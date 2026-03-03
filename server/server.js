@@ -4,9 +4,7 @@ const path = require("path");
 const { Server } = require("socket.io");
 
 /*
-====================================
 INTELLIGENCE ENGINES
-====================================
 */
 const analyzeResult =
 require("./services/intelligence/resultEngine");
@@ -14,11 +12,9 @@ require("./services/intelligence/resultEngine");
 const analyzeQoQ =
 require("./services/intelligence/qoqEngine");
 
-/*
-====================================
-APP INIT
-====================================
-*/
+const updateSectorStrength =
+require("./services/intelligence/sectorEngine");
+
 const app = express();
 const server = http.createServer(app);
 
@@ -27,18 +23,14 @@ const io = new Server(server,{
 });
 
 /*
-====================================
-HEALTH CHECK
-====================================
+HEALTH
 */
 app.get("/health",(req,res)=>{
  res.send("OK");
 });
 
 /*
-====================================
 SERVE FRONTEND
-====================================
 */
 const distPath =
  path.join(__dirname,"../client/dist");
@@ -52,9 +44,7 @@ app.use((req,res)=>{
 });
 
 /*
-====================================
-MARKET DATA + QoQ ENGINE
-====================================
+MARKET DATA
 */
 
 function generateMarketData(){
@@ -126,19 +116,25 @@ function generateMarketData(){
  const qoqIntel =
   analyzeQoQ(rawData);
 
- return{
+ const finalData={
   ...rawData,
   ...resultIntel,
-  ...qoqIntel,
+  ...qoqIntel
+ };
+
+ const sectorData =
+  updateSectorStrength(finalData);
+
+ return{
+  ...finalData,
+  sectorStrength:sectorData,
   time:new Date()
    .toLocaleTimeString()
  };
 }
 
 /*
-====================================
 REALTIME ENGINE
-====================================
 */
 
 setInterval(()=>{
@@ -149,9 +145,8 @@ setInterval(()=>{
    generateMarketData();
 
   console.log(
-   "📡 INTELLIGENCE EVENT",
-   data.company,
-   data.insight
+   "📡 SECTOR UPDATE",
+   data.sector
   );
 
   io.emit("announcement",data);
@@ -163,9 +158,7 @@ setInterval(()=>{
 },10000);
 
 /*
-====================================
 SOCKET
-====================================
 */
 
 io.on("connection",()=>{
@@ -173,9 +166,7 @@ io.on("connection",()=>{
 });
 
 /*
-====================================
 START SERVER
-====================================
 */
 
 const PORT =

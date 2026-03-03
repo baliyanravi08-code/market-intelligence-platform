@@ -1,21 +1,23 @@
-import { useEffect, useState } from "react";
-import { io } from "socket.io-client";
+import {useEffect,useState} from "react";
+import {io} from "socket.io-client";
 
-const socket = io();
+const socket=io();
 
 export default function App(){
 
- const [announcements,setAnnouncements]
- = useState([]);
+ const[ann,setAnn]=useState([]);
+ const[sector,setSector]=useState({});
 
  useEffect(()=>{
 
   socket.on("announcement",(data)=>{
 
-   setAnnouncements(prev=>[
+   setAnn(prev=>[
     data,
     ...prev.slice(0,9)
    ]);
+
+   setSector(data.sectorStrength);
 
   });
 
@@ -30,13 +32,23 @@ export default function App(){
    color:"white"
   }}>
 
-   <h1>
-    🇮🇳 Market Intelligence Dashboard
-   </h1>
+   <h1>🇮🇳 Market Intelligence</h1>
 
-   {announcements.map((item,index)=>(
+   <h2>Sector Strength</h2>
 
-    <div key={index}
+   {Object.entries(sector).map(
+    ([name,value])=>(
+
+     <div key={name}>
+      {name}: {value}
+     </div>
+   ))}
+
+   <hr/>
+
+   {ann.map((item,i)=>(
+
+    <div key={i}
      style={{
       background:"#102542",
       padding:"20px",
@@ -47,17 +59,8 @@ export default function App(){
      <h3>{item.company}</h3>
 
      <p>Sector: {item.sector}</p>
-
-     <p><b>Verdict:</b> {item.verdict}</p>
-
-     <p><b>Reason:</b> {item.reason}</p>
-
-     <p><b>QoQ:</b> {item.qoqSignal}</p>
-
-     <p><b>YoY:</b> {item.yoySignal}</p>
-
-     <p><b>Insight:</b> {item.insight}</p>
-
+     <p>Verdict: {item.verdict}</p>
+     <p>Insight: {item.insight}</p>
      <p>{item.time}</p>
 
     </div>
