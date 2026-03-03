@@ -3,211 +3,274 @@ const http = require("http");
 const { Server } = require("socket.io");
 const path = require("path");
 
+/*
+==============================
+SERVICES
+==============================
+*/
+
 const {
-  fetchAnnouncements,
-  getNewAnnouncement
+ fetchAnnouncements,
+ getNewAnnouncement
 } = require("./services/bseListener");
 
 const {
-  classifyAnnouncement
+ classifyAnnouncement
 } = require("./services/announcementClassifier");
 
 const {
-  readPDF,
-  analyzeResult
+ readPDF,
+ analyzeResult
 } = require("./services/resultAnalyzer");
 
 const {
-  analyzeOrder
+ analyzeOrder
 } = require("./services/orderAnalyzer");
 
 const {
-  extractCompany
+ extractCompany
 } = require("./services/companyExtractor");
 
 const {
-  updateOrderBook,
-  getOrderBook
+ updateOrderBook,
+ getOrderBook
 } = require("./data/orderStore");
 
 const {
-  calculateStrength
+ calculateStrength
 } = require("./services/strengthEngine");
 
 const {
-  getSector,
-  updateSectorStrength,
-  getSectorStrength
+ getSector,
+ updateSectorStrength,
+ getSectorStrength
 } = require("./services/sectorEngine");
 
 const {
-  updateMarketDirection,
-  getMarketStatus
+ updateMarketDirection,
+ getMarketStatus
 } = require("./services/marketEngine");
+
+/*
+==============================
+APP INIT
+==============================
+*/
 
 const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: { origin: "*" }
+ cors: { origin: "*" }
 });
 
 /*
-====================================
-SERVE REACT BUILD
-====================================
+==============================
+SERVE FRONTEND BUILD
+(RENDER SAFE)
+==============================
 */
 
-const distPath = path.join(__dirname, "../client/dist");
+const distPath =
+ path.join(__dirname, "../client/dist");
 
 app.use(express.static(distPath));
 
-/*
-EXPRESS 5 SAFE FALLBACK ROUTE
-*/
 app.use((req, res) => {
-  res.sendFile(path.join(distPath, "index.html"));
+ res.sendFile(
+  path.join(distPath, "index.html")
+ );
 });
+
+/*
+==============================
+DATA STORE
+==============================
+*/
 
 const announcements = [];
 
 /*
-====================================
-LIVE LISTENER
-====================================
+==============================
+LIVE BSE LISTENER
+==============================
 */
 
 async function startListener() {
 
-  console.log("✅ LIVE BSE ENGINE STARTED");
+ console.log("✅ LIVE BSE ENGINE STARTED");
 
-  setInterval(async () => {
+ setInterval(async () => {
 
-    try {
+  try {
 
-      const list = await fetchAnnouncements();
-      const event = getNewAnnouncement(list);
+   const list =
+    await fetchAnnouncements();
 
-      if (!event) return;
+   const event =
+    getNewAnnouncement(list);
 
-      const type =
-        classifyAnnouncement(event.title);
+   if (!event) return;
 
-      let analysis = null;
-      let company = null;
+   const type =
+    classifyAnnouncement(event.title);
 
-      if (type === "RESULT") {
+   let analysis = null;
+   let company = null;
 
-        company =
-          extractCompany(event.title);
+/*
+==============================
+RESULT ANALYSIS
+==============================
+*/
 
-        const text =
-          await readPDF(event.link);
+   if (type === "RESULT") {
 
-        analysis =
-          analyzeResult(text);
-      }
+    company =
+     extractCompany(event.title);
 
-      if (type === "ORDER") {
+    const text =
+     await readPDF(event.link);
 
-        const text =
-          await readPDF(event.link);
+    analysis =
+     analyzeResult(text);
+   }
 
-        const order =
-          analyzeOrder(text);
+/*
+==============================
+ORDER ANALYSIS
+==============================
+*/
 
-        if (order) {
+   if (type === "ORDER") {
 
-          company =
-            extractCompany(event.title);
+    const text =
+     await readPDF(event.link);
 
-          const book =
-            updateOrderBook(
-              company,
-              parseFloat(order.orderValue)
-            );
+    const order =
+     analyzeOrder(text);
 
-          analysis = {
-            ...order,
-            company,
-            totalOrders: book.orders,
-            totalOrderValue:
-              book.totalOrderValue + " Cr"
-          };
-        }
-      }
+    if (order) {
 
-      if (!analysis) return;
+     company =
+      extractCompany(event.title);
 
-      const strength =
-        calculateStrength(type, analysis);
+     const book =
+      updateOrderBook(
+       company,
+       parseFloat(order.orderValue)
+      );
 
-      const sector =
-        getSector(company);
-
-      const sectorData =
-        updateSectorStrength(
-          sector,
-          strength
-        );
-
-      const marketStatus =
-        updateMarketDirection(
-          sectorData
-        );
-
-      const data = {
-        title: event.title,
-        company,
-        sector,
-        strengthScore: strength,
-        marketStatus,
-        analysis,
-        time: new Date().toLocaleTimeString()
-      };
-
-      announcements.unshift(data);
-
-      console.log("🚨 LIVE EVENT:", company);
-
-      io.emit("announcement", data);
-
-    } catch (err) {
-      console.log("Listener Error:", err.message);
+     analysis = {
+      ...order,
+      company,
+      totalOrders: book.orders,
+      totalOrderValue:
+       book.totalOrderValue + " Cr"
+     };
     }
+   }
 
-  }, 30000);
+   if (!analysis) return;
+
+/*
+==============================
+STRENGTH ENGINE
+==============================
+*/
+
+   const strength =
+    calculateStrength(type, analysis);
+
+   const sector =
+    getSector(company);
+
+   const sectorData =
+    updateSectorStrength(
+     sector,
+     strength
+    );
+
+   const marketStatus =
+    updateMarketDirection(
+     sectorData
+    );
+
+   const data = {
+    title: event.title,
+    company,
+    sector,
+    strengthScore: strength,
+    marketStatus,
+    analysis,
+    time: new Date().toLocaleTimeString()
+   };
+
+   announcements.unshift(data);
+
+   console.log("🚨 LIVE EVENT:", company);
+
+   io.emit("announcement", data);
+
+  } catch (err) {
+
+   console.log(
+    "Listener Error:",
+    err.message
+   );
+  }
+
+ }, 30000);
 }
 
 /*
-====================================
+==============================
 APIs
-====================================
+==============================
 */
 
 app.get("/history", (req, res) =>
-  res.json(announcements)
+ res.json(announcements)
 );
 
 app.get("/orders", (req, res) =>
-  res.json(getOrderBook())
+ res.json(getOrderBook())
 );
 
 app.get("/sectors", (req, res) =>
-  res.json(getSectorStrength())
+ res.json(getSectorStrength())
 );
 
 app.get("/market", (req, res) =>
-  res.json({ status: getMarketStatus() })
+ res.json({
+  status: getMarketStatus()
+ })
 );
 
+/*
+==============================
+SOCKET CONNECTION
+==============================
+*/
+
 io.on("connection", () => {
-  console.log("👤 Dashboard Connected");
+ console.log("👤 Dashboard Connected");
 });
 
-const PORT = process.env.PORT || 4000;
+/*
+==============================
+START SERVER
+==============================
+*/
+
+const PORT =
+ process.env.PORT || 4000;
 
 server.listen(PORT, () => {
-  console.log("🚀 MARKET INTELLIGENCE LIVE");
-  startListener();
+
+ console.log(
+  "🚀 MARKET INTELLIGENCE LIVE"
+ );
+
+ startListener();
 });
