@@ -7,6 +7,7 @@ export default function App(){
 
  const[ann,setAnn]=useState([]);
  const[sector,setSector]=useState({});
+ const[market,setMarket]=useState({});
 
  useEffect(()=>{
 
@@ -18,6 +19,10 @@ export default function App(){
    ]);
 
    setSector(data.sectorStrength);
+   setMarket({
+    status:data.marketStatus,
+    score:data.marketScore
+   });
 
   });
 
@@ -34,11 +39,22 @@ export default function App(){
 
    <h1>🇮🇳 Market Intelligence</h1>
 
+   <h2>
+    Market Direction:
+    {market.status}
+   </h2>
+
+   <h3>
+    Market Score:
+    {market.score?.toFixed?.(2)}
+   </h3>
+
+   <hr/>
+
    <h2>Sector Strength</h2>
 
    {Object.entries(sector).map(
     ([name,value])=>(
-
      <div key={name}>
       {name}: {value}
      </div>
@@ -57,7 +73,6 @@ export default function App(){
      }}>
 
      <h3>{item.company}</h3>
-
      <p>Sector: {item.sector}</p>
      <p>Verdict: {item.verdict}</p>
      <p>Insight: {item.insight}</p>

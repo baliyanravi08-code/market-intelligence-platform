@@ -15,6 +15,9 @@ require("./services/intelligence/qoqEngine");
 const updateSectorStrength =
 require("./services/intelligence/sectorEngine");
 
+const updateMarketDirection =
+require("./services/intelligence/marketDirection");
+
 const app = express();
 const server = http.createServer(app);
 
@@ -44,7 +47,7 @@ app.use((req,res)=>{
 });
 
 /*
-MARKET DATA
+MARKET DATA GENERATOR
 */
 
 function generateMarketData(){
@@ -116,18 +119,24 @@ function generateMarketData(){
  const qoqIntel =
   analyzeQoQ(rawData);
 
- const finalData={
+ const merged={
   ...rawData,
   ...resultIntel,
   ...qoqIntel
  };
 
- const sectorData =
-  updateSectorStrength(finalData);
+ const sectorStrength =
+  updateSectorStrength(merged);
+
+ const marketData =
+  updateMarketDirection(
+   sectorStrength
+  );
 
  return{
-  ...finalData,
-  sectorStrength:sectorData,
+  ...merged,
+  sectorStrength,
+  ...marketData,
   time:new Date()
    .toLocaleTimeString()
  };
@@ -145,8 +154,8 @@ setInterval(()=>{
    generateMarketData();
 
   console.log(
-   "📡 SECTOR UPDATE",
-   data.sector
+   "📊 MARKET:",
+   data.marketStatus
   );
 
   io.emit("announcement",data);
@@ -160,7 +169,6 @@ setInterval(()=>{
 /*
 SOCKET
 */
-
 io.on("connection",()=>{
  console.log("👤 Dashboard Connected");
 });
