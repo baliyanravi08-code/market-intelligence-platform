@@ -1,27 +1,36 @@
-const express = require("express");
-const http = require("http");
-const path = require("path");
-const { Server } = require("socket.io");
+const express=require("express");
+const http=require("http");
+const path=require("path");
+const {Server}=require("socket.io");
 
 /*
-INTELLIGENCE ENGINES
+INTELLIGENCE
 */
-const analyzeResult =
+const analyzeResult=
 require("./services/intelligence/resultEngine");
 
-const analyzeQoQ =
+const analyzeQoQ=
 require("./services/intelligence/qoqEngine");
 
-const updateSectorStrength =
+const updateSectorStrength=
 require("./services/intelligence/sectorEngine");
 
-const updateMarketDirection =
+const updateMarketDirection=
 require("./services/intelligence/marketDirection");
 
-const app = express();
-const server = http.createServer(app);
+/*
+DATA SOURCES
+*/
+const getRealMarketData=
+require("./services/data/realMarketData");
 
-const io = new Server(server,{
+const getSimulatorData=
+require("./services/data/simulator");
+
+const app=express();
+const server=http.createServer(app);
+
+const io=new Server(server,{
  cors:{origin:"*"}
 });
 
@@ -33,9 +42,9 @@ app.get("/health",(req,res)=>{
 });
 
 /*
-SERVE FRONTEND
+FRONTEND
 */
-const distPath =
+const distPath=
  path.join(__dirname,"../client/dist");
 
 app.use(express.static(distPath));
@@ -47,88 +56,50 @@ app.use((req,res)=>{
 });
 
 /*
-MARKET DATA GENERATOR
+HYBRID DATA ENGINE
 */
 
-function generateMarketData(){
+async function getMarketEvent(){
 
- const sectors=[
-  "Bank",
-  "Pharma",
-  "Defense",
-  "Railway",
-  "Auto"
- ];
+ let data =
+  await getRealMarketData();
 
- const companies=[
-  "SBIN",
-  "HDFCBANK",
-  "HAL",
-  "BEL",
-  "SUNPHARMA",
-  "TITAN",
-  "TCS"
- ];
+ if(!data){
 
- const sector =
-  sectors[Math.floor(
-   Math.random()*sectors.length
-  )];
+  console.log("🟡 Using Simulator");
 
- const baseProfit =
+  data =
+   getSimulatorData();
+ }
+
+ const baseProfit=
   Math.floor(Math.random()*1000);
 
- const rawData={
+ data.currentProfit=baseProfit;
+ data.lastQuarterProfit=
+  baseProfit+
+  Math.floor(Math.random()*200-100);
 
-  company:
-   companies[Math.floor(
-    Math.random()*companies.length
-   )],
+ data.lastYearProfit=
+  baseProfit+
+  Math.floor(Math.random()*400-200);
 
-  sector,
+ const resultIntel=
+  analyzeResult(data);
 
-  currentProfit:baseProfit,
-
-  lastQuarterProfit:
-   baseProfit +
-   Math.floor(Math.random()*400-200),
-
-  lastYearProfit:
-   baseProfit +
-   Math.floor(Math.random()*600-300),
-
-  profitChange:
-   Math.floor(Math.random()*40)-20,
-
-  revenueChange:
-   Math.floor(Math.random()*30),
-
-  otherExpense:
-   Math.floor(Math.random()*40),
-
-  provisions:
-   Math.floor(Math.random()*30),
-
-  newOrders:
-   Math.floor(Math.random()*100)
- };
-
- const resultIntel =
-  analyzeResult(rawData);
-
- const qoqIntel =
-  analyzeQoQ(rawData);
+ const qoqIntel=
+  analyzeQoQ(data);
 
  const merged={
-  ...rawData,
+  ...data,
   ...resultIntel,
   ...qoqIntel
  };
 
- const sectorStrength =
+ const sectorStrength=
   updateSectorStrength(merged);
 
- const marketData =
+ const market=
   updateMarketDirection(
    sectorStrength
   );
@@ -136,32 +107,32 @@ function generateMarketData(){
  return{
   ...merged,
   sectorStrength,
-  ...marketData,
+  ...market,
   time:new Date()
    .toLocaleTimeString()
  };
 }
 
 /*
-REALTIME ENGINE
+REALTIME LOOP
 */
 
-setInterval(()=>{
+setInterval(async()=>{
 
  try{
 
-  const data =
-   generateMarketData();
+  const event=
+   await getMarketEvent();
 
   console.log(
-   "📊 MARKET:",
-   data.marketStatus
+   "📡 MARKET EVENT",
+   event.company
   );
 
-  io.emit("announcement",data);
+  io.emit("announcement",event);
 
- }catch(err){
-  console.log("Engine Safe Error");
+ }catch(e){
+  console.log("Safe Engine Error");
  }
 
 },10000);
@@ -174,11 +145,10 @@ io.on("connection",()=>{
 });
 
 /*
-START SERVER
+START
 */
-
-const PORT =
- process.env.PORT || 4000;
+const PORT=
+ process.env.PORT||4000;
 
 server.listen(PORT,"0.0.0.0",()=>{
  console.log(
