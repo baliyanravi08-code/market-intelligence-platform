@@ -1,43 +1,48 @@
 const axios = require("axios");
 
-let lastTitle = null;
+let lastAnnouncement = null;
 
-async function fetchBSE() {
+async function fetchBSEAnnouncement() {
 
- try {
+  try {
 
-  const res = await axios.get(
-   "https://api.allorigins.win/raw?url=https://www.bseindia.com/corporates/ann.html"
-  );
+    const response = await axios.get(
+      "https://api.allorigins.win/raw?url=https://www.bseindia.com/corporates/ann.html",
+      { timeout: 15000 }
+    );
 
-  const html = res.data;
+    const html = response.data;
 
-  const match =
-   html.match(/<td class="tdtext">(.*?)<\/td>/);
+    const match =
+      html.match(/<td class="tdtext">(.*?)<\/td>/);
 
-  if(!match) return null;
+    if (!match) return null;
 
-  const title =
-   match[1].replace(/<[^>]*>/g,"").trim();
+    const text = match[1]
+      .replace(/<[^>]*>/g, "")
+      .trim();
 
-  if(title === lastTitle) return null;
+    if (text === lastAnnouncement)
+      return null;
 
-  lastTitle = title;
+    lastAnnouncement = text;
 
-  return {
-   company:title.split(" ")[0],
-   sector:"Market",
-   strengthScore:
-    Math.floor(Math.random()*100),
-   marketStatus:"Live",
-   time:new Date().toLocaleTimeString()
-  };
+    return {
+      company: text.split(" ")[0],
+      sector: "Market",
+      strengthScore:
+        Math.floor(Math.random() * 100),
+      marketStatus: "LIVE",
+      time: new Date().toLocaleTimeString()
+    };
 
- } catch(err){
+  } catch (err) {
 
-  console.log("BSE Fetch Failed");
-  return null;
- }
+    console.log("❌ BSE Fetch Failed");
+    return null;
+  }
 }
 
-module.exports={fetchBSE};
+module.exports = {
+  fetchBSEAnnouncement
+};

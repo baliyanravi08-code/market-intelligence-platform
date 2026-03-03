@@ -4,23 +4,23 @@ const path = require("path");
 const { Server } = require("socket.io");
 
 const {
- fetchBSEAnnouncement
+  fetchBSEAnnouncement
 } = require("./services/bseListener");
 
 const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server,{
- cors:{origin:"*"}
+  cors:{origin:"*"}
 });
 
 /*
 ==============================
-HEALTH CHECK
+HEALTH
 ==============================
 */
 app.get("/health",(req,res)=>{
- res.send("OK");
+  res.send("OK");
 });
 
 /*
@@ -42,20 +42,25 @@ app.use((req,res)=>{
 /*
 ==============================
 REAL BSE ENGINE
-(RENDER SAFE)
 ==============================
 */
 
 setInterval(async()=>{
 
- const data =
-  await fetchBSEAnnouncement();
+ try{
 
- if(!data) return;
+  const data =
+   await fetchBSEAnnouncement();
 
- console.log("📡 REAL BSE EVENT");
+  if(!data) return;
 
- io.emit("announcement",data);
+  console.log("📡 REAL BSE EVENT");
+
+  io.emit("announcement",data);
+
+ }catch(err){
+  console.log("Engine Error");
+ }
 
 },20000);
 
@@ -64,7 +69,6 @@ setInterval(async()=>{
 SOCKET
 ==============================
 */
-
 io.on("connection",()=>{
  console.log("👤 Dashboard Connected");
 });
@@ -74,7 +78,6 @@ io.on("connection",()=>{
 START SERVER
 ==============================
 */
-
 const PORT =
  process.env.PORT || 4000;
 
