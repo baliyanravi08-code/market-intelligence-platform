@@ -5,7 +5,7 @@ const path = require("path");
 
 /*
 ==============================
-SERVICES
+IMPORT SERVICES
 ==============================
 */
 
@@ -60,49 +60,58 @@ APP INIT
 const app = express();
 const server = http.createServer(app);
 
-const io = new Server(server, {
- cors: { origin: "*" }
+const io = new Server(server,{
+ cors:{origin:"*"}
 });
 
 /*
 ==============================
-SERVE FRONTEND BUILD
-(RENDER SAFE)
+RENDER HEALTH CHECK
+==============================
+*/
+
+app.get("/health",(req,res)=>{
+ res.send("OK");
+});
+
+/*
+==============================
+SERVE FRONTEND
 ==============================
 */
 
 const distPath =
- path.join(__dirname, "../client/dist");
+ path.join(__dirname,"../client/dist");
 
 app.use(express.static(distPath));
 
-app.use((req, res) => {
+app.use((req,res)=>{
  res.sendFile(
-  path.join(distPath, "index.html")
+  path.join(distPath,"index.html")
  );
 });
 
 /*
 ==============================
-DATA STORE
+DATA
 ==============================
 */
 
-const announcements = [];
+const announcements=[];
 
 /*
 ==============================
-LIVE BSE LISTENER
+LIVE ENGINE
 ==============================
 */
 
-async function startListener() {
+async function startListener(){
 
  console.log("✅ LIVE BSE ENGINE STARTED");
 
- setInterval(async () => {
+ setInterval(async()=>{
 
-  try {
+  try{
 
    const list =
     await fetchAnnouncements();
@@ -110,77 +119,63 @@ async function startListener() {
    const event =
     getNewAnnouncement(list);
 
-   if (!event) return;
+   if(!event) return;
 
    const type =
     classifyAnnouncement(event.title);
 
-   let analysis = null;
-   let company = null;
+   let analysis=null;
+   let company=null;
 
-/*
-==============================
-RESULT ANALYSIS
-==============================
-*/
+/* RESULT */
 
-   if (type === "RESULT") {
+   if(type==="RESULT"){
 
-    company =
+    company=
      extractCompany(event.title);
 
-    const text =
+    const text=
      await readPDF(event.link);
 
-    analysis =
+    analysis=
      analyzeResult(text);
    }
 
-/*
-==============================
-ORDER ANALYSIS
-==============================
-*/
+/* ORDER */
 
-   if (type === "ORDER") {
+   if(type==="ORDER"){
 
-    const text =
+    const text=
      await readPDF(event.link);
 
-    const order =
+    const order=
      analyzeOrder(text);
 
-    if (order) {
+    if(order){
 
-     company =
+     company=
       extractCompany(event.title);
 
-     const book =
+     const book=
       updateOrderBook(
        company,
        parseFloat(order.orderValue)
       );
 
-     analysis = {
+     analysis={
       ...order,
       company,
-      totalOrders: book.orders,
+      totalOrders:book.orders,
       totalOrderValue:
-       book.totalOrderValue + " Cr"
+       book.totalOrderValue+" Cr"
      };
     }
    }
 
-   if (!analysis) return;
-
-/*
-==============================
-STRENGTH ENGINE
-==============================
-*/
+   if(!analysis) return;
 
    const strength =
-    calculateStrength(type, analysis);
+    calculateStrength(type,analysis);
 
    const sector =
     getSector(company);
@@ -196,31 +191,30 @@ STRENGTH ENGINE
      sectorData
     );
 
-   const data = {
-    title: event.title,
+   const data={
+    title:event.title,
     company,
     sector,
-    strengthScore: strength,
+    strengthScore:strength,
     marketStatus,
     analysis,
-    time: new Date().toLocaleTimeString()
+    time:new Date().toLocaleTimeString()
    };
 
    announcements.unshift(data);
 
-   console.log("🚨 LIVE EVENT:", company);
+   console.log("🚨 LIVE EVENT:",company);
 
-   io.emit("announcement", data);
+   io.emit("announcement",data);
 
-  } catch (err) {
-
+  }catch(err){
    console.log(
     "Listener Error:",
     err.message
    );
   }
 
- }, 30000);
+ },30000);
 }
 
 /*
@@ -229,48 +223,54 @@ APIs
 ==============================
 */
 
-app.get("/history", (req, res) =>
- res.json(announcements)
-);
+app.get("/history",(req,res)=>{
+ res.json(announcements);
+});
 
-app.get("/orders", (req, res) =>
- res.json(getOrderBook())
-);
+app.get("/orders",(req,res)=>{
+ res.json(getOrderBook());
+});
 
-app.get("/sectors", (req, res) =>
- res.json(getSectorStrength())
-);
+app.get("/sectors",(req,res)=>{
+ res.json(getSectorStrength());
+});
 
-app.get("/market", (req, res) =>
+app.get("/market",(req,res)=>{
  res.json({
-  status: getMarketStatus()
- })
-);
+  status:getMarketStatus()
+ });
+});
 
-/*
-==============================
-SOCKET CONNECTION
-==============================
-*/
-
-io.on("connection", () => {
+io.on("connection",()=>{
  console.log("👤 Dashboard Connected");
 });
 
 /*
 ==============================
-START SERVER
+SERVER START (RENDER SAFE)
 ==============================
 */
 
 const PORT =
  process.env.PORT || 4000;
 
-server.listen(PORT, () => {
+server.listen(PORT,()=>{
 
- console.log(
-  "🚀 MARKET INTELLIGENCE LIVE"
- );
+ console.log("🚀 MARKET INTELLIGENCE LIVE");
 
- startListener();
+/*
+IMPORTANT:
+Delay heavy engine start
+*/
+
+ setTimeout(()=>{
+
+  console.log(
+   "✅ Starting BSE Engine..."
+  );
+
+  startListener();
+
+ },15000);
+
 });
