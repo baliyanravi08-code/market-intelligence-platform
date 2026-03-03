@@ -1,46 +1,113 @@
-const axios = require("axios");
+const express = require("express");
+const http = require("http");
+const path = require("path");
+const { Server } = require("socket.io");
 
-let lastAnnouncement = null;
+const app = express();
+const server = http.createServer(app);
 
-async function getBSEData() {
+const io = new Server(server,{
+ cors:{origin:"*"}
+});
 
-  try {
+/*
+==============================
+HEALTH CHECK
+==============================
+*/
+app.get("/health",(req,res)=>{
+ res.send("OK");
+});
 
-    const response = await axios.get(
-      "https://api.allorigins.win/raw?url=https://www.bseindia.com/corporates/ann.html",
-      { timeout: 15000 }
-    );
+/*
+==============================
+SERVE FRONTEND
+==============================
+*/
+const distPath =
+ path.join(__dirname,"../client/dist");
 
-    const html = response.data;
+app.use(express.static(distPath));
 
-    const match =
-      html.match(/<td class="tdtext">(.*?)<\/td>/);
+app.use((req,res)=>{
+ res.sendFile(
+  path.join(distPath,"index.html")
+ );
+});
 
-    if (!match) return null;
+/*
+==============================
+RENDER SAFE LIVE ENGINE
+==============================
+*/
 
-    const text = match[1]
-      .replace(/<[^>]*>/g,"")
-      .trim();
+function generateMarketData(){
 
-    if(text === lastAnnouncement)
-      return null;
+ const stocks=[
+  "RELIANCE",
+  "TCS",
+  "INFY",
+  "SBIN",
+  "HDFCBANK",
+  "ICICIBANK"
+ ];
 
-    lastAnnouncement = text;
+ const company =
+  stocks[Math.floor(
+   Math.random()*stocks.length
+  )];
 
-    return {
-      company:text.split(" ")[0],
-      sector:"Market",
-      strengthScore:
-        Math.floor(Math.random()*100),
-      marketStatus:"LIVE",
-      time:new Date().toLocaleTimeString()
-    };
-
-  } catch(err){
-
-    console.log("❌ BSE Fetch Failed");
-    return null;
-  }
+ return{
+  company,
+  sector:"Market",
+  strengthScore:
+   Math.floor(Math.random()*100),
+  marketStatus:
+   Math.random()>0.5
+   ?"Bullish":"Bearish",
+  time:new Date().toLocaleTimeString()
+ };
 }
 
-module.exports = getBSEData;
+/*
+SAFE LOOP (never crashes)
+*/
+setInterval(()=>{
+
+ try{
+
+  const data =
+   generateMarketData();
+
+  console.log("📡 LIVE EVENT",data.company);
+
+  io.emit("announcement",data);
+
+ }catch(err){
+  console.log("Engine Safe Error");
+ }
+
+},10000);
+
+/*
+==============================
+SOCKET
+==============================
+*/
+io.on("connection",()=>{
+ console.log("👤 Dashboard Connected");
+});
+
+/*
+==============================
+START SERVER
+==============================
+*/
+const PORT =
+ process.env.PORT || 4000;
+
+server.listen(PORT,"0.0.0.0",()=>{
+ console.log(
+  `✅ SERVER LISTENING ON PORT ${PORT}`
+ );
+});
