@@ -1,88 +1,46 @@
-const express = require("express");
-const http = require("http");
-const path = require("path");
-const { Server } = require("socket.io");
+const axios = require("axios");
 
-const {
-  fetchBSEAnnouncement
-} = require("./services/bseListener");
+let lastAnnouncement = null;
 
-const app = express();
-const server = http.createServer(app);
+async function getBSEData() {
 
-const io = new Server(server,{
-  cors:{origin:"*"}
-});
+  try {
 
-/*
-==============================
-HEALTH
-==============================
-*/
-app.get("/health",(req,res)=>{
-  res.send("OK");
-});
+    const response = await axios.get(
+      "https://api.allorigins.win/raw?url=https://www.bseindia.com/corporates/ann.html",
+      { timeout: 15000 }
+    );
 
-/*
-==============================
-SERVE FRONTEND
-==============================
-*/
-const distPath =
- path.join(__dirname,"../client/dist");
+    const html = response.data;
 
-app.use(express.static(distPath));
+    const match =
+      html.match(/<td class="tdtext">(.*?)<\/td>/);
 
-app.use((req,res)=>{
- res.sendFile(
-  path.join(distPath,"index.html")
- );
-});
+    if (!match) return null;
 
-/*
-==============================
-REAL BSE ENGINE
-==============================
-*/
+    const text = match[1]
+      .replace(/<[^>]*>/g,"")
+      .trim();
 
-setInterval(async()=>{
+    if(text === lastAnnouncement)
+      return null;
 
- try{
+    lastAnnouncement = text;
 
-  const data =
-   await fetchBSEAnnouncement();
+    return {
+      company:text.split(" ")[0],
+      sector:"Market",
+      strengthScore:
+        Math.floor(Math.random()*100),
+      marketStatus:"LIVE",
+      time:new Date().toLocaleTimeString()
+    };
 
-  if(!data) return;
+  } catch(err){
 
-  console.log("📡 REAL BSE EVENT");
+    console.log("❌ BSE Fetch Failed");
+    return null;
+  }
+}
 
-  io.emit("announcement",data);
-
- }catch(err){
-  console.log("Engine Error");
- }
-
-},20000);
-
-/*
-==============================
-SOCKET
-==============================
-*/
-io.on("connection",()=>{
- console.log("👤 Dashboard Connected");
-});
-
-/*
-==============================
-START SERVER
-==============================
-*/
-const PORT =
- process.env.PORT || 4000;
-
-server.listen(PORT,"0.0.0.0",()=>{
- console.log(
-  `✅ SERVER LISTENING ON PORT ${PORT}`
- );
-});
+module.exports = getBSEData;

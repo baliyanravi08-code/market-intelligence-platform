@@ -2,7 +2,7 @@ const axios = require("axios");
 
 let lastAnnouncement = null;
 
-async function fetchBSEAnnouncement() {
+async function getBSEData() {
 
   try {
 
@@ -19,30 +19,28 @@ async function fetchBSEAnnouncement() {
     if (!match) return null;
 
     const text = match[1]
-      .replace(/<[^>]*>/g, "")
+      .replace(/<[^>]*>/g,"")
       .trim();
 
-    if (text === lastAnnouncement)
+    if(text === lastAnnouncement)
       return null;
 
     lastAnnouncement = text;
 
     return {
-      company: text.split(" ")[0],
-      sector: "Market",
+      company:text.split(" ")[0],
+      sector:"Market",
       strengthScore:
-        Math.floor(Math.random() * 100),
-      marketStatus: "LIVE",
-      time: new Date().toLocaleTimeString()
+        Math.floor(Math.random()*100),
+      marketStatus:"LIVE",
+      time:new Date().toLocaleTimeString()
     };
 
-  } catch (err) {
+  } catch(err){
 
     console.log("❌ BSE Fetch Failed");
     return null;
   }
 }
 
-module.exports = {
-  fetchBSEAnnouncement
-};
+module.exports = getBSEData;
