@@ -66,7 +66,7 @@ const io = new Server(server,{
 
 /*
 ==============================
-RENDER HEALTH CHECK
+HEALTH ROUTE
 ==============================
 */
 
@@ -85,7 +85,8 @@ const distPath =
 
 app.use(express.static(distPath));
 
-app.use((req,res)=>{
+app.use((req,res,next)=>{
+ if(req.path.startsWith("/api")) return next();
  res.sendFile(
   path.join(distPath,"index.html")
  );
@@ -93,7 +94,7 @@ app.use((req,res)=>{
 
 /*
 ==============================
-DATA
+DATA STORE
 ==============================
 */
 
@@ -127,8 +128,6 @@ async function startListener(){
    let analysis=null;
    let company=null;
 
-/* RESULT */
-
    if(type==="RESULT"){
 
     company=
@@ -140,8 +139,6 @@ async function startListener(){
     analysis=
      analyzeResult(text);
    }
-
-/* ORDER */
 
    if(type==="ORDER"){
 
@@ -247,30 +244,38 @@ io.on("connection",()=>{
 
 /*
 ==============================
-SERVER START (RENDER SAFE)
+RENDER SAFE START
 ==============================
 */
 
 const PORT =
  process.env.PORT || 4000;
 
-server.listen(PORT,()=>{
+let engineStarted=false;
 
+server.listen(PORT,()=>{
  console.log("🚀 MARKET INTELLIGENCE LIVE");
+});
 
 /*
-IMPORTANT:
-Delay heavy engine start
+START ENGINE ONLY AFTER TRAFFIC
+(RENDER FREE SAFE)
 */
 
- setTimeout(()=>{
+app.use((req,res,next)=>{
+
+ if(!engineStarted){
+
+  engineStarted=true;
 
   console.log(
-   "✅ Starting BSE Engine..."
+   "✅ Traffic detected → Starting Engine"
   );
 
-  startListener();
+  setTimeout(()=>{
+   startListener();
+  },5000);
+ }
 
- },15000);
-
+ next();
 });
