@@ -3,6 +3,14 @@ const http = require("http");
 const path = require("path");
 const { Server } = require("socket.io");
 
+/*
+==============================
+INTELLIGENCE ENGINE
+==============================
+*/
+const analyzeResult =
+require("./services/intelligence/resultEngine");
+
 const app = express();
 const server = http.createServer(app);
 
@@ -37,41 +45,76 @@ app.use((req,res)=>{
 
 /*
 ==============================
-RENDER SAFE LIVE ENGINE
+MARKET DATA GENERATOR
 ==============================
 */
 
 function generateMarketData(){
 
- const stocks=[
-  "RELIANCE",
-  "TCS",
-  "INFY",
-  "SBIN",
-  "HDFCBANK",
-  "ICICIBANK"
+ const sectors=[
+  "Bank",
+  "Pharma",
+  "Defense",
+  "Railway",
+  "Auto"
  ];
 
- const company =
-  stocks[Math.floor(
-   Math.random()*stocks.length
+ const companies=[
+  "SBIN",
+  "HDFCBANK",
+  "HAL",
+  "BEL",
+  "SUNPHARMA",
+  "TITAN",
+  "TCS"
+ ];
+
+ const sector =
+  sectors[Math.floor(
+   Math.random()*sectors.length
   )];
 
+ const rawData={
+
+  company:
+   companies[Math.floor(
+    Math.random()*companies.length
+   )],
+
+  sector,
+
+  profitChange:
+   Math.floor(Math.random()*40)-20,
+
+  revenueChange:
+   Math.floor(Math.random()*30),
+
+  otherExpense:
+   Math.floor(Math.random()*40),
+
+  provisions:
+   Math.floor(Math.random()*30),
+
+  newOrders:
+   Math.floor(Math.random()*100)
+ };
+
+ const intelligence =
+  analyzeResult(rawData);
+
  return{
-  company,
-  sector:"Market",
-  strengthScore:
-   Math.floor(Math.random()*100),
-  marketStatus:
-   Math.random()>0.5
-   ?"Bullish":"Bearish",
+  ...rawData,
+  ...intelligence,
   time:new Date().toLocaleTimeString()
  };
 }
 
 /*
-SAFE LOOP (never crashes)
+==============================
+REALTIME ENGINE
+==============================
 */
+
 setInterval(()=>{
 
  try{
@@ -79,7 +122,11 @@ setInterval(()=>{
   const data =
    generateMarketData();
 
-  console.log("📡 LIVE EVENT",data.company);
+  console.log(
+   "📡 INTELLIGENCE EVENT",
+   data.company,
+   data.verdict
+  );
 
   io.emit("announcement",data);
 
@@ -91,9 +138,10 @@ setInterval(()=>{
 
 /*
 ==============================
-SOCKET
+SOCKET CONNECTION
 ==============================
 */
+
 io.on("connection",()=>{
  console.log("👤 Dashboard Connected");
 });
@@ -103,6 +151,7 @@ io.on("connection",()=>{
 START SERVER
 ==============================
 */
+
 const PORT =
  process.env.PORT || 4000;
 
