@@ -10,70 +10,57 @@ export default function App(){
 
  useEffect(()=>{
 
-  socket.on(
-   "announcement",
-   (data)=>{
+  socket.on("announcement",(data)=>{
 
-    setAnnouncements(prev=>[
-     data,
-     ...prev.slice(0,9)
-    ]);
-   }
-  );
+   setAnnouncements(prev=>[
+    data,
+    ...prev.slice(0,9)
+   ]);
+
+  });
 
  },[]);
 
  return(
 
-  <div
-   style={{
-    background:"#06142b",
-    minHeight:"100vh",
-    padding:"30px",
-    color:"white"
-   }}
-  >
+  <div style={{
+   background:"#06142b",
+   minHeight:"100vh",
+   padding:"30px",
+   color:"white"
+  }}>
 
    <h1>
     🇮🇳 Market Intelligence Dashboard
    </h1>
 
-   <h2>Live Announcements</h2>
+   {announcements.map((item,index)=>(
 
-   {announcements.map(
-    (item,index)=>(
+    <div key={index}
+     style={{
+      background:"#102542",
+      padding:"20px",
+      margin:"15px 0",
+      borderRadius:"10px"
+     }}>
 
-     <div key={index}
-      style={{
-       background:"#102542",
-       padding:"20px",
-       margin:"15px 0",
-       borderRadius:"10px"
-      }}
-     >
+     <h3>{item.company}</h3>
 
-      <h3>{item.company}</h3>
+     <p>Sector: {item.sector}</p>
 
-      <p>Sector: {item.sector}</p>
+     <p><b>Verdict:</b> {item.verdict}</p>
 
-      <p>
-       Verdict:
-       <b> {item.verdict}</b>
-      </p>
+     <p><b>Reason:</b> {item.reason}</p>
 
-      <p>
-       Reason:
-       {item.reason}
-      </p>
+     <p><b>QoQ:</b> {item.qoqSignal}</p>
 
-      <p>
-       Strength:
-       {item.strengthScore}
-      </p>
+     <p><b>YoY:</b> {item.yoySignal}</p>
 
-      <p>{item.time}</p>
+     <p><b>Insight:</b> {item.insight}</p>
 
-     </div>
+     <p>{item.time}</p>
+
+    </div>
 
    ))}
 

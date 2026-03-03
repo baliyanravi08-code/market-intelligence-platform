@@ -4,13 +4,21 @@ const path = require("path");
 const { Server } = require("socket.io");
 
 /*
-==============================
-INTELLIGENCE ENGINE
-==============================
+====================================
+INTELLIGENCE ENGINES
+====================================
 */
 const analyzeResult =
 require("./services/intelligence/resultEngine");
 
+const analyzeQoQ =
+require("./services/intelligence/qoqEngine");
+
+/*
+====================================
+APP INIT
+====================================
+*/
 const app = express();
 const server = http.createServer(app);
 
@@ -19,18 +27,18 @@ const io = new Server(server,{
 });
 
 /*
-==============================
+====================================
 HEALTH CHECK
-==============================
+====================================
 */
 app.get("/health",(req,res)=>{
  res.send("OK");
 });
 
 /*
-==============================
+====================================
 SERVE FRONTEND
-==============================
+====================================
 */
 const distPath =
  path.join(__dirname,"../client/dist");
@@ -44,9 +52,9 @@ app.use((req,res)=>{
 });
 
 /*
-==============================
-MARKET DATA GENERATOR
-==============================
+====================================
+MARKET DATA + QoQ ENGINE
+====================================
 */
 
 function generateMarketData(){
@@ -74,6 +82,9 @@ function generateMarketData(){
    Math.random()*sectors.length
   )];
 
+ const baseProfit =
+  Math.floor(Math.random()*1000);
+
  const rawData={
 
   company:
@@ -82,6 +93,16 @@ function generateMarketData(){
    )],
 
   sector,
+
+  currentProfit:baseProfit,
+
+  lastQuarterProfit:
+   baseProfit +
+   Math.floor(Math.random()*400-200),
+
+  lastYearProfit:
+   baseProfit +
+   Math.floor(Math.random()*600-300),
 
   profitChange:
    Math.floor(Math.random()*40)-20,
@@ -99,20 +120,25 @@ function generateMarketData(){
    Math.floor(Math.random()*100)
  };
 
- const intelligence =
+ const resultIntel =
   analyzeResult(rawData);
+
+ const qoqIntel =
+  analyzeQoQ(rawData);
 
  return{
   ...rawData,
-  ...intelligence,
-  time:new Date().toLocaleTimeString()
+  ...resultIntel,
+  ...qoqIntel,
+  time:new Date()
+   .toLocaleTimeString()
  };
 }
 
 /*
-==============================
+====================================
 REALTIME ENGINE
-==============================
+====================================
 */
 
 setInterval(()=>{
@@ -125,7 +151,7 @@ setInterval(()=>{
   console.log(
    "📡 INTELLIGENCE EVENT",
    data.company,
-   data.verdict
+   data.insight
   );
 
   io.emit("announcement",data);
@@ -137,9 +163,9 @@ setInterval(()=>{
 },10000);
 
 /*
-==============================
-SOCKET CONNECTION
-==============================
+====================================
+SOCKET
+====================================
 */
 
 io.on("connection",()=>{
@@ -147,9 +173,9 @@ io.on("connection",()=>{
 });
 
 /*
-==============================
+====================================
 START SERVER
-==============================
+====================================
 */
 
 const PORT =
