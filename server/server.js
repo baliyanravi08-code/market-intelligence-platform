@@ -1,45 +1,83 @@
 const express = require("express");
 const http = require("http");
 const path = require("path");
+const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
 
-/*
-====================================
-RENDER HEALTH CHECK
-====================================
-VERY IMPORTANT
-*/
-app.get("/health", (req, res) => {
-  res.status(200).send("OK");
+const io = new Server(server,{
+ cors:{origin:"*"}
 });
 
 /*
-====================================
-SERVE FRONTEND BUILD
-====================================
+==============================
+HEALTH
+==============================
 */
+app.get("/health",(req,res)=>{
+ res.send("OK");
+});
 
-const distPath = path.join(__dirname, "../client/dist");
+/*
+==============================
+SERVE FRONTEND
+==============================
+*/
+const distPath =
+ path.join(__dirname,"../client/dist");
 
 app.use(express.static(distPath));
 
-/*
-Express v5 SAFE fallback
-*/
-app.use((req, res) => {
-  res.sendFile(path.join(distPath, "index.html"));
+app.use((req,res)=>{
+ res.sendFile(
+  path.join(distPath,"index.html")
+ );
 });
 
 /*
-====================================
-START SERVER (RENDER SAFE)
-====================================
+==============================
+TEST LIVE ENGINE
+(simulates BSE)
+==============================
 */
 
-const PORT = process.env.PORT || 4000;
+setInterval(()=>{
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ SERVER LISTENING ON PORT ${PORT}`);
+ const fakeData={
+  company:"TCS",
+  sector:"IT",
+  strengthScore:
+   Math.floor(Math.random()*100),
+  marketStatus:"Bullish",
+  time:new Date().toLocaleTimeString()
+ };
+
+ console.log("📡 Sending Live Data");
+
+ io.emit("announcement",fakeData);
+
+},10000);
+
+/*
+==============================
+SOCKET
+==============================
+*/
+
+io.on("connection",()=>{
+ console.log("👤 Dashboard Connected");
+});
+
+/*
+==============================
+START SERVER
+==============================
+*/
+
+const PORT =
+ process.env.PORT || 4000;
+
+server.listen(PORT,"0.0.0.0",()=>{
+ console.log(`✅ SERVER LISTENING ON PORT ${PORT}`);
 });
