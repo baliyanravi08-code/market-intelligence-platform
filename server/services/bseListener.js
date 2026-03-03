@@ -1,46 +1,50 @@
 const axios = require("axios");
 
-let lastAnnouncement = null;
+let lastTime = null;
 
 async function getBSEData() {
 
-  try {
+ try {
 
-    const response = await axios.get(
-      "https://api.allorigins.win/raw?url=https://www.bseindia.com/corporates/ann.html",
-      { timeout: 15000 }
-    );
+  const res = await axios.get(
+   "https://query1.finance.yahoo.com/v7/finance/quote?symbols=RELIANCE.NS,TCS.NS,HDFCBANK.NS,SBIN.NS,INFY.NS",
+   { timeout:15000 }
+  );
 
-    const html = response.data;
+  const quotes =
+   res.data.quoteResponse.result;
 
-    const match =
-      html.match(/<td class="tdtext">(.*?)<\/td>/);
+  if(!quotes.length) return null;
 
-    if (!match) return null;
+  const random =
+   quotes[Math.floor(
+    Math.random()*quotes.length
+   )];
 
-    const text = match[1]
-      .replace(/<[^>]*>/g,"")
-      .trim();
+  const now =
+   new Date().toLocaleTimeString();
 
-    if(text === lastAnnouncement)
-      return null;
+  if(now === lastTime)
+   return null;
 
-    lastAnnouncement = text;
+  lastTime = now;
 
-    return {
-      company:text.split(" ")[0],
-      sector:"Market",
-      strengthScore:
-        Math.floor(Math.random()*100),
-      marketStatus:"LIVE",
-      time:new Date().toLocaleTimeString()
-    };
+  return {
+   company:random.symbol,
+   sector:"Market",
+   strengthScore:
+    Math.floor(Math.random()*100),
+   marketStatus:
+    random.regularMarketChangePercent>0
+     ?"Bullish":"Bearish",
+   time:now
+  };
 
-  } catch(err){
+ } catch(err){
 
-    console.log("❌ BSE Fetch Failed");
-    return null;
-  }
+  console.log("❌ Market Feed Failed");
+  return null;
+ }
 }
 
 module.exports = getBSEData;
