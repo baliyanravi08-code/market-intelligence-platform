@@ -3,6 +3,10 @@ const http = require("http");
 const path = require("path");
 const { Server } = require("socket.io");
 
+const {
+ fetchBSEAnnouncement
+} = require("./services/bseListener");
+
 const app = express();
 const server = http.createServer(app);
 
@@ -12,7 +16,7 @@ const io = new Server(server,{
 
 /*
 ==============================
-HEALTH
+HEALTH CHECK
 ==============================
 */
 app.get("/health",(req,res)=>{
@@ -37,27 +41,23 @@ app.use((req,res)=>{
 
 /*
 ==============================
-TEST LIVE ENGINE
-(simulates BSE)
+REAL BSE ENGINE
+(RENDER SAFE)
 ==============================
 */
 
-setInterval(()=>{
+setInterval(async()=>{
 
- const fakeData={
-  company:"TCS",
-  sector:"IT",
-  strengthScore:
-   Math.floor(Math.random()*100),
-  marketStatus:"Bullish",
-  time:new Date().toLocaleTimeString()
- };
+ const data =
+  await fetchBSEAnnouncement();
 
- console.log("📡 Sending Live Data");
+ if(!data) return;
 
- io.emit("announcement",fakeData);
+ console.log("📡 REAL BSE EVENT");
 
-},10000);
+ io.emit("announcement",data);
+
+},20000);
 
 /*
 ==============================
@@ -79,5 +79,7 @@ const PORT =
  process.env.PORT || 4000;
 
 server.listen(PORT,"0.0.0.0",()=>{
- console.log(`✅ SERVER LISTENING ON PORT ${PORT}`);
+ console.log(
+  `✅ SERVER LISTENING ON PORT ${PORT}`
+ );
 });

@@ -1,118 +1,43 @@
-const puppeteer=require("puppeteer-core");
+const axios = require("axios");
 
-let browser=null;
-let lastAnnouncement="";
-let launchTime=Date.now();
+let lastTitle = null;
 
-async function getBrowser(){
+async function fetchBSE() {
 
- const SIX_HOURS=6*60*60*1000;
+ try {
 
- if(browser &&
-   Date.now()-launchTime>SIX_HOURS){
-
-   console.log("♻ Refresh Browser");
-
-   await browser.close();
-   browser=null;
- }
-
- if(!browser){
-
-  console.log("🌐 Launch Browser");
-
-  browser=await puppeteer.launch({
-
-   executablePath:
-     process.env.CHROME_PATH ||
-     "/usr/bin/chromium-browser",
-
-   headless:true,
-
-   args:[
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage"
-   ]
-  });
-
-  launchTime=Date.now();
- }
-
- return browser;
-}
-
-async function fetchAnnouncements(){
-
- try{
-
-  const br=await getBrowser();
-  const page=await br.newPage();
-
-  await page.goto(
-   "https://www.bseindia.com/corporates/ann.html",
-   {
-    waitUntil:"domcontentloaded",
-    timeout:60000
-   }
+  const res = await axios.get(
+   "https://api.allorigins.win/raw?url=https://www.bseindia.com/corporates/ann.html"
   );
 
-  const data=await page.evaluate(()=>{
+  const html = res.data;
 
-   const list=[];
+  const match =
+   html.match(/<td class="tdtext">(.*?)<\/td>/);
 
-   document.querySelectorAll("a")
-   .forEach(a=>{
+  if(!match) return null;
 
-    const text=a.innerText?.trim();
-    const link=a.getAttribute("href");
+  const title =
+   match[1].replace(/<[^>]*>/g,"").trim();
 
-    if(text && link &&
-       link.includes("AnnPdf")){
+  if(title === lastTitle) return null;
 
-      list.push({
-        title:text,
-        link:
-        "https://www.bseindia.com"+link
-      });
-    }
-   });
+  lastTitle = title;
 
-   return list;
-  });
+  return {
+   company:title.split(" ")[0],
+   sector:"Market",
+   strengthScore:
+    Math.floor(Math.random()*100),
+   marketStatus:"Live",
+   time:new Date().toLocaleTimeString()
+  };
 
-  await page.close();
+ } catch(err){
 
-  return data;
-
- }catch(err){
-
-  console.log("⚠ Browser restart");
-
-  if(browser){
-   await browser.close();
-   browser=null;
-  }
-
-  return [];
+  console.log("BSE Fetch Failed");
+  return null;
  }
 }
 
-function getNewAnnouncement(list){
-
- if(!list.length) return null;
-
- const latest=list[0];
-
- if(latest.title!==lastAnnouncement){
-  lastAnnouncement=latest.title;
-  return latest;
- }
-
- return null;
-}
-
-module.exports={
- fetchAnnouncements,
- getNewAnnouncement
-};
+module.exports={fetchBSE};
