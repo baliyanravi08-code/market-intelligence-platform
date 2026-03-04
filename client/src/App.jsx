@@ -1,90 +1,50 @@
-import {useEffect,useState} from "react";
-import {io} from "socket.io-client";
+import { useEffect, useState } from "react";
+import { io } from "socket.io-client";
 
-const socket=io();
+const socket = io();
 
-export default function App(){
+export default function App() {
 
- const[ann,setAnn]=useState([]);
+  const [announcements, setAnnouncements] = useState([]);
 
- useEffect(()=>{
+  useEffect(() => {
 
-  socket.on("announcement",(data)=>{
+    socket.on("connect", () => {
+      console.log("Connected to server");
+    });
 
-   setAnn(prev=>[
-    data,
-    ...prev.slice(0,9)
-   ]);
+    socket.on("bse_announcements", (data) => {
+      console.log("Announcements received:", data);
 
-  });
+      setAnnouncements(data.announcements || []);
+    });
 
- },[]);
+  }, []);
 
- return(
+  return (
+    <div style={{
+      background:"#001b3a",
+      minHeight:"100vh",
+      color:"white",
+      padding:"40px"
+    }}>
 
-  <div style={{
-   background:"#06142b",
-   color:"white",
-   minHeight:"100vh",
-   padding:"30px"
-  }}>
+      <h1>Market Intelligence</h1>
 
-   <h1>Market Intelligence</h1>
+      <h2 style={{marginTop:"30px"}}>Latest BSE Announcements</h2>
 
-   {ann.map((item,i)=>(
+      {announcements.length === 0 && (
+        <p>No announcements yet...</p>
+      )}
 
-    <div key={i}
-     style={{
-      background:"#102542",
-      padding:"20px",
-      margin:"15px 0",
-      borderRadius:"10px"
-     }}>
-
-     <h3>🚨 {item.company}</h3>
-
-     <p>Sector: {item.sector}</p>
-
-     <p>MarketCap: {item.marketCap}</p>
-
-     <p>Insight: {item.insight}</p>
-
-     <p>PDF Insight: {item.pdfInsight}</p>
-
-     {item.orders && (
-
-      <div>
-
-       <b>Orders</b>
-
-       {item.orders.map((o,index)=>(
-
-        <p key={index}>
-         ₹{o.value} Cr
-        </p>
-
-       ))}
-
-       <p>
-        <b>Total Orders:</b>
-        ₹{item.totalOrderValue} Cr
-       </p>
-
-       <p>
-        <b>Impact Score:</b>
-        {item.impactPercent}% ({item.impactLevel})
-       </p>
-
-      </div>
-
-     )}
-
-     <p>{item.time}</p>
+      <ul>
+        {announcements.map((a, i) => (
+          <li key={i} style={{marginBottom:"10px"}}>
+            {a}
+          </li>
+        ))}
+      </ul>
 
     </div>
-
-   ))}
-
-  </div>
- );
+  );
 }
