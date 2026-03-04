@@ -4,7 +4,7 @@ const path=require("path");
 const {Server}=require("socket.io");
 
 /*
-INTELLIGENCE ENGINES
+INTELLIGENCE
 */
 const analyzeResult=
 require("./services/intelligence/resultEngine");
@@ -21,8 +21,11 @@ require("./services/intelligence/marketDirection");
 const analyzeResultPDF=
 require("./services/intelligence/pdfEngine");
 
+const detectOrder=
+require("./services/intelligence/orderDetector");
+
 /*
-DATA SOURCES
+DATA
 */
 const getBSEAnnouncement=
 require("./services/data/bseAnnouncements");
@@ -32,6 +35,9 @@ require("./services/data/simulator");
 
 const getResultPDF=
 require("./services/data/resultSource");
+
+const getMarketCap=
+require("./services/data/marketCap");
 
 const app=express();
 const server=http.createServer(app);
@@ -48,7 +54,7 @@ app.get("/health",(req,res)=>{
 });
 
 /*
-SERVE FRONTEND
+FRONTEND
 */
 const distPath=
  path.join(__dirname,"../client/dist");
@@ -62,7 +68,7 @@ app.use((req,res)=>{
 });
 
 /*
-BUILD MARKET EVENT
+BUILD EVENT
 */
 async function buildEvent(){
 
@@ -70,8 +76,6 @@ async function buildEvent(){
   await getBSEAnnouncement();
 
  if(!data){
-
-  console.log("Using simulator");
 
   data =
    getSimulatorData();
@@ -102,11 +106,32 @@ async function buildEvent(){
  const pdfIntel=
   await analyzeResultPDF(pdfUrl);
 
+/*
+ORDER DETECTION
+*/
+
+ const orders =
+  detectOrder(data.announcement);
+
+ let marketCap=null;
+
+ if(data.company){
+
+  const cap =
+   await getMarketCap(data.company);
+
+  if(cap)
+   marketCap=cap.marketCap;
+
+ }
+
  const merged={
   ...data,
   ...resultIntel,
   ...qoqIntel,
-  ...pdfIntel
+  ...pdfIntel,
+  orders,
+  marketCap
  };
 
  const sectorStrength=
@@ -127,7 +152,7 @@ async function buildEvent(){
 }
 
 /*
-REALTIME LOOP
+LOOP
 */
 setInterval(async()=>{
 
@@ -136,10 +161,14 @@ setInterval(async()=>{
   const event=
    await buildEvent();
 
-  console.log(
-   "Announcement:",
-   event.company
-  );
+  if(event.orders){
+
+   console.log(
+    "ORDER DETECTED:",
+    event.orders
+   );
+
+  }
 
   io.emit("announcement",event);
 
@@ -159,13 +188,11 @@ io.on("connection",()=>{
 });
 
 /*
-START SERVER
+START
 */
 const PORT=
  process.env.PORT||4000;
 
 server.listen(PORT,"0.0.0.0",()=>{
- console.log(
-  `Server running on ${PORT}`
- );
+ console.log(`Server running ${PORT}`);
 });
