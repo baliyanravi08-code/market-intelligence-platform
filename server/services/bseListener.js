@@ -1,5 +1,4 @@
 const axios = require("axios");
-const cheerio = require("cheerio");
 
 const analyzeAnnouncement = require("./orderAnalyzer");
 const updateSectorRadar = require("./intelligence/sectorRadar");
@@ -24,49 +23,41 @@ async function fetchAnnouncements() {
 
   try {
 
-    const url = "https://www.bseindia.com/corporates/ann.html";
+    const url =
+      "https://api.bseindia.com/BseIndiaAPI/api/AnnGetData/w?pageno=1&strCat=&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C";
 
     const res = await axios.get(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Referer": "https://www.bseindia.com/"
       }
     });
 
-    const $ = cheerio.load(res.data);
+    const list = res.data?.Table || [];
 
-    const rows = $("#ctl00_ContentPlaceHolder1_gvData tr");
-
-    console.log("📢 BSE Announcements fetched:", rows.length);
+    console.log("📢 BSE Announcements fetched:", list.length);
 
     const alerts = [];
 
-    rows.each(async (index, row) => {
+    for (const item of list) {
 
-      const cols = $(row).find("td");
+      const id = item.SCRIP_CD + item.HEADLINE + item.NEWS_DT;
 
-      if (cols.length < 5) return;
-
-      const company = $(cols[1]).text().trim();
-      const code = $(cols[0]).text().trim();
-      const title = $(cols[3]).text().trim();
-      const date = $(cols[4]).text().trim();
-
-      const id = code + title + date;
-
-      if (seen.has(id)) return;
+      if (seen.has(id)) continue;
 
       seen.add(id);
 
       const announcement = {
-        company,
-        code,
-        title,
-        date
+        company: item.SLONGNAME,
+        code: item.SCRIP_CD,
+        title: item.HEADLINE,
+        date: item.NEWS_DT
       };
 
       const signal = await analyzeAnnouncement(announcement);
 
-      if (!signal) return;
+      if (!signal) continue;
 
       alerts.push(signal);
 
@@ -88,7 +79,7 @@ async function fetchAnnouncements() {
 
       }
 
-    });
+    }
 
     if (alerts.length > 0 && ioRef) {
 
