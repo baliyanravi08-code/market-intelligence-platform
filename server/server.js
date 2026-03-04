@@ -1,49 +1,105 @@
-const express = require("express")
-const http = require("http")
-const { Server } = require("socket.io")
-const path = require("path")
+const express = require("express");
+const http = require("http");
+const path = require("path");
+const cors = require("cors");
+const { Server } = require("socket.io");
 
-const app = express()
-const server = http.createServer(app)
+/* ------------------------------
+   Import System Components
+------------------------------ */
 
-const io = new Server(server,{
- cors:{origin:"*"}
-})
+const startBSEListener = require("./services/bseListener");
+const startCoordinator = require("./coordinator");
 
-/*
-========================================
-SERVE FRONTEND (REACT BUILD)
-========================================
-*/
+/* ------------------------------
+   Express + HTTP Server
+------------------------------ */
 
-const clientPath = path.join(__dirname,"../client/dist")
+const app = express();
+const server = http.createServer(app);
 
-app.use(express.static(clientPath))
+/* ------------------------------
+   Socket.io Setup
+------------------------------ */
 
-app.get("*",(req,res)=>{
- res.sendFile(path.join(clientPath,"index.html"))
-})
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+  },
+});
 
-/*
-========================================
-WEBSOCKET
-========================================
-*/
+/* ------------------------------
+   Middleware
+------------------------------ */
 
-io.on("connection",(socket)=>{
- console.log("👤 Dashboard Connected")
-})
+app.use(cors());
+app.use(express.json());
 
-/*
-========================================
-MARKET ENGINE START
-========================================
-*/
+/* ------------------------------
+   Health Check Route
+------------------------------ */
 
-console.log("🚀 ULTRA FAST RESULT ENGINE RUNNING")
+app.get("/health", (req, res) => {
+  res.json({
+    status: "Market Intelligence Platform Running",
+    time: new Date(),
+  });
+});
 
-const PORT = process.env.PORT || 4000
+/* ------------------------------
+   WebSocket Connection
+------------------------------ */
 
-server.listen(PORT,()=>{
- console.log("🌐 Server running on port",PORT)
-})
+io.on("connection", (socket) => {
+  console.log("Client connected:", socket.id);
+
+  socket.emit("connected", {
+    message: "Connected to Market Intelligence Platform",
+  });
+
+  socket.on("disconnect", () => {
+    console.log("Client disconnected:", socket.id);
+  });
+});
+
+/* ------------------------------
+   Start Market Intelligence System
+------------------------------ */
+
+console.log("🚀 Starting Market Intelligence Engines...");
+
+try {
+  startCoordinator(io);
+  console.log("✅ Coordinator started");
+} catch (err) {
+  console.error("❌ Coordinator failed:", err.message);
+}
+
+try {
+  startBSEListener();
+  console.log("✅ BSE Listener started");
+} catch (err) {
+  console.error("❌ BSE Listener failed:", err.message);
+}
+
+/* ------------------------------
+   Serve React Frontend
+------------------------------ */
+
+const clientPath = path.join(__dirname, "../../client/dist");
+
+app.use(express.static(clientPath));
+
+app.get("/*", (req, res) => {
+  res.sendFile(path.join(clientPath, "index.html"));
+});
+
+/* ------------------------------
+   Start Server
+------------------------------ */
+
+const PORT = process.env.PORT || 10000;
+
+server.listen(PORT, () => {
+  console.log(`🚀 Market Intelligence Server running on port ${PORT}`);
+});
