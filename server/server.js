@@ -21,7 +21,7 @@ require("./services/intelligence/marketDirection");
 const analyzeResultPDF=
 require("./services/intelligence/pdfEngine");
 
-const detectOrder=
+const detectOrders=
 require("./services/intelligence/orderDetector");
 
 /*
@@ -54,7 +54,7 @@ app.get("/health",(req,res)=>{
 });
 
 /*
-FRONTEND
+SERVE FRONTEND
 */
 const distPath=
  path.join(__dirname,"../client/dist");
@@ -81,37 +81,37 @@ async function buildEvent(){
    getSimulatorData();
  }
 
- const baseProfit=
+ const baseProfit =
   Math.floor(Math.random()*1000);
 
- data.currentProfit=baseProfit;
+ data.currentProfit = baseProfit;
 
- data.lastQuarterProfit=
-  baseProfit+
+ data.lastQuarterProfit =
+  baseProfit +
   Math.floor(Math.random()*200-100);
 
- data.lastYearProfit=
-  baseProfit+
+ data.lastYearProfit =
+  baseProfit +
   Math.floor(Math.random()*400-200);
 
- const resultIntel=
+ const resultIntel =
   analyzeResult(data);
 
- const qoqIntel=
+ const qoqIntel =
   analyzeQoQ(data);
 
- const pdfUrl=
+ const pdfUrl =
   getResultPDF();
 
- const pdfIntel=
+ const pdfIntel =
   await analyzeResultPDF(pdfUrl);
 
 /*
 ORDER DETECTION
 */
 
- const orders =
-  detectOrder(data.announcement);
+ const orderData =
+  detectOrders(data.announcement);
 
  let marketCap=null;
 
@@ -130,14 +130,14 @@ ORDER DETECTION
   ...resultIntel,
   ...qoqIntel,
   ...pdfIntel,
-  orders,
+  ...orderData,
   marketCap
  };
 
- const sectorStrength=
+ const sectorStrength =
   updateSectorStrength(merged);
 
- const market=
+ const market =
   updateMarketDirection(
    sectorStrength
   );
@@ -152,20 +152,21 @@ ORDER DETECTION
 }
 
 /*
-LOOP
+REALTIME LOOP
 */
 setInterval(async()=>{
 
  try{
 
-  const event=
+  const event =
    await buildEvent();
 
-  if(event.orders){
+  if(event.totalOrderValue){
 
    console.log(
-    "ORDER DETECTED:",
-    event.orders
+    "ORDERS DETECTED:",
+    event.totalOrderValue,
+    "Crore"
    );
 
   }
@@ -174,7 +175,7 @@ setInterval(async()=>{
 
  }catch(err){
 
-  console.log("Safe Engine Error");
+  console.log("Engine Error");
 
  }
 
@@ -188,11 +189,11 @@ io.on("connection",()=>{
 });
 
 /*
-START
+START SERVER
 */
-const PORT=
- process.env.PORT||4000;
+const PORT =
+ process.env.PORT || 4000;
 
 server.listen(PORT,"0.0.0.0",()=>{
- console.log(`Server running ${PORT}`);
+ console.log(`Server running on ${PORT}`);
 });

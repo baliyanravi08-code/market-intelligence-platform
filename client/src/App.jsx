@@ -55,15 +55,20 @@ export default function App(){
 
       <div>
 
-       <b>Orders Detected:</b>
+       <b>Orders Detected</b>
 
        {item.orders.map((o,index)=>(
 
         <p key={index}>
-         ₹{o.value} Crore Order
+         ₹{o.value} Crore
         </p>
 
        ))}
+
+       <p>
+        <b>Total Orders:</b>
+        ₹{item.totalOrderValue} Crore
+       </p>
 
       </div>
 
