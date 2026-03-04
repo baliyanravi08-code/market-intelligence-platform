@@ -1,48 +1,36 @@
 const detectOrder = require("./intelligence/orderDetector");
-const detectMarketEvent = require("./intelligence/marketRadar");
 
 function analyzeAnnouncement(announcement) {
 
   const order = detectOrder(announcement.title);
 
-  if (order) {
+  if (!order) return null;
 
-    return {
-      type: "ORDER_ALERT",
-      company: announcement.company,
-      code: announcement.code,
-      orderValueCrore: order.orderValueCrore,
-      impact: classifyImpact(order.orderValueCrore),
-      title: announcement.title,
-      date: announcement.date
-    };
+  const impact = classifyImpact(order.orderValueCrore);
 
-  }
+  return {
 
-  const event = detectMarketEvent(announcement);
+    type: "ORDER_ALERT",
 
-  if (event) {
+    company: announcement.company,
+    code: announcement.code,
 
-    return {
-      type: event.type,
-      priority: event.priority,
-      company: announcement.company,
-      code: announcement.code,
-      title: announcement.title,
-      date: announcement.date
-    };
+    orderValueCrore: order.orderValueCrore,
 
-  }
+    impact: impact,
 
-  return null;
+    title: announcement.title,
+    date: announcement.date
+
+  };
 
 }
 
 function classifyImpact(value) {
 
-  if (value > 500) return "VERY_HIGH";
-  if (value > 100) return "HIGH";
-  if (value > 20) return "MEDIUM";
+  if (value >= 500) return "VERY_HIGH";
+  if (value >= 100) return "HIGH";
+  if (value >= 20) return "MEDIUM";
   return "LOW";
 
 }

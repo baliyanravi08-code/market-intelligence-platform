@@ -43,15 +43,21 @@ async function fetchAnnouncements() {
       seen.add(id);
 
       const announcement = {
+
         company: item.SLONGNAME,
         code: item.SCRIP_CD,
         title: item.HEADLINE,
         date: item.NEWS_DT
+
       };
 
       const signal = analyzeAnnouncement(announcement);
 
-      if (signal) alerts.push(signal);
+      if (signal && signal.orderValueCrore >= 1) {
+
+        alerts.push(signal);
+
+      }
 
     }
 
@@ -59,9 +65,9 @@ async function fetchAnnouncements() {
 
     if (alerts.length > 0 && ioRef) {
 
-      ioRef.emit("market_events", alerts);
+      ioRef.emit("order_alerts", alerts);
 
-      console.log("🚨 Market events detected:", alerts.length);
+      console.log("🚨 Orders ≥ ₹1 Cr detected:", alerts.length);
 
     }
 

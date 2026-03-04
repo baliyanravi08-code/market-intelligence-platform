@@ -5,19 +5,20 @@ const socket = io();
 
 export default function App() {
 
-  const [events, setEvents] = useState([]);
+  const [alerts, setAlerts] = useState([]);
 
   useEffect(() => {
 
-    socket.on("market_events", (data) => {
+    socket.on("order_alerts", (data) => {
 
-      setEvents(prev => [...data, ...prev]);
+      setAlerts(prev => [...data, ...prev]);
 
     });
 
   }, []);
 
   return (
+
     <div style={{
       background:"#001b3a",
       minHeight:"100vh",
@@ -28,13 +29,13 @@ export default function App() {
 
       <h1>Market Intelligence Radar</h1>
 
-      <h2 style={{marginTop:"20px"}}>📡 Market Events</h2>
+      <h2 style={{marginTop:"20px"}}>🚨 Orders ≥ ₹1 Crore</h2>
 
-      {events.length === 0 && (
-        <p>No market events yet...</p>
+      {alerts.length === 0 && (
+        <p>No large orders detected yet...</p>
       )}
 
-      {events.map((e,i)=>(
+      {alerts.map((a,i)=>(
         <div
           key={i}
           style={{
@@ -45,32 +46,25 @@ export default function App() {
           }}
         >
 
-          <b>{e.company} ({e.code})</b>
+          <b>{a.company} ({a.code})</b>
 
           <div style={{marginTop:"5px"}}>
-            Event: {e.type}
+            Order Value: ₹{a.orderValueCrore} Cr
           </div>
 
-          {e.orderValueCrore && (
-            <div>
-              Order Value: ₹{e.orderValueCrore} Cr
-            </div>
-          )}
-
-          {e.impact && (
-            <div>
-              Impact: {e.impact}
-            </div>
-          )}
+          <div>
+            Impact Level: {a.impact}
+          </div>
 
           <div style={{marginTop:"5px"}}>
-            {e.title}
+            {a.title}
           </div>
 
         </div>
       ))}
 
     </div>
+
   );
 
 }
