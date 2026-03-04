@@ -1,5 +1,6 @@
 const express = require("express")
 const http = require("http")
+const axios = require("axios")
 const { Server } = require("socket.io")
 
 const sectorMap = require("./data/sectorMap")
@@ -13,7 +14,7 @@ const io = new Server(server,{
 
 /*
 ==============================
-DATABASE (TEMP MEMORY)
+STORAGE
 ==============================
 */
 
@@ -28,9 +29,11 @@ const sectorScore = {
  OTHER:0
 }
 
+let lastId = ""
+
 /*
 ==============================
-DETECT SECTOR
+SECTOR DETECTOR
 ==============================
 */
 
@@ -38,32 +41,36 @@ function detectSector(company){
 
  const key = company.replace(/\s/g,"").toUpperCase()
 
- if(sectorMap[key]){
+ if(sectorMap[key])
   return sectorMap[key]
- }
 
  return "OTHER"
+
 }
 
 /*
 ==============================
-SIGNAL GENERATOR
+RESULT SIGNAL ENGINE
 ==============================
 */
 
-function generateSignal(){
+function analyze(text){
 
- const r = Math.random()
+ const t = text.toLowerCase()
 
- if(r > 0.65) return "POSITIVE"
- if(r < 0.35) return "NEGATIVE"
+ if(t.includes("record") || t.includes("growth"))
+  return "POSITIVE"
+
+ if(t.includes("loss") || t.includes("decline"))
+  return "NEGATIVE"
 
  return "NEUTRAL"
+
 }
 
 /*
 ==============================
-UPDATE SECTOR SCORE
+UPDATE SECTOR
 ==============================
 */
 
@@ -74,11 +81,12 @@ function updateSector(sector,signal){
 
  if(signal === "NEGATIVE")
   sectorScore[sector]--
+
 }
 
 /*
 ==============================
-MARKET DIRECTION
+MARKET TREND
 ==============================
 */
 
@@ -92,55 +100,82 @@ function marketDirection(){
  if(total < -5) return "BEARISH"
 
  return "SIDEWAYS"
+
 }
 
 /*
 ==============================
-SIMULATED MARKET EVENTS
+BSE RESULT WATCHER
 ==============================
 */
 
-setInterval(()=>{
+async function checkBSE(){
 
- const companies = [
-  "HDFCBANK",
-  "ICICIBANK",
-  "SUNPHARMA",
-  "HAL",
-  "BEL",
-  "TITAN",
-  "TATAMOTORS",
-  "IRCTC",
-  "RVNL"
- ]
+ try{
 
- const company =
- companies[Math.floor(Math.random()*companies.length)]
+  const response = await axios.get(
+   "https://api.allorigins.win/raw?url=https://www.bseindia.com/corporates/ann.html"
+  )
 
- const sector = detectSector(company)
+  const html = response.data
 
- const signal = generateSignal()
+  const match =
+  html.match(/Financial Results[^<]*/i)
 
- updateSector(sector,signal)
+  if(!match) return
 
- const result = {
-  company,
-  sector,
-  signal,
-  time:new Date().toLocaleTimeString()
+  const text = match[0]
+
+  const id = text.slice(0,40)
+
+  if(id === lastId) return
+
+  lastId = id
+
+  const company =
+  text.split(" ")[0]
+
+  const sector = detectSector(company)
+
+  const signal = analyze(text)
+
+  updateSector(sector,signal)
+
+  const result = {
+
+   company,
+   sector,
+   signal,
+   insight:text,
+   time:new Date().toLocaleTimeString()
+
+  }
+
+  results.unshift(result)
+
+  io.emit("update",{
+   result,
+   sectorScore,
+   market:marketDirection()
+  })
+
+  console.log("📡 RESULT DETECTED:",company)
+
+ }catch(e){
+
+  console.log("⚠ Market Fetch Failed")
+
  }
 
- results.unshift(result)
+}
 
- io.emit("update",{
-  result,
-  sectorScore,
-  market:marketDirection()
- })
+/*
+==============================
+RUN EVERY 5 SEC
+==============================
+*/
 
- console.log("📡 MARKET EVENT",company)
-
-},15000)
+setInterval(checkBSE,5000)
 
 /*
 ==============================
@@ -171,5 +206,5 @@ START SERVER
 const PORT = process.env.PORT || 4000
 
 server.listen(PORT,()=>{
- console.log("🚀 MARKET INTELLIGENCE ENGINE RUNNING")
+ console.log("🚀 REAL MARKET WATCHER RUNNING")
 })

@@ -16,6 +16,7 @@
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "mongoose": "^9.2.4",
+    "node-fetch": "^3.3.2",
     "pdf-parse": "^2.4.5",
     "puppeteer-core": "^24.37.5",
     "socket.io": "^4.8.3"
