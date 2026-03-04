@@ -39,11 +39,11 @@ async function loadBSECompanies() {
 
   const res = await axios.get(url);
 
-  const list = res.data;
+  const list = res.data || [];
 
   list.forEach((item) => {
 
-    companyMap.set(item.SCRIP_CD.toString(), {
+    companyMap.set(String(item.SCRIP_CD), {
       symbol: item.SCRIP_CD,
       name: item.SCRIPNAME,
       exchange: "BSE"
@@ -55,12 +55,12 @@ async function loadBSECompanies() {
 
 async function loadCompanyMaster() {
 
-  console.log("Loading company master...");
+  console.log("📊 Loading company master...");
 
   await loadNSECompanies();
   await loadBSECompanies();
 
-  console.log("Companies loaded:", companyMap.size);
+  console.log("✅ Companies loaded:", companyMap.size);
 
 }
 
