@@ -6,6 +6,7 @@ const socket = io();
 export default function App() {
 
   const [announcements, setAnnouncements] = useState([]);
+  const [count, setCount] = useState(0);
 
   useEffect(() => {
 
@@ -14,36 +15,76 @@ export default function App() {
     });
 
     socket.on("bse_announcements", (data) => {
+
       console.log("Announcements received:", data);
 
       setAnnouncements(data.announcements || []);
+      setCount(data.count || 0);
+
     });
+
+    return () => {
+      socket.off("bse_announcements");
+    };
 
   }, []);
 
   return (
-    <div style={{
-      background:"#001b3a",
-      minHeight:"100vh",
-      color:"white",
-      padding:"40px"
-    }}>
+    <div
+      style={{
+        background: "#001b3a",
+        minHeight: "100vh",
+        color: "white",
+        padding: "40px",
+        fontFamily: "Arial"
+      }}
+    >
 
-      <h1>Market Intelligence</h1>
+      <h1 style={{ marginBottom: "30px" }}>Market Intelligence</h1>
 
-      <h2 style={{marginTop:"30px"}}>Latest BSE Announcements</h2>
+      <h2>Latest BSE Announcements ({count})</h2>
 
       {announcements.length === 0 && (
-        <p>No announcements yet...</p>
+        <p style={{ marginTop: "20px" }}>Waiting for announcements...</p>
       )}
 
-      <ul>
+      <div style={{ marginTop: "30px" }}>
+
         {announcements.map((a, i) => (
-          <li key={i} style={{marginBottom:"10px"}}>
-            {a}
-          </li>
+
+          <div
+            key={i}
+            style={{
+              background: "#012a5c",
+              padding: "15px",
+              borderRadius: "8px",
+              marginBottom: "15px"
+            }}
+          >
+
+            <div style={{ fontWeight: "bold", fontSize: "16px" }}>
+              {a.company} ({a.code})
+            </div>
+
+            <div style={{ marginTop: "5px" }}>
+              {a.title}
+            </div>
+
+            <div
+              style={{
+                marginTop: "8px",
+                fontSize: "12px",
+                opacity: 0.8
+              }}
+            >
+              {a.date}
+            </div>
+
+          </div>
+
         ))}
-      </ul>
+
+      </div>
 
     </div>
   );

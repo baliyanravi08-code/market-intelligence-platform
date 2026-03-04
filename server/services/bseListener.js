@@ -1,58 +1,6 @@
 const axios = require("axios");
-const cheerio = require("cheerio");
-
-const BSE_URL = "https://www.bseindia.com/corporates/ann.html";
 
 let ioRef = null;
-
-function attachSocket(io) {
-  ioRef = io;
-}
-
-async function fetchAnnouncements() {
-
-  try {
-
-    const res = await axios.get(BSE_URL, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
-      }
-    });
-
-    const $ = cheerio.load(res.data);
-
-    const announcements = [];
-
-    $("table tr").each((i, row) => {
-
-      const text = $(row).text().trim();
-
-      if (text.length > 30) {
-        announcements.push(text);
-      }
-
-    });
-
-    console.log("📢 BSE Announcements fetched:", announcements.length);
-
-    if (ioRef) {
-
-      ioRef.emit("bse_announcements", {
-        count: announcements.length,
-        announcements: announcements.slice(0, 10),
-        time: new Date()
-      });
-
-    }
-
-  } catch (err) {
-
-    console.log("❌ Market Feed Failed", err.message);
-
-  }
-
-}
 
 function startBSEListener(io) {
 
@@ -63,6 +11,49 @@ function startBSEListener(io) {
   fetchAnnouncements();
 
   setInterval(fetchAnnouncements, 5000);
+
+}
+
+async function fetchAnnouncements() {
+
+  try {
+
+    const url =
+      "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?pageno=1&strCat=-1&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C";
+
+    const res = await axios.get(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://www.bseindia.com/",
+        "Origin": "https://www.bseindia.com"
+      }
+    });
+
+    const list = res.data.Table || [];
+
+    console.log("📢 BSE Announcements fetched:", list.length);
+
+    const announcements = list.slice(0,10).map(item => ({
+      company: item.SLONGNAME,
+      code: item.SCRIP_CD,
+      title: item.HEADLINE,
+      date: item.NEWS_DT
+    }));
+
+    if (ioRef) {
+
+      ioRef.emit("bse_announcements", {
+        count: announcements.length,
+        announcements
+      });
+
+    }
+
+  } catch (err) {
+
+    console.log("❌ Market Feed Failed:", err.message);
+
+  }
 
 }
 
