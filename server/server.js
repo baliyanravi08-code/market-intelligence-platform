@@ -3,7 +3,7 @@ const http = require("http")
 const axios = require("axios")
 const { Server } = require("socket.io")
 
-const sectorMap = require("./data/sectorMap")
+const sectorMap = require("./services/data/sectorMap")
 
 const app = express()
 const server = http.createServer(app)
