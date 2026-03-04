@@ -19,6 +19,7 @@
     "node-fetch": "^3.3.2",
     "pdf-parse": "^2.4.5",
     "puppeteer-core": "^24.37.5",
+    "redis": "^5.11.0",
     "socket.io": "^4.8.3"
   }
 }

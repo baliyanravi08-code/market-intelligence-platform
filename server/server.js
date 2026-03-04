@@ -21,12 +21,12 @@ STORAGE
 const results = []
 
 const sectorScore = {
- BANK:0,
- PHARMA:0,
- DEFENSE:0,
- RAILWAY:0,
- AUTO:0,
- OTHER:0
+ BANK:50,
+ PHARMA:50,
+ DEFENSE:50,
+ RAILWAY:50,
+ AUTO:50,
+ OTHER:50
 }
 
 let lastId = ""
@@ -50,7 +50,7 @@ function detectSector(company){
 
 /*
 ==============================
-RESULT SIGNAL ENGINE
+SIGNAL ENGINE
 ==============================
 */
 
@@ -77,10 +77,38 @@ UPDATE SECTOR
 function updateSector(sector,signal){
 
  if(signal === "POSITIVE")
-  sectorScore[sector]++
+  sectorScore[sector] += 2
 
  if(signal === "NEGATIVE")
-  sectorScore[sector]--
+  sectorScore[sector] -= 2
+
+}
+
+/*
+==============================
+FLOW ENGINE
+==============================
+*/
+
+function detectFlow(){
+
+ const flows = {}
+
+ Object.entries(sectorScore)
+ .forEach(([k,v])=>{
+
+  if(v > 65)
+   flows[k] = "🔥 STRONG BUY FLOW"
+
+  else if(v < 40)
+   flows[k] = "⚠ SELL PRESSURE"
+
+  else
+   flows[k] = "➖ NEUTRAL"
+
+ })
+
+ return flows
 
 }
 
@@ -96,8 +124,8 @@ function marketDirection(){
  Object.values(sectorScore)
  .reduce((a,b)=>a+b,0)
 
- if(total > 5) return "BULLISH"
- if(total < -5) return "BEARISH"
+ if(total > 350) return "BULLISH 📈"
+ if(total < 250) return "BEARISH 📉"
 
  return "SIDEWAYS"
 
@@ -105,11 +133,11 @@ function marketDirection(){
 
 /*
 ==============================
-BSE RESULT WATCHER
+BSE FETCH ENGINE
 ==============================
 */
 
-async function checkBSE(){
+async function fetchAnnouncements(){
 
  try{
 
@@ -154,9 +182,12 @@ async function checkBSE(){
   results.unshift(result)
 
   io.emit("update",{
+
    result,
    sectorScore,
-   market:marketDirection()
+   market:marketDirection(),
+   flow:detectFlow()
+
   })
 
   console.log("📡 RESULT DETECTED:",company)
@@ -171,11 +202,19 @@ async function checkBSE(){
 
 /*
 ==============================
-RUN EVERY 5 SEC
+MULTI WATCHERS
 ==============================
 */
 
-setInterval(checkBSE,5000)
+setInterval(fetchAnnouncements,5000)
+
+setTimeout(()=>{
+ setInterval(fetchAnnouncements,5000)
+},2000)
+
+setTimeout(()=>{
+ setInterval(fetchAnnouncements,5000)
+},4000)
 
 /*
 ==============================
@@ -206,5 +245,5 @@ START SERVER
 const PORT = process.env.PORT || 4000
 
 server.listen(PORT,()=>{
- console.log("🚀 REAL MARKET WATCHER RUNNING")
+ console.log("🚀 ULTRA FAST RESULT ENGINE RUNNING")
 })
