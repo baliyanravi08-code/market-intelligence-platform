@@ -41,7 +41,7 @@ export default function App(){
       borderRadius:"10px"
      }}>
 
-     <h3>{item.company}</h3>
+     <h3>🚨 {item.company}</h3>
 
      <p>Sector: {item.sector}</p>
 
@@ -55,19 +55,24 @@ export default function App(){
 
       <div>
 
-       <b>Orders Detected</b>
+       <b>Orders</b>
 
        {item.orders.map((o,index)=>(
 
         <p key={index}>
-         ₹{o.value} Crore
+         ₹{o.value} Cr
         </p>
 
        ))}
 
        <p>
         <b>Total Orders:</b>
-        ₹{item.totalOrderValue} Crore
+        ₹{item.totalOrderValue} Cr
+       </p>
+
+       <p>
+        <b>Impact Score:</b>
+        {item.impactPercent}% ({item.impactLevel})
        </p>
 
       </div>

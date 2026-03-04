@@ -200,7 +200,7 @@ setInterval(async()=>{
 
  }
 
-},20000);
+},5000);
 
 /*
 SOCKET

@@ -1,67 +1,77 @@
-const axios = require("axios");
-const cheerio = require("cheerio");
+const axios=require("axios");
+const cheerio=require("cheerio");
 
-let lastAnnouncement = null;
+let seenAnnouncements=new Set();
 
 async function getBSEAnnouncement(){
 
  try{
 
-  const url =
+  const url=
    "https://www.bseindia.com/corporates/ann.html";
 
-  const response = await axios.get(url,{
+  const res=await axios.get(url,{
    headers:{
     "User-Agent":
-     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+     "Mozilla/5.0"
    },
    timeout:15000
   });
 
-  const html = response.data;
+  const html=res.data;
 
-  const $ = cheerio.load(html);
+  const $=cheerio.load(html);
 
-  const firstRow =
-   $("table tr").eq(1).text();
+  const rows=$("table tr");
 
-  if(!firstRow)
-   return null;
+  for(let i=1;i<rows.length;i++){
 
-  const clean =
-   firstRow.replace(/\s+/g," ").trim();
+   const text=
+    $(rows[i]).text()
+    .replace(/\s+/g," ")
+    .trim();
 
-  if(clean === lastAnnouncement)
-   return null;
+   if(!text)
+    continue;
 
-  lastAnnouncement = clean;
+   if(seenAnnouncements.has(text))
+    continue;
 
-  const company =
-   clean.split(" ")[0];
+   seenAnnouncements.add(text);
 
-  return{
-   company,
-   sector:"Market",
-   announcement:clean,
-   profitChange:
-    Math.floor(Math.random()*40)-20,
-   revenueChange:
-    Math.floor(Math.random()*30),
-   otherExpense:
-    Math.floor(Math.random()*40),
-   provisions:
-    Math.floor(Math.random()*30),
-   newOrders:
-    Math.floor(Math.random()*100)
-  };
+   const company=
+    text.split(" ")[0];
+
+   return{
+
+    company,
+    sector:"Market",
+    announcement:text,
+    profitChange:
+     Math.floor(Math.random()*40)-20,
+    revenueChange:
+     Math.floor(Math.random()*30),
+    otherExpense:
+     Math.floor(Math.random()*40),
+    provisions:
+     Math.floor(Math.random()*30),
+    newOrders:
+     Math.floor(Math.random()*100)
+
+   };
+
+  }
+
+  return null;
 
  }catch(err){
 
   console.log("BSE fetch failed");
 
   return null;
+
  }
 
 }
 
-module.exports = getBSEAnnouncement;
+module.exports=getBSEAnnouncement;
