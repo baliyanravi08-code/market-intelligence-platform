@@ -2,11 +2,12 @@ const axios = require("axios");
 const csv = require("csv-parser");
 const { Readable } = require("stream");
 const updateSmartMoney = require("./intelligence/smartMoneyTracker");
+const { updateRadar } = require("./intelligence/radarEngine");
 
 let ioRef = null;
 let seenDeals = new Set();
 
-function startNSEDealsListener(io) {
+function startNSEDealsListener(io){
 
   ioRef = io;
 
@@ -14,77 +15,79 @@ function startNSEDealsListener(io) {
 
   fetchDeals();
 
-  setInterval(fetchDeals, 60000);
+  setInterval(fetchDeals,60000);
 
 }
 
-async function fetchDeals() {
+async function fetchDeals(){
 
-  try {
+  try{
 
     const url =
       "https://archives.nseindia.com/content/equities/bulk.csv";
 
-    const res = await axios.get(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0"
+    const res = await axios.get(url,{
+      headers:{
+        "User-Agent":"Mozilla/5.0"
       }
     });
 
     const stream = Readable.from(res.data);
 
-    const institutionalAlerts = [];
-    const smartMoneyAlerts = [];
+    const institutionalAlerts=[];
+    const smartMoneyAlerts=[];
 
     stream
       .pipe(csv())
-      .on("data", (row) => {
+      .on("data",(row)=>{
 
         const id = row.Symbol + row.ClientName + row.Date;
 
-        if (seenDeals.has(id)) return;
+        if(seenDeals.has(id)) return;
 
         seenDeals.add(id);
 
         const quantity = Number(row.Quantity);
         const price = Number(row.Price);
 
-        const value = (quantity * price) / 10000000;
+        const value = (quantity*price)/10000000;
 
         const activity = {
-
-          type: "INSTITUTIONAL_DEAL",
-          company: row.Symbol,
-          investor: row.ClientName,
-          action: row.BuySell,
-          quantity: quantity,
-          price: price,
-          value: value
-
+          type:"INSTITUTIONAL_DEAL",
+          company:row.Symbol,
+          investor:row.ClientName,
+          action:row.BuySell,
+          quantity,
+          price,
+          value
         };
 
         institutionalAlerts.push(activity);
 
+        updateRadar(activity.company,activity);
+
         const smartSignal = updateSmartMoney(activity);
 
-        if (smartSignal) {
+        if(smartSignal){
 
           smartMoneyAlerts.push(smartSignal);
+
+          updateRadar(smartSignal.company,smartSignal);
 
         }
 
       })
-      .on("end", () => {
+      .on("end",()=>{
 
-        if (institutionalAlerts.length > 0 && ioRef) {
+        if(institutionalAlerts.length>0 && ioRef){
 
-          ioRef.emit("institutional_activity", institutionalAlerts);
+          ioRef.emit("institutional_activity",institutionalAlerts);
 
         }
 
-        if (smartMoneyAlerts.length > 0 && ioRef) {
+        if(smartMoneyAlerts.length>0 && ioRef){
 
-          ioRef.emit("smart_money_alerts", smartMoneyAlerts);
+          ioRef.emit("smart_money_alerts",smartMoneyAlerts);
 
           console.log("🧠 Smart money detected");
 
@@ -92,9 +95,9 @@ async function fetchDeals() {
 
       });
 
-  } catch (err) {
+  }catch(err){
 
-    console.log("❌ NSE Deals Fetch Failed:", err.message);
+    console.log("❌ NSE Deals Fetch Failed:",err.message);
 
   }
 

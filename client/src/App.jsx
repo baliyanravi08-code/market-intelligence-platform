@@ -1,30 +1,30 @@
 import { useEffect, useState } from "react";
-import { io } from "socket.io-client";
 
-const socket = io();
+export default function App(){
 
-export default function App() {
+  const [radar,setRadar] = useState([]);
 
-  const [events, setEvents] = useState([]);
-  const [institutions, setInstitutions] = useState([]);
+  useEffect(()=>{
 
-  useEffect(() => {
+    loadRadar();
 
-    socket.on("market_events", (data) => {
+    const timer = setInterval(loadRadar,10000);
 
-      setEvents(prev => [...data, ...prev]);
+    return ()=>clearInterval(timer);
 
-    });
+  },[]);
 
-    socket.on("institutional_activity", (data) => {
+  async function loadRadar(){
 
-      setInstitutions(prev => [...data, ...prev]);
+    const res = await fetch("/radar");
 
-    });
+    const data = await res.json();
 
-  }, []);
+    setRadar(data);
 
-  return (
+  }
+
+  return(
 
     <div style={{
       background:"#001b3a",
@@ -34,11 +34,9 @@ export default function App() {
       fontFamily:"Arial"
     }}>
 
-      <h1>Market Intelligence Radar</h1>
+      <h1>⭐ Market Radar</h1>
 
-      <h2 style={{marginTop:"20px"}}>📡 Market Events</h2>
-
-      {events.map((e,i)=>(
+      {radar.map((r,i)=>(
         <div key={i}
           style={{
             background:"#012a5c",
@@ -48,42 +46,11 @@ export default function App() {
           }}
         >
 
-          <b>{e.company} ({e.code})</b>
+          <b>{r.symbol}</b>
 
-          <div>Event Type: {e.type}</div>
+          <div>Score: {r.score}</div>
 
-          {e.newOrder && (
-            <div>Order Value: ₹{e.newOrder} Cr</div>
-          )}
-
-          {e.impactPercent && (
-            <div>MarketCap Impact: {e.impactPercent}%</div>
-          )}
-
-        </div>
-      ))}
-
-      <h2 style={{marginTop:"40px"}}>🏦 Institutional Activity</h2>
-
-      {institutions.map((i,k)=>(
-        <div key={k}
-          style={{
-            background:"#013c1b",
-            padding:"15px",
-            borderRadius:"8px",
-            marginBottom:"15px"
-          }}
-        >
-
-          <b>{i.company}</b>
-
-          <div>Investor: {i.investor}</div>
-
-          <div>Action: {i.action}</div>
-
-          <div>Shares: {i.quantity}</div>
-
-          <div>Value: ₹{i.value.toFixed(2)} Cr</div>
+          <div>Signals: {r.signals.join(", ")}</div>
 
         </div>
       ))}
