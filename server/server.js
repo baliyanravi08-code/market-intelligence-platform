@@ -18,14 +18,17 @@ require("./services/intelligence/sectorEngine");
 const updateMarketDirection=
 require("./services/intelligence/marketDirection");
 
-/*
-DATA SOURCES
-*/
-const getRealMarketData=
-require("./services/data/realMarketData");
+const analyzeResultPDF=
+require("./services/intelligence/pdfEngine");
 
+/*
+DATA
+*/
 const getSimulatorData=
 require("./services/data/simulator");
+
+const getResultPDF=
+require("./services/data/resultSource");
 
 const app=express();
 const server=http.createServer(app);
@@ -56,21 +59,12 @@ app.use((req,res)=>{
 });
 
 /*
-HYBRID DATA ENGINE
+ENGINE
 */
 
-async function getMarketEvent(){
+async function buildEvent(){
 
- let data =
-  await getRealMarketData();
-
- if(!data){
-
-  console.log("🟡 Using Simulator");
-
-  data =
-   getSimulatorData();
- }
+ const data=getSimulatorData();
 
  const baseProfit=
   Math.floor(Math.random()*1000);
@@ -90,10 +84,17 @@ async function getMarketEvent(){
  const qoqIntel=
   analyzeQoQ(data);
 
+ const pdfUrl=
+  getResultPDF();
+
+ const pdfIntel=
+  await analyzeResultPDF(pdfUrl);
+
  const merged={
   ...data,
   ...resultIntel,
-  ...qoqIntel
+  ...qoqIntel,
+  ...pdfIntel
  };
 
  const sectorStrength=
@@ -114,7 +115,7 @@ async function getMarketEvent(){
 }
 
 /*
-REALTIME LOOP
+LOOP
 */
 
 setInterval(async()=>{
@@ -122,10 +123,10 @@ setInterval(async()=>{
  try{
 
   const event=
-   await getMarketEvent();
+   await buildEvent();
 
   console.log(
-   "📡 MARKET EVENT",
+   "📄 RESULT ANALYZED",
    event.company
   );
 
@@ -135,7 +136,7 @@ setInterval(async()=>{
   console.log("Safe Engine Error");
  }
 
-},10000);
+},15000);
 
 /*
 SOCKET
