@@ -1,27 +1,20 @@
 const sectorMap = {
 
- HDFCBANK: "BANK",
- ICICIBANK: "BANK",
- SBIN: "BANK",
- AXISBANK: "BANK",
+  "500510": "Infrastructure", // Larsen & Toubro
+  "532540": "Infrastructure", // KNR Constructions
+  "500400": "Power",
+  "532898": "Railway",
+  "540678": "Defense",
+  "500325": "Energy",
+  "532174": "IT",
+  "532215": "Pharma"
 
- SUNPHARMA: "PHARMA",
- CIPLA: "PHARMA",
- DRREDDY: "PHARMA",
+};
 
- HAL: "DEFENSE",
- BEL: "DEFENSE",
- BDL: "DEFENSE",
+function getSector(code) {
 
- IRCTC: "RAILWAY",
- RVNL: "RAILWAY",
- IRCON: "RAILWAY",
-
- TATAMOTORS: "AUTO",
- MARUTI: "AUTO",
- TITAN: "AUTO",
- MOTHERSON: "AUTO"
+  return sectorMap[code] || "Unknown";
 
 }
 
-module.exports = sectorMap
+module.exports = getSector;

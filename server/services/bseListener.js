@@ -1,5 +1,6 @@
 const axios = require("axios");
 const analyzeAnnouncement = require("./orderAnalyzer");
+const updateSectorRadar = require("./intelligence/sectorRadar");
 
 let ioRef = null;
 let seen = new Set();
@@ -32,7 +33,8 @@ async function fetchAnnouncements() {
 
     const list = res.data.Table || [];
 
-    const alerts = [];
+    const orderAlerts = [];
+    const sectorAlerts = [];
 
     for (const item of list.slice(0, 50)) {
 
@@ -51,11 +53,23 @@ async function fetchAnnouncements() {
 
       };
 
-      const signal = analyzeAnnouncement(announcement);
+      const signal = await analyzeAnnouncement(announcement);
 
-      if (signal && signal.orderValueCrore >= 1) {
+      if (signal && signal.newOrder >= 1) {
 
-        alerts.push(signal);
+        orderAlerts.push(signal);
+
+        const sectorData = updateSectorRadar(signal);
+
+        if (sectorData.orders >= 3) {
+
+          sectorAlerts.push({
+            sector: sectorData.sector,
+            orders: sectorData.orders,
+            value: sectorData.value
+          });
+
+        }
 
       }
 
@@ -63,11 +77,17 @@ async function fetchAnnouncements() {
 
     console.log("📢 BSE Announcements fetched:", list.length);
 
-    if (alerts.length > 0 && ioRef) {
+    if (orderAlerts.length > 0 && ioRef) {
 
-      ioRef.emit("order_alerts", alerts);
+      ioRef.emit("order_book_updates", orderAlerts);
 
-      console.log("🚨 Orders ≥ ₹1 Cr detected:", alerts.length);
+    }
+
+    if (sectorAlerts.length > 0 && ioRef) {
+
+      ioRef.emit("sector_alerts", sectorAlerts);
+
+      console.log("🚨 Sector momentum detected");
 
     }
 

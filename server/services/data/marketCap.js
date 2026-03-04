@@ -1,32 +1,27 @@
 const axios = require("axios");
 
-async function getMarketCap(symbol){
+async function getMarketCap(symbol) {
 
- try{
+  try {
 
-  const url =
-   `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}.NS`;
+    const url =
+      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}.NS`;
 
-  const res =
-   await axios.get(url,{timeout:10000});
+    const res = await axios.get(url);
 
-  const data =
-   res.data.quoteResponse.result[0];
+    const data = res.data.quoteResponse.result[0];
 
-  if(!data)
-   return null;
+    if (!data) return null;
 
-  return{
-   marketCap:data.marketCap,
-   price:data.regularMarketPrice
-  };
+    const marketCap = data.marketCap || 0;
 
- }catch(err){
+    return marketCap / 10000000; // convert to crore
 
-  console.log("Marketcap fetch failed");
+  } catch {
 
-  return null;
- }
+    return null;
+
+  }
 
 }
 

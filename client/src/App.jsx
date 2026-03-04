@@ -5,13 +5,20 @@ const socket = io();
 
 export default function App() {
 
-  const [alerts, setAlerts] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [sectors, setSectors] = useState([]);
 
   useEffect(() => {
 
-    socket.on("order_alerts", (data) => {
+    socket.on("order_book_updates", (data) => {
 
-      setAlerts(prev => [...data, ...prev]);
+      setOrders(prev => [...data, ...prev]);
+
+    });
+
+    socket.on("sector_alerts", (data) => {
+
+      setSectors(prev => [...data, ...prev]);
 
     });
 
@@ -29,15 +36,10 @@ export default function App() {
 
       <h1>Market Intelligence Radar</h1>
 
-      <h2 style={{marginTop:"20px"}}>🚨 Orders ≥ ₹1 Crore</h2>
+      <h2 style={{marginTop:"20px"}}>📦 Order Book Updates</h2>
 
-      {alerts.length === 0 && (
-        <p>No large orders detected yet...</p>
-      )}
-
-      {alerts.map((a,i)=>(
-        <div
-          key={i}
+      {orders.map((o,i)=>(
+        <div key={i}
           style={{
             background:"#012a5c",
             padding:"15px",
@@ -46,19 +48,36 @@ export default function App() {
           }}
         >
 
-          <b>{a.company} ({a.code})</b>
+          <b>{o.company} ({o.code})</b>
 
-          <div style={{marginTop:"5px"}}>
-            Order Value: ₹{a.orderValueCrore} Cr
-          </div>
+          <div>New Order: ₹{o.newOrder} Cr</div>
 
-          <div>
-            Impact Level: {a.impact}
-          </div>
+          <div>Total Order Book: ₹{o.totalOrderBook} Cr</div>
 
-          <div style={{marginTop:"5px"}}>
-            {a.title}
-          </div>
+          {o.impactPercent && (
+            <div>MarketCap Impact: {o.impactPercent}%</div>
+          )}
+
+        </div>
+      ))}
+
+      <h2 style={{marginTop:"40px"}}>🚨 Sector Momentum</h2>
+
+      {sectors.map((s,i)=>(
+        <div key={i}
+          style={{
+            background:"#5c2a01",
+            padding:"15px",
+            borderRadius:"8px",
+            marginBottom:"15px"
+          }}
+        >
+
+          <b>Sector: {s.sector}</b>
+
+          <div>Orders: {s.orders}</div>
+
+          <div>Total Value: ₹{s.value} Cr</div>
 
         </div>
       ))}
