@@ -4,7 +4,7 @@ const path=require("path");
 const {Server}=require("socket.io");
 
 /*
-INTELLIGENCE
+INTELLIGENCE ENGINES
 */
 const analyzeResult=
 require("./services/intelligence/resultEngine");
@@ -22,8 +22,11 @@ const analyzeResultPDF=
 require("./services/intelligence/pdfEngine");
 
 /*
-DATA
+DATA SOURCES
 */
+const getBSEAnnouncement=
+require("./services/data/bseAnnouncements");
+
 const getSimulatorData=
 require("./services/data/simulator");
 
@@ -45,7 +48,7 @@ app.get("/health",(req,res)=>{
 });
 
 /*
-FRONTEND
+SERVE FRONTEND
 */
 const distPath=
  path.join(__dirname,"../client/dist");
@@ -59,17 +62,26 @@ app.use((req,res)=>{
 });
 
 /*
-ENGINE
+BUILD MARKET EVENT
 */
-
 async function buildEvent(){
 
- const data=getSimulatorData();
+ let data =
+  await getBSEAnnouncement();
+
+ if(!data){
+
+  console.log("Using simulator");
+
+  data =
+   getSimulatorData();
+ }
 
  const baseProfit=
   Math.floor(Math.random()*1000);
 
  data.currentProfit=baseProfit;
+
  data.lastQuarterProfit=
   baseProfit+
   Math.floor(Math.random()*200-100);
@@ -115,9 +127,8 @@ async function buildEvent(){
 }
 
 /*
-LOOP
+REALTIME LOOP
 */
-
 setInterval(async()=>{
 
  try{
@@ -126,33 +137,35 @@ setInterval(async()=>{
    await buildEvent();
 
   console.log(
-   "📄 RESULT ANALYZED",
+   "Announcement:",
    event.company
   );
 
   io.emit("announcement",event);
 
- }catch(e){
+ }catch(err){
+
   console.log("Safe Engine Error");
+
  }
 
-},15000);
+},20000);
 
 /*
 SOCKET
 */
 io.on("connection",()=>{
- console.log("👤 Dashboard Connected");
+ console.log("Dashboard Connected");
 });
 
 /*
-START
+START SERVER
 */
 const PORT=
  process.env.PORT||4000;
 
 server.listen(PORT,"0.0.0.0",()=>{
  console.log(
-  `✅ SERVER LISTENING ON PORT ${PORT}`
+  `Server running on ${PORT}`
  );
 });
