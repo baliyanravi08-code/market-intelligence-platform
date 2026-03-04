@@ -1,50 +1,53 @@
 const axios = require("axios");
+const cheerio = require("cheerio");
 
-let lastTime = null;
+const BSE_URL = "https://www.bseindia.com/corporates/ann.html";
 
-async function getBSEData() {
+async function fetchAnnouncements() {
 
- try {
+  try {
 
-  const res = await axios.get(
-   "https://query1.finance.yahoo.com/v7/finance/quote?symbols=RELIANCE.NS,TCS.NS,HDFCBANK.NS,SBIN.NS,INFY.NS",
-   { timeout:15000 }
-  );
+    const res = await axios.get(BSE_URL, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+      },
+      timeout: 10000
+    });
 
-  const quotes =
-   res.data.quoteResponse.result;
+    const $ = cheerio.load(res.data);
 
-  if(!quotes.length) return null;
+    const announcements = [];
 
-  const random =
-   quotes[Math.floor(
-    Math.random()*quotes.length
-   )];
+    $("table tr").each((i, row) => {
 
-  const now =
-   new Date().toLocaleTimeString();
+      const text = $(row).text().trim();
 
-  if(now === lastTime)
-   return null;
+      if (text.length > 20) {
+        announcements.push(text);
+      }
 
-  lastTime = now;
+    });
 
-  return {
-   company:random.symbol,
-   sector:"Market",
-   strengthScore:
-    Math.floor(Math.random()*100),
-   marketStatus:
-    random.regularMarketChangePercent>0
-     ?"Bullish":"Bearish",
-   time:now
-  };
+    console.log("📢 BSE Announcements fetched:", announcements.length);
 
- } catch(err){
+  } catch (err) {
 
-  console.log("❌ Market Feed Failed");
-  return null;
- }
+    console.log("❌ Market Feed Failed");
+    console.log(err.message);
+
+  }
+
 }
 
-module.exports = getBSEData;
+function startBSEListener() {
+
+  console.log("🚀 BSE Listener running...");
+
+  fetchAnnouncements();
+
+  setInterval(fetchAnnouncements, 5000);
+
+}
+
+module.exports = startBSEListener;
