@@ -5,14 +5,14 @@ const socket = io();
 
 export default function App() {
 
-  const [orders, setOrders] = useState([]);
+  const [events, setEvents] = useState([]);
   const [sectors, setSectors] = useState([]);
 
   useEffect(() => {
 
-    socket.on("order_book_updates", (data) => {
+    socket.on("market_events", (data) => {
 
-      setOrders(prev => [...data, ...prev]);
+      setEvents(prev => [...data, ...prev]);
 
     });
 
@@ -36,9 +36,9 @@ export default function App() {
 
       <h1>Market Intelligence Radar</h1>
 
-      <h2 style={{marginTop:"20px"}}>📦 Order Book Updates</h2>
+      <h2 style={{marginTop:"20px"}}>📡 Market Events</h2>
 
-      {orders.map((o,i)=>(
+      {events.map((e,i)=>(
         <div key={i}
           style={{
             background:"#012a5c",
@@ -48,15 +48,25 @@ export default function App() {
           }}
         >
 
-          <b>{o.company} ({o.code})</b>
+          <b>{e.company} ({e.code})</b>
 
-          <div>New Order: ₹{o.newOrder} Cr</div>
+          <div>Event Type: {e.type}</div>
 
-          <div>Total Order Book: ₹{o.totalOrderBook} Cr</div>
-
-          {o.impactPercent && (
-            <div>MarketCap Impact: {o.impactPercent}%</div>
+          {e.newOrder && (
+            <div>New Order: ₹{e.newOrder} Cr</div>
           )}
+
+          {e.totalOrderBook && (
+            <div>Total Order Book: ₹{e.totalOrderBook} Cr</div>
+          )}
+
+          {e.impactPercent && (
+            <div>MarketCap Impact: {e.impactPercent}%</div>
+          )}
+
+          <div style={{marginTop:"5px"}}>
+            {e.title}
+          </div>
 
         </div>
       ))}

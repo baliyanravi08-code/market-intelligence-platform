@@ -1,43 +1,51 @@
 const detectOrder = require("./intelligence/orderDetector");
+const classifyAnnouncement = require("./intelligence/aiClassifier");
 const { addOrder } = require("./data/orderBookStore");
 const getMarketCap = require("./data/marketCap");
 
 async function analyzeAnnouncement(announcement) {
 
-  const order = detectOrder(announcement.title);
+  const text = announcement.title;
 
-  if (!order) return null;
+  const order = detectOrder(text);
 
-  const orderValue = order.orderValueCrore;
+  if (order) {
 
-  const book = addOrder(announcement.code, orderValue);
+    const orderValue = order.orderValueCrore;
 
-  const marketCap = await getMarketCap(announcement.code);
+    const book = addOrder(announcement.code, orderValue);
 
-  let impactPercent = null;
+    const marketCap = await getMarketCap(announcement.code);
 
-  if (marketCap && marketCap > 0) {
+    let impactPercent = null;
 
-    impactPercent = ((book.totalOrderValue / marketCap) * 100).toFixed(2);
+    if (marketCap && marketCap > 0) {
+      impactPercent = ((book.totalOrderValue / marketCap) * 100).toFixed(2);
+    }
+
+    return {
+      type: "ORDER_ALERT",
+      company: announcement.company,
+      code: announcement.code,
+      newOrder: orderValue,
+      totalOrderBook: book.totalOrderValue,
+      impactPercent: impactPercent,
+      title: announcement.title,
+      date: announcement.date
+    };
 
   }
 
+  const aiEvent = classifyAnnouncement(text);
+
+  if (!aiEvent) return null;
+
   return {
-
-    type: "ORDER_UPDATE",
-
+    type: aiEvent,
     company: announcement.company,
     code: announcement.code,
-
-    newOrder: orderValue,
-
-    totalOrderBook: book.totalOrderValue,
-
-    impactPercent: impactPercent,
-
     title: announcement.title,
     date: announcement.date
-
   };
 
 }

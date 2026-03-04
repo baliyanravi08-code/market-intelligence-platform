@@ -33,7 +33,7 @@ async function fetchAnnouncements() {
 
     const list = res.data.Table || [];
 
-    const orderAlerts = [];
+    const alerts = [];
     const sectorAlerts = [];
 
     for (const item of list.slice(0, 50)) {
@@ -45,19 +45,19 @@ async function fetchAnnouncements() {
       seen.add(id);
 
       const announcement = {
-
         company: item.SLONGNAME,
         code: item.SCRIP_CD,
         title: item.HEADLINE,
         date: item.NEWS_DT
-
       };
 
       const signal = await analyzeAnnouncement(announcement);
 
-      if (signal && signal.newOrder >= 1) {
+      if (!signal) continue;
 
-        orderAlerts.push(signal);
+      alerts.push(signal);
+
+      if (signal.type === "ORDER_ALERT") {
 
         const sectorData = updateSectorRadar(signal);
 
@@ -77,17 +77,15 @@ async function fetchAnnouncements() {
 
     console.log("📢 BSE Announcements fetched:", list.length);
 
-    if (orderAlerts.length > 0 && ioRef) {
+    if (alerts.length > 0 && ioRef) {
 
-      ioRef.emit("order_book_updates", orderAlerts);
+      ioRef.emit("market_events", alerts);
 
     }
 
     if (sectorAlerts.length > 0 && ioRef) {
 
       ioRef.emit("sector_alerts", sectorAlerts);
-
-      console.log("🚨 Sector momentum detected");
 
     }
 
