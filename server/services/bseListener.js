@@ -3,6 +3,12 @@ const cheerio = require("cheerio");
 
 const BSE_URL = "https://www.bseindia.com/corporates/ann.html";
 
+let ioRef = null;
+
+function attachSocket(io) {
+  ioRef = io;
+}
+
 async function fetchAnnouncements() {
 
   try {
@@ -11,8 +17,7 @@ async function fetchAnnouncements() {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
-      },
-      timeout: 10000
+      }
     });
 
     const $ = cheerio.load(res.data);
@@ -23,7 +28,7 @@ async function fetchAnnouncements() {
 
       const text = $(row).text().trim();
 
-      if (text.length > 20) {
+      if (text.length > 30) {
         announcements.push(text);
       }
 
@@ -31,16 +36,27 @@ async function fetchAnnouncements() {
 
     console.log("📢 BSE Announcements fetched:", announcements.length);
 
+    if (ioRef) {
+
+      ioRef.emit("bse_announcements", {
+        count: announcements.length,
+        announcements: announcements.slice(0, 10),
+        time: new Date()
+      });
+
+    }
+
   } catch (err) {
 
-    console.log("❌ Market Feed Failed");
-    console.log(err.message);
+    console.log("❌ Market Feed Failed", err.message);
 
   }
 
 }
 
-function startBSEListener() {
+function startBSEListener(io) {
+
+  ioRef = io;
 
   console.log("🚀 BSE Listener running...");
 

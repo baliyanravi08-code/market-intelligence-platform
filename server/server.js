@@ -56,7 +56,7 @@ try {
 }
 
 try {
-  startBSEListener();
+  startBSEListener(io);
   console.log("✅ BSE Listener started");
 } catch (err) {
   console.error("❌ BSE Listener failed:", err.message);
