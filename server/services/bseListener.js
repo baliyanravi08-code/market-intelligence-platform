@@ -1,4 +1,6 @@
 const axios = require("axios");
+const cheerio = require("cheerio");
+
 const analyzeAnnouncement = require("./orderAnalyzer");
 const updateSectorRadar = require("./intelligence/sectorRadar");
 const { updateRadar } = require("./intelligence/radarEngine");
@@ -22,40 +24,49 @@ async function fetchAnnouncements() {
 
   try {
 
-    const url =
-      "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?pageno=1&strCat=-1&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C";
+    const url = "https://www.bseindia.com/corporates/ann.html";
 
     const res = await axios.get(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.bseindia.com/"
+        "User-Agent": "Mozilla/5.0"
       }
     });
 
-    const list = res.data?.Table || [];
+    const $ = cheerio.load(res.data);
 
-    console.log("📢 BSE Announcements fetched:", list.length);
+    const rows = $("#ctl00_ContentPlaceHolder1_gvData tr");
+
+    console.log("📢 BSE Announcements fetched:", rows.length);
 
     const alerts = [];
 
-    for (const item of list) {
+    rows.each(async (index, row) => {
 
-      const id = item.SCRIP_CD + item.HEADLINE + item.NEWS_DT;
+      const cols = $(row).find("td");
 
-      if (seen.has(id)) continue;
+      if (cols.length < 5) return;
+
+      const company = $(cols[1]).text().trim();
+      const code = $(cols[0]).text().trim();
+      const title = $(cols[3]).text().trim();
+      const date = $(cols[4]).text().trim();
+
+      const id = code + title + date;
+
+      if (seen.has(id)) return;
 
       seen.add(id);
 
       const announcement = {
-        company: item.SLONGNAME,
-        code: item.SCRIP_CD,
-        title: item.HEADLINE,
-        date: item.NEWS_DT
+        company,
+        code,
+        title,
+        date
       };
 
       const signal = await analyzeAnnouncement(announcement);
 
-      if (!signal) continue;
+      if (!signal) return;
 
       alerts.push(signal);
 
@@ -77,7 +88,7 @@ async function fetchAnnouncements() {
 
       }
 
-    }
+    });
 
     if (alerts.length > 0 && ioRef) {
 
