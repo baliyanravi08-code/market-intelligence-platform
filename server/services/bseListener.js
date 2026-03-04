@@ -14,7 +14,7 @@ function startBSEListener(io) {
 
   fetchAnnouncements();
 
-  setInterval(fetchAnnouncements, 5000);
+  setInterval(fetchAnnouncements, 10000);
 
 }
 
@@ -26,19 +26,21 @@ async function fetchAnnouncements() {
       "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?pageno=1&strCat=-1&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C";
 
     const res = await axios.get(url, {
-      headers:{
-        "User-Agent":"Mozilla/5.0",
-        "Referer":"https://www.bseindia.com/"
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://www.bseindia.com/"
       }
     });
 
-    const list = res.data.Table || [];
+    const list = res.data?.Table || [];
+
+    console.log("📢 BSE Announcements fetched:", list.length);
 
     const alerts = [];
 
-    for (const item of list.slice(0,50)) {
+    for (const item of list) {
 
-      const id = item.SCRIP_CD + item.HEADLINE;
+      const id = item.SCRIP_CD + item.HEADLINE + item.NEWS_DT;
 
       if (seen.has(id)) continue;
 
@@ -65,7 +67,7 @@ async function fetchAnnouncements() {
 
         if (sectorData.orders >= 3) {
 
-          ioRef.emit("sector_alerts",[{
+          ioRef.emit("sector_alerts", [{
             sector: sectorData.sector,
             orders: sectorData.orders,
             value: sectorData.value
@@ -77,8 +79,6 @@ async function fetchAnnouncements() {
 
     }
 
-    console.log("📢 BSE Announcements fetched:", list.length);
-
     if (alerts.length > 0 && ioRef) {
 
       ioRef.emit("market_events", alerts);
@@ -87,7 +87,7 @@ async function fetchAnnouncements() {
 
   } catch (err) {
 
-    console.log("❌ Market Feed Failed:", err.message);
+    console.log("❌ BSE Feed Failed:", err.message);
 
   }
 
