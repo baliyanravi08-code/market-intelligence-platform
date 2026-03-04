@@ -5,13 +5,13 @@ const socket = io();
 
 export default function App() {
 
-  const [alerts, setAlerts] = useState([]);
+  const [events, setEvents] = useState([]);
 
   useEffect(() => {
 
-    socket.on("order_alerts", (data) => {
+    socket.on("market_events", (data) => {
 
-      setAlerts(prev => [...data, ...prev]);
+      setEvents(prev => [...data, ...prev]);
 
     });
 
@@ -26,15 +26,15 @@ export default function App() {
       fontFamily:"Arial"
     }}>
 
-      <h1>Market Intelligence</h1>
+      <h1>Market Intelligence Radar</h1>
 
-      <h2 style={{marginTop:"20px"}}>🚨 High Value Orders</h2>
+      <h2 style={{marginTop:"20px"}}>📡 Market Events</h2>
 
-      {alerts.length === 0 && (
-        <p>No order alerts yet...</p>
+      {events.length === 0 && (
+        <p>No market events yet...</p>
       )}
 
-      {alerts.map((a,i)=>(
+      {events.map((e,i)=>(
         <div
           key={i}
           style={{
@@ -45,18 +45,26 @@ export default function App() {
           }}
         >
 
-          <b>{a.company} ({a.code})</b>
+          <b>{e.company} ({e.code})</b>
 
           <div style={{marginTop:"5px"}}>
-            Order Value: ₹{a.orderValueCrore} Cr
+            Event: {e.type}
           </div>
 
-          <div>
-            Impact: {a.impact}
-          </div>
+          {e.orderValueCrore && (
+            <div>
+              Order Value: ₹{e.orderValueCrore} Cr
+            </div>
+          )}
+
+          {e.impact && (
+            <div>
+              Impact: {e.impact}
+            </div>
+          )}
 
           <div style={{marginTop:"5px"}}>
-            {a.title}
+            {e.title}
           </div>
 
         </div>

@@ -26,8 +26,7 @@ async function fetchAnnouncements() {
     const res = await axios.get(url, {
       headers: {
         "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.bseindia.com/",
-        "Origin": "https://www.bseindia.com"
+        "Referer": "https://www.bseindia.com/"
       }
     });
 
@@ -60,9 +59,9 @@ async function fetchAnnouncements() {
 
     if (alerts.length > 0 && ioRef) {
 
-      ioRef.emit("order_alerts", alerts);
+      ioRef.emit("market_events", alerts);
 
-      console.log("🚨 Orders detected:", alerts.length);
+      console.log("🚨 Market events detected:", alerts.length);
 
     }
 
