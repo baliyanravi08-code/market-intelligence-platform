@@ -1,0 +1,29 @@
+const sectorMap = {
+
+ HDFCBANK: "BANK",
+ ICICIBANK: "BANK",
+ SBIN: "BANK",
+ AXISBANK: "BANK",
+ KOTAKBANK: "BANK",
+
+ SUNPHARMA: "PHARMA",
+ CIPLA: "PHARMA",
+ DRREDDY: "PHARMA",
+ LUPIN: "PHARMA",
+
+ HAL: "DEFENSE",
+ BEL: "DEFENSE",
+ BDL: "DEFENSE",
+
+ IRCTC: "RAILWAY",
+ RVNL: "RAILWAY",
+ IRCON: "RAILWAY",
+
+ TATAMOTORS: "AUTO",
+ MARUTI: "AUTO",
+ TITAN: "AUTO",
+ MOTHERSON: "AUTO"
+
+}
+
+module.exports = sectorMap

@@ -1,222 +1,175 @@
-const express=require("express");
-const http=require("http");
-const path=require("path");
-const {Server}=require("socket.io");
+const express = require("express")
+const http = require("http")
+const { Server } = require("socket.io")
 
-/*
-INTELLIGENCE
-*/
-const analyzeResult=
-require("./services/intelligence/resultEngine");
+const sectorMap = require("./data/sectorMap")
 
-const analyzeQoQ=
-require("./services/intelligence/qoqEngine");
+const app = express()
+const server = http.createServer(app)
 
-const updateSectorStrength=
-require("./services/intelligence/sectorEngine");
-
-const updateMarketDirection=
-require("./services/intelligence/marketDirection");
-
-const analyzeResultPDF=
-require("./services/intelligence/pdfEngine");
-
-const detectOrders=
-require("./services/intelligence/orderDetector");
-
-const calculateOrderImpact=
-require("./services/intelligence/orderImpact");
-
-/*
-DATA
-*/
-const getBSEAnnouncement=
-require("./services/data/bseAnnouncements");
-
-const getSimulatorData=
-require("./services/data/simulator");
-
-const getResultPDF=
-require("./services/data/resultSource");
-
-const getMarketCap=
-require("./services/data/marketCap");
-
-const app=express();
-const server=http.createServer(app);
-
-const io=new Server(server,{
+const io = new Server(server,{
  cors:{origin:"*"}
-});
+})
 
 /*
-HEALTH
-*/
-app.get("/health",(req,res)=>{
- res.send("OK");
-});
-
-/*
-FRONTEND
-*/
-const distPath=
- path.join(__dirname,"../client/dist");
-
-app.use(express.static(distPath));
-
-app.use((req,res)=>{
- res.sendFile(
-  path.join(distPath,"index.html")
- );
-});
-
-/*
-BUILD EVENT
-*/
-async function buildEvent(){
-
- let data =
-  await getBSEAnnouncement();
-
- if(!data){
-
-  data =
-   getSimulatorData();
- }
-
- const baseProfit =
-  Math.floor(Math.random()*1000);
-
- data.currentProfit=baseProfit;
-
- data.lastQuarterProfit=
-  baseProfit+
-  Math.floor(Math.random()*200-100);
-
- data.lastYearProfit=
-  baseProfit+
-  Math.floor(Math.random()*400-200);
-
- const resultIntel=
-  analyzeResult(data);
-
- const qoqIntel=
-  analyzeQoQ(data);
-
- const pdfUrl=
-  getResultPDF();
-
- const pdfIntel=
-  await analyzeResultPDF(pdfUrl);
-
-/*
-ORDER DETECTION
+==============================
+DATABASE (TEMP MEMORY)
+==============================
 */
 
- const orderData=
-  detectOrders(data.announcement);
+const results = []
 
- let marketCap=null;
-
- if(data.company){
-
-  const cap=
-   await getMarketCap(data.company);
-
-  if(cap)
-   marketCap=cap.marketCap;
-
- }
-
-/*
-ORDER IMPACT
-*/
-
- let impact=null;
-
- if(orderData && marketCap){
-
-  impact=
-   calculateOrderImpact(
-    orderData.totalOrderValue,
-    marketCap
-   );
-
- }
-
- const merged={
-  ...data,
-  ...resultIntel,
-  ...qoqIntel,
-  ...pdfIntel,
-  ...orderData,
-  ...impact,
-  marketCap
- };
-
- const sectorStrength=
-  updateSectorStrength(merged);
-
- const market=
-  updateMarketDirection(
-   sectorStrength
-  );
-
- return{
-  ...merged,
-  sectorStrength,
-  ...market,
-  time:new Date()
-   .toLocaleTimeString()
- };
+const sectorScore = {
+ BANK:0,
+ PHARMA:0,
+ DEFENSE:0,
+ RAILWAY:0,
+ AUTO:0,
+ OTHER:0
 }
 
 /*
-REALTIME LOOP
+==============================
+DETECT SECTOR
+==============================
 */
 
-setInterval(async()=>{
+function detectSector(company){
 
- try{
+ const key = company.replace(/\s/g,"").toUpperCase()
 
-  const event=
-   await buildEvent();
-
-  if(event.totalOrderValue){
-
-   console.log(
-    "ORDER IMPACT:",
-    event.impactLevel,
-    event.impactPercent,"%"
-   );
-
-  }
-
-  io.emit("announcement",event);
-
- }catch(err){
-
-  console.log("Engine Error");
-
+ if(sectorMap[key]){
+  return sectorMap[key]
  }
 
-},5000);
+ return "OTHER"
+}
 
 /*
+==============================
+SIGNAL GENERATOR
+==============================
+*/
+
+function generateSignal(){
+
+ const r = Math.random()
+
+ if(r > 0.65) return "POSITIVE"
+ if(r < 0.35) return "NEGATIVE"
+
+ return "NEUTRAL"
+}
+
+/*
+==============================
+UPDATE SECTOR SCORE
+==============================
+*/
+
+function updateSector(sector,signal){
+
+ if(signal === "POSITIVE")
+  sectorScore[sector]++
+
+ if(signal === "NEGATIVE")
+  sectorScore[sector]--
+}
+
+/*
+==============================
+MARKET DIRECTION
+==============================
+*/
+
+function marketDirection(){
+
+ const total =
+ Object.values(sectorScore)
+ .reduce((a,b)=>a+b,0)
+
+ if(total > 5) return "BULLISH"
+ if(total < -5) return "BEARISH"
+
+ return "SIDEWAYS"
+}
+
+/*
+==============================
+SIMULATED MARKET EVENTS
+==============================
+*/
+
+setInterval(()=>{
+
+ const companies = [
+  "HDFCBANK",
+  "ICICIBANK",
+  "SUNPHARMA",
+  "HAL",
+  "BEL",
+  "TITAN",
+  "TATAMOTORS",
+  "IRCTC",
+  "RVNL"
+ ]
+
+ const company =
+ companies[Math.floor(Math.random()*companies.length)]
+
+ const sector = detectSector(company)
+
+ const signal = generateSignal()
+
+ updateSector(sector,signal)
+
+ const result = {
+  company,
+  sector,
+  signal,
+  time:new Date().toLocaleTimeString()
+ }
+
+ results.unshift(result)
+
+ io.emit("update",{
+  result,
+  sectorScore,
+  market:marketDirection()
+ })
+
+ console.log("📡 MARKET EVENT",company)
+
+},15000)
+
+/*
+==============================
+API
+==============================
+*/
+
+app.get("/history",(req,res)=>{
+ res.json(results)
+})
+
+/*
+==============================
 SOCKET
+==============================
 */
 
 io.on("connection",()=>{
- console.log("Dashboard Connected");
-});
+ console.log("👤 Dashboard Connected")
+})
 
 /*
-START
+==============================
+START SERVER
+==============================
 */
 
-const PORT=
- process.env.PORT||4000;
+const PORT = process.env.PORT || 4000
 
-server.listen(PORT,"0.0.0.0",()=>{
- console.log(`Server running on ${PORT}`);
-});
+server.listen(PORT,()=>{
+ console.log("🚀 MARKET INTELLIGENCE ENGINE RUNNING")
+})
