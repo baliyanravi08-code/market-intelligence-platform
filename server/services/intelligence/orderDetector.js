@@ -1,58 +1,34 @@
-function detectOrders(announcement){
+function detectOrder(text) {
 
- if(!announcement)
-  return null;
+  if (!text) return null;
 
- const text = announcement.toLowerCase();
+  const patterns = [
+    /₹?\s?([\d,.]+)\s?crore/i,
+    /₹?\s?([\d,.]+)\s?cr/i,
+    /₹?\s?([\d,.]+)\s?million/i
+  ];
 
-/*
-Detect patterns:
-₹50 crore
-50 crore
-50 cr
-₹3.5 cr
-*/
+  for (const p of patterns) {
 
- const regex =
- /₹?\s*(\d+(?:\.\d+)?)\s*(crore|cr)/g;
+    const match = text.match(p);
 
- let match;
- const orders=[];
+    if (match) {
 
- while((match = regex.exec(text)) !== null){
+      const value = parseFloat(match[1].replace(/,/g, ""));
 
-  const value =
-   parseFloat(match[1]);
+      if (value >= 1) {
 
-  if(value >= 1){
+        return {
+          orderValueCrore: value
+        };
 
-   orders.push({
-    value:value,
-    unit:"crore"
-   });
+      }
+
+    }
 
   }
 
- }
-
- if(!orders.length)
   return null;
-
-/*
-TOTAL ORDER VALUE
-*/
-
- const totalOrderValue =
-  orders.reduce(
-   (sum,o)=>sum+o.value,
-   0
-  );
-
- return{
-  orders,
-  totalOrderValue
- };
-
 }
 
-module.exports = detectOrders;
+module.exports = detectOrder;

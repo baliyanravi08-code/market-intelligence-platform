@@ -1,90 +1,32 @@
-/*
-====================================
-ORDER VALUE EXTRACTION
-====================================
-*/
+const detectOrder = require("./intelligence/orderDetector");
 
-function extractOrderValue(text){
+function analyzeAnnouncement(announcement) {
 
- text=text.toLowerCase();
+  const order = detectOrder(announcement.title);
 
- /*
- CRORE FORMAT
- */
+  if (!order) return null;
 
- let crore =
- text.match(/rs\.?\s?(\d+(\.\d+)?)\s?crore/);
+  const impact = classifyImpact(order.orderValueCrore);
 
- if(crore){
-  return parseFloat(crore[1]);
- }
+  return {
+    type: "ORDER_ALERT",
+    company: announcement.company,
+    code: announcement.code,
+    orderValueCrore: order.orderValueCrore,
+    impact,
+    title: announcement.title,
+    date: announcement.date
+  };
 
- /*
- MILLION FORMAT
- */
-
- let million =
- text.match(/(\d+(\.\d+)?)\s?million/);
-
- if(million){
-  return parseFloat(million[1]) * 0.1;
- }
-
- /*
- BILLION FORMAT
- */
-
- let billion =
- text.match(/(\d+(\.\d+)?)\s?billion/);
-
- if(billion){
-  return parseFloat(billion[1]) * 100;
- }
-
- return null;
 }
 
-/*
-====================================
-ORDER IMPACT SCORE
-====================================
-*/
+function classifyImpact(value) {
 
-function orderImpact(value){
+  if (value > 500) return "VERY_HIGH";
+  if (value > 100) return "HIGH";
+  if (value > 20) return "MEDIUM";
+  return "LOW";
 
- if(!value) return "UNKNOWN";
-
- if(value>500)
-  return "MEGA ORDER 🚀";
-
- if(value>100)
-  return "HIGH ORDER ✅";
-
- if(value>20)
-  return "MEDIUM ORDER";
-
- return "SMALL ORDER";
 }
 
-/*
-====================================
-ORDER ANALYSIS
-====================================
-*/
-
-function analyzeOrder(text){
-
- const value =
-  extractOrderValue(text);
-
- if(!value) return null;
-
- return{
-  orderValue:value+" Cr",
-  impact:orderImpact(value)
- };
-}
-
-module.exports={
- analyzeOrder
-};
+module.exports = analyzeAnnouncement;

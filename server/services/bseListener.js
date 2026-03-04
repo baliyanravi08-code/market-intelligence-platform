@@ -1,7 +1,8 @@
 const axios = require("axios");
+const analyzeAnnouncement = require("./orderAnalyzer");
 
 let ioRef = null;
-let seenAnnouncements = new Set();
+let seen = new Set();
 
 function startBSEListener(io) {
 
@@ -27,41 +28,41 @@ async function fetchAnnouncements() {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://www.bseindia.com/",
         "Origin": "https://www.bseindia.com"
-      },
-      timeout: 10000
+      }
     });
 
     const list = res.data.Table || [];
 
-    console.log("📢 BSE Announcements fetched:", list.length);
-
-    const announcements = [];
+    const alerts = [];
 
     for (const item of list.slice(0, 50)) {
 
       const id = item.SCRIP_CD + item.HEADLINE;
 
-      if (seenAnnouncements.has(id)) continue;
+      if (seen.has(id)) continue;
 
-      seenAnnouncements.add(id);
+      seen.add(id);
 
-      announcements.push({
+      const announcement = {
         company: item.SLONGNAME,
         code: item.SCRIP_CD,
         title: item.HEADLINE,
         date: item.NEWS_DT
-      });
+      };
+
+      const signal = analyzeAnnouncement(announcement);
+
+      if (signal) alerts.push(signal);
 
     }
 
-    if (announcements.length === 0) return;
+    console.log("📢 BSE Announcements fetched:", list.length);
 
-    if (ioRef) {
+    if (alerts.length > 0 && ioRef) {
 
-      ioRef.emit("bse_announcements", {
-        count: announcements.length,
-        announcements: announcements
-      });
+      ioRef.emit("order_alerts", alerts);
+
+      console.log("🚨 Orders detected:", alerts.length);
 
     }
 
