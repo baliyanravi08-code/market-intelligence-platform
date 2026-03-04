@@ -4,23 +4,11 @@ const path = require("path");
 const cors = require("cors");
 const { Server } = require("socket.io");
 
-/* ------------------------------
-   Import System Components
------------------------------- */
-
 const startBSEListener = require("./services/bseListener");
 const startCoordinator = require("./coordinator");
 
-/* ------------------------------
-   Express + HTTP Server
------------------------------- */
-
 const app = express();
 const server = http.createServer(app);
-
-/* ------------------------------
-   Socket.io Setup
------------------------------- */
 
 const io = new Server(server, {
   cors: {
@@ -28,15 +16,11 @@ const io = new Server(server, {
   },
 });
 
-/* ------------------------------
-   Middleware
------------------------------- */
-
 app.use(cors());
 app.use(express.json());
 
 /* ------------------------------
-   Health Check Route
+   Health Route
 ------------------------------ */
 
 app.get("/health", (req, res) => {
@@ -47,7 +31,7 @@ app.get("/health", (req, res) => {
 });
 
 /* ------------------------------
-   WebSocket Connection
+   WebSocket
 ------------------------------ */
 
 io.on("connection", (socket) => {
@@ -63,7 +47,7 @@ io.on("connection", (socket) => {
 });
 
 /* ------------------------------
-   Start Market Intelligence System
+   Start Engines
 ------------------------------ */
 
 console.log("🚀 Starting Market Intelligence Engines...");
@@ -83,14 +67,16 @@ try {
 }
 
 /* ------------------------------
-   Serve React Frontend
+   Serve React
 ------------------------------ */
 
 const clientPath = path.join(__dirname, "../../client/dist");
 
 app.use(express.static(clientPath));
 
-app.get("/*", (req, res) => {
+/* Express 5 SAFE fallback */
+
+app.use((req, res) => {
   res.sendFile(path.join(clientPath, "index.html"));
 });
 
@@ -101,5 +87,5 @@ app.get("/*", (req, res) => {
 const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, () => {
-  console.log(`🚀 Market Intelligence Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });

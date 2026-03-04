@@ -1,12 +1,16 @@
-console.log("🚀 Coordinator Running")
+function startCoordinator(io) {
 
-// Workers
-require("../workers/bseWorker")
-require("../workers/nseWorker")
-require("../workers/analyzerWorker")
-require("../workers/sectorWorker")
+  console.log("🚀 Coordinator Running")
 
-// API
-require("../api/websocket")
+  setInterval(() => {
 
-console.log("✅ Workers Loaded")
+    io.emit("system_event", {
+      type: "heartbeat",
+      time: new Date().toISOString()
+    })
+
+  }, 10000)
+
+}
+
+module.exports = startCoordinator
