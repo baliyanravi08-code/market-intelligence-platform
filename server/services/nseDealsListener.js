@@ -1,4 +1,7 @@
 const axios = require("axios");
+const csv = require("csv-parser");
+const { Readable } = require("stream");
+const updateSmartMoney = require("./intelligence/smartMoneyTracker");
 
 let ioRef = null;
 let seenDeals = new Set();
@@ -11,7 +14,7 @@ function startNSEDealsListener(io) {
 
   fetchDeals();
 
-  setInterval(fetchDeals, 30000);
+  setInterval(fetchDeals, 60000);
 
 }
 
@@ -20,54 +23,74 @@ async function fetchDeals() {
   try {
 
     const url =
-      "https://www.nseindia.com/api/block-deals";
+      "https://archives.nseindia.com/content/equities/bulk.csv";
 
     const res = await axios.get(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.nseindia.com/"
+        "User-Agent": "Mozilla/5.0"
       }
     });
 
-    const deals = res.data.data || [];
+    const stream = Readable.from(res.data);
 
-    const alerts = [];
+    const institutionalAlerts = [];
+    const smartMoneyAlerts = [];
 
-    for (const deal of deals) {
+    stream
+      .pipe(csv())
+      .on("data", (row) => {
 
-      const id = deal.symbol + deal.clientName + deal.tradeDate;
+        const id = row.Symbol + row.ClientName + row.Date;
 
-      if (seenDeals.has(id)) continue;
+        if (seenDeals.has(id)) return;
 
-      seenDeals.add(id);
+        seenDeals.add(id);
 
-      alerts.push({
+        const quantity = Number(row.Quantity);
+        const price = Number(row.Price);
 
-        type: "INSTITUTIONAL_DEAL",
+        const value = (quantity * price) / 10000000;
 
-        company: deal.symbol,
+        const activity = {
 
-        investor: deal.clientName,
+          type: "INSTITUTIONAL_DEAL",
+          company: row.Symbol,
+          investor: row.ClientName,
+          action: row.BuySell,
+          quantity: quantity,
+          price: price,
+          value: value
 
-        action: deal.buySell,
+        };
 
-        quantity: deal.quantity,
+        institutionalAlerts.push(activity);
 
-        price: deal.price,
+        const smartSignal = updateSmartMoney(activity);
 
-        value: (deal.quantity * deal.price) / 10000000
+        if (smartSignal) {
+
+          smartMoneyAlerts.push(smartSignal);
+
+        }
+
+      })
+      .on("end", () => {
+
+        if (institutionalAlerts.length > 0 && ioRef) {
+
+          ioRef.emit("institutional_activity", institutionalAlerts);
+
+        }
+
+        if (smartMoneyAlerts.length > 0 && ioRef) {
+
+          ioRef.emit("smart_money_alerts", smartMoneyAlerts);
+
+          console.log("🧠 Smart money detected");
+
+        }
 
       });
-
-    }
-
-    if (alerts.length > 0 && ioRef) {
-
-      ioRef.emit("institutional_activity", alerts);
-
-      console.log("🏦 Institutional deals detected:", alerts.length);
-
-    }
 
   } catch (err) {
 
