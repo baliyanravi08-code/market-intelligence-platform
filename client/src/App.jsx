@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
+import "./App.css";
 
 const socket = io(window.location.origin);
 
@@ -44,39 +45,20 @@ export default function App(){
 
   return(
 
-    <div style={{
-      background:"#001b3a",
-      minHeight:"100vh",
-      width:"100%",
-      color:"white",
-      padding:"40px",
-      fontFamily:"Arial",
-      boxSizing:"border-box"
-    }}>
+    <div className="container">
 
       <h1 style={{marginBottom:"30px"}}>
         ⭐ Market Intelligence Dashboard
       </h1>
 
-      <div style={{
-        display:"grid",
-        gridTemplateColumns:"1fr 1fr 1fr",
-        gap:"30px"
-      }}>
-
-        {/* MARKET EVENTS */}
+      <div className="grid">
 
         <div>
 
           <h2>📢 Market Events</h2>
 
           {events.map((e,i)=>(
-            <div key={i} style={{
-              background:"#012a5c",
-              padding:"12px",
-              marginBottom:"10px",
-              borderRadius:"6px"
-            }}>
+            <div className="card" key={i}>
               <b>{e.company}</b>
               <div>{e.title}</div>
             </div>
@@ -84,20 +66,12 @@ export default function App(){
 
         </div>
 
-
-        {/* ORDER BOOK */}
-
         <div>
 
           <h2>📦 Order Book Updates</h2>
 
           {orders.map((o,i)=>(
-            <div key={i} style={{
-              background:"#013b7a",
-              padding:"12px",
-              marginBottom:"10px",
-              borderRadius:"6px"
-            }}>
+            <div className="card" key={i}>
               <b>{o.company}</b>
               <div>Total Orders: ₹{o.totalOrderValue} Cr</div>
             </div>
@@ -105,20 +79,12 @@ export default function App(){
 
         </div>
 
-
-        {/* SECTOR SIGNALS */}
-
         <div>
 
           <h2>🚀 Sector Signals</h2>
 
           {sector.map((s,i)=>(
-            <div key={i} style={{
-              background:"#014a96",
-              padding:"12px",
-              marginBottom:"10px",
-              borderRadius:"6px"
-            }}>
+            <div className="card" key={i}>
               <b>{s.sector}</b>
               <div>Orders: {s.orders || s.companies}</div>
               <div>Total Value: ₹{s.value || s.totalValue} Cr</div>
