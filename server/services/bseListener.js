@@ -1,5 +1,4 @@
 const axios = require("axios");
-const xml2js = require("xml2js");
 
 const analyzeAnnouncement = require("./orderAnalyzer");
 const updateSectorRadar = require("./intelligence/sectorRadar");
@@ -25,30 +24,37 @@ async function fetchAnnouncements() {
   try {
 
     const url =
-      "https://www.bseindia.com/xml-data/corpfiling/ann.xml";
+      "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w";
 
     const res = await axios.get(url, {
+      params: {
+        pageno: 1,
+        strCat: -1,
+        strPrevDate: "",
+        strScrip: "",
+        strSearch: "P",
+        strToDate: "",
+        strType: "C"
+      },
       headers: {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Referer": "https://www.bseindia.com/corporates/ann.html"
       }
     });
 
-    const parser = new xml2js.Parser();
+    const list = res.data?.Table || [];
 
-    const data = await parser.parseStringPromise(res.data);
-
-    const items = data.Announcements.Announcement || [];
-
-    console.log("📢 BSE Announcements fetched:", items.length);
+    console.log("📢 BSE Announcements fetched:", list.length);
 
     const alerts = [];
 
-    for (const item of items) {
+    for (const item of list) {
 
-      const title = item.HEADLINE?.[0] || "";
-      const company = item.SLONGNAME?.[0] || "";
-      const code = item.SCRIP_CD?.[0] || "";
-      const date = item.NEWS_DT?.[0] || "";
+      const company = item.SLONGNAME;
+      const code = item.SCRIP_CD;
+      const title = item.HEADLINE;
+      const date = item.NEWS_DT;
 
       const id = code + title + date;
 
