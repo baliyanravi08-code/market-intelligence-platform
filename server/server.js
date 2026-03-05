@@ -6,6 +6,8 @@ const { Server } = require("socket.io");
 const startBSEListener = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 
+const { getRadar } = require("./services/intelligence/radarEngine");
+
 const app = express();
 const server = http.createServer(app);
 
@@ -26,15 +28,20 @@ const clientPath = path.join(__dirname, "../client/dist");
 app.use(express.static(clientPath));
 
 /*
-API ROOT
+API ROUTES
 */
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "Market Intelligence Platform Running 🚀" });
 });
 
+app.get("/api/radar", (req, res) => {
+  const radar = getRadar();
+  res.json(radar);
+});
+
 /*
-CATCH ALL ROUTE FOR REACT
+REACT FALLBACK ROUTE
 */
 
 app.use((req, res) => {
@@ -50,7 +57,7 @@ io.on("connection", (socket) => {
 });
 
 /*
-START MARKET LISTENERS
+START DATA LISTENERS
 */
 
 startBSEListener(io);

@@ -1,38 +1,44 @@
-const radar = new Map();
+const radar = {};
 
 function updateRadar(company, signal) {
 
-  if (!radar.has(company)) {
-    radar.set(company, {
+  if (!radar[company]) {
+
+    radar[company] = {
+      company,
       score: 0,
       signals: []
-    });
+    };
+
   }
 
-  const data = radar.get(company);
+  let score = 0;
 
-  if (signal.type === "ORDER_ALERT") {
-    data.score += 30;
+  if (signal.type === "ORDER_ALERT") score = 40;
+  if (signal.type === "AI_EVENT") score = 10;
+  if (signal.signal === "ORDER_MOMENTUM") score = 25;
+  if (signal.signal === "ORDER_QUALITY") score = 30;
+
+  radar[company].score += score;
+
+  if (signal.type) {
+    radar[company].signals.push(signal.type);
   }
 
-  if (signal.type === "AI_EVENT") {
-    data.score += 10;
+  if (signal.signal) {
+    radar[company].signals.push(signal.signal);
   }
-
-  data.signals.push(signal);
-
-  radar.set(company, data);
-
-  return {
-    company,
-    score: data.score,
-    signals: data.signals
-  };
 
 }
 
 function getRadar() {
-  return Array.from(radar.entries());
+
+  const list = Object.values(radar);
+
+  return list
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
+
 }
 
 module.exports = {

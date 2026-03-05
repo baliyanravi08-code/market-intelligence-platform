@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect,useState } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
 
@@ -9,12 +9,13 @@ export default function App(){
   const [events,setEvents] = useState([]);
   const [orders,setOrders] = useState([]);
   const [sector,setSector] = useState([]);
+  const [radar,setRadar] = useState([]);
 
   useEffect(()=>{
 
-    socket.on("connect",()=>{
-      console.log("Connected to server");
-    });
+    loadRadar();
+
+    const timer = setInterval(loadRadar,10000);
 
     socket.on("market_events",(data)=>{
       setEvents(prev=>[...data,...prev].slice(0,20));
@@ -32,24 +33,35 @@ export default function App(){
       setSector(prev=>[data,...prev].slice(0,20));
     });
 
-    return ()=>{
-
-      socket.off("market_events");
-      socket.off("order_book_update");
-      socket.off("sector_alerts");
-      socket.off("sector_boom");
-
-    };
+    return ()=>clearInterval(timer);
 
   },[]);
+
+  async function loadRadar(){
+
+    const res = await fetch("/api/radar");
+
+    const data = await res.json();
+
+    setRadar(data);
+
+  }
 
   return(
 
     <div className="container">
 
-      <h1 style={{marginBottom:"30px"}}>
-        ⭐ Market Intelligence Dashboard
-      </h1>
+      <h1>⭐ Market Intelligence Dashboard</h1>
+
+      <h2>⭐ Market Radar</h2>
+
+      {radar.map((r,i)=>(
+        <div className="card" key={i}>
+          <b>{r.company}</b>
+          <div>Score: {r.score}</div>
+          <div>{r.signals.join(", ")}</div>
+        </div>
+      ))}
 
       <div className="grid">
 
