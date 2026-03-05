@@ -25,7 +25,19 @@ const clientPath = path.join(__dirname, "../client/dist");
 
 app.use(express.static(clientPath));
 
-app.get("*", (req, res) => {
+/*
+API ROOT
+*/
+
+app.get("/api/health", (req, res) => {
+  res.json({ status: "Market Intelligence Platform Running 🚀" });
+});
+
+/*
+CATCH ALL ROUTE FOR REACT
+*/
+
+app.use((req, res) => {
   res.sendFile(path.join(clientPath, "index.html"));
 });
 
@@ -38,7 +50,7 @@ io.on("connection", (socket) => {
 });
 
 /*
-START LISTENERS
+START MARKET LISTENERS
 */
 
 startBSEListener(io);
