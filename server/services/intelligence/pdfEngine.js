@@ -1,5 +1,5 @@
 const axios = require("axios");
-const pdfParse = require("pdf-parse");
+const pdf = require("pdf-parse");
 
 const detectOrder = require("./orderDetector");
 
@@ -12,16 +12,9 @@ async function extractOrderFromPDF(url){
       timeout:15000
     });
 
-    const buffer = Buffer.from(res.data);
+    const data = await pdf(res.data);
 
-    // support both export styles
-    const parser = typeof pdfParse === "function"
-      ? pdfParse
-      : pdfParse.default;
-
-    const data = await parser(buffer);
-
-    const text = data?.text || "";
+    const text = data.text || "";
 
     const orderValue = detectOrder(text);
 
