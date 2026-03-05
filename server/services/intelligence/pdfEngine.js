@@ -1,5 +1,5 @@
 const axios = require("axios");
-const pdf = require("pdf-parse");
+const pdfParse = require("pdf-parse");
 
 const detectOrder = require("./orderDetector");
 
@@ -12,9 +12,16 @@ async function extractOrderFromPDF(url) {
       timeout: 15000
     });
 
-    const data = await pdf(response.data);
+    const buffer = Buffer.from(response.data);
 
-    const text = data.text;
+    // handle both export formats
+    const pdf = typeof pdfParse === "function"
+      ? pdfParse
+      : pdfParse.default;
+
+    const data = await pdf(buffer);
+
+    const text = data.text || "";
 
     const orderValue = detectOrder(text);
 
@@ -28,6 +35,7 @@ async function extractOrderFromPDF(url) {
   } catch (err) {
 
     console.log("PDF parse failed:", err.message);
+
     return null;
 
   }

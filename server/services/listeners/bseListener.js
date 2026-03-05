@@ -4,6 +4,7 @@ const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 
 const orderBookEngine = require("../intelligence/orderBookEngine");
 const orderStrengthEngine = require("../intelligence/orderStrengthEngine");
+const orderMomentumEngine = require("../intelligence/orderMomentumEngine");
 const sectorRadar = require("../intelligence/sectorRadar");
 const { updateRadar } = require("../intelligence/radarEngine");
 
@@ -65,14 +66,14 @@ async function fetchAnnouncements() {
       seen.add(id);
 
       const announcement = {
-  company,
-  code,
-  title,
-  date,
-  pdfUrl: item.ATTACHMENTNAME
-    ? `https://www.bseindia.com/xml-data/corpfiling/AttachLive/${item.ATTACHMENTNAME}`
-    : null
-};
+        company,
+        code,
+        title,
+        date,
+        pdfUrl: item.ATTACHMENTNAME
+          ? `https://www.bseindia.com/xml-data/corpfiling/AttachLive/${item.ATTACHMENTNAME}`
+          : null
+      };
 
       const signal = await analyzeAnnouncement(announcement);
 
@@ -82,17 +83,39 @@ async function fetchAnnouncements() {
 
       updateRadar(signal.company, signal);
 
+      /*
+      ORDER BOOK ENGINE
+      */
+
       const orderData = orderBookEngine(signal);
 
       if (orderData) {
 
         ioRef.emit("order_book_update", orderData);
 
+        /*
+        ORDER STRENGTH ENGINE
+        */
+
         const strength = orderStrengthEngine(signal.code);
 
         if (strength) {
           ioRef.emit("order_strength", strength);
         }
+
+        /*
+        ORDER MOMENTUM ENGINE
+        */
+
+        const momentum = orderMomentumEngine(signal);
+
+        if (momentum) {
+          ioRef.emit("order_momentum", momentum);
+        }
+
+        /*
+        SECTOR RADAR
+        */
 
         const sectorData = sectorRadar(signal);
 
@@ -111,7 +134,9 @@ async function fetchAnnouncements() {
     }
 
     if (alerts.length > 0 && ioRef) {
+
       ioRef.emit("market_events", alerts);
+
     }
 
   } catch (err) {
