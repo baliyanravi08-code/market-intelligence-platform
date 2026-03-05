@@ -25,7 +25,7 @@ async function fetchAnnouncements() {
   try {
 
     const url =
-      "https://www.bseindia.com/markets/MarketInfo/BseRSS.xml";
+      "https://www.bseindia.com/xml-data/corpfiling/ann.xml";
 
     const res = await axios.get(url, {
       headers: {
@@ -37,7 +37,7 @@ async function fetchAnnouncements() {
 
     const data = await parser.parseStringPromise(res.data);
 
-    const items = data.rss.channel[0].item || [];
+    const items = data.Announcements.Announcement || [];
 
     console.log("📢 BSE Announcements fetched:", items.length);
 
@@ -45,11 +45,12 @@ async function fetchAnnouncements() {
 
     for (const item of items) {
 
-      const title = item.title?.[0] || "";
-      const date = item.pubDate?.[0] || "";
-      const company = title.split(" - ")[0] || "Unknown";
+      const title = item.HEADLINE?.[0] || "";
+      const company = item.SLONGNAME?.[0] || "";
+      const code = item.SCRIP_CD?.[0] || "";
+      const date = item.NEWS_DT?.[0] || "";
 
-      const id = title + date;
+      const id = code + title + date;
 
       if (seen.has(id)) continue;
 
@@ -57,7 +58,7 @@ async function fetchAnnouncements() {
 
       const announcement = {
         company,
-        code: company,
+        code,
         title,
         date
       };
@@ -68,7 +69,7 @@ async function fetchAnnouncements() {
 
       alerts.push(signal);
 
-      updateRadar(signal.company || signal.code, signal);
+      updateRadar(signal.code || signal.company, signal);
 
       if (signal.type === "ORDER_ALERT") {
 
@@ -96,7 +97,7 @@ async function fetchAnnouncements() {
 
   } catch (err) {
 
-    console.log("❌ BSE RSS Feed Failed:", err.message);
+    console.log("❌ BSE Feed Failed:", err.message);
 
   }
 
