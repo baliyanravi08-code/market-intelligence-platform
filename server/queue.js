@@ -1,17 +1,9 @@
-const EventEmitter = require("events")
+// server/queue.js
 
-const bus = new EventEmitter()
+const EventEmitter = require("events");
 
-function publish(channel,data){
+class EventBus extends EventEmitter {}
 
- bus.emit(channel,data)
+const eventBus = new EventBus();
 
-}
-
-function subscribe(channel,handler){
-
- bus.on(channel,handler)
-
-}
-
-module.exports = { publish, subscribe }
+module.exports = eventBus;

@@ -1,53 +1,19 @@
-const orderBooks = {};
+const { addOrder } = require("../data/orderBookStore");
 
-function updateOrderBook(signal, marketCap) {
+function orderBookEngine(signal) {
 
-  const company = signal.company || signal.code;
+  if (signal.type !== "ORDER_ALERT") return null;
 
-  if (!orderBooks[company]) {
-
-    orderBooks[company] = {
-      totalOrders: 0,
-      history: []
-    };
-
-  }
-
-  const newOrder = signal.newOrder || 0;
-
-  orderBooks[company].totalOrders += newOrder;
-
-  orderBooks[company].history.push({
-    value: newOrder,
-    date: new Date()
-  });
-
-  const orderBook = orderBooks[company].totalOrders;
-
-  let orderToMcap = null;
-
-  if (marketCap) {
-
-    orderToMcap = (orderBook / marketCap) * 100;
-
-  }
+  const orderData = addOrder(signal.code, signal.value);
 
   return {
-    company,
-    newOrder,
-    orderBook,
-    orderToMcap
+    company: signal.company,
+    code: signal.code,
+    totalOrderValue: orderData.totalValue,
+    orderCount: orderData.orderCount,
+    lastOrder: signal.value
   };
 
 }
 
-function getOrderBook(company) {
-
-  return orderBooks[company] || null;
-
-}
-
-module.exports = {
-  updateOrderBook,
-  getOrderBook
-};
+module.exports = orderBookEngine;

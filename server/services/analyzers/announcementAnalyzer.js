@@ -1,18 +1,19 @@
-const detectOrder = require("./intelligence/orderDetector");
-const classifyAnnouncement = require("./intelligence/aiClassifier");
+const detectOrder = require("../intelligence/orderDetector");
+const classifyAnnouncement = require("../intelligence/aiClassifier");
 
 async function analyzeAnnouncement(announcement) {
 
-  const order = detectOrder(announcement.title);
+  const orderValue = detectOrder(announcement.title);
 
-  if (order) {
+  if (orderValue) {
 
     return {
       type: "ORDER_ALERT",
       company: announcement.company,
       code: announcement.code,
-      newOrder: order,
-      title: announcement.title
+      value: orderValue,
+      title: announcement.title,
+      time: new Date()
     };
 
   }
@@ -26,7 +27,8 @@ async function analyzeAnnouncement(announcement) {
       company: announcement.company,
       code: announcement.code,
       event: aiEvent,
-      title: announcement.title
+      title: announcement.title,
+      time: new Date()
     };
 
   }

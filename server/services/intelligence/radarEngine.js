@@ -1,66 +1,41 @@
-const radar = {};
+const radar = new Map();
 
-function updateRadar(symbol, signal) {
+function updateRadar(company, signal) {
 
-  if (!radar[symbol]) {
-    radar[symbol] = {
+  if (!radar.has(company)) {
+    radar.set(company, {
       score: 0,
       signals: []
-    };
+    });
   }
 
-  let points = 0;
+  const data = radar.get(company);
 
   if (signal.type === "ORDER_ALERT") {
-
-    const value = signal.newOrder || 0;
-
-    if (value >= 50) points = 40;
-    else if (value >= 10) points = 25;
-    else points = 10;
-
-  }
-
-  if (signal.type === "INSTITUTIONAL_DEAL") {
-    points = 20;
-  }
-
-  if (signal.type === "SMART_MONEY_ALERT") {
-    points = 30;
-  }
-
-  if (signal.type === "SECTOR_MOMENTUM") {
-    points = 15;
+    data.score += 30;
   }
 
   if (signal.type === "AI_EVENT") {
-    points = 10;
+    data.score += 10;
   }
 
-  radar[symbol].score += points;
+  data.signals.push(signal);
 
-  radar[symbol].signals.push(signal.type);
+  radar.set(company, data);
 
-  return radar[symbol];
+  return {
+    company,
+    score: data.score,
+    signals: data.signals
+  };
 
 }
 
-function getTopRadar() {
-
-  const list = Object.entries(radar)
-    .map(([symbol, data]) => ({
-      symbol,
-      score: data.score,
-      signals: data.signals
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 10);
-
-  return list;
-
+function getRadar() {
+  return Array.from(radar.entries());
 }
 
 module.exports = {
   updateRadar,
-  getTopRadar
+  getRadar
 };

@@ -1,8 +1,8 @@
 const axios = require("axios");
 const csv = require("csv-parser");
 const { Readable } = require("stream");
-const updateSmartMoney = require("./intelligence/smartMoneyTracker");
-const { updateRadar } = require("./intelligence/radarEngine");
+const updateSmartMoney = require("../intelligence/smartMoneyTracker");
+const { updateRadar } = require("../intelligence/radarEngine");
 
 let ioRef = null;
 let seenDeals = new Set();

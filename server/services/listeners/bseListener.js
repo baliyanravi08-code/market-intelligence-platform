@@ -1,9 +1,9 @@
 const axios = require("axios");
 
-const analyzeAnnouncement = require("./orderAnalyzer");
-const updateSectorRadar = require("./intelligence/sectorRadar");
-const { updateRadar } = require("./intelligence/radarEngine");
-const { updateOrderBook } = require("./intelligence/orderBookEngine");
+const analyzeAnnouncement = require("../orderAnalyzer");
+const updateSectorRadar = require("../intelligence/sectorRadar");
+const { updateRadar } = require("../intelligence/radarEngine");
+const { updateOrderBook } = require("../intelligence/orderBookEngine");
 
 let ioRef = null;
 let seen = new Set();
