@@ -1,9 +1,11 @@
 const axios = require("axios");
 
-const analyzeAnnouncement = require("../orderAnalyzer");
-const updateSectorRadar = require("../intelligence/sectorRadar");
+const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
+
+const orderBookEngine = require("../intelligence/orderBookEngine");
+const orderStrengthEngine = require("../intelligence/orderStrengthEngine");
+const sectorRadar = require("../intelligence/sectorRadar");
 const { updateRadar } = require("../intelligence/radarEngine");
-const { updateOrderBook } = require("../intelligence/orderBookEngine");
 
 let ioRef = null;
 let seen = new Set();
@@ -16,7 +18,7 @@ function startBSEListener(io) {
 
   fetchAnnouncements();
 
-  setInterval(fetchAnnouncements, 15000);
+  setInterval(fetchAnnouncements, 30000);
 
 }
 
@@ -77,15 +79,21 @@ async function fetchAnnouncements() {
 
       updateRadar(signal.company, signal);
 
-      if (signal.type === "ORDER_ALERT") {
+      const orderData = orderBookEngine(signal);
 
-        const orderData = updateOrderBook(signal);
+      if (orderData) {
 
         ioRef.emit("order_book_update", orderData);
 
-        const sectorData = updateSectorRadar(signal);
+        const strength = orderStrengthEngine(signal.code);
 
-        if (sectorData.orders >= 3) {
+        if (strength) {
+          ioRef.emit("order_strength", strength);
+        }
+
+        const sectorData = sectorRadar(signal);
+
+        if (sectorData && sectorData.orders >= 3) {
 
           ioRef.emit("sector_alerts", [{
             sector: sectorData.sector,
@@ -100,9 +108,7 @@ async function fetchAnnouncements() {
     }
 
     if (alerts.length > 0 && ioRef) {
-
       ioRef.emit("market_events", alerts);
-
     }
 
   } catch (err) {
