@@ -1,20 +1,40 @@
 const detectOrder = require("../intelligence/orderDetector");
 const classifyAnnouncement = require("../intelligence/aiClassifier");
+const extractOrderFromPDF = require("../intelligence/pdfEngine");
 
 async function analyzeAnnouncement(announcement) {
 
-  const orderValue = detectOrder(announcement.title);
+  const order = detectOrder(announcement.title);
 
-  if (orderValue) {
+  if (order) {
 
     return {
       type: "ORDER_ALERT",
       company: announcement.company,
       code: announcement.code,
-      value: orderValue,
-      title: announcement.title,
-      time: new Date()
+      value: order,
+      source: "headline",
+      title: announcement.title
     };
+
+  }
+
+  if (announcement.pdfUrl) {
+
+    const pdfOrder = await extractOrderFromPDF(announcement.pdfUrl);
+
+    if (pdfOrder) {
+
+      return {
+        type: "ORDER_ALERT",
+        company: announcement.company,
+        code: announcement.code,
+        value: pdfOrder.value,
+        source: "pdf",
+        title: announcement.title
+      };
+
+    }
 
   }
 
@@ -27,8 +47,7 @@ async function analyzeAnnouncement(announcement) {
       company: announcement.company,
       code: announcement.code,
       event: aiEvent,
-      title: announcement.title,
-      time: new Date()
+      title: announcement.title
     };
 
   }

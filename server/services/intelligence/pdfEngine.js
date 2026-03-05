@@ -8,7 +8,8 @@ async function extractOrderFromPDF(url) {
   try {
 
     const response = await axios.get(url, {
-      responseType: "arraybuffer"
+      responseType: "arraybuffer",
+      timeout: 15000
     });
 
     const data = await pdf(response.data);
@@ -27,7 +28,6 @@ async function extractOrderFromPDF(url) {
   } catch (err) {
 
     console.log("PDF parse failed:", err.message);
-
     return null;
 
   }
