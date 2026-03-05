@@ -1,4 +1,5 @@
 const axios = require("axios");
+const xml2js = require("xml2js");
 
 const analyzeAnnouncement = require("./orderAnalyzer");
 const updateSectorRadar = require("./intelligence/sectorRadar");
@@ -15,7 +16,7 @@ function startBSEListener(io) {
 
   fetchAnnouncements();
 
-  setInterval(fetchAnnouncements, 10000);
+  setInterval(fetchAnnouncements, 15000);
 
 }
 
@@ -24,35 +25,41 @@ async function fetchAnnouncements() {
   try {
 
     const url =
-      "https://api.bseindia.com/BseIndiaAPI/api/AnnGetData/w?pageno=1&strCat=&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C";
+      "https://www.bseindia.com/markets/MarketInfo/BseRSS.xml";
 
     const res = await axios.get(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-        "Referer": "https://www.bseindia.com/"
+        "User-Agent": "Mozilla/5.0"
       }
     });
 
-    const list = res.data?.Table || [];
+    const parser = new xml2js.Parser();
 
-    console.log("📢 BSE Announcements fetched:", list.length);
+    const data = await parser.parseStringPromise(res.data);
+
+    const items = data.rss.channel[0].item || [];
+
+    console.log("📢 BSE Announcements fetched:", items.length);
 
     const alerts = [];
 
-    for (const item of list) {
+    for (const item of items) {
 
-      const id = item.SCRIP_CD + item.HEADLINE + item.NEWS_DT;
+      const title = item.title?.[0] || "";
+      const date = item.pubDate?.[0] || "";
+      const company = title.split(" - ")[0] || "Unknown";
+
+      const id = title + date;
 
       if (seen.has(id)) continue;
 
       seen.add(id);
 
       const announcement = {
-        company: item.SLONGNAME,
-        code: item.SCRIP_CD,
-        title: item.HEADLINE,
-        date: item.NEWS_DT
+        company,
+        code: company,
+        title,
+        date
       };
 
       const signal = await analyzeAnnouncement(announcement);
@@ -61,7 +68,7 @@ async function fetchAnnouncements() {
 
       alerts.push(signal);
 
-      updateRadar(signal.code || signal.company, signal);
+      updateRadar(signal.company || signal.code, signal);
 
       if (signal.type === "ORDER_ALERT") {
 
@@ -89,7 +96,7 @@ async function fetchAnnouncements() {
 
   } catch (err) {
 
-    console.log("❌ BSE Feed Failed:", err.message);
+    console.log("❌ BSE RSS Feed Failed:", err.message);
 
   }
 
