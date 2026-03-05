@@ -1,5 +1,7 @@
 const axios = require("axios");
-const pdf = require("pdf-parse");
+const fs = require("fs");
+const path = require("path");
+const extract = require("pdf-text-extract");
 
 const detectOrder = require("./orderDetector");
 
@@ -7,27 +9,44 @@ async function extractOrderFromPDF(url){
 
   try{
 
+    const tempFile = path.join(__dirname, "temp.pdf");
+
     const res = await axios.get(url,{
       responseType:"arraybuffer",
       timeout:15000
     });
 
-    const data = await pdf(res.data);
+    fs.writeFileSync(tempFile,res.data);
 
-    const text = data.text || "";
+    return new Promise((resolve)=>{
 
-    const orderValue = detectOrder(text);
+      extract(tempFile,function(err,pages){
 
-    if(!orderValue) return null;
+        fs.unlinkSync(tempFile);
 
-    return {
-      value: orderValue,
-      source: "PDF"
-    };
+        if(err){
+          console.log("PDF parse failed:",err.message);
+          return resolve(null);
+        }
+
+        const text = pages.join(" ");
+
+        const orderValue = detectOrder(text);
+
+        if(!orderValue) return resolve(null);
+
+        resolve({
+          value: orderValue,
+          source:"PDF"
+        });
+
+      });
+
+    });
 
   }catch(err){
 
-    console.log("PDF parse failed:", err.message);
+    console.log("PDF download failed:",err.message);
 
     return null;
 
