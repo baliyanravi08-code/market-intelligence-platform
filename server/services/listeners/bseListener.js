@@ -6,6 +6,7 @@ const orderBookEngine = require("../intelligence/orderBookEngine");
 const orderStrengthEngine = require("../intelligence/orderStrengthEngine");
 const orderMomentumEngine = require("../intelligence/orderMomentumEngine");
 const sectorRadar = require("../intelligence/sectorRadar");
+const sectorBoomEngine = require("../intelligence/sectorBoomEngine");
 const { updateRadar } = require("../intelligence/radarEngine");
 
 let ioRef = null;
@@ -83,19 +84,11 @@ async function fetchAnnouncements() {
 
       updateRadar(signal.company, signal);
 
-      /*
-      ORDER BOOK ENGINE
-      */
-
       const orderData = orderBookEngine(signal);
 
       if (orderData) {
 
         ioRef.emit("order_book_update", orderData);
-
-        /*
-        ORDER STRENGTH ENGINE
-        */
 
         const strength = orderStrengthEngine(signal.code);
 
@@ -103,19 +96,11 @@ async function fetchAnnouncements() {
           ioRef.emit("order_strength", strength);
         }
 
-        /*
-        ORDER MOMENTUM ENGINE
-        */
-
         const momentum = orderMomentumEngine(signal);
 
         if (momentum) {
           ioRef.emit("order_momentum", momentum);
         }
-
-        /*
-        SECTOR RADAR
-        */
 
         const sectorData = sectorRadar(signal);
 
@@ -129,14 +114,18 @@ async function fetchAnnouncements() {
 
         }
 
+        const boom = sectorBoomEngine(signal);
+
+        if (boom) {
+          ioRef.emit("sector_boom", boom);
+        }
+
       }
 
     }
 
     if (alerts.length > 0 && ioRef) {
-
       ioRef.emit("market_events", alerts);
-
     }
 
   } catch (err) {
