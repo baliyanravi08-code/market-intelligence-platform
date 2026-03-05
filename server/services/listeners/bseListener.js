@@ -44,7 +44,8 @@ async function fetchAnnouncements() {
       headers: {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://www.bseindia.com/"
-      }
+      },
+      timeout: 15000
     });
 
     const list = res.data?.Table || [];
@@ -66,6 +67,10 @@ async function fetchAnnouncements() {
 
       seen.add(id);
 
+      if (seen.size > 5000) {
+        seen = new Set([...seen].slice(-2000));
+      }
+
       const announcement = {
         company,
         code,
@@ -86,7 +91,7 @@ async function fetchAnnouncements() {
 
       const orderData = orderBookEngine(signal);
 
-      if (orderData) {
+      if (orderData && ioRef) {
 
         ioRef.emit("order_book_update", orderData);
 
@@ -125,7 +130,9 @@ async function fetchAnnouncements() {
     }
 
     if (alerts.length > 0 && ioRef) {
+
       ioRef.emit("market_events", alerts);
+
     }
 
   } catch (err) {
