@@ -3,36 +3,36 @@ const pdfParse = require("pdf-parse");
 
 const detectOrder = require("./orderDetector");
 
-async function extractOrderFromPDF(url) {
+async function extractOrderFromPDF(url){
 
-  try {
+  try{
 
-    const response = await axios.get(url, {
-      responseType: "arraybuffer",
-      timeout: 15000
+    const res = await axios.get(url,{
+      responseType:"arraybuffer",
+      timeout:15000
     });
 
-    const buffer = Buffer.from(response.data);
+    const buffer = Buffer.from(res.data);
 
-    // handle both export formats
-    const pdf = typeof pdfParse === "function"
+    // support both export styles
+    const parser = typeof pdfParse === "function"
       ? pdfParse
       : pdfParse.default;
 
-    const data = await pdf(buffer);
+    const data = await parser(buffer);
 
-    const text = data.text || "";
+    const text = data?.text || "";
 
     const orderValue = detectOrder(text);
 
-    if (!orderValue) return null;
+    if(!orderValue) return null;
 
     return {
       value: orderValue,
       source: "PDF"
     };
 
-  } catch (err) {
+  }catch(err){
 
     console.log("PDF parse failed:", err.message);
 
