@@ -3,6 +3,7 @@ const axios = require("axios");
 const analyzeAnnouncement = require("./orderAnalyzer");
 const updateSectorRadar = require("./intelligence/sectorRadar");
 const { updateRadar } = require("./intelligence/radarEngine");
+const { updateOrderBook } = require("./intelligence/orderBookEngine");
 
 let ioRef = null;
 let seen = new Set();
@@ -38,8 +39,7 @@ async function fetchAnnouncements() {
       },
       headers: {
         "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-        "Referer": "https://www.bseindia.com/corporates/ann.html"
+        "Referer": "https://www.bseindia.com/"
       }
     });
 
@@ -75,9 +75,13 @@ async function fetchAnnouncements() {
 
       alerts.push(signal);
 
-      updateRadar(signal.code || signal.company, signal);
+      updateRadar(signal.company, signal);
 
       if (signal.type === "ORDER_ALERT") {
+
+        const orderData = updateOrderBook(signal);
+
+        ioRef.emit("order_book_update", orderData);
 
         const sectorData = updateSectorRadar(signal);
 
