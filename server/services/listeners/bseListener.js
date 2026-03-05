@@ -65,11 +65,14 @@ async function fetchAnnouncements() {
       seen.add(id);
 
       const announcement = {
-        company,
-        code,
-        title,
-        date
-      };
+  company,
+  code,
+  title,
+  date,
+  pdfUrl: item.ATTACHMENTNAME
+    ? `https://www.bseindia.com/xml-data/corpfiling/AttachLive/${item.ATTACHMENTNAME}`
+    : null
+};
 
       const signal = await analyzeAnnouncement(announcement);
 

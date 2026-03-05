@@ -1,65 +1,37 @@
 const axios = require("axios");
 const pdf = require("pdf-parse");
 
-async function analyzeResultPDF(pdfUrl){
+const detectOrder = require("./orderDetector");
 
- try{
+async function extractOrderFromPDF(url) {
 
-  const response = await axios.get(
-   pdfUrl,
-   { responseType:"arraybuffer" }
-  );
+  try {
 
-  const data =
-   await pdf(response.data);
+    const response = await axios.get(url, {
+      responseType: "arraybuffer"
+    });
 
-  const text =
-   data.text.toLowerCase();
+    const data = await pdf(response.data);
 
-/*
-=====================
-BASIC DETECTION
-=====================
-*/
+    const text = data.text;
 
- let insight="Stable Result";
- let reason="Normal Operations";
+    const orderValue = detectOrder(text);
 
- if(text.includes("other expense")){
-  insight="Expense Impact";
-  reason="Other Expense Increased";
- }
+    if (!orderValue) return null;
 
- if(text.includes("provision")){
-  insight="Provision Impact";
-  reason="Higher Credit Cost";
- }
+    return {
+      value: orderValue,
+      source: "PDF"
+    };
 
- if(text.includes("exceptional")){
-  insight="One-time Event";
-  reason="Exceptional Item Present";
- }
+  } catch (err) {
 
- if(text.includes("order")){
-  insight="Order Growth";
-  reason="Strong Order Book";
- }
+    console.log("PDF parse failed:", err.message);
 
- return{
-  pdfInsight:insight,
-  pdfReason:reason
- };
+    return null;
 
- }catch(err){
-
-  console.log("PDF Read Failed");
-
-  return{
-   pdfInsight:"Unavailable",
-   pdfReason:"PDF Parsing Failed"
-  };
- }
+  }
 
 }
 
-module.exports = analyzeResultPDF;
+module.exports = extractOrderFromPDF;
