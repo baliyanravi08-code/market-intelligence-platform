@@ -1,10 +1,10 @@
-const marketCaps = require("../data/marketCap");
+const { getMarketCap } = require("../data/marketCap");
 
 function orderQualityEngine(signal){
 
   if(signal.type !== "ORDER_ALERT") return null;
 
-  const marketCap = marketCaps[signal.code];
+  const marketCap = getMarketCap(signal.code);
 
   if(!marketCap) return null;
 
