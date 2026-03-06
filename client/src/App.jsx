@@ -9,6 +9,8 @@ export default function App(){
   const [events,setEvents] = useState([]);
   const [sector,setSector] = useState([]);
   const [radar,setRadar] = useState([]);
+  const [orderBook,setOrderBook] = useState([]);
+  const [selected,setSelected] = useState(null);
 
   useEffect(()=>{
 
@@ -17,11 +19,28 @@ export default function App(){
     const timer = setInterval(loadRadar,10000);
 
     socket.on("market_events",(data)=>{
-      setEvents(prev=>[...data,...prev].slice(0,30));
+      setEvents(prev=>[...data,...prev].slice(0,40));
     });
 
     socket.on("sector_boom",(data)=>{
       setSector(prev=>[data,...prev].slice(0,10));
+    });
+
+    socket.on("order_book_update",(data)=>{
+      setOrderBook(prev=>[data,...prev].slice(0,20));
+    });
+
+    /* SMART MONEY LISTENER */
+
+    socket.on("smart_money",(data)=>{
+
+      const alert = {
+        company:data.company,
+        title:`Institutional accumulation detected ₹${data.value} Cr`
+      };
+
+      setEvents(prev=>[alert,...prev].slice(0,40));
+
     });
 
     return ()=>clearInterval(timer);
@@ -62,7 +81,11 @@ export default function App(){
 
           {radar.map((r,i)=>(
 
-            <div className="radar-card" key={i}>
+            <div
+              className="radar-card"
+              key={i}
+              onClick={()=>setSelected(r)}
+            >
 
               <div className="radar-row">
 
@@ -82,11 +105,7 @@ export default function App(){
               <div className="signals">
 
                 {r.signals.map((s,j)=>(
-                  <span
-                    key={j}
-                    className="tag"
-                    onClick={()=>alert(`${r.company}\nSignal: ${s}`)}
-                  >
+                  <span key={j} className="tag">
                     {s}
                   </span>
                 ))}
@@ -120,14 +139,16 @@ export default function App(){
                 </div>
 
                 {e.pdfUrl && (
+
                   <a
                     href={e.pdfUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="pdf-link"
                   >
-                    View Filing
+                    📄 Filing
                   </a>
+
                 )}
 
               </div>
@@ -171,9 +192,54 @@ export default function App(){
 
           ))}
 
+          <h3 style={{marginTop:"20px"}}>Order Book</h3>
+
+          {orderBook.map((o,i)=>(
+
+            <div className="order-card" key={i}>
+
+              <b>{o.company}</b>
+
+              <div>
+                Order Value: ₹{o.value} Cr
+              </div>
+
+            </div>
+
+          ))}
+
         </div>
 
       </div>
+
+      {/* COMPANY DETAIL MODAL */}
+
+      {selected && (
+
+        <div className="modal">
+
+          <div className="modal-box">
+
+            <h2>{selected.company}</h2>
+
+            <div>Score: {selected.score}</div>
+
+            <div>
+              Signals: {selected.signals.join(", ")}
+            </div>
+
+            <button
+              onClick={()=>setSelected(null)}
+              className="close-btn"
+            >
+              Close
+            </button>
+
+          </div>
+
+        </div>
+
+      )}
 
     </div>
 

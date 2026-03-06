@@ -2,6 +2,8 @@ const axios = require("axios");
 
 const { updateRadar } = require("../intelligence/radarEngine");
 
+const institutionalFlowEngine = require("../intelligence/institutionalFlowEngine");
+
 let ioRef = null;
 
 function startNSEDealsListener(io){
@@ -33,28 +35,39 @@ async function fetchDeals(){
     for(const deal of deals){
 
       const activity = {
+
         company: deal.symbol,
-        signal: "INSTITUTIONAL_DEAL",
+        signal:"INSTITUTIONAL_DEAL",
         quantity: deal.quantity,
         price: deal.price,
         value: deal.quantity * deal.price
+
       };
 
-      // update radar scoring
-      updateRadar(activity.company, activity);
+      updateRadar(activity.company,activity);
 
-      if(ioRef){
+      /*
+      INSTITUTIONAL FLOW ENGINE
+      */
 
-        ioRef.emit("institutional_activity", activity);
+      const flow = institutionalFlowEngine(activity);
+
+      if(flow){
+
+        updateRadar(flow.company,flow);
+
+        ioRef.emit("smart_money",flow);
 
       }
+
+      ioRef.emit("institutional_activity",activity);
 
     }
 
   }
   catch(err){
 
-    console.log("❌ NSE Deals fetch failed:", err.message);
+    console.log("❌ NSE Deals fetch failed:",err.message);
 
   }
 
