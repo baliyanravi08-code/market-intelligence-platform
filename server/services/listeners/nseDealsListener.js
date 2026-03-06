@@ -1,11 +1,10 @@
 const axios = require("axios");
 const csv = require("csv-parser");
 const { Readable } = require("stream");
-const updateSmartMoney = require("../intelligence/smartMoneyTracker");
+
 const { updateRadar } = require("../intelligence/radarEngine");
 
 let ioRef = null;
-let seenDeals = new Set();
 
 function startNSEDealsListener(io){
 
@@ -23,8 +22,7 @@ async function fetchDeals(){
 
   try{
 
-    const url =
-      "https://archives.nseindia.com/content/equities/bulk.csv";
+    const url = "https://www.nseindia.com/api/block-deal";
 
     const res = await axios.get(url,{
       headers:{
@@ -32,72 +30,32 @@ async function fetchDeals(){
       }
     });
 
-    const stream = Readable.from(res.data);
+    const deals = res.data?.data || [];
 
-    const institutionalAlerts=[];
-    const smartMoneyAlerts=[];
+    for(const deal of deals){
 
-    stream
-      .pipe(csv())
-      .on("data",(row)=>{
+      const activity = {
+        company: deal.symbol,
+        signal: "INSTITUTIONAL_DEAL",
+        quantity: deal.quantity,
+        price: deal.price,
+        value: deal.quantity * deal.price
+      };
 
-        const id = row.Symbol + row.ClientName + row.Date;
+      updateRadar(activity.company,activity);
 
-        if(seenDeals.has(id)) return;
+      if(ioRef){
 
-        seenDeals.add(id);
+        ioRef.emit("institutional_activity",activity);
 
-        const quantity = Number(row.Quantity);
-        const price = Number(row.Price);
+      }
 
-        const value = (quantity*price)/10000000;
+    }
 
-        const activity = {
-          type:"INSTITUTIONAL_DEAL",
-          company:row.Symbol,
-          investor:row.ClientName,
-          action:row.BuySell,
-          quantity,
-          price,
-          value
-        };
+  }
+  catch(err){
 
-        institutionalAlerts.push(activity);
-
-        updateRadar(activity.company,activity);
-
-        const smartSignal = updateSmartMoney(activity);
-
-        if(smartSignal){
-
-          smartMoneyAlerts.push(smartSignal);
-
-          updateRadar(smartSignal.company,smartSignal);
-
-        }
-
-      })
-      .on("end",()=>{
-
-        if(institutionalAlerts.length>0 && ioRef){
-
-          ioRef.emit("institutional_activity",institutionalAlerts);
-
-        }
-
-        if(smartMoneyAlerts.length>0 && ioRef){
-
-          ioRef.emit("smart_money_alerts",smartMoneyAlerts);
-
-          console.log("🧠 Smart money detected");
-
-        }
-
-      });
-
-  }catch(err){
-
-    console.log("❌ NSE Deals Fetch Failed:",err.message);
+    console.log("❌ NSE Deals fetch failed:",err.message);
 
   }
 
