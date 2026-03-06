@@ -17,11 +17,7 @@ export default function App(){
     const timer = setInterval(loadRadar,10000);
 
     socket.on("market_events",(data)=>{
-      setEvents(prev=>[...data,...prev].slice(0,20));
-    });
-
-    socket.on("sector_alerts",(data)=>{
-      setSector(prev=>[...data,...prev].slice(0,10));
+      setEvents(prev=>[...data,...prev].slice(0,30));
     });
 
     socket.on("sector_boom",(data)=>{
@@ -42,120 +38,133 @@ export default function App(){
 
   function scoreColor(score){
 
-    if(score>=100) return "#00ff9c";
-    if(score>=70) return "#ffcc00";
-    if(score>=40) return "#ff8800";
-
-    return "#aaa";
-
-  }
-
-  function opportunityColor(level){
-
-    if(level==="VERY_HIGH") return "#00ff9c";
-
-    if(level==="HIGH") return "#ffcc00";
-
-    if(level==="MEDIUM") return "#ff8800";
-
+    if(score>=80) return "#00ff9c";
+    if(score>=50) return "#ffcc00";
     return "#aaa";
 
   }
 
   return(
 
-    <div className="container">
+    <div className="terminal">
 
-      <h1>⭐ Market Intelligence Terminal</h1>
-
-      <div className="section">
-
-        <h2>⭐ Market Radar</h2>
-
-        <table className="table">
-
-          <thead>
-
-            <tr>
-              <th>Company</th>
-              <th>Score</th>
-              <th>Opportunity</th>
-              <th>Signals</th>
-            </tr>
-
-          </thead>
-
-          <tbody>
-
-            {radar.map((r,i)=>(
-
-              <tr key={i} className="row">
-
-                <td>{r.company}</td>
-
-                <td style={{color:scoreColor(r.score)}}>
-                  {r.score}
-                </td>
-
-                <td style={{color:opportunityColor(r.opportunity)}}>
-                  {r.opportunity}
-                </td>
-
-                <td>
-
-                  {r.signals.map((s,j)=>(
-                    <span className="tag" key={j}>
-                      {s}
-                    </span>
-                  ))}
-
-                </td>
-
-              </tr>
-
-            ))}
-
-          </tbody>
-
-        </table>
-
+      <div className="header">
+        ⭐ Market Intelligence Terminal
       </div>
 
-      <div className="grid">
+      <div className="layout">
 
-        <div>
+        {/* LEFT PANEL */}
 
-          <h2>📢 Live Alerts</h2>
+        <div className="radar-panel">
 
-          <div className="events">
+          <h3>Radar</h3>
+
+          {radar.map((r,i)=>(
+
+            <div className="radar-card" key={i}>
+
+              <div className="radar-row">
+
+                <span className="company">
+                  {r.company}
+                </span>
+
+                <span
+                  className="score"
+                  style={{color:scoreColor(r.score)}}
+                >
+                  {r.score}
+                </span>
+
+              </div>
+
+              <div className="signals">
+
+                {r.signals.map((s,j)=>(
+                  <span
+                    key={j}
+                    className="tag"
+                    onClick={()=>alert(`${r.company}\nSignal: ${s}`)}
+                  >
+                    {s}
+                  </span>
+                ))}
+
+              </div>
+
+            </div>
+
+          ))}
+
+        </div>
+
+        {/* CENTER PANEL */}
+
+        <div className="feed-panel">
+
+          <h3>Live Alerts</h3>
+
+          <div className="feed">
 
             {events.map((e,i)=>(
-              <div className="event-card" key={i}>
-                <b>{e.company}</b>
-                <div>{e.title}</div>
+
+              <div className="feed-card" key={i}>
+
+                <div className="feed-title">
+                  {e.company}
+                </div>
+
+                <div className="feed-text">
+                  {e.title}
+                </div>
+
+                {e.pdfUrl && (
+                  <a
+                    href={e.pdfUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="pdf-link"
+                  >
+                    View Filing
+                  </a>
+                )}
+
               </div>
+
             ))}
 
           </div>
 
         </div>
 
-        <div>
+        {/* RIGHT PANEL */}
 
-          <h2>🚀 Sector Momentum</h2>
+        <div className="sector-panel">
+
+          <h3>Sector Momentum</h3>
 
           {sector.map((s,i)=>(
 
-            <div className="event-card" key={i}>
+            <div className="sector-card" key={i}>
 
-              <b>{s.sector}</b>
-
-              <div>
-                Orders: {s.orders || s.companies}
+              <div className="sector-title">
+                {s.sector}
               </div>
 
               <div>
-                Value: ₹{s.value || s.totalValue} Cr
+                Orders: {s.orders}
+              </div>
+
+              <div>
+                Companies:
+                <div className="sector-companies">
+                  {s.companies?.join(", ")}
+                </div>
+              </div>
+
+              <div>
+                Value: ₹{s.totalValue} Cr
               </div>
 
             </div>
