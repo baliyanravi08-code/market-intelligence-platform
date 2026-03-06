@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect,useState } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
 
@@ -9,7 +9,6 @@ export default function App(){
   const [events,setEvents] = useState([]);
   const [sector,setSector] = useState([]);
   const [radar,setRadar] = useState([]);
-  const [selectedSignal,setSelectedSignal] = useState(null);
 
   useEffect(()=>{
 
@@ -35,39 +34,32 @@ export default function App(){
 
   async function loadRadar(){
 
-    try{
-
-      const res = await fetch("/api/radar");
-      const data = await res.json();
-      setRadar(data);
-
-    }catch(err){
-      console.log("Radar fetch failed",err);
-    }
+    const res = await fetch("/api/radar");
+    const data = await res.json();
+    setRadar(data);
 
   }
 
   function scoreColor(score){
 
-    if(score >= 80) return "#00ff9c";
-    if(score >= 50) return "#ffcc00";
-    if(score >= 20) return "#ff8800";
+    if(score>=100) return "#00ff9c";
+    if(score>=70) return "#ffcc00";
+    if(score>=40) return "#ff8800";
+
     return "#aaa";
 
   }
 
-  function openSignal(company,signal,score){
+  function opportunityColor(level){
 
-    setSelectedSignal({
-      company,
-      signal,
-      score
-    });
+    if(level==="VERY_HIGH") return "#00ff9c";
 
-  }
+    if(level==="HIGH") return "#ffcc00";
 
-  function closeSignal(){
-    setSelectedSignal(null);
+    if(level==="MEDIUM") return "#ff8800";
+
+    return "#aaa";
+
   }
 
   return(
@@ -75,8 +67,6 @@ export default function App(){
     <div className="container">
 
       <h1>⭐ Market Intelligence Terminal</h1>
-
-      {/* RADAR */}
 
       <div className="section">
 
@@ -89,6 +79,7 @@ export default function App(){
             <tr>
               <th>Company</th>
               <th>Score</th>
+              <th>Opportunity</th>
               <th>Signals</th>
             </tr>
 
@@ -98,13 +89,7 @@ export default function App(){
 
             {radar.map((r,i)=>(
 
-              <tr
-                className="row"
-                key={i}
-                style={{
-                  borderLeft:`4px solid ${scoreColor(r.score)}`
-                }}
-              >
+              <tr key={i} className="row">
 
                 <td>{r.company}</td>
 
@@ -112,15 +97,14 @@ export default function App(){
                   {r.score}
                 </td>
 
+                <td style={{color:opportunityColor(r.opportunity)}}>
+                  {r.opportunity}
+                </td>
+
                 <td>
 
                   {r.signals.map((s,j)=>(
-                    <span
-                      className="tag"
-                      key={j}
-                      style={{cursor:"pointer"}}
-                      onClick={()=>openSignal(r.company,s,r.score)}
-                    >
+                    <span className="tag" key={j}>
                       {s}
                     </span>
                   ))}
@@ -137,11 +121,7 @@ export default function App(){
 
       </div>
 
-      {/* GRID */}
-
       <div className="grid">
-
-        {/* EVENTS */}
 
         <div>
 
@@ -159,8 +139,6 @@ export default function App(){
           </div>
 
         </div>
-
-        {/* SECTOR */}
 
         <div>
 
@@ -187,64 +165,6 @@ export default function App(){
         </div>
 
       </div>
-
-      {/* SIGNAL DETAIL PANEL */}
-
-      {selectedSignal && (
-
-        <div
-          style={{
-            position:"fixed",
-            right:0,
-            top:0,
-            width:"320px",
-            height:"100vh",
-            background:"#012a5c",
-            padding:"20px",
-            borderLeft:"2px solid #014a96"
-          }}
-        >
-
-          <h3>Signal Detail</h3>
-
-          <div style={{marginTop:"15px"}}>
-
-            <b>Company</b>
-            <div>{selectedSignal.company}</div>
-
-          </div>
-
-          <div style={{marginTop:"15px"}}>
-
-            <b>Signal</b>
-            <div>{selectedSignal.signal}</div>
-
-          </div>
-
-          <div style={{marginTop:"15px"}}>
-
-            <b>Radar Score</b>
-            <div>{selectedSignal.score}</div>
-
-          </div>
-
-          <button
-            onClick={closeSignal}
-            style={{
-              marginTop:"30px",
-              padding:"8px 15px",
-              background:"#014a96",
-              color:"white",
-              border:"none",
-              cursor:"pointer"
-            }}
-          >
-            Close
-          </button>
-
-        </div>
-
-      )}
 
     </div>
 

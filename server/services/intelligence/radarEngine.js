@@ -1,53 +1,52 @@
-const radar = {};
+const opportunities = {};
 
-function updateRadar(company, signal){
+function updateOpportunity(company, signal){
 
-  if(!radar[company]){
-
-    radar[company] = {
+  if(!opportunities[company]){
+    opportunities[company] = {
       company,
       score:0,
-      signals:[]
+      signals:[],
+      lastUpdate: Date.now()
     };
-
   }
 
-  let score = 0;
-
-  if(signal.type === "ORDER_ALERT") score = 40;
-
-  if(signal.signal === "ORDER_QUALITY") score = 30;
-
-  if(signal.signal === "ORDER_MOMENTUM") score = 25;
-
-  if(signal.signal === "INSTITUTIONAL_DEAL") score = 20;
-
-  if(signal.signal === "SMART_MONEY") score = 50;
-
-  if(signal.type === "AI_EVENT") score = 10;
-
-  radar[company].score += score;
+  const weights = {
+    ORDER_ALERT:40,
+    ORDER_QUALITY:30,
+    ORDER_MOMENTUM:25,
+    INSTITUTIONAL_DEAL:20,
+    SMART_MONEY:50,
+    SECTOR_BOOM:15
+  };
 
   const label = signal.type || signal.signal;
 
-  if(label && !radar[company].signals.includes(label)){
-    radar[company].signals.push(label);
-  }
+  const score = weights[label] || 0;
 
+  opportunities[company].score += score;
+  opportunities[company].lastUpdate = Date.now();
+
+  if(label && !opportunities[company].signals.includes(label)){
+    opportunities[company].signals.push(label);
+  }
 }
 
-function getRadar(){
+function decayScores(){
+  for(const c in opportunities){
+    opportunities[c].score *= 0.97;
+  }
+}
 
-  const list = Object.values(radar);
-
-  return list
-    .filter(r => r.score > 0)
-    .sort((a,b)=>b.score-a.score)
-    .slice(0,15);
-
+function getOpportunities(){
+  return Object.values(opportunities)
+  .filter(o => o.score >= 60)
+  .sort((a,b)=>b.score-a.score)
+  .slice(0,10);
 }
 
 module.exports = {
-  updateRadar,
-  getRadar
+  updateOpportunity,
+  getOpportunities,
+  decayScores
 };
