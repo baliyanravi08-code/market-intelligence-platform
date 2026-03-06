@@ -1,7 +1,7 @@
 const axios = require("axios");
 
 const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
-
+const orderQualityEngine = require("../intelligence/orderQualityEngine");
 const orderBookEngine = require("../intelligence/orderBookEngine");
 const orderStrengthEngine = require("../intelligence/orderStrengthEngine");
 const orderMomentumEngine = require("../intelligence/orderMomentumEngine");
@@ -87,62 +87,48 @@ async function fetchAnnouncements(){
 
       const orderData = orderBookEngine(signal);
 
-      if(orderData){
+if (orderData) {
 
-        ioRef.emit("order_book_update",orderData);
+  ioRef.emit("order_book_update", orderData);
 
-        const strength = orderStrengthEngine(signal.code);
+  const quality = orderQualityEngine(signal);
 
-        if(strength){
-          ioRef.emit("order_strength",strength);
-        }
+  if(quality){
 
-        const momentum = orderMomentumEngine(signal);
+    ioRef.emit("order_quality", quality);
 
-        if(momentum){
-          ioRef.emit("order_momentum",momentum);
-        }
-
-        const quality = orderQualityEngine(signal);
-
-        if(quality){
-          ioRef.emit("order_quality",quality);
-        }
-
-        const sectorData = sectorRadar(signal);
-
-        if(sectorData && sectorData.orders >= 3){
-
-          ioRef.emit("sector_alerts",[{
-            sector: sectorData.sector,
-            orders: sectorData.orders,
-            value: sectorData.value
-          }]);
-
-        }
-
-        const boom = sectorBoomEngine(signal);
-
-        if(boom){
-          ioRef.emit("sector_boom",boom);
-        }
-
-      }
-
-    }
-
-    if(alerts.length > 0 && ioRef){
-
-      ioRef.emit("market_events",alerts);
-
-    }
-
-  }catch(err){
-
-    console.log("❌ BSE Feed Failed:",err.message);
+    updateRadar(signal.company, quality);
 
   }
 
-}
+  const strength = orderStrengthEngine(signal.code);
 
-module.exports = startBSEListener;
+  if (strength) {
+    ioRef.emit("order_strength", strength);
+  }
+
+  const momentum = orderMomentumEngine(signal);
+
+  if (momentum) {
+    ioRef.emit("order_momentum", momentum);
+  }
+
+  const sectorData = sectorRadar(signal);
+
+  if (sectorData && sectorData.orders >= 3) {
+
+    ioRef.emit("sector_alerts", [{
+      sector: sectorData.sector,
+      orders: sectorData.orders,
+      value: sectorData.value
+    }]);
+
+  }
+
+  const boom = sectorBoomEngine(signal);
+
+  if (boom) {
+    ioRef.emit("sector_boom", boom);
+  }
+
+}

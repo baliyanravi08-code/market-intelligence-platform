@@ -16,15 +16,15 @@ function updateRadar(company, signal){
 
   if(signal.type === "ORDER_ALERT") score = 40;
 
-  if(signal.type === "AI_EVENT") score = 10;
+  if(signal.signal === "ORDER_QUALITY") score = 30;
 
   if(signal.signal === "ORDER_MOMENTUM") score = 25;
-
-  if(signal.signal === "ORDER_QUALITY") score = 30;
 
   if(signal.signal === "INSTITUTIONAL_DEAL") score = 20;
 
   if(signal.signal === "SMART_MONEY") score = 50;
+
+  if(signal.type === "AI_EVENT") score = 10;
 
   radar[company].score += score;
 
@@ -43,7 +43,7 @@ function getRadar(){
   return list
     .filter(r => r.score > 0)
     .sort((a,b)=>b.score-a.score)
-    .slice(0,10);
+    .slice(0,15);
 
 }
 
