@@ -1,13 +1,15 @@
 const axios = require("axios");
 
 const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
-const orderQualityEngine = require("../intelligence/orderQualityEngine");
+
 const orderBookEngine = require("../intelligence/orderBookEngine");
 const orderStrengthEngine = require("../intelligence/orderStrengthEngine");
 const orderMomentumEngine = require("../intelligence/orderMomentumEngine");
 const orderQualityEngine = require("../intelligence/orderQualityEngine");
+
 const sectorRadar = require("../intelligence/sectorRadar");
 const sectorBoomEngine = require("../intelligence/sectorBoomEngine");
+
 const { updateRadar } = require("../intelligence/radarEngine");
 
 let ioRef = null;
@@ -87,48 +89,67 @@ async function fetchAnnouncements(){
 
       const orderData = orderBookEngine(signal);
 
-if (orderData) {
+      if(orderData){
 
-  ioRef.emit("order_book_update", orderData);
+        ioRef.emit("order_book_update",orderData);
 
-  const quality = orderQualityEngine(signal);
+        const quality = orderQualityEngine(signal);
 
-  if(quality){
+        if(quality){
 
-    ioRef.emit("order_quality", quality);
+          ioRef.emit("order_quality",quality);
 
-    updateRadar(signal.company, quality);
+          updateRadar(signal.company,quality);
+
+        }
+
+        const strength = orderStrengthEngine(signal.code);
+
+        if(strength){
+          ioRef.emit("order_strength",strength);
+        }
+
+        const momentum = orderMomentumEngine(signal);
+
+        if(momentum){
+          ioRef.emit("order_momentum",momentum);
+        }
+
+        const sectorData = sectorRadar(signal);
+
+        if(sectorData && sectorData.orders >= 3){
+
+          ioRef.emit("sector_alerts",[{
+            sector:sectorData.sector,
+            orders:sectorData.orders,
+            value:sectorData.value
+          }]);
+
+        }
+
+        const boom = sectorBoomEngine(signal);
+
+        if(boom){
+          ioRef.emit("sector_boom",boom);
+        }
+
+      }
+
+    }
+
+    if(alerts.length > 0 && ioRef){
+
+      ioRef.emit("market_events",alerts);
+
+    }
 
   }
+  catch(err){
 
-  const strength = orderStrengthEngine(signal.code);
+    console.log("❌ BSE Feed Failed:",err.message);
 
-  if (strength) {
-    ioRef.emit("order_strength", strength);
-  }
-
-  const momentum = orderMomentumEngine(signal);
-
-  if (momentum) {
-    ioRef.emit("order_momentum", momentum);
-  }
-
-  const sectorData = sectorRadar(signal);
-
-  if (sectorData && sectorData.orders >= 3) {
-
-    ioRef.emit("sector_alerts", [{
-      sector: sectorData.sector,
-      orders: sectorData.orders,
-      value: sectorData.value
-    }]);
-
-  }
-
-  const boom = sectorBoomEngine(signal);
-
-  if (boom) {
-    ioRef.emit("sector_boom", boom);
   }
 
 }
+
+module.exports = startBSEListener;
