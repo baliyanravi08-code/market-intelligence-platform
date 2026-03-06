@@ -1,4 +1,4 @@
-import { useEffect,useState } from "react";
+import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
 
@@ -9,6 +9,7 @@ export default function App(){
   const [events,setEvents] = useState([]);
   const [sector,setSector] = useState([]);
   const [radar,setRadar] = useState([]);
+  const [selectedSignal,setSelectedSignal] = useState(null);
 
   useEffect(()=>{
 
@@ -34,18 +35,39 @@ export default function App(){
 
   async function loadRadar(){
 
-    const res = await fetch("/api/radar");
-    const data = await res.json();
-    setRadar(data);
+    try{
+
+      const res = await fetch("/api/radar");
+      const data = await res.json();
+      setRadar(data);
+
+    }catch(err){
+      console.log("Radar fetch failed",err);
+    }
 
   }
 
   function scoreColor(score){
 
-    if(score>=80) return "#00ff9c";
-    if(score>=50) return "#ffcc00";
+    if(score >= 80) return "#00ff9c";
+    if(score >= 50) return "#ffcc00";
+    if(score >= 20) return "#ff8800";
     return "#aaa";
 
+  }
+
+  function openSignal(company,signal,score){
+
+    setSelectedSignal({
+      company,
+      signal,
+      score
+    });
+
+  }
+
+  function closeSignal(){
+    setSelectedSignal(null);
   }
 
   return(
@@ -54,7 +76,7 @@ export default function App(){
 
       <h1>⭐ Market Intelligence Terminal</h1>
 
-      {/* RADAR TABLE */}
+      {/* RADAR */}
 
       <div className="section">
 
@@ -76,7 +98,13 @@ export default function App(){
 
             {radar.map((r,i)=>(
 
-              <tr className="row" key={i}>
+              <tr
+                className="row"
+                key={i}
+                style={{
+                  borderLeft:`4px solid ${scoreColor(r.score)}`
+                }}
+              >
 
                 <td>{r.company}</td>
 
@@ -87,7 +115,12 @@ export default function App(){
                 <td>
 
                   {r.signals.map((s,j)=>(
-                    <span className="tag" key={j}>
+                    <span
+                      className="tag"
+                      key={j}
+                      style={{cursor:"pointer"}}
+                      onClick={()=>openSignal(r.company,s,r.score)}
+                    >
                       {s}
                     </span>
                   ))}
@@ -154,6 +187,64 @@ export default function App(){
         </div>
 
       </div>
+
+      {/* SIGNAL DETAIL PANEL */}
+
+      {selectedSignal && (
+
+        <div
+          style={{
+            position:"fixed",
+            right:0,
+            top:0,
+            width:"320px",
+            height:"100vh",
+            background:"#012a5c",
+            padding:"20px",
+            borderLeft:"2px solid #014a96"
+          }}
+        >
+
+          <h3>Signal Detail</h3>
+
+          <div style={{marginTop:"15px"}}>
+
+            <b>Company</b>
+            <div>{selectedSignal.company}</div>
+
+          </div>
+
+          <div style={{marginTop:"15px"}}>
+
+            <b>Signal</b>
+            <div>{selectedSignal.signal}</div>
+
+          </div>
+
+          <div style={{marginTop:"15px"}}>
+
+            <b>Radar Score</b>
+            <div>{selectedSignal.score}</div>
+
+          </div>
+
+          <button
+            onClick={closeSignal}
+            style={{
+              marginTop:"30px",
+              padding:"8px 15px",
+              background:"#014a96",
+              color:"white",
+              border:"none",
+              cursor:"pointer"
+            }}
+          >
+            Close
+          </button>
+
+        </div>
+
+      )}
 
     </div>
 
