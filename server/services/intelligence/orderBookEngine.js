@@ -1,17 +1,18 @@
 const { addOrder } = require("../data/orderBookStore");
 
-function orderBookEngine(signal) {
+function orderBookEngine(signal){
 
-  if (signal.type !== "ORDER_ALERT") return null;
+  if(signal.type !== "ORDER_ALERT") return null;
 
-  const orderData = addOrder(signal.code, signal.value);
+  const value = signal.newOrder || 0;
+
+  const data = addOrder(signal.code,value);
 
   return {
     company: signal.company,
-    code: signal.code,
-    totalOrderValue: orderData.totalValue,
-    orderCount: orderData.orderCount,
-    lastOrder: signal.value
+    value,
+    totalOrderValue: data.totalOrderValue,
+    orders: data.orders.length
   };
 
 }

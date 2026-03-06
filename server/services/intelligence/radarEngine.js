@@ -1,6 +1,6 @@
 const radar = {};
 
-function updateRadar(company, signal){
+function updateRadar(company,signal){
 
   if(!company) return;
 
@@ -9,14 +9,13 @@ function updateRadar(company, signal){
     radar[company] = {
       company,
       score:0,
-      signals:[]
+      signals:[],
+      pdfUrl:null
     };
 
   }
 
   const label = signal.type || signal.signal;
-
-  /* prevent duplicate signals */
 
   if(radar[company].signals.includes(label)){
     return;
@@ -24,14 +23,15 @@ function updateRadar(company, signal){
 
   radar[company].signals.push(label);
 
+  if(signal.pdfUrl){
+    radar[company].pdfUrl = signal.pdfUrl;
+  }
+
   let score = 0;
 
   if(signal.type === "ORDER_ALERT") score = 40;
-  if(signal.signal === "ORDER_QUALITY") score = 35;
-  if(signal.signal === "ORDER_MOMENTUM") score = 25;
-  if(signal.signal === "ORDER_STRENGTH") score = 20;
-  if(signal.signal === "SECTOR_BOOM") score = 20;
   if(signal.signal === "INSTITUTIONAL_DEAL") score = 25;
+  if(signal.signal === "AI_EVENT") score = 10;
 
   radar[company].score += score;
 

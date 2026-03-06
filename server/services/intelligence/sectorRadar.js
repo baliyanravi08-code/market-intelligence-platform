@@ -21,7 +21,7 @@ function sectorRadar(signal){
 
   }
 
-  sectors[sector].orders += 1;
+  sectors[sector].orders++;
 
   sectors[sector].totalValue += signal.newOrder || 0;
 

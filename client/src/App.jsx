@@ -10,16 +10,19 @@ export default function App(){
   const [sector,setSector] = useState([]);
   const [radar,setRadar] = useState([]);
   const [orderBook,setOrderBook] = useState([]);
-  const [selected,setSelected] = useState(null);
 
   useEffect(()=>{
 
     loadRadar();
 
-    const timer = setInterval(loadRadar,10000);
+    const timer=setInterval(loadRadar,10000);
 
     socket.on("market_events",(data)=>{
       setEvents(prev=>[...data,...prev].slice(0,40));
+    });
+
+    socket.on("sector_alerts",(data)=>{
+      setSector(prev=>[...data,...prev].slice(0,10));
     });
 
     socket.on("sector_boom",(data)=>{
@@ -30,19 +33,6 @@ export default function App(){
       setOrderBook(prev=>[data,...prev].slice(0,20));
     });
 
-    /* SMART MONEY LISTENER */
-
-    socket.on("smart_money",(data)=>{
-
-      const alert = {
-        company:data.company,
-        title:`Institutional accumulation detected ₹${data.value} Cr`
-      };
-
-      setEvents(prev=>[alert,...prev].slice(0,40));
-
-    });
-
     return ()=>clearInterval(timer);
 
   },[]);
@@ -50,7 +40,9 @@ export default function App(){
   async function loadRadar(){
 
     const res = await fetch("/api/radar");
+
     const data = await res.json();
+
     setRadar(data);
 
   }
@@ -73,7 +65,7 @@ export default function App(){
 
       <div className="layout">
 
-        {/* LEFT PANEL */}
+        {/* RADAR */}
 
         <div className="radar-panel">
 
@@ -81,11 +73,7 @@ export default function App(){
 
           {radar.map((r,i)=>(
 
-            <div
-              className="radar-card"
-              key={i}
-              onClick={()=>setSelected(r)}
-            >
+            <div className="radar-card" key={i}>
 
               <div className="radar-row">
 
@@ -112,13 +100,26 @@ export default function App(){
 
               </div>
 
+              {r.pdfUrl && (
+
+                <a
+                  href={r.pdfUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="pdf-link"
+                >
+                  📄 Order Filing
+                </a>
+
+              )}
+
             </div>
 
           ))}
 
         </div>
 
-        {/* CENTER PANEL */}
+        {/* LIVE ALERTS */}
 
         <div className="feed-panel">
 
@@ -130,28 +131,28 @@ export default function App(){
 
               <div className="feed-card" key={i}>
 
-  <div className="feed-title">
-    {e.company}
-  </div>
+                <div className="feed-title">
+                  {e.company}
+                </div>
 
-  <div className="feed-text">
-    {e.title}
-  </div>
+                <div className="feed-text">
+                  {e.title}
+                </div>
 
-  {e.pdfUrl && (
+                {e.pdfUrl && (
 
-    <a
-      href={e.pdfUrl}
-      target="_blank"
-      rel="noreferrer"
-      className="pdf-link"
-    >
-      📄 View Filing
-    </a>
+                  <a
+                    href={e.pdfUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="pdf-link"
+                  >
+                    📄 View Filing
+                  </a>
 
-  )}
+                )}
 
-</div>
+              </div>
 
             ))}
 
@@ -211,35 +212,6 @@ export default function App(){
         </div>
 
       </div>
-
-      {/* COMPANY DETAIL MODAL */}
-
-      {selected && (
-
-        <div className="modal">
-
-          <div className="modal-box">
-
-            <h2>{selected.company}</h2>
-
-            <div>Score: {selected.score}</div>
-
-            <div>
-              Signals: {selected.signals.join(", ")}
-            </div>
-
-            <button
-              onClick={()=>setSelected(null)}
-              className="close-btn"
-            >
-              Close
-            </button>
-
-          </div>
-
-        </div>
-
-      )}
 
     </div>
 
