@@ -1,6 +1,4 @@
 const axios = require("axios");
-const csv = require("csv-parser");
-const { Readable } = require("stream");
 
 const { updateRadar } = require("../intelligence/radarEngine");
 
@@ -42,11 +40,12 @@ async function fetchDeals(){
         value: deal.quantity * deal.price
       };
 
-      updateRadar(activity.company,activity);
+      // update radar scoring
+      updateRadar(activity.company, activity);
 
       if(ioRef){
 
-        ioRef.emit("institutional_activity",activity);
+        ioRef.emit("institutional_activity", activity);
 
       }
 
@@ -55,7 +54,7 @@ async function fetchDeals(){
   }
   catch(err){
 
-    console.log("❌ NSE Deals fetch failed:",err.message);
+    console.log("❌ NSE Deals fetch failed:", err.message);
 
   }
 
