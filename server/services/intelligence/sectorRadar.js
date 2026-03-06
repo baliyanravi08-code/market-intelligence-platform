@@ -1,10 +1,6 @@
 const sectorMap = require("../data/sectorMap");
 
-const sectorState = {};
-
-/*
-TRACK SECTOR ACTIVITY
-*/
+const sectors = {};
 
 function sectorRadar(signal){
 
@@ -14,29 +10,26 @@ function sectorRadar(signal){
 
   if(!sector) return null;
 
-  if(!sectorState[sector]){
+  if(!sectors[sector]){
 
-    sectorState[sector] = {
+    sectors[sector] = {
       sector,
       orders:0,
-      value:0,
-      companies:new Set()
+      totalValue:0,
+      companies:[]
     };
 
   }
 
-  const data = sectorState[sector];
+  sectors[sector].orders += 1;
 
-  data.orders += 1;
-  data.value += signal.newOrder || 0;
-  data.companies.add(signal.company);
+  sectors[sector].totalValue += signal.newOrder || 0;
 
-  return {
-    sector,
-    orders:data.orders,
-    value:data.value,
-    companies:Array.from(data.companies)
-  };
+  if(!sectors[sector].companies.includes(signal.company)){
+    sectors[sector].companies.push(signal.company);
+  }
+
+  return sectors[sector];
 
 }
 

@@ -130,28 +130,28 @@ export default function App(){
 
               <div className="feed-card" key={i}>
 
-                <div className="feed-title">
-                  {e.company}
-                </div>
+  <div className="feed-title">
+    {e.company}
+  </div>
 
-                <div className="feed-text">
-                  {e.title}
-                </div>
+  <div className="feed-text">
+    {e.title}
+  </div>
 
-                {e.pdfUrl && (
+  {e.pdfUrl && (
 
-                  <a
-                    href={e.pdfUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="pdf-link"
-                  >
-                    📄 Filing
-                  </a>
+    <a
+      href={e.pdfUrl}
+      target="_blank"
+      rel="noreferrer"
+      className="pdf-link"
+    >
+      📄 View Filing
+    </a>
 
-                )}
+  )}
 
-              </div>
+</div>
 
             ))}
 
