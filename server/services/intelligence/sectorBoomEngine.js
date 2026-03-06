@@ -1,44 +1,15 @@
-const sectorMap = require("../data/sectorMap");
+function sectorBoomEngine(sectorData){
 
-const sectorOrders = new Map();
+  if(!sectorData) return null;
 
-function sectorBoomEngine(signal) {
-
-  if (signal.type !== "ORDER_ALERT") return null;
-
-  const sector = sectorMap[signal.code];
-
-  if (!sector) return null;
-
-  if (!sectorOrders.has(sector)) {
-    sectorOrders.set(sector, []);
-  }
-
-  const list = sectorOrders.get(sector);
-
-  list.push({
-    company: signal.company,
-    value: signal.value,
-    time: Date.now()
-  });
-
-  const sevenDays = 7 * 24 * 60 * 60 * 1000;
-
-  const recent = list.filter(
-    o => Date.now() - o.time < sevenDays
-  );
-
-  sectorOrders.set(sector, recent);
-
-  if (recent.length >= 3) {
-
-    const total = recent.reduce((sum, o) => sum + o.value, 0);
+  if(sectorData.orders >= 3){
 
     return {
-      sector,
-      companies: recent.length,
-      totalValue: total,
-      signal: "SECTOR_ORDER_BOOM"
+      signal:"SECTOR_BOOM",
+      sector:sectorData.sector,
+      orders:sectorData.orders,
+      companies:sectorData.companies,
+      totalValue:sectorData.value
     };
 
   }

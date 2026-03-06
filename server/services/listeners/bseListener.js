@@ -5,7 +5,6 @@ const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 const orderBookEngine = require("../intelligence/orderBookEngine");
 const orderStrengthEngine = require("../intelligence/orderStrengthEngine");
 const orderMomentumEngine = require("../intelligence/orderMomentumEngine");
-const orderQualityEngine = require("../intelligence/orderQualityEngine");
 
 const sectorRadar = require("../intelligence/sectorRadar");
 const sectorBoomEngine = require("../intelligence/sectorBoomEngine");
@@ -85,7 +84,15 @@ async function fetchAnnouncements(){
 
       alerts.push(signal);
 
+      /*
+      UPDATE RADAR
+      */
+
       updateRadar(signal.company,signal);
+
+      /*
+      ORDER BOOK ENGINE
+      */
 
       const orderData = orderBookEngine(signal);
 
@@ -93,15 +100,9 @@ async function fetchAnnouncements(){
 
         ioRef.emit("order_book_update",orderData);
 
-        const quality = orderQualityEngine(signal);
-
-        if(quality){
-
-          ioRef.emit("order_quality",quality);
-
-          updateRadar(signal.company,quality);
-
-        }
+        /*
+        ORDER STRENGTH
+        */
 
         const strength = orderStrengthEngine(signal.code);
 
@@ -109,38 +110,38 @@ async function fetchAnnouncements(){
           ioRef.emit("order_strength",strength);
         }
 
+        /*
+        ORDER MOMENTUM
+        */
+
         const momentum = orderMomentumEngine(signal);
 
         if(momentum){
           ioRef.emit("order_momentum",momentum);
         }
 
+        /*
+        SECTOR RADAR
+        */
+
         const sectorData = sectorRadar(signal);
 
-        if(sectorData && sectorData.orders >= 3){
-
-          ioRef.emit("sector_alerts",[{
-            sector:sectorData.sector,
-            orders:sectorData.orders,
-            value:sectorData.value
-          }]);
-
-        }
-
-        const boom = sectorBoomEngine(signal);
+        const boom = sectorBoomEngine(sectorData);
 
         if(boom){
+
           ioRef.emit("sector_boom",boom);
+
+          updateRadar(boom.sector,boom);
+
         }
 
       }
 
     }
 
-    if(alerts.length > 0 && ioRef){
-
+    if(alerts.length>0 && ioRef){
       ioRef.emit("market_events",alerts);
-
     }
 
   }

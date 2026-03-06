@@ -1,31 +1,43 @@
-const getSector = require("../data/sectorMap");
+const sectorMap = require("../data/sectorMap");
 
-const sectorStats = {};
+const sectorState = {};
 
-function updateSectorRadar(orderEvent) {
+/*
+TRACK SECTOR ACTIVITY
+*/
 
-  const sector = getSector(orderEvent.code);
+function sectorRadar(signal){
 
-  if (!sectorStats[sector]) {
+  if(signal.type !== "ORDER_ALERT") return null;
 
-    sectorStats[sector] = {
-      totalOrders: 0,
-      totalValue: 0
+  const sector = sectorMap[signal.code];
+
+  if(!sector) return null;
+
+  if(!sectorState[sector]){
+
+    sectorState[sector] = {
+      sector,
+      orders:0,
+      value:0,
+      companies:new Set()
     };
 
   }
 
-  sectorStats[sector].totalOrders += 1;
-  sectorStats[sector].totalValue += orderEvent.newOrder;
+  const data = sectorState[sector];
+
+  data.orders += 1;
+  data.value += signal.newOrder || 0;
+  data.companies.add(signal.company);
 
   return {
-
-    sector: sector,
-    orders: sectorStats[sector].totalOrders,
-    value: sectorStats[sector].totalValue
-
+    sector,
+    orders:data.orders,
+    value:data.value,
+    companies:Array.from(data.companies)
   };
 
 }
 
-module.exports = updateSectorRadar;
+module.exports = sectorRadar;
