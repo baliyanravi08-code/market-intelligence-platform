@@ -1,139 +1,58 @@
-const axios = require("axios");
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const path = require("path");
 
-const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
+const startBSEListener = require("./services/listeners/bseListener");
+const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 
-const orderBookEngine = require("../intelligence/orderBookEngine");
-const sectorQueue = require("../intelligence/sectorQueue");
-const sectorRadar = require("../intelligence/sectorRadar");
-const sectorBoomEngine = require("../intelligence/sectorBoomEngine");
+const { getRadar } = require("./services/intelligence/radarEngine");
 
-const { updateRadar } = require("../intelligence/radarEngine");
+const app = express();
 
-let ioRef = null;
-let seen = new Set();
+const server = http.createServer(app);
 
-function startBSEListener(io){
+const io = new Server(server,{
+  cors:{origin:"*"}
+});
 
-  ioRef = io;
+/* SOCKET */
 
-  console.log("🚀 BSE Listener running...");
+io.on("connection",(socket)=>{
 
-  fetchAnnouncements();
+  console.log("Client connected:",socket.id);
 
-  setInterval(fetchAnnouncements,30000);
+});
 
-}
+/* API */
 
-async function fetchAnnouncements(){
+app.get("/api/radar",(req,res)=>{
 
-  try{
+  res.json(getRadar());
 
-    const url =
-      "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w";
+});
 
-    const res = await axios.get(url,{
-      params:{
-        pageno:1,
-        strCat:-1,
-        strPrevDate:"",
-        strScrip:"",
-        strSearch:"P",
-        strToDate:"",
-        strType:"C"
-      },
-      headers:{
-        "User-Agent":"Mozilla/5.0",
-        "Referer":"https://www.bseindia.com/"
-      }
-    });
+/* FRONTEND */
 
-    const list = res.data?.Table || [];
+app.use(express.static(path.join(__dirname,"../client/dist")));
 
-    console.log("📢 BSE Announcements fetched:",list.length);
+app.get("*",(req,res)=>{
 
-    const alerts=[];
+  res.sendFile(path.join(__dirname,"../client/dist/index.html"));
 
-    for(const item of list){
+});
 
-      const company = item.SLONGNAME;
-      const code = item.SCRIP_CD;
-      const title = item.HEADLINE;
-      const date = item.NEWS_DT;
+/* START LISTENERS */
 
-      const id = code + title + date;
+startBSEListener(io);
+startNSEDealsListener(io);
 
-      if(seen.has(id)) continue;
+/* SERVER */
 
-      seen.add(id);
+const PORT = process.env.PORT || 10000;
 
-      const announcement={
+server.listen(PORT,()=>{
 
-        company,
-        code,
-        title,
-        date,
+  console.log("🚀 Server running on port",PORT);
 
-        pdfUrl: item.ATTACHMENTNAME
-          ? `https://www.bseindia.com/xml-data/corpfiling/AttachLive/${item.ATTACHMENTNAME}`
-          : null
-
-      };
-
-      const signal = await analyzeAnnouncement(announcement);
-
-      if(!signal) continue;
-
-      signal.pdfUrl = announcement.pdfUrl;
-
-      alerts.push(signal);
-
-      updateRadar(signal.company,signal);
-
-      /* ORDER BOOK */
-
-      const orderData = orderBookEngine(signal);
-
-      if(orderData && ioRef){
-
-        ioRef.emit("order_book_update",orderData);
-
-      }
-
-      /* SECTOR QUEUE */
-
-      const queue = sectorQueue(signal);
-
-      const sectorData = sectorRadar(queue);
-
-      if(sectorData && ioRef){
-
-        ioRef.emit("sector_alerts",[sectorData]);
-
-      }
-
-      const boom = sectorBoomEngine(queue);
-
-      if(boom && ioRef){
-
-        ioRef.emit("sector_boom",boom);
-
-      }
-
-    }
-
-    if(alerts.length>0 && ioRef){
-
-      ioRef.emit("market_events",alerts);
-
-    }
-
-  }
-  catch(err){
-
-    console.log("❌ BSE Feed Failed:",err.message);
-
-  }
-
-}
-
-module.exports = startBSEListener;
+});

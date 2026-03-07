@@ -1,7 +1,7 @@
 const express = require("express");
 const http = require("http");
-const path = require("path");
 const { Server } = require("socket.io");
+const path = require("path");
 
 const startBSEListener = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
@@ -9,66 +9,50 @@ const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { getRadar } = require("./services/intelligence/radarEngine");
 
 const app = express();
+
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: {
-    origin: "*"
-  }
+const io = new Server(server,{
+  cors:{origin:"*"}
 });
 
-app.use(express.json());
+/* SOCKET */
 
-/*
-SERVE REACT BUILD
-*/
+io.on("connection",(socket)=>{
 
-const clientPath = path.join(__dirname, "../client/dist");
+  console.log("Client connected:",socket.id);
 
-app.use(express.static(clientPath));
-
-/*
-API ROUTES
-*/
-
-app.get("/api/health", (req, res) => {
-  res.json({ status: "Market Intelligence Platform Running 🚀" });
 });
 
-app.get("/api/radar", (req, res) => {
-  const radar = getRadar();
-  res.json(radar);
+/* API */
+
+app.get("/api/radar",(req,res)=>{
+
+  res.json(getRadar());
+
 });
 
-/*
-REACT FALLBACK ROUTE
-*/
+/* FRONTEND */
 
-app.use((req, res) => {
-  res.sendFile(path.join(clientPath, "index.html"));
+app.use(express.static(path.join(__dirname,"../client/dist")));
+
+app.get("*",(req,res)=>{
+
+  res.sendFile(path.join(__dirname,"../client/dist/index.html"));
+
 });
 
-/*
-SOCKET CONNECTION
-*/
-
-io.on("connection", (socket) => {
-  console.log("Client connected:", socket.id);
-});
-
-/*
-START DATA LISTENERS
-*/
+/* START LISTENERS */
 
 startBSEListener(io);
 startNSEDealsListener(io);
 
-/*
-START SERVER
-*/
+/* SERVER */
 
 const PORT = process.env.PORT || 10000;
 
-server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+server.listen(PORT,()=>{
+
+  console.log("🚀 Server running on port",PORT);
+
 });
