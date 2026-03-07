@@ -56,7 +56,7 @@ async function fetchAnnouncements(){
     for(const item of list){
 
       const company = item.SLONGNAME;
-      const code = item.SCRIP_CD;
+      const code = String(item.SCRIP_CD);
       const title = item.HEADLINE;
       const date = item.NEWS_DT;
 
@@ -66,21 +66,23 @@ async function fetchAnnouncements(){
 
       seen.add(id);
 
+      const pdfUrl = item.ATTACHMENTNAME
+        ? `https://www.bseindia.com/xml-data/corpfiling/AttachLive/${item.ATTACHMENTNAME}`
+        : null;
+
       const announcement = {
         company,
         code,
         title,
         date,
-        pdfUrl: item.ATTACHMENTNAME
-  ? `https://www.bseindia.com/xml-data/corpfiling/AttachHis/${item.ATTACHMENTNAME}`
-  : null
+        pdfUrl
       };
 
       const signal = await analyzeAnnouncement(announcement);
 
       if(!signal) continue;
 
-      signal.pdfUrl = announcement.pdfUrl;
+      signal.pdfUrl = pdfUrl;
 
       alerts.push(signal);
 

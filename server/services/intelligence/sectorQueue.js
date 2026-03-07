@@ -6,7 +6,7 @@ function sectorQueue(signal){
 
   if(signal.type !== "ORDER_ALERT") return null;
 
-  const sector = getSector(signal.code);
+  const sector = getSector(String(signal.code));
 
   if(!sector) return null;
 

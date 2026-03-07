@@ -8,8 +8,7 @@ function orderBookEngine(signal){
 
   if(!value) return null;
 
-  const data = addOrder(signal.code,value);
-
+const data = addOrder(String(signal.code),value);
   return {
     company: signal.company,
     value,
