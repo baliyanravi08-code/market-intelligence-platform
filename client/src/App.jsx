@@ -30,8 +30,11 @@ export default function App(){
     });
 
     socket.on("order_book_update",(data)=>{
-      setOrderBook(prev=>[data,...prev].slice(0,20));
-    });
+  setOrderBook(prev=>{
+    const list=[data,...prev];
+    return list.slice(0,20);
+  });
+});
 
     return ()=>clearInterval(timer);
 
@@ -100,18 +103,18 @@ export default function App(){
 
               </div>
 
-              {r.pdfUrl && (
+              {r.type === "ORDER_ALERT" && r.pdfUrl && (
 
-                <a
-                  href={r.pdfUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="pdf-link"
-                >
-                  📄 Order Filing
-                </a>
+  <a
+    href={r.pdfUrl}
+    target="_blank"
+    rel="noopener noreferrer"
+    className="pdf-link"
+  >
+    📄 Order Filing
+  </a>
 
-              )}
+)}
 
             </div>
 
@@ -139,18 +142,18 @@ export default function App(){
                   {e.title}
                 </div>
 
-                {e.pdfUrl && (
+               {e.type === "ORDER_ALERT" && e.pdfUrl && (
 
-                  <a
-                    href={e.pdfUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="pdf-link"
-                  >
-                    📄 View Filing
-                  </a>
+  <a
+    href={e.pdfUrl}
+    target="_blank"
+    rel="noopener noreferrer"
+    className="pdf-link"
+  >
+    📄 View Filing
+  </a>
 
-                )}
+)}
 
               </div>
 
