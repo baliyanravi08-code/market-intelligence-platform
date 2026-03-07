@@ -1,7 +1,7 @@
 const sectorMap = {
 
-  "500510": "Infrastructure", // Larsen & Toubro
-  "532540": "Infrastructure", // KNR Constructions
+  "500510": "Infrastructure",
+  "532540": "Infrastructure",
   "500400": "Power",
   "532898": "Railway",
   "540678": "Defense",
@@ -11,10 +11,6 @@ const sectorMap = {
 
 };
 
-function getSector(code) {
-
-  return sectorMap[code] || "Unknown";
-
-}
-
-module.exports = getSector;
+module.exports = function(code){
+  return sectorMap[code] || null;
+};

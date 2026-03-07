@@ -8,14 +8,14 @@ function orderQualityEngine(signal){
 
   if(!marketCap) return null;
 
-  const percentage = (signal.newOrder / marketCap) * 100;
+  const percentage = (signal.value / marketCap) * 100;
 
   if(percentage >= 20){
 
     return {
       company: signal.company,
       code: signal.code,
-      orderValue: signal.newOrder,
+      orderValue: signal.value,
       marketCap,
       percentage: percentage.toFixed(2),
       signal: "ORDER_QUALITY"

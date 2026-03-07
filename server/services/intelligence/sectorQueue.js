@@ -6,7 +6,7 @@ function sectorQueue(signal){
 
   if(signal.type !== "ORDER_ALERT") return null;
 
-  const sector = sectorMap[signal.code];
+  const sector = sectorMap(signal.code);
 
   if(!sector) return null;
 
@@ -25,7 +25,7 @@ function sectorQueue(signal){
   const q = queues[sector];
 
   q.orders += 1;
-  q.totalValue += signal.newOrder || 0;
+  q.totalValue += signal.value || 0;
 
   if(!q.companies.includes(signal.company)){
     q.companies.push(signal.company);

@@ -36,9 +36,9 @@ async function extractOrderFromPDF(url){
         if(!orderValue) return resolve(null);
 
         resolve({
-          value: orderValue,
-          source:"PDF"
-        });
+  value: orderValue.orderValueCrore,
+  source:"PDF"
+});
 
       });
 

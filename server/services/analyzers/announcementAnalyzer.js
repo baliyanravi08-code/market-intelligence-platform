@@ -12,7 +12,7 @@ async function analyzeAnnouncement(announcement) {
       type: "ORDER_ALERT",
       company: announcement.company,
       code: announcement.code,
-      value: order,
+      value: order.orderValueCrore,
       source: "headline",
       title: announcement.title
     };
