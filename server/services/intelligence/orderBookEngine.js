@@ -4,7 +4,9 @@ function orderBookEngine(signal){
 
   if(signal.type !== "ORDER_ALERT") return null;
 
-  const value = signal.value || 0;
+  const value = signal.value;
+
+  if(!value) return null;
 
   const data = addOrder(signal.code,value);
 

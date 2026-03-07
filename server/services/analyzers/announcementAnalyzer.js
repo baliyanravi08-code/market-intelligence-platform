@@ -13,8 +13,8 @@ async function analyzeAnnouncement(announcement) {
       company: announcement.company,
       code: announcement.code,
       value: order.orderValueCrore,
-      source: "headline",
-      title: announcement.title
+      title: announcement.title,
+      pdfUrl: announcement.pdfUrl
     };
 
   }
@@ -30,8 +30,8 @@ async function analyzeAnnouncement(announcement) {
         company: announcement.company,
         code: announcement.code,
         value: pdfOrder.value,
-        source: "pdf",
-        title: announcement.title
+        title: announcement.title,
+        pdfUrl: announcement.pdfUrl
       };
 
     }
@@ -46,8 +46,9 @@ async function analyzeAnnouncement(announcement) {
       type: "AI_EVENT",
       company: announcement.company,
       code: announcement.code,
-      event: aiEvent,
-      title: announcement.title
+      signal: aiEvent,
+      title: announcement.title,
+      pdfUrl: announcement.pdfUrl
     };
 
   }

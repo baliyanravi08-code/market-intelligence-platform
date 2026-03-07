@@ -1,4 +1,4 @@
-const sectorMap = require("../data/sectorMap");
+const getSector = require("../data/sectorMap");
 
 const queues = {};
 
@@ -6,7 +6,7 @@ function sectorQueue(signal){
 
   if(signal.type !== "ORDER_ALERT") return null;
 
-  const sector = sectorMap(signal.code);
+  const sector = getSector(signal.code);
 
   if(!sector) return null;
 

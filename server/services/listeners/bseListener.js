@@ -72,8 +72,8 @@ async function fetchAnnouncements(){
         title,
         date,
         pdfUrl: item.ATTACHMENTNAME
-          ? `https://www.bseindia.com/xml-data/corpfiling/AttachLive/${item.ATTACHMENTNAME}`
-          : null
+  ? `https://www.bseindia.com/xml-data/corpfiling/AttachHis/${item.ATTACHMENTNAME}`
+  : null
       };
 
       const signal = await analyzeAnnouncement(announcement);

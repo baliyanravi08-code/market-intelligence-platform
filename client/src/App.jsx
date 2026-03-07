@@ -18,7 +18,7 @@ export default function App(){
     const timer=setInterval(loadRadar,10000);
 
     socket.on("market_events",(data)=>{
-      setEvents(prev=>[...data,...prev].slice(0,40));
+      setEvents(prev=>[...(data || []),...prev].slice(0,40));
     });
 
     socket.on("sector_alerts",(data)=>{
