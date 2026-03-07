@@ -198,20 +198,27 @@ export default function App(){
 
           <h3 style={{marginTop:"20px"}}>Order Book</h3>
 
-          {orderBook.map((o,i)=>(
+{orderBook.map((o,i)=>(
 
-            <div className="order-card" key={i}>
+  <div className="order-card" key={i}>
 
-              <b>{o.company}</b>
+    <b>{o.company}</b>
 
-              <div>
-                Order Value: ₹{o.value} Cr
-              </div>
+    <div>
+      Order: ₹{o.orderValue} Cr
+    </div>
 
-            </div>
+    <div>
+      Total Book: ₹{o.totalOrderBook} Cr
+    </div>
 
-          ))}
+    <div>
+      Orders: {o.orders}
+    </div>
 
+  </div>
+
+))}
         </div>
 
       </div>

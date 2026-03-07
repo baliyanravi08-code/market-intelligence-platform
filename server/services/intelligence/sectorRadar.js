@@ -2,7 +2,7 @@ function sectorRadar(queue){
 
   if(!queue) return null;
 
-  if(queue.orders < 3) return null;
+  if(queue.orders < 2) return null;
 
   return {
     sector: queue.sector,

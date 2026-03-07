@@ -15,8 +15,8 @@ function orderBookEngine(signal){
 
   return {
     company: signal.company,
-    value,
-    totalOrderValue: data.totalOrderValue,
+    orderValue: value,
+    totalOrderBook: data.totalOrderValue,
     orders: data.orders.length
   };
 
