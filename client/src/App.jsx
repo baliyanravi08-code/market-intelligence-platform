@@ -168,30 +168,30 @@ export default function App(){
 
           {sector.map((s,i)=>(
 
-            <div className="sector-card" key={i}>
+  <div className="sector-card" key={i}>
 
-              <div className="sector-title">
-                {s.sector}
-              </div>
+    <div className="sector-title">
+      {s.sector}
+    </div>
 
-              <div>
-                Orders: {s.orders}
-              </div>
+    <div>
+      Orders: {s.orders}
+    </div>
 
-              <div>
-                Companies:
-                <div className="sector-companies">
-                  {s.companies?.join(", ")}
-                </div>
-              </div>
+    <div>
+      Companies:
+      <div className="sector-companies">
+        {s.companies?.join(", ")}
+      </div>
+    </div>
 
-              <div>
-                Value: ₹{s.totalValue} Cr
-              </div>
+    <div>
+      Value: ₹{s.totalValue} Cr
+    </div>
 
-            </div>
+  </div>
 
-          ))}
+))}
 
           <h3 style={{marginTop:"20px"}}>Order Book</h3>
 

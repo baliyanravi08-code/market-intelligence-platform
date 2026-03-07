@@ -1,20 +1,15 @@
-function sectorBoomEngine(sectorData){
+function sectorBoomEngine(queue){
 
-  if(!sectorData) return null;
+  if(!queue) return null;
 
-  if(sectorData.orders >= 3){
+  if(queue.orders < 5) return null;
 
-    return {
-      signal:"SECTOR_BOOM",
-      sector:sectorData.sector,
-      orders:sectorData.orders,
-      companies:sectorData.companies,
-      totalValue:sectorData.value
-    };
-
-  }
-
-  return null;
+  return {
+    sector: queue.sector,
+    companies: queue.companies,
+    totalValue: queue.totalValue,
+    signal:"SECTOR_BOOM"
+  };
 
 }
 

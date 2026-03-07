@@ -1,35 +1,15 @@
-const sectorMap = require("../data/sectorMap");
+function sectorRadar(queue){
 
-const sectors = {};
+  if(!queue) return null;
 
-function sectorRadar(signal){
+  if(queue.orders < 3) return null;
 
-  if(signal.type !== "ORDER_ALERT") return null;
-
-  const sector = sectorMap[signal.code];
-
-  if(!sector) return null;
-
-  if(!sectors[sector]){
-
-    sectors[sector] = {
-      sector,
-      orders:0,
-      totalValue:0,
-      companies:[]
-    };
-
-  }
-
-  sectors[sector].orders++;
-
-  sectors[sector].totalValue += signal.newOrder || 0;
-
-  if(!sectors[sector].companies.includes(signal.company)){
-    sectors[sector].companies.push(signal.company);
-  }
-
-  return sectors[sector];
+  return {
+    sector: queue.sector,
+    orders: queue.orders,
+    companies: queue.companies,
+    totalValue: queue.totalValue
+  };
 
 }
 

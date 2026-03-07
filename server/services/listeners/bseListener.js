@@ -6,6 +6,7 @@ const orderBookEngine = require("../intelligence/orderBookEngine");
 const orderStrengthEngine = require("../intelligence/orderStrengthEngine");
 const orderMomentumEngine = require("../intelligence/orderMomentumEngine");
 
+const sectorQueue = require("../intelligence/sectorQueue");
 const sectorRadar = require("../intelligence/sectorRadar");
 const sectorBoomEngine = require("../intelligence/sectorBoomEngine");
 
@@ -109,7 +110,9 @@ async function fetchAnnouncements(){
           ioRef.emit("order_momentum",momentum);
         }
 
-        const sectorData = sectorRadar(signal);
+        const queue = sectorQueue(signal);
+
+const sectorData = sectorRadar(queue);
 
         if(sectorData && sectorData.orders >=3){
 
@@ -122,7 +125,7 @@ async function fetchAnnouncements(){
 
         }
 
-        const boom = sectorBoomEngine(signal);
+        const boom = sectorBoomEngine(queue);
 
         if(boom){
           ioRef.emit("sector_boom",boom);
