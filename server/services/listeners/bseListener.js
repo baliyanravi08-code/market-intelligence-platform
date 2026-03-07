@@ -3,9 +3,6 @@ const axios = require("axios");
 const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 
 const orderBookEngine = require("../intelligence/orderBookEngine");
-const orderStrengthEngine = require("../intelligence/orderStrengthEngine");
-const orderMomentumEngine = require("../intelligence/orderMomentumEngine");
-
 const sectorQueue = require("../intelligence/sectorQueue");
 const sectorRadar = require("../intelligence/sectorRadar");
 const sectorBoomEngine = require("../intelligence/sectorBoomEngine");
@@ -54,7 +51,7 @@ async function fetchAnnouncements(){
 
     console.log("📢 BSE Announcements fetched:",list.length);
 
-    const alerts = [];
+    const alerts=[];
 
     for(const item of list){
 
@@ -69,7 +66,7 @@ async function fetchAnnouncements(){
 
       seen.add(id);
 
-      const announcement = {
+      const announcement={
 
         company,
         code,
@@ -92,50 +89,39 @@ async function fetchAnnouncements(){
 
       updateRadar(signal.company,signal);
 
+      /* ORDER BOOK */
+
       const orderData = orderBookEngine(signal);
 
-      if(orderData){
+      if(orderData && ioRef){
 
         ioRef.emit("order_book_update",orderData);
 
-        const strength = orderStrengthEngine(signal.code);
+      }
 
-        if(strength){
-          ioRef.emit("order_strength",strength);
-        }
+      /* SECTOR QUEUE */
 
-        const momentum = orderMomentumEngine(signal);
+      const queue = sectorQueue(signal);
 
-        if(momentum){
-          ioRef.emit("order_momentum",momentum);
-        }
+      const sectorData = sectorRadar(queue);
 
-        const queue = sectorQueue(signal);
+      if(sectorData && ioRef){
 
-const sectorData = sectorRadar(queue);
+        ioRef.emit("sector_alerts",[sectorData]);
 
-        if(sectorData && sectorData.orders >=3){
+      }
 
-          ioRef.emit("sector_alerts",[{
-            sector: sectorData.sector,
-            orders: sectorData.orders,
-            companies: sectorData.companies,
-            totalValue: sectorData.totalValue
-          }]);
+      const boom = sectorBoomEngine(queue);
 
-        }
+      if(boom && ioRef){
 
-        const boom = sectorBoomEngine(queue);
-
-        if(boom){
-          ioRef.emit("sector_boom",boom);
-        }
+        ioRef.emit("sector_boom",boom);
 
       }
 
     }
 
-    if(alerts.length > 0 && ioRef){
+    if(alerts.length>0 && ioRef){
 
       ioRef.emit("market_events",alerts);
 
