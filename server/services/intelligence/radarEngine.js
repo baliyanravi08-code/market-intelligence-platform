@@ -3,30 +3,46 @@ const radarMap = new Map();
 function getIndianTime() {
   return new Date().toLocaleString("en-IN", {
     timeZone: "Asia/Kolkata",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
+    month: "short", day: "numeric",
+    hour: "numeric", minute: "numeric",
     hour12: true
   });
+}
+
+function normalizeName(name) {
+  if (!name) return name;
+  return name
+    .trim()
+    .replace(/\s+(limited|ltd\.?|inc\.?|llp\.?|pvt\.?|private)$/i, "")
+    .replace(/\s+-\s*\$.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function updateRadar(company, signal) {
   if (!company) return;
 
-  if (!radarMap.has(company)) {
-    radarMap.set(company, {
-      company,
+  const key = normalizeName(company).toLowerCase();
+
+  if (!radarMap.has(key)) {
+    radarMap.set(key, {
+      company: normalizeName(company),
       score: 0,
       signals: [],
       strength: "WEAK",
       pdfUrl: null,
       time: null,
-      receivedAt: Date.now()
+      receivedAt: Date.now(),
+      exchanges: []
     });
   }
 
-  const data = radarMap.get(company);
+  const data = radarMap.get(key);
+
+  const exchange = signal.exchange || (signal.pdfUrl?.includes("bseindia") ? "BSE" : "NSE");
+  if (exchange && !data.exchanges.includes(exchange)) {
+    data.exchanges.push(exchange);
+  }
 
   data.signals.unshift(signal.type);
   if (data.signals.length > 5) data.signals = data.signals.slice(0, 5);

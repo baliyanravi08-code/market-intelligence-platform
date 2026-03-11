@@ -236,3 +236,12 @@ body { font-family: 'IBM Plex Sans', Arial, sans-serif; color: #b8cfe8; font-siz
 ::-webkit-scrollbar-track { background: #020810; }
 ::-webkit-scrollbar-thumb { background: #0e3060; border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: #1a4a80; }
+/* ── EXCHANGE BADGES ── */
+.ex-badge {
+  font-size: 7px; font-weight: 700;
+  font-family: 'IBM Plex Mono', monospace;
+  padding: 0px 3px; border-radius: 2px;
+  letter-spacing: 0.5px;
+}
+.ex-bse { background: #1a3a00; color: #00cc44; border: 1px solid #00cc4444; }
+.ex-nse { background: #001a3a; color: #0088ff; border: 1px solid #0088ff44; }

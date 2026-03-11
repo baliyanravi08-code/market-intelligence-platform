@@ -83,6 +83,12 @@ function Tag({ type }) {
   return <span className="tag" style={{ background: c.bg, color: c.fg }}>{type}</span>;
 }
 
+function ExBadge({ exchange }) {
+  return (
+    <span className={`ex-badge ex-${exchange.toLowerCase()}`}>{exchange}</span>
+  );
+}
+
 export default function App() {
   const [bseEvents,     setBseEvents]     = useState([]);
   const [nseEvents,     setNseEvents]     = useState([]);
@@ -201,7 +207,12 @@ export default function App() {
             <div className={`radar-card ${r.score >= 60 ? "hl" : ""}`} key={i}>
               <div className="rc-top">
                 <span className="co-name">{r.company}</span>
-                <span className="score">{r.score}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  {(r.exchanges || []).map((ex, j) => (
+                    <ExBadge key={j} exchange={ex} />
+                  ))}
+                  <span className="score">{r.score}</span>
+                </div>
               </div>
               <div className="sbar"><div className="sfill" style={{
                 width: `${Math.min(r.score, 100)}%`,

@@ -90,12 +90,12 @@ async function scan() {
         value: 0,
         time: item.an_dt || item.bcast_date || getIndianTime(),
         ago: "just now",
+        exchange: "NSE",
         pdfUrl: item.attchmntFile
           ? `https://www.nseindia.com${item.attchmntFile}`
           : null
       };
 
-      // save to disk for 48h persistence
       saveEvent("nse", signal);
 
       updateRadar(signal.company, signal);

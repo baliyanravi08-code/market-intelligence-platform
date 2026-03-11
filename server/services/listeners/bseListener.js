@@ -91,6 +91,7 @@ function processItem(item) {
     title: item.HEADLINE || "",
     time: item.DT_TM || item.NEWS_DT || getIndianTime(),
     ago: getTimeAgo(new Date()),
+    exchange: "BSE",
     pdfUrl: item.ATTACHMENTNAME
       ? `https://www.bseindia.com/xml-data/corpfiling/AttachLive/${item.ATTACHMENTNAME}`
       : null
@@ -98,7 +99,6 @@ function processItem(item) {
 
   if (!signal) return;
 
-  // save to disk for 48h persistence
   saveResult(signal);
 
   updateRadar(signal.company, signal);
