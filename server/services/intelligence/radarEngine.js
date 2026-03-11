@@ -57,6 +57,8 @@ function updateRadar(company, signal) {
     PARTNERSHIP:      15,
     CORPORATE_ACTION: 10,
     SMART_MONEY:      20,
+    RESULT:           25,
+    BANK_RESULT:      25,
     NEWS:              5
   };
 

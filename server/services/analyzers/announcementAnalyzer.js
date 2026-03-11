@@ -1,4 +1,5 @@
 const orderDetector = require("../intelligence/orderDetector");
+const analyzeResult = require("./resultAnalyzer");
 
 // ── NEGATIVE CONTEXT — these always override to NEWS ──
 const NEGATIVE_PATTERNS = [
@@ -13,8 +14,7 @@ const NEGATIVE_PATTERNS = [
   "resignation of", "cessation of", "stepping down",
   "death of", "demise of", "sad demise",
   "credit rating downgrade", "rating downgraded",
-  "default", "npa", "stressed asset",
-  "loss for", "net loss", "quarterly loss",
+  "default", "stressed asset",
   "regulatory action", "adjudication", "compounding",
   "suspension", "debarment", "disqualification",
   "statutory notice", "demand u/s", "order u/s",
@@ -91,14 +91,10 @@ const NEGATIVE_PATTERNS = [
   "outcome of board meeting",
   "proceedings of agm",
   "proceedings of egm",
-  "financial results for",
   "unaudited financial results",
   "audited financial results",
   "standalone financial results",
   "consolidated financial results",
-  "quarterly results",
-  "half yearly results",
-  "annual results",
   "change in director",
   "appointment of director",
   "change in auditor",
@@ -113,7 +109,7 @@ const NEGATIVE_PATTERNS = [
   "change in object clause",
   "alteration of moa",
   "alteration of aoa",
-  // inter-se / succession / family transfers — NOT real acquisitions
+  // inter-se / succession / family transfers
   "inter-se transfer",
   "inter se transfer",
   "by way of gift",
@@ -401,8 +397,12 @@ function analyzeAnnouncement(data) {
     value = 30;
   }
 
-  // ── STEP 10: FALLBACK ──
+  // ── STEP 10: RESULT FILING ──
   else {
+    const resultData = analyzeResult(data);
+    if (resultData) return resultData;
+
+    // ── STEP 11: FALLBACK ──
     type = "NEWS";
     value = 5;
   }

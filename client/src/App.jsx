@@ -20,6 +20,8 @@ const SIGNAL_COLOR = {
   PARTNERSHIP:        { bg: "#ffe14d", fg: "#000" },
   CORPORATE_ACTION:   { bg: "#334455", fg: "#aac" },
   SMART_MONEY:        { bg: "#ff9c00", fg: "#000" },
+  RESULT:             { bg: "#00aaff", fg: "#000" },
+  BANK_RESULT:        { bg: "#aa44ff", fg: "#fff" },
   MULTIBAGGER_SIGNAL: { bg: "#ff2d55", fg: "#fff" },
   NEWS:               { bg: "#0d2a4a", fg: "#6aaaf0" }
 };
