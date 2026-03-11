@@ -30,9 +30,20 @@ function pruneOld(arr) {
   return arr.filter(e => (e.savedAt || 0) > cutoff);
 }
 
+function parseExchangeTs(timeStr) {
+  if (!timeStr) return null;
+  try {
+    const d = new Date(timeStr);
+    if (!isNaN(d)) return d.getTime();
+  } catch {}
+  return null;
+}
+
 function saveEvent(type, event) {
   const db = loadDB();
-  const entry = { ...event, savedAt: Date.now() };
+  // preserve exchange time as savedAt — fall back to server time only if unparseable
+  const exchangeTs = parseExchangeTs(event.time);
+  const entry = { ...event, savedAt: exchangeTs || Date.now() };
   db[type] = pruneOld([entry, ...(db[type] || [])]).slice(0, MAX_EVENTS);
   saveDB(db);
 }

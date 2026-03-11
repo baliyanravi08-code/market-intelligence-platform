@@ -42,6 +42,15 @@ function getTimeAgo(date) {
   return `${Math.floor(seconds / 3600)}h ago`;
 }
 
+function parseExchangeTs(timeStr) {
+  if (!timeStr) return null;
+  try {
+    const d = new Date(timeStr);
+    if (!isNaN(d)) return d.getTime();
+  } catch {}
+  return null;
+}
+
 async function warmup() {
   try {
     const res = await axios.get(BSE_HOME, {
@@ -99,29 +108,33 @@ function processItem(item) {
 
   if (!signal) return;
 
-  saveResult(signal);
+  // use exchange time as savedAt — preserves real filing time
+  const exchangeTs = parseExchangeTs(signal.time);
+  const signalWithTs = { ...signal, savedAt: (exchangeTs && !isNaN(exchangeTs)) ? exchangeTs : Date.now() };
 
-  updateRadar(signal.company, signal);
+  saveResult(signalWithTs);
+
+  updateRadar(signalWithTs.company, signalWithTs);
   const radar = getRadar();
   persistRadar(radar);
 
-  if (ioRef) ioRef.emit("bse_events", [signal]);
+  if (ioRef) ioRef.emit("bse_events", [signalWithTs]);
   if (ioRef) ioRef.emit("radar_update", radar);
 
-  if (signal.type === "ORDER_ALERT") {
-    const orderData = orderBookEngine(signal);
+  if (signalWithTs.type === "ORDER_ALERT") {
+    const orderData = orderBookEngine(signalWithTs);
     if (orderData) {
       persistOrderBook(orderData);
       if (ioRef) ioRef.emit("order_book_update", orderData);
     }
 
-    const opportunity = opportunityEngine(signal);
+    const opportunity = opportunityEngine(signalWithTs);
     if (opportunity) {
       persistOpportunity(opportunity);
       if (ioRef) ioRef.emit("opportunity_alert", opportunity);
     }
 
-    const queue = sectorQueue(signal);
+    const queue = sectorQueue(signalWithTs);
     const sectorAlert = sectorRadar(queue);
     if (sectorAlert) {
       persistSector(sectorAlert);

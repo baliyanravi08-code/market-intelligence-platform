@@ -59,10 +59,18 @@ function toAgo(ts) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function bestTs(e) {
-  if (e.savedAt)  return e.savedAt;
+// For RADAR — savedAt is set correctly by server, use it
+function bestTsRadar(e) {
+  if (e.savedAt) return e.savedAt;
   const et = exchangeToTs(e.time);
-  if (et)         return et;
+  if (et)        return et;
+  return Date.now();
+}
+
+// For FEED EVENTS — always prefer exchange time, savedAt is server time so skip it
+function bestTsFeed(e) {
+  const et = exchangeToTs(e.time);
+  if (et && !isNaN(et)) return et;
   return Date.now();
 }
 
@@ -121,15 +129,16 @@ export default function App() {
         return data.map(r => ({
           ...r,
           receivedAt: prevMap[r.company]?.score === r.score
-            ? (prevMap[r.company]?.receivedAt || bestTs(r))
-            : bestTs(r)
+            ? (prevMap[r.company]?.receivedAt || bestTsRadar(r))
+            : bestTsRadar(r)
         }));
       });
     });
 
     socket.on("bse_events", data => {
       triggerFlash();
-      const stamped = data.map(e => ({ ...e, receivedAt: bestTs(e) }));
+      // use exchange time — NOT savedAt (which is server time)
+      const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
       setBseEvents(prev => {
         const existingIds = new Set(prev.map(e => e.company + e.time));
         const fresh = stamped.filter(e => !existingIds.has(e.company + e.time));
@@ -138,7 +147,8 @@ export default function App() {
     });
 
     socket.on("nse_events", data => {
-      const stamped = data.map(e => ({ ...e, receivedAt: bestTs(e) }));
+      // use exchange time — NOT savedAt (which is server time)
+      const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
       setNseEvents(prev => {
         const existingIds = new Set(prev.map(e => e.company + e.time));
         const fresh = stamped.filter(e => !existingIds.has(e.company + e.time));
@@ -148,7 +158,7 @@ export default function App() {
 
     socket.on("order_book_update", data => {
       setOrderBook(prev => [
-        { ...data, receivedAt: bestTs(data) },
+        { ...data, receivedAt: bestTsFeed(data) },
         ...prev.filter(o => o.company !== data.company)
       ].slice(0, 20));
     });
@@ -167,7 +177,7 @@ export default function App() {
     });
 
     socket.on("opportunity_alert", data => {
-      setOpportunities(prev => [{ ...data, receivedAt: bestTs(data) }, ...prev].slice(0, 10));
+      setOpportunities(prev => [{ ...data, receivedAt: bestTsFeed(data) }, ...prev].slice(0, 10));
     });
 
     return () => socket.removeAllListeners();

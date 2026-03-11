@@ -28,6 +28,15 @@ function getIndianTime() {
   });
 }
 
+function parseExchangeTs(timeStr) {
+  if (!timeStr) return null;
+  try {
+    const d = new Date(timeStr);
+    if (!isNaN(d)) return d.getTime();
+  } catch {}
+  return null;
+}
+
 async function warmup() {
   try {
     const res = await axios.get(NSE_HOME, {
@@ -82,15 +91,19 @@ async function scan() {
       if (!id || seen.has(id)) return;
       seen.add(id);
 
+      const timeStr = item.an_dt || item.bcast_date || getIndianTime();
+      const exchangeTs = parseExchangeTs(timeStr);
+
       const signal = {
         company: item.sm_name || item.symbol || "Unknown",
         code: item.symbol || "",
         type: "NEWS",
         title: item.subject || item.desc || "",
         value: 0,
-        time: item.an_dt || item.bcast_date || getIndianTime(),
+        time: timeStr,
         ago: "just now",
         exchange: "NSE",
+        savedAt: (exchangeTs && !isNaN(exchangeTs)) ? exchangeTs : Date.now(),
         pdfUrl: item.attchmntFile
           ? `https://www.nseindia.com${item.attchmntFile}`
           : null
