@@ -112,7 +112,35 @@ const NEGATIVE_PATTERNS = [
   "change in registered office",
   "change in object clause",
   "alteration of moa",
-  "alteration of aoa"
+  "alteration of aoa",
+  // inter-se / succession / family transfers — NOT real acquisitions
+  "inter-se transfer",
+  "inter se transfer",
+  "by way of gift",
+  "transfer by way of gift",
+  "gift of shares",
+  "gift to family",
+  "family trust",
+  "succession planning",
+  "estate planning",
+  "pursuant to will",
+  "pursuant to gift",
+  "transfer to family",
+  "settlement of shares",
+  "off market transfer",
+  "off-market transfer",
+  "sebi sast",
+  "substantial acquisition of shares and takeover",
+  "takeover regulations 2011",
+  "regulation 29(1)",
+  "regulation 29(2)",
+  "exempt under regulation 11",
+  "sebi exemption order",
+  "pre-clearance order",
+  "intimation received from",
+  "disclosure for intimation",
+  "disclosure under regulation 29",
+  "disclosure under sebi sast"
 ];
 
 // ── ORDER — only real business orders ──
@@ -165,7 +193,11 @@ const MERGER_NEGATIVE = [
   "post merger", "pursuant to merger", "earlier merger",
   "erstwhile", "formerly known", "previously merged",
   "completion of merger", "effect of merger",
-  "pursuant to amalgamation", "post amalgamation"
+  "pursuant to amalgamation", "post amalgamation",
+  "inter-se transfer", "inter se transfer",
+  "by way of gift", "family trust",
+  "succession", "exempt under regulation 11",
+  "sebi exemption order", "regulation 29"
 ];
 
 // ── CAPEX ──
@@ -207,7 +239,10 @@ const INSIDER_BUY_NEGATIVE = [
   "promoter pledged", "insider selling",
   "reduction in promoter", "promoter reduces",
   "promoter offloads", "promoter divests",
-  "promoter stake sale"
+  "promoter stake sale",
+  "inter-se transfer", "inter se transfer",
+  "by way of gift", "family trust",
+  "off market transfer", "off-market transfer"
 ];
 
 // ── PARTNERSHIP ──
@@ -275,22 +310,20 @@ function isNegativeContext(text) {
 function insiderScoreBySize(title) {
   const text = title.toLowerCase();
 
-  // look for percentage pattern like "2.5%" or "0.09%"
   const pctMatch = text.match(/(\d+\.?\d*)\s*%/);
   if (pctMatch) {
     const pct = parseFloat(pctMatch[1]);
-    if (pct >= 2)    return 50;
-    if (pct >= 1)    return 40;
-    if (pct >= 0.5)  return 30;
-    if (pct >= 0.1)  return 20;
-    return 15; // below 0.1% — very small buy
+    if (pct >= 2)   return 50;
+    if (pct >= 1)   return 40;
+    if (pct >= 0.5) return 30;
+    if (pct >= 0.1) return 20;
+    return 15;
   }
 
-  // look for crore value pattern like "rs. 50 crore" or "50cr"
   const crMatch = text.match(/rs\.?\s*(\d+\.?\d*)\s*(cr|crore|lakh|lac)/);
   if (crMatch) {
-    const unit = crMatch[2];
-    const val  = parseFloat(crMatch[1]);
+    const unit  = crMatch[2];
+    const val   = parseFloat(crMatch[1]);
     const crVal = unit.startsWith("l") ? val / 100 : val;
     if (crVal >= 100) return 50;
     if (crVal >= 50)  return 40;
@@ -299,7 +332,7 @@ function insiderScoreBySize(title) {
     return 15;
   }
 
-  return 25; // default if no size info found
+  return 25;
 }
 
 function analyzeAnnouncement(data) {
