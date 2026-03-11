@@ -2,6 +2,7 @@ const orderDetector = require("../intelligence/orderDetector");
 
 // ── NEGATIVE CONTEXT — these always override to NEWS ──
 const NEGATIVE_PATTERNS = [
+  // legal / regulatory trouble
   "income tax", "tax demand", "tax notice", "demand notice",
   "assessment order", "penalty order", "show cause",
   "sebi notice", "sebi order", "enforcement notice",
@@ -21,12 +22,14 @@ const NEGATIVE_PATTERNS = [
   "gst notice", "gst demand", "customs notice",
   "fire at", "accident at", "plant shutdown",
   "strike", "lockout", "labour dispute",
+  // guarantees / liabilities
   "corporate guarantee", "guarantee for term loan",
   "guarantee towards", "contingent liability",
   "surety for", "indemnity for",
   "pledge of shares", "encumbrance of shares",
   "issuance of guarantee", "issue of guarantee",
   "invocation of guarantee", "revocation",
+  // accounting / audit issues
   "restatement", "restatement of accounts",
   "qualified opinion", "adverse opinion",
   "whistle blower", "whistleblower",
@@ -39,11 +42,77 @@ const NEGATIVE_PATTERNS = [
   "it department", "it raid",
   "downgrade", "watch negative", "outlook negative",
   "credit watch", "rating withdrawn",
+  // project issues
   "delay in", "delays in", "unable to",
   "postponement", "cancellation of project",
   "project cancelled", "project stalled",
   "force majeure", "natural disaster",
-  "flood damage", "fire damage"
+  "flood damage", "fire damage",
+  // routine investor / meeting notices — zero signal
+  "investor meet", "analyst meet", "investor day",
+  "earnings call", "conference call scheduled",
+  "schedule of meeting", "meeting with investor",
+  "meeting with analyst", "investor conference",
+  "non deal roadshow", "ndr ",
+  "analyst briefing", "earnings webcast",
+  "board meeting intimation", "board meeting on",
+  "intimation of board meeting",
+  "prior intimation", "closure of trading window",
+  "trading window closure", "trading window open",
+  "unpublished price sensitive",
+  "record date intimation", "book closure",
+  "agm notice", "egm notice", "postal ballot",
+  "scrutinizer report", "voting results",
+  "annual general meeting", "extraordinary general",
+  "interaction with investor", "interaction with analyst",
+  "intimation of investor", "meeting scheduled",
+  "analyst call on", "investor call on",
+  "cancellation of investor call", "cancellation of analyst",
+  "investor call scheduled", "analyst call scheduled",
+  "regulation 46", "schedule iii",
+  // boilerplate / no info filings
+  "please refer to the attachment",
+  "please find attached",
+  "please find enclosed",
+  "as per attached annexure",
+  "as per annexure",
+  "kindly refer",
+  "enclosed herewith",
+  "as per attached",
+  "pursuant to regulation 30",
+  "disclosure under regulation 30",
+  "reg 30 disclosure",
+  "regulation 30 disclosure",
+  "intimation under regulation",
+  "newspaper publication",
+  "newspaper advertisement",
+  "extract of newspaper",
+  "copy of newspaper",
+  "outcome of board meeting",
+  "proceedings of agm",
+  "proceedings of egm",
+  "financial results for",
+  "unaudited financial results",
+  "audited financial results",
+  "standalone financial results",
+  "consolidated financial results",
+  "quarterly results",
+  "half yearly results",
+  "annual results",
+  "change in director",
+  "appointment of director",
+  "change in auditor",
+  "appointment of auditor",
+  "change in key managerial",
+  "kmp change",
+  "loss of share certificate",
+  "duplicate share certificate",
+  "transmission of shares",
+  "name change",
+  "change in registered office",
+  "change in object clause",
+  "alteration of moa",
+  "alteration of aoa"
 ];
 
 // ── ORDER — only real business orders ──
@@ -183,7 +252,7 @@ const SMART_MONEY_POSITIVE = [
   "fpi increases stake", "institutional stake increase"
 ];
 
-// ── FUNDRAISE — positive signal ──
+// ── FUNDRAISE ──
 const FUNDRAISE_POSITIVE = [
   "qip of", "ipo of", "ncd issue",
   "rights issue proceeds", "fpo of",
