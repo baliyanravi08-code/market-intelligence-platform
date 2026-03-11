@@ -48,7 +48,7 @@ const NEGATIVE_PATTERNS = [
   "project cancelled", "project stalled",
   "force majeure", "natural disaster",
   "flood damage", "fire damage",
-  // routine investor / meeting notices — zero signal
+  // routine investor / meeting notices
   "investor meet", "analyst meet", "investor day",
   "earnings call", "conference call scheduled",
   "schedule of meeting", "meeting with investor",
@@ -271,6 +271,37 @@ function isNegativeContext(text) {
   return matchesAny(text, NEGATIVE_PATTERNS);
 }
 
+// ── INSIDER SIZE DETECTOR — score by % acquired ──
+function insiderScoreBySize(title) {
+  const text = title.toLowerCase();
+
+  // look for percentage pattern like "2.5%" or "0.09%"
+  const pctMatch = text.match(/(\d+\.?\d*)\s*%/);
+  if (pctMatch) {
+    const pct = parseFloat(pctMatch[1]);
+    if (pct >= 2)    return 50;
+    if (pct >= 1)    return 40;
+    if (pct >= 0.5)  return 30;
+    if (pct >= 0.1)  return 20;
+    return 15; // below 0.1% — very small buy
+  }
+
+  // look for crore value pattern like "rs. 50 crore" or "50cr"
+  const crMatch = text.match(/rs\.?\s*(\d+\.?\d*)\s*(cr|crore|lakh|lac)/);
+  if (crMatch) {
+    const unit = crMatch[2];
+    const val  = parseFloat(crMatch[1]);
+    const crVal = unit.startsWith("l") ? val / 100 : val;
+    if (crVal >= 100) return 50;
+    if (crVal >= 50)  return 40;
+    if (crVal >= 10)  return 30;
+    if (crVal >= 1)   return 20;
+    return 15;
+  }
+
+  return 25; // default if no size info found
+}
+
 function analyzeAnnouncement(data) {
   if (!data || !data.title) return null;
 
@@ -307,10 +338,10 @@ function analyzeAnnouncement(data) {
     value = 60;
   }
 
-  // ── STEP 5: INSIDER BUY ──
+  // ── STEP 5: INSIDER BUY — size-aware scoring ──
   else if (matchesAny(text, INSIDER_BUY_POSITIVE) && !matchesAny(text, INSIDER_BUY_NEGATIVE)) {
     type = "INSIDER_BUY";
-    value = 50;
+    value = insiderScoreBySize(data.title);
   }
 
   // ── STEP 6: PARTNERSHIP ──

@@ -22,37 +22,33 @@ function updateRadar(company, signal) {
       strength: "WEAK",
       pdfUrl: null,
       time: null,
-      receivedAt: Date.now()  // ← timestamp for LiveAgo
+      receivedAt: Date.now()
     });
   }
 
   const data = radarMap.get(company);
 
-  // Keep last 5 signals only
   data.signals.unshift(signal.type);
   if (data.signals.length > 5) data.signals = data.signals.slice(0, 5);
 
-  // Score by signal type
   const scores = {
     ORDER_ALERT:      40,
     MERGER:           35,
     BLOCK_DEAL:       30,
-    INSIDER_TRADE:    25,
-    INSIDER_BUY:      25,
+    INSIDER_TRADE:    15,
+    INSIDER_BUY:      15,
     CAPEX:            20,
     PARTNERSHIP:      15,
     CORPORATE_ACTION: 10,
+    SMART_MONEY:      20,
     NEWS:              5
   };
 
   data.score = Math.min(100, data.score + (scores[signal.type] || 5));
-
-  // Update metadata — receivedAt is NOW (when server got it)
   data.receivedAt = Date.now();
-  data.time = signal.time || getIndianTime(); // exchange time for display
+  data.time = signal.time || getIndianTime();
   if (signal.pdfUrl) data.pdfUrl = signal.pdfUrl;
 
-  // Strength label
   if (data.score >= 70)      data.strength = "VERY STRONG";
   else if (data.score >= 40) data.strength = "STRONG";
   else if (data.score >= 20) data.strength = "MODERATE";
