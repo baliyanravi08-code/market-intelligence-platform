@@ -70,7 +70,7 @@ const NEGATIVE_PATTERNS = [
   "cancellation of investor call", "cancellation of analyst",
   "investor call scheduled", "analyst call scheduled",
   "regulation 46", "schedule iii",
-  // boilerplate / no info filings
+  // boilerplate / no info filings — NOT regulation 30 (real orders use reg 30)
   "please refer to the attachment",
   "please find attached",
   "please find enclosed",
@@ -79,10 +79,6 @@ const NEGATIVE_PATTERNS = [
   "kindly refer",
   "enclosed herewith",
   "as per attached",
-  "pursuant to regulation 30",
-  "disclosure under regulation 30",
-  "reg 30 disclosure",
-  "regulation 30 disclosure",
   "intimation under regulation",
   "newspaper publication",
   "newspaper advertisement",
@@ -146,6 +142,7 @@ const ORDER_POSITIVE = [
   "contract order", "order win", "order from",
   "bagged order", "bags order", "secures order",
   "letter of award", "loa from", "loa for",
+  "letter of acceptance",
   "purchase order", "export order", "bulk order",
   "order inflow", "fresh order",
   "repeat order", "prestigious order", "major order",
@@ -155,7 +152,10 @@ const ORDER_POSITIVE = [
   "project win", "wins project", "project secured",
   "construction contract", "turnkey contract",
   "supply and installation", "epc contract",
-  "o&m contract", "amc contract"
+  "supply, installation", "supply & installation",
+  "o&m contract", "amc contract",
+  "commissioning of", "roof top solar",
+  "solar pv system", "solar project"
 ];
 
 const ORDER_NEGATIVE = [
@@ -302,6 +302,19 @@ function isNegativeContext(text) {
   return matchesAny(text, NEGATIVE_PATTERNS);
 }
 
+// ── ORDER SCORE — convert crore value to signal score ──
+function orderScoreFromCrores(crores) {
+  if (!crores || crores <= 0) return 30; // unknown size — low default
+  if (crores >= 1000) return 90;
+  if (crores >= 500)  return 80;
+  if (crores >= 200)  return 70;
+  if (crores >= 100)  return 60;
+  if (crores >= 50)   return 50;
+  if (crores >= 10)   return 40;
+  if (crores >= 1)    return 30;
+  return 25; // sub-crore
+}
+
 // ── INSIDER SIZE DETECTOR — score by % acquired ──
 function insiderScoreBySize(title) {
   const text = title.toLowerCase();
@@ -352,7 +365,8 @@ function analyzeAnnouncement(data) {
   // ── STEP 2: ORDER ALERT ──
   if (matchesAny(text, ORDER_POSITIVE) && !matchesAny(text, ORDER_NEGATIVE)) {
     type = "ORDER_ALERT";
-    value = orderDetector(data.title) || 50;
+    const crores = orderDetector(data.title);
+    value = orderScoreFromCrores(crores);
   }
 
   // ── STEP 3: MERGER ──
