@@ -37,6 +37,12 @@ function parseExchangeTs(timeStr) {
   return null;
 }
 
+function buildPdfUrl(attchmntFile) {
+  if (!attchmntFile) return null;
+  if (attchmntFile.startsWith("http")) return attchmntFile;
+  return `https://www.nseindia.com${attchmntFile}`;
+}
+
 async function warmup() {
   try {
     const res = await axios.get(NSE_HOME, {
@@ -104,9 +110,7 @@ async function scan() {
         ago: "just now",
         exchange: "NSE",
         savedAt: (exchangeTs && !isNaN(exchangeTs)) ? exchangeTs : Date.now(),
-        pdfUrl: item.attchmntFile
-          ? `https://www.nseindia.com${item.attchmntFile}`
-          : null
+        pdfUrl: buildPdfUrl(item.attchmntFile)
       };
 
       saveEvent("nse", signal);
