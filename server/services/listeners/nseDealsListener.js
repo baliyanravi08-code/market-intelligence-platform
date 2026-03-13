@@ -39,7 +39,12 @@ function parseExchangeTs(timeStr) {
 
 function buildPdfUrl(attchmntFile) {
   if (!attchmntFile) return null;
-  if (attchmntFile.startsWith("http")) return attchmntFile;
+  // already a proper full URL
+  if (attchmntFile.startsWith("https://") || attchmntFile.startsWith("http://")) return attchmntFile;
+  // NSE sends broken "https//..." without colon — fix it
+  if (attchmntFile.startsWith("https//")) return attchmntFile.replace("https//", "https://");
+  if (attchmntFile.startsWith("http//"))  return attchmntFile.replace("http//",  "http://");
+  // relative path — prepend NSE base
   return `https://www.nseindia.com${attchmntFile}`;
 }
 
