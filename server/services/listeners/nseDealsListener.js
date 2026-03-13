@@ -40,8 +40,15 @@ function parseExchangeTs(timeStr) {
 function buildPdfUrl(attchmntFile) {
   if (!attchmntFile) return null;
 
-  // strip any accidental nseindia.com prefix (with or without trailing slash)
-  attchmntFile = attchmntFile.replace(/^https?:\/\/www\.nseindia\.com\/?/, "");
+  console.log("RAW attchmntFile:", JSON.stringify(attchmntFile));
+
+  // nuclear option — extract just the actual file path regardless of prefix garbage
+  // match nsearchives.nseindia.com/... or /corporate/... or /content/...
+  const archiveMatch = attchmntFile.match(/(nsearchives\.nseindia\.com\/.+)/);
+  if (archiveMatch) return `https://${archiveMatch[1]}`;
+
+  const nseMatch = attchmntFile.match(/(www\.nseindia\.com\/.+)/);
+  if (nseMatch) return `https://${nseMatch[1]}`;
 
   // fix broken "https//..." without colon
   if (attchmntFile.startsWith("https//")) return attchmntFile.replace("https//", "https://");
@@ -51,8 +58,9 @@ function buildPdfUrl(attchmntFile) {
   if (attchmntFile.startsWith("https://") || attchmntFile.startsWith("http://")) return attchmntFile;
 
   // relative path — prepend NSE base
-  return `https://www.nseindia.com${attchmntFile}`;
+  return `https://www.nseindia.com${attchmntFile.startsWith("/") ? "" : "/"}${attchmntFile}`;
 }
+
 async function warmup() {
   try {
     const res = await axios.get(NSE_HOME, {
