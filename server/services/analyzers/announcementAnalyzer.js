@@ -292,7 +292,17 @@ const FUNDRAISE_POSITIVE = [
   "approves qip", "preferential issue of",
   "private placement of"
 ];
-
+// STRESS_SIGNAL patterns — negative but worth flagging differently
+const STRESS_PATTERNS = [
+  "invocation of pledge",
+  "invocation of shares",
+  "pledge invoked",
+  "margin call",
+  "intraday margin",
+  "against availability of intraday",
+  "collateral for supply of materials",  // pledging to supplier not bank
+  "creation of pledge",                  // new pledge creation worth watching
+];
 // ── HELPERS ──
 function matchesAny(text, patterns) {
   return patterns.some(p => text.includes(p));
