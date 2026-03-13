@@ -40,20 +40,19 @@ function parseExchangeTs(timeStr) {
 function buildPdfUrl(attchmntFile) {
   if (!attchmntFile) return null;
 
-  // remove any accidental nseindia.com prefix first
-  attchmntFile = attchmntFile.replace(/^https?:\/\/www\.nseindia\.com/, "");
-
-  // already a proper full URL
-  if (attchmntFile.startsWith("https://") || attchmntFile.startsWith("http://")) return attchmntFile;
+  // strip any accidental nseindia.com prefix (with or without trailing slash)
+  attchmntFile = attchmntFile.replace(/^https?:\/\/www\.nseindia\.com\/?/, "");
 
   // fix broken "https//..." without colon
   if (attchmntFile.startsWith("https//")) return attchmntFile.replace("https//", "https://");
   if (attchmntFile.startsWith("http//"))  return attchmntFile.replace("http//",  "http://");
 
+  // already a proper full URL
+  if (attchmntFile.startsWith("https://") || attchmntFile.startsWith("http://")) return attchmntFile;
+
   // relative path — prepend NSE base
   return `https://www.nseindia.com${attchmntFile}`;
 }
-
 async function warmup() {
   try {
     const res = await axios.get(NSE_HOME, {
