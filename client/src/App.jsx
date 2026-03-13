@@ -59,15 +59,13 @@ function toAgo(ts) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-// For RADAR — savedAt is set correctly by server, use it
 function bestTsRadar(e) {
   if (e.savedAt) return e.savedAt;
   const et = exchangeToTs(e.time);
-  if (et)        return et;
+  if (et) return et;
   return Date.now();
 }
 
-// For FEED EVENTS — always prefer exchange time, savedAt is server time so skip it
 function bestTsFeed(e) {
   const et = exchangeToTs(e.time);
   if (et && !isNaN(et)) return et;
@@ -111,6 +109,7 @@ export default function App() {
   const [activeTab,     setActiveTab]     = useState("bse");
   const [flash,         setFlash]         = useState(false);
   const [radarSearch,   setRadarSearch]   = useState("");
+  const [mobilePanel,   setMobilePanel]   = useState("radar");
   const flashTimer = useRef(null);
 
   function triggerFlash() {
@@ -137,7 +136,6 @@ export default function App() {
 
     socket.on("bse_events", data => {
       triggerFlash();
-      // use exchange time — NOT savedAt (which is server time)
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
       setBseEvents(prev => {
         const existingIds = new Set(prev.map(e => e.company + e.time));
@@ -147,7 +145,6 @@ export default function App() {
     });
 
     socket.on("nse_events", data => {
-      // use exchange time — NOT savedAt (which is server time)
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
       setNseEvents(prev => {
         const existingIds = new Set(prev.map(e => e.company + e.time));
@@ -190,6 +187,8 @@ export default function App() {
 
   return (
     <div className="terminal">
+
+      {/* HEADER */}
       <div className="header">
         <span className="star">★</span>
         <span className="title">Market Intelligence Terminal</span>
@@ -201,10 +200,32 @@ export default function App() {
         </div>
       </div>
 
+      {/* MOBILE TAB BAR — hidden on desktop via CSS */}
+      <div className="mobile-tabs">
+        <button
+          className={`mobile-tab ${mobilePanel === "radar" ? "active" : ""}`}
+          onClick={() => setMobilePanel("radar")}
+        >
+          📡 Radar
+        </button>
+        <button
+          className={`mobile-tab ${mobilePanel === "feed" ? "active" : ""}`}
+          onClick={() => setMobilePanel("feed")}
+        >
+          📋 Feed
+        </button>
+        <button
+          className={`mobile-tab ${mobilePanel === "right" ? "active" : ""}`}
+          onClick={() => setMobilePanel("right")}
+        >
+          📊 Sectors
+        </button>
+      </div>
+
       <div className="layout">
 
-        {/* RADAR */}
-        <div className="panel radar-panel">
+        {/* ── RADAR PANEL ── */}
+        <div className={`panel radar-panel ${mobilePanel === "radar" ? "mobile-active" : ""}`}>
           <div className="panel-title">
             RADAR <span className="count">{filteredRadar.length}</span>
           </div>
@@ -226,10 +247,12 @@ export default function App() {
                   <span className="score">{r.score}</span>
                 </div>
               </div>
-              <div className="sbar"><div className="sfill" style={{
-                width: `${Math.min(r.score, 100)}%`,
-                background: r.score >= 70 ? "#00ff9c" : r.score >= 40 ? "#ffaa00" : "#0d5bd1"
-              }} /></div>
+              <div className="sbar">
+                <div className="sfill" style={{
+                  width: `${Math.min(r.score, 100)}%`,
+                  background: r.score >= 70 ? "#00ff9c" : r.score >= 40 ? "#ffaa00" : "#0d5bd1"
+                }} />
+              </div>
               <div className="tags">
                 {[...new Set(r.signals)].slice(0, 3).map((s, j) => <Tag key={j} type={s} />)}
               </div>
@@ -241,13 +264,19 @@ export default function App() {
           ))}
         </div>
 
-        {/* FEED */}
-        <div className={`panel feed-panel ${flash ? "flash" : ""}`}>
+        {/* ── FEED PANEL ── */}
+        <div className={`panel feed-panel ${flash ? "flash" : ""} ${mobilePanel === "feed" ? "mobile-active" : ""}`}>
           <div className="panel-title">
-            <button className={`tbtn ${activeTab === "bse" ? "active" : ""}`} onClick={() => setActiveTab("bse")}>
+            <button
+              className={`tbtn ${activeTab === "bse" ? "active" : ""}`}
+              onClick={() => setActiveTab("bse")}
+            >
               BSE <span className="count">{bseEvents.length}</span>
             </button>
-            <button className={`tbtn ${activeTab === "nse" ? "active" : ""}`} onClick={() => setActiveTab("nse")}>
+            <button
+              className={`tbtn ${activeTab === "nse" ? "active" : ""}`}
+              onClick={() => setActiveTab("nse")}
+            >
               NSE <span className="count">{nseEvents.length}</span>
             </button>
           </div>
@@ -267,21 +296,25 @@ export default function App() {
           ))}
         </div>
 
-        {/* RIGHT */}
-        <div className="panel right-panel">
+        {/* ── RIGHT PANEL ── */}
+        <div className={`panel right-panel ${mobilePanel === "right" ? "mobile-active" : ""}`}>
 
-          {opportunities.length > 0 && <>
-            <div className="panel-title">MULTIBAGGER <span className="count">{opportunities.length}</span></div>
-            {opportunities.map((o, i) => (
-              <div className="opp-card" key={i}>
-                <div className="opp-row">
-                  <span className="co-name">{o.company}</span>
-                  <span className="opp-pct">{o.score}%</span>
-                </div>
-                <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
+          {opportunities.length > 0 && (
+            <>
+              <div className="panel-title">
+                MULTIBAGGER <span className="count">{opportunities.length}</span>
               </div>
-            ))}
-          </>}
+              {opportunities.map((o, i) => (
+                <div className="opp-card" key={i}>
+                  <div className="opp-row">
+                    <span className="co-name">{o.company}</span>
+                    <span className="opp-pct">{o.score}%</span>
+                  </div>
+                  <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
+                </div>
+              ))}
+            </>
+          )}
 
           <div className="panel-title" style={{ marginTop: opportunities.length > 0 ? 8 : 0 }}>
             SECTOR <span className="count">{sector.length}</span>
@@ -308,7 +341,9 @@ export default function App() {
               <div className="ord-card" key={i}>
                 <div className="ord-top">
                   <span className="co-name">{o.company}</span>
-                  <span className={`str-lbl ${(o.strength || "").toLowerCase().replace(" ", "-")}`}>{o.strength}</span>
+                  <span className={`str-lbl ${(o.strength || "").toLowerCase().replace(" ", "-")}`}>
+                    {o.strength}
+                  </span>
                 </div>
                 <div className="ord-stats">
                   <span className="ord-val">₹{o.orderValue}Cr</span>

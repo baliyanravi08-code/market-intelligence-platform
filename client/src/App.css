@@ -26,35 +26,40 @@ body {
 .header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 16px;
+  gap: 8px;
+  padding: 0 10px;
   height: 36px;
   background: #030c1a;
   border-bottom: 2px solid #0a3060;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
-.star { color: #ffd700; font-size: 16px; }
+.star { color: #ffd700; font-size: 16px; flex-shrink: 0; }
 
 .title {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   color: #ffffff;
   letter-spacing: 1px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .status-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-left: 10px;
+  gap: 5px;
+  margin-left: 6px;
+  flex-shrink: 0;
 }
 
 .status-row span {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   font-family: 'IBM Plex Mono', monospace;
+  white-space: nowrap;
 }
 
 .dot {
@@ -62,6 +67,35 @@ body {
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+/* ── MOBILE PANEL TABS ── */
+
+.mobile-tabs {
+  display: none;
+  background: #030c1a;
+  border-bottom: 1px solid #0a3060;
+  flex-shrink: 0;
+}
+
+.mobile-tab {
+  flex: 1;
+  padding: 8px 4px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #3a6a9a;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+
+.mobile-tab.active {
+  color: #ffffff;
+  border-bottom-color: #2a6abf;
 }
 
 /* ── LAYOUT ── */
@@ -271,6 +305,12 @@ body {
   margin-bottom: 3px;
 }
 
+.fc-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 /* ── SECTOR ── */
 
 .sec-card {
@@ -370,17 +410,9 @@ body {
 /* ── SCROLLBAR ── */
 
 ::-webkit-scrollbar { width: 4px; }
-
 ::-webkit-scrollbar-track { background: #020810; }
-
-::-webkit-scrollbar-thumb {
-  background: #0e3060;
-  border-radius: 2px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #1a4a80;
-}
+::-webkit-scrollbar-thumb { background: #0e3060; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #1a4a80; }
 
 /* ── EXCHANGE BADGES ── */
 
@@ -402,4 +434,69 @@ body {
   background: #001a3a;
   color: #0088ff;
   border: 1px solid #0088ff44;
+}
+
+/* ── RADAR SEARCH ── */
+
+.radar-search {
+  width: 100%;
+  background: #020c1e;
+  border: 1px solid #0e2a4a;
+  color: #b8cfe8;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  padding: 4px 7px;
+  border-radius: 3px;
+  margin-bottom: 6px;
+  outline: none;
+}
+
+.radar-search:focus { border-color: #2a6abf; }
+
+/* ══════════════════════════════════════
+   MOBILE RESPONSIVE — max-width: 768px
+   ══════════════════════════════════════ */
+
+@media (max-width: 768px) {
+
+  .terminal {
+    height: 100dvh; /* dynamic viewport height — fixes iOS Safari bar */
+  }
+
+  .title {
+    font-size: 10px;
+    letter-spacing: 0.5px;
+  }
+
+  .status-row span { font-size: 9px; }
+
+  /* Show mobile tab bar */
+  .mobile-tabs {
+    display: flex;
+  }
+
+  /* Stack panels — only active panel visible */
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+    padding: 4px;
+    gap: 0;
+  }
+
+  .panel {
+    border-radius: 4px;
+    display: none; /* hidden by default */
+  }
+
+  /* JS adds .mobile-active class to show the right panel */
+  .panel.mobile-active {
+    display: block;
+  }
+
+  .co-name { font-size: 12px; }
+
+  .radar-search {
+    font-size: 13px; /* bigger on mobile for easier typing */
+    padding: 6px 8px;
+  }
 }
