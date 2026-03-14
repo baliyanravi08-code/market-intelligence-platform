@@ -71,6 +71,7 @@ function bestTsRadar(e) {
 function bestTsFeed(e) {
   const et = exchangeToTs(e.time);
   if (et && !isNaN(et)) return et;
+  if (e.savedAt) return e.savedAt;
   return Date.now();
 }
 
@@ -95,6 +96,21 @@ function filterEvent(e, filter) {
   if (filter === "INSIDER") return e.type === "INSIDER_BUY" || e.type === "INSIDER_TRADE";
   if (filter === ">50")     return (e.value || 0) >= 50;
   return true;
+}
+
+// ── Merge + dedup + sort events by savedAt descending ──
+function mergeEvents(incoming, existing) {
+  const merged = [...incoming, ...existing];
+  const deduped = Object.values(
+    merged.reduce((acc, e) => {
+      const key = (e.company || "") + (e.time || "") + (e.title || "").substring(0, 20);
+      if (!acc[key]) acc[key] = e;
+      return acc;
+    }, {})
+  );
+  return deduped
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
+    .slice(0, 500);
 }
 
 function LiveAgo({ receivedAt, exchangeTime }) {
@@ -170,15 +186,17 @@ export default function App() {
       .then(data => {
         if (data.bse?.length) {
           const stamped = data.bse.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
-          setBseEvents(stamped.slice(0, 500));
+          setBseEvents(stamped.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0)).slice(0, 500));
         }
         if (data.nse?.length) {
           const stamped = data.nse.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
-          setNseEvents(stamped.slice(0, 500));
+          setNseEvents(stamped.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0)).slice(0, 500));
         }
         if (data.windowHours) {
           setWindowInfo({ hours: data.windowHours, label: data.windowLabel });
         }
+        // ── Always reset to ALL so nothing is hidden on load ──
+        setFeedFilter("ALL");
       })
       .catch(() => {});
   }, []);
@@ -186,7 +204,6 @@ export default function App() {
   useEffect(() => {
     socket.on("bse_status", s => setBseStatus(s));
     socket.on("nse_status", s => setNseStatus(s));
-
     socket.on("window_info", info => setWindowInfo(info));
 
     socket.on("radar_update", data => {
@@ -202,24 +219,21 @@ export default function App() {
     });
 
     socket.on("bse_events", data => {
-      triggerFlash();
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
-      const high = stamped.find(e => (e.value || 0) >= 70);
-      if (high) playAlert(660, 880);
-      setBseEvents(prev => {
-        const ids   = new Set(prev.map(e => e.company + e.time));
-        const fresh = stamped.filter(e => !ids.has(e.company + e.time));
-        return [...fresh, ...prev].slice(0, 500);
-      });
+
+      // Only play sound + flash for single new events, not bulk historical loads
+      if (data.length <= 5) {
+        triggerFlash();
+        const high = stamped.find(e => (e.value || 0) >= 70);
+        if (high) playAlert(660, 880);
+      }
+
+      setBseEvents(prev => mergeEvents(stamped, prev));
     });
 
     socket.on("nse_events", data => {
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
-      setNseEvents(prev => {
-        const ids   = new Set(prev.map(e => e.company + e.time));
-        const fresh = stamped.filter(e => !ids.has(e.company + e.time));
-        return [...fresh, ...prev].slice(0, 500);
-      });
+      setNseEvents(prev => mergeEvents(stamped, prev));
     });
 
     socket.on("order_book_update", data => {
@@ -259,8 +273,8 @@ export default function App() {
     return () => socket.removeAllListeners();
   }, []);
 
-  const feedEvents    = activeTab === "bse" ? bseEvents : nseEvents;
-  const filteredFeed  = feedEvents.filter(e => filterEvent(e, feedFilter));
+  const feedEvents   = activeTab === "bse" ? bseEvents : nseEvents;
+  const filteredFeed = feedEvents.filter(e => filterEvent(e, feedFilter));
   const filteredRadar = radarSearch
     ? radar.filter(r => r.company.toLowerCase().includes(radarSearch.toLowerCase()))
     : radar;
