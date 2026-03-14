@@ -114,24 +114,13 @@ function LiveAgo({ receivedAt, exchangeTime }) {
 function Tag({ type, crores }) {
   const c = SIGNAL_COLOR[type] || { bg: "#0d3060", fg: "#fff" };
   const label = (type === "ORDER_ALERT" && crores)
-    ? `ORDER ₹${crores >= 1000 ? (crores/1000).toFixed(1)+"K" : crores}Cr`
+    ? `ORDER ₹${crores >= 1000 ? (crores / 1000).toFixed(1) + "K" : crores}Cr`
     : type;
-  return (
-    <span className="tag" style={{ background: c.bg, color: c.fg }}>
-      {label}
-    </span>
-  );
+  return <span className="tag" style={{ background: c.bg, color: c.fg }}>{label}</span>;
 }
 
 function ExBadge({ exchange }) {
   return <span className={`ex-badge ex-${exchange.toLowerCase()}`}>{exchange}</span>;
-}
-
-function AlertBadge({ level }) {
-  if (!level) return null;
-  return (
-    <span className={`alert-badge alert-${level.toLowerCase()}`}>{level}</span>
-  );
 }
 
 export default function App() {
@@ -149,6 +138,7 @@ export default function App() {
   const [flash,         setFlash]         = useState(false);
   const [radarSearch,   setRadarSearch]   = useState("");
   const [mobilePanel,   setMobilePanel]   = useState("radar");
+  const [windowInfo,    setWindowInfo]    = useState({ hours: 24, label: "24h" });
   const flashTimer = useRef(null);
 
   function triggerFlash() {
@@ -173,9 +163,31 @@ export default function App() {
     } catch(e) {}
   }
 
+  // ── Load historical events on mount via REST API ──
+  useEffect(() => {
+    fetch("/api/events")
+      .then(r => r.json())
+      .then(data => {
+        if (data.bse?.length) {
+          const stamped = data.bse.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
+          setBseEvents(stamped.slice(0, 500));
+        }
+        if (data.nse?.length) {
+          const stamped = data.nse.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
+          setNseEvents(stamped.slice(0, 500));
+        }
+        if (data.windowHours) {
+          setWindowInfo({ hours: data.windowHours, label: data.windowLabel });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     socket.on("bse_status", s => setBseStatus(s));
     socket.on("nse_status", s => setNseStatus(s));
+
+    socket.on("window_info", info => setWindowInfo(info));
 
     socket.on("radar_update", data => {
       setRadar(prev => {
@@ -192,7 +204,6 @@ export default function App() {
     socket.on("bse_events", data => {
       triggerFlash();
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
-      // Play sound for high value signals
       const high = stamped.find(e => (e.value || 0) >= 70);
       if (high) playAlert(660, 880);
       setBseEvents(prev => {
@@ -223,7 +234,7 @@ export default function App() {
         { ...data, receivedAt: Date.now() },
         ...prev.filter(o => o.company !== data.company)
       ].slice(0, 10));
-      playAlert(880, 1320); // higher pitch for mega
+      playAlert(880, 1320);
     });
 
     socket.on("sector_alerts", data => {
@@ -254,6 +265,8 @@ export default function App() {
     ? radar.filter(r => r.company.toLowerCase().includes(radarSearch.toLowerCase()))
     : radar;
 
+  const isWeekend = windowInfo.hours > 24;
+
   return (
     <div className="terminal">
 
@@ -262,6 +275,22 @@ export default function App() {
         <div className="header-left">
           <span className="star">★</span>
           <span className="title">Market Intelligence</span>
+          {isWeekend && (
+            <span style={{
+              fontFamily: "IBM Plex Mono, monospace",
+              fontSize: "9px",
+              color: "#ffaa00",
+              background: "#1a0800",
+              border: "1px solid #ff440033",
+              borderRadius: "3px",
+              padding: "1px 6px",
+              fontWeight: 700,
+              letterSpacing: "0.5px",
+              flexShrink: 0
+            }}>
+              ⏱ {windowInfo.label}
+            </span>
+          )}
         </div>
         <div className="header-right">
           <div className="status-pill">
@@ -294,6 +323,15 @@ export default function App() {
               📡 Radar
               <span className="count">{filteredRadar.length}</span>
             </span>
+            {isWeekend && (
+              <span style={{
+                fontSize: "9px",
+                color: "#ffaa00",
+                fontFamily: "IBM Plex Mono, monospace"
+              }}>
+                Fri–Mon data
+              </span>
+            )}
           </div>
 
           <input
@@ -304,7 +342,12 @@ export default function App() {
           />
 
           {filteredRadar.length === 0
-            ? <div className="empty">Waiting for signals…<br/>Market opens Mon 9:15 AM</div>
+            ? <div className="empty">
+                {isWeekend
+                  ? "Weekend mode — showing last 96h\nMarket opens Mon 9:15 AM"
+                  : "Waiting for signals…\nMarket opens Mon 9:15 AM"
+                }
+              </div>
             : filteredRadar.map((r, i) => {
               const isMega = r.signals?.includes("ORDER_ALERT") && r.score >= 85;
               return (
@@ -346,7 +389,6 @@ export default function App() {
         {/* ══ FEED PANEL ══ */}
         <div className={`panel feed-panel ${flash ? "flash" : ""} ${mobilePanel === "feed" ? "mobile-active" : ""}`}>
 
-          {/* BSE / NSE tabs */}
           <div className="panel-header">
             <div style={{ display: "flex", gap: 4 }}>
               <button className={`tbtn ${activeTab === "bse" ? "active" : ""}`}
@@ -358,10 +400,15 @@ export default function App() {
                 NSE <span className="count">{nseEvents.length}</span>
               </button>
             </div>
-            <span className="count">{filteredFeed.length} shown</span>
+            <span style={{
+              fontSize: "9px",
+              color: isWeekend ? "#ffaa00" : "#1a4a60",
+              fontFamily: "IBM Plex Mono, monospace"
+            }}>
+              {isWeekend ? `⏱ ${windowInfo.label}` : `${filteredFeed.length} shown`}
+            </span>
           </div>
 
-          {/* Filter buttons */}
           <div className="filter-bar">
             {FEED_FILTERS.map(f => (
               <button
@@ -375,11 +422,16 @@ export default function App() {
           </div>
 
           {filteredFeed.length === 0
-            ? <div className="empty">No signals match filter</div>
+            ? <div className="empty">
+                {isWeekend
+                  ? "Weekend — no new filings\nFriday orders shown above"
+                  : "No signals match filter"
+                }
+              </div>
             : filteredFeed.map((e, i) => {
-              const crores  = e._orderInfo?.crores || null;
-              const isMega  = e.type === "ORDER_ALERT" && crores >= 1000;
-              const isHigh  = (e.value || 0) >= 70;
+              const crores = e._orderInfo?.crores || null;
+              const isMega = e.type === "ORDER_ALERT" && crores >= 1000;
+              const isHigh = (e.value || 0) >= 70;
               return (
                 <div
                   className={`feed-card ${isMega ? "mega-value" : isHigh ? "high-value" : ""}`}
@@ -420,9 +472,8 @@ export default function App() {
               <div className="mega-card" key={i}>
                 <div className="mega-head">
                   <span className="co-name">{o.company}</span>
-                  <span className="mega-val">₹{o.crores >= 1000
-                    ? (o.crores/1000).toFixed(1)+"K"
-                    : o.crores}Cr
+                  <span className="mega-val">
+                    ₹{o.crores >= 1000 ? (o.crores / 1000).toFixed(1) + "K" : o.crores}Cr
                   </span>
                 </div>
                 {o.periodLabel && (
@@ -501,7 +552,9 @@ export default function App() {
                     <span className="ord-book">Q: ₹{o.quarterBook?.toFixed(0)}Cr</span>
                   )}
                   {o.estimatedOrderBook && (
-                    <span className="ord-book">Est: ₹{(o.estimatedOrderBook/100).toFixed(0)}K Cr</span>
+                    <span className="ord-book">
+                      Est: ₹{(o.estimatedOrderBook / 100).toFixed(0)}K Cr
+                    </span>
                   )}
                 </div>
                 {o.periodLabel && (
