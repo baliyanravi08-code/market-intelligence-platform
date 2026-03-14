@@ -1,3 +1,5 @@
+const { loadDB } = require("../../database");
+
 const radarMap = new Map();
 
 function getIndianTime() {
@@ -17,6 +19,22 @@ function normalizeName(name) {
     .replace(/\s+-\s*\$.*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// ── Load persisted radar from database into memory on startup ──
+function loadRadarFromDB() {
+  try {
+    const db = loadDB();
+    if (db.radar?.length) {
+      db.radar.forEach(entry => {
+        const key = normalizeName(entry.company).toLowerCase();
+        radarMap.set(key, entry);
+      });
+      console.log(`📡 Radar restored: ${radarMap.size} companies loaded from DB`);
+    }
+  } catch (e) {
+    console.log("⚠️ Radar restore failed:", e.message);
+  }
 }
 
 function updateRadar(company, signal) {
@@ -78,5 +96,8 @@ function getRadar() {
     .sort((a, b) => b.score - a.score)
     .slice(0, 500);
 }
+
+// Load from DB immediately when module is first imported
+loadRadarFromDB();
 
 module.exports = { updateRadar, getRadar };
