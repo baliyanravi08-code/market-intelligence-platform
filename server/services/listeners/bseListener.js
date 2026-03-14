@@ -217,10 +217,30 @@ function startBSEListener(io) {
 
   io.on("connection", (socket) => {
     console.log("Client connected:", socket.id);
-    socket.emit("bse_status", "connecting");
+
+    // Send current status
+    socket.emit("bse_status", bseCookie ? "connected" : "connecting");
+
+    // ── Send ALL stored events from database on connect ──
+    // This is what the user sees when they open the app
+    const { getEvents } = require("../../database");
+    const storedBse = getEvents("bse") || [];
+    const storedNse = getEvents("nse") || [];
+
+    if (storedBse.length) {
+      socket.emit("bse_events", storedBse);
+      console.log(`📤 Sent ${storedBse.length} stored BSE events to new client`);
+    }
+    if (storedNse.length) {
+      socket.emit("nse_events", storedNse);
+      console.log(`📤 Sent ${storedNse.length} stored NSE events to new client`);
+    }
+
+    // Send radar
     socket.emit("radar_update", getRadar());
 
-    // ── Send retention window info to client ──
+    // Send retention window info
+    const { getRetentionHours, getWindowLabel } = require("../../database");
     socket.emit("window_info", {
       hours: getRetentionHours(),
       label: getWindowLabel()
