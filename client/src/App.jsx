@@ -5,10 +5,10 @@ import "./App.css";
 const socket = io(window.location.origin);
 
 const STATUS_COLOR = {
-  connected: "#00ff9c",
+  connected:    "#00ff9c",
   disconnected: "#ff5c5c",
-  unavailable: "#ffaa00",
-  connecting: "#888"
+  unavailable:  "#ffaa00",
+  connecting:   "#555"
 };
 
 const SIGNAL_COLOR = {
@@ -18,13 +18,15 @@ const SIGNAL_COLOR = {
   INSIDER_BUY:        { bg: "#ff5cff", fg: "#000" },
   INSIDER_TRADE:      { bg: "#ff5cff", fg: "#000" },
   PARTNERSHIP:        { bg: "#ffe14d", fg: "#000" },
-  CORPORATE_ACTION:   { bg: "#334455", fg: "#aac" },
+  CORPORATE_ACTION:   { bg: "#1a3040", fg: "#6090aa" },
   SMART_MONEY:        { bg: "#ff9c00", fg: "#000" },
-  RESULT:             { bg: "#00aaff", fg: "#000" },
-  BANK_RESULT:        { bg: "#aa44ff", fg: "#fff" },
+  RESULT:             { bg: "#0088dd", fg: "#fff" },
+  BANK_RESULT:        { bg: "#8833cc", fg: "#fff" },
   MULTIBAGGER_SIGNAL: { bg: "#ff2d55", fg: "#fff" },
-  NEWS:               { bg: "#0d2a4a", fg: "#6aaaf0" }
+  NEWS:               { bg: "#081828", fg: "#2a5a7a" }
 };
+
+const FEED_FILTERS = ["ALL", "ORDER", "MERGER", "CAPEX", "RESULT", "INSIDER", ">50"];
 
 function formatTime(raw) {
   if (!raw) return null;
@@ -72,6 +74,29 @@ function bestTsFeed(e) {
   return Date.now();
 }
 
+function scoreClass(score) {
+  if (score >= 70) return "score-high";
+  if (score >= 40) return "score-mid";
+  return "score-low";
+}
+
+function scoreBg(score) {
+  if (score >= 70) return "#00ff9c";
+  if (score >= 40) return "#ffaa00";
+  return "#0d5bd1";
+}
+
+function filterEvent(e, filter) {
+  if (filter === "ALL")     return true;
+  if (filter === "ORDER")   return e.type === "ORDER_ALERT";
+  if (filter === "MERGER")  return e.type === "MERGER";
+  if (filter === "CAPEX")   return e.type === "CAPEX";
+  if (filter === "RESULT")  return e.type === "RESULT" || e.type === "BANK_RESULT";
+  if (filter === "INSIDER") return e.type === "INSIDER_BUY" || e.type === "INSIDER_TRADE";
+  if (filter === ">50")     return (e.value || 0) >= 50;
+  return true;
+}
+
 function LiveAgo({ receivedAt, exchangeTime }) {
   const [ago, setAgo] = useState(toAgo(receivedAt));
   useEffect(() => {
@@ -86,14 +111,26 @@ function LiveAgo({ receivedAt, exchangeTime }) {
   );
 }
 
-function Tag({ type }) {
-  const c = SIGNAL_COLOR[type] || { bg: "#0d5bd1", fg: "#fff" };
-  return <span className="tag" style={{ background: c.bg, color: c.fg }}>{type}</span>;
+function Tag({ type, crores }) {
+  const c = SIGNAL_COLOR[type] || { bg: "#0d3060", fg: "#fff" };
+  const label = (type === "ORDER_ALERT" && crores)
+    ? `ORDER ₹${crores >= 1000 ? (crores/1000).toFixed(1)+"K" : crores}Cr`
+    : type;
+  return (
+    <span className="tag" style={{ background: c.bg, color: c.fg }}>
+      {label}
+    </span>
+  );
 }
 
 function ExBadge({ exchange }) {
+  return <span className={`ex-badge ex-${exchange.toLowerCase()}`}>{exchange}</span>;
+}
+
+function AlertBadge({ level }) {
+  if (!level) return null;
   return (
-    <span className={`ex-badge ex-${exchange.toLowerCase()}`}>{exchange}</span>
+    <span className={`alert-badge alert-${level.toLowerCase()}`}>{level}</span>
   );
 }
 
@@ -104,9 +141,11 @@ export default function App() {
   const [sector,        setSector]        = useState([]);
   const [orderBook,     setOrderBook]     = useState([]);
   const [opportunities, setOpportunities] = useState([]);
+  const [megaOrders,    setMegaOrders]    = useState([]);
   const [bseStatus,     setBseStatus]     = useState("connecting");
   const [nseStatus,     setNseStatus]     = useState("connecting");
   const [activeTab,     setActiveTab]     = useState("bse");
+  const [feedFilter,    setFeedFilter]    = useState("ALL");
   const [flash,         setFlash]         = useState(false);
   const [radarSearch,   setRadarSearch]   = useState("");
   const [mobilePanel,   setMobilePanel]   = useState("radar");
@@ -115,7 +154,23 @@ export default function App() {
   function triggerFlash() {
     setFlash(true);
     clearTimeout(flashTimer.current);
-    flashTimer.current = setTimeout(() => setFlash(false), 400);
+    flashTimer.current = setTimeout(() => setFlash(false), 600);
+  }
+
+  function playAlert(freq1 = 880, freq2 = 1100) {
+    try {
+      const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.setValueAtTime(freq1, ctx.currentTime);
+      osc.frequency.setValueAtTime(freq2, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.25, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.5);
+    } catch(e) {}
   }
 
   useEffect(() => {
@@ -137,9 +192,12 @@ export default function App() {
     socket.on("bse_events", data => {
       triggerFlash();
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
+      // Play sound for high value signals
+      const high = stamped.find(e => (e.value || 0) >= 70);
+      if (high) playAlert(660, 880);
       setBseEvents(prev => {
-        const existingIds = new Set(prev.map(e => e.company + e.time));
-        const fresh = stamped.filter(e => !existingIds.has(e.company + e.time));
+        const ids   = new Set(prev.map(e => e.company + e.time));
+        const fresh = stamped.filter(e => !ids.has(e.company + e.time));
         return [...fresh, ...prev].slice(0, 500);
       });
     });
@@ -147,8 +205,8 @@ export default function App() {
     socket.on("nse_events", data => {
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
       setNseEvents(prev => {
-        const existingIds = new Set(prev.map(e => e.company + e.time));
-        const fresh = stamped.filter(e => !existingIds.has(e.company + e.time));
+        const ids   = new Set(prev.map(e => e.company + e.time));
+        const fresh = stamped.filter(e => !ids.has(e.company + e.time));
         return [...fresh, ...prev].slice(0, 500);
       });
     });
@@ -158,6 +216,14 @@ export default function App() {
         { ...data, receivedAt: bestTsFeed(data) },
         ...prev.filter(o => o.company !== data.company)
       ].slice(0, 20));
+    });
+
+    socket.on("mega_order_alert", data => {
+      setMegaOrders(prev => [
+        { ...data, receivedAt: Date.now() },
+        ...prev.filter(o => o.company !== data.company)
+      ].slice(0, 10));
+      playAlert(880, 1320); // higher pitch for mega
     });
 
     socket.on("sector_alerts", data => {
@@ -174,13 +240,16 @@ export default function App() {
     });
 
     socket.on("opportunity_alert", data => {
-      setOpportunities(prev => [{ ...data, receivedAt: bestTsFeed(data) }, ...prev].slice(0, 10));
+      setOpportunities(prev => [
+        { ...data, receivedAt: bestTsFeed(data) }, ...prev
+      ].slice(0, 10));
     });
 
     return () => socket.removeAllListeners();
   }, []);
 
-  const feedEvents = activeTab === "bse" ? bseEvents : nseEvents;
+  const feedEvents    = activeTab === "bse" ? bseEvents : nseEvents;
+  const filteredFeed  = feedEvents.filter(e => filterEvent(e, feedFilter));
   const filteredRadar = radarSearch
     ? radar.filter(r => r.company.toLowerCase().includes(radarSearch.toLowerCase()))
     : radar;
@@ -188,136 +257,215 @@ export default function App() {
   return (
     <div className="terminal">
 
-      {/* HEADER */}
+      {/* ── HEADER ── */}
       <div className="header">
-        <span className="star">★</span>
-        <span className="title">Market Intelligence Terminal</span>
-        <div className="status-row">
-          <span className="dot" style={{ background: STATUS_COLOR[bseStatus] }} />
-          <span style={{ color: STATUS_COLOR[bseStatus] }}>BSE: {bseStatus}</span>
-          <span className="dot" style={{ background: STATUS_COLOR[nseStatus] }} />
-          <span style={{ color: STATUS_COLOR[nseStatus] }}>NSE: {nseStatus}</span>
+        <div className="header-left">
+          <span className="star">★</span>
+          <span className="title">Market Intelligence</span>
+        </div>
+        <div className="header-right">
+          <div className="status-pill">
+            <span className="dot pulse" style={{ background: STATUS_COLOR[bseStatus] }} />
+            <span style={{ color: STATUS_COLOR[bseStatus] }}>BSE</span>
+          </div>
+          <div className="status-pill">
+            <span className="dot pulse" style={{ background: STATUS_COLOR[nseStatus] }} />
+            <span style={{ color: STATUS_COLOR[nseStatus] }}>NSE</span>
+          </div>
         </div>
       </div>
 
-      {/* MOBILE TAB BAR — hidden on desktop via CSS */}
+      {/* ── MOBILE TABS ── */}
       <div className="mobile-tabs">
-        <button
-          className={`mobile-tab ${mobilePanel === "radar" ? "active" : ""}`}
-          onClick={() => setMobilePanel("radar")}
-        >
-          📡 Radar
-        </button>
-        <button
-          className={`mobile-tab ${mobilePanel === "feed" ? "active" : ""}`}
-          onClick={() => setMobilePanel("feed")}
-        >
-          📋 Feed
-        </button>
-        <button
-          className={`mobile-tab ${mobilePanel === "right" ? "active" : ""}`}
-          onClick={() => setMobilePanel("right")}
-        >
-          📊 Sectors
-        </button>
+        <button className={`mobile-tab ${mobilePanel === "radar" ? "active" : ""}`}
+          onClick={() => setMobilePanel("radar")}>📡 Radar</button>
+        <button className={`mobile-tab ${mobilePanel === "feed" ? "active" : ""}`}
+          onClick={() => setMobilePanel("feed")}>📋 Feed</button>
+        <button className={`mobile-tab ${mobilePanel === "right" ? "active" : ""}`}
+          onClick={() => setMobilePanel("right")}>📊 Data</button>
       </div>
 
       <div className="layout">
 
-        {/* ── RADAR PANEL ── */}
+        {/* ══ RADAR PANEL ══ */}
         <div className={`panel radar-panel ${mobilePanel === "radar" ? "mobile-active" : ""}`}>
-          <div className="panel-title">
-            RADAR <span className="count">{filteredRadar.length}</span>
+          <div className="panel-header">
+            <span className="panel-title">
+              📡 Radar
+              <span className="count">{filteredRadar.length}</span>
+            </span>
           </div>
+
           <input
             className="radar-search"
             placeholder="Search company..."
             value={radarSearch}
             onChange={e => setRadarSearch(e.target.value)}
           />
-          {filteredRadar.length === 0 && <div className="empty">Waiting for signals…</div>}
-          {filteredRadar.map((r, i) => (
-            <div className={`radar-card ${r.score >= 60 ? "hl" : ""}`} key={i}>
-              <div className="rc-top">
-                <span className="co-name">{r.company}</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  {(r.exchanges || []).map((ex, j) => (
-                    <ExBadge key={j} exchange={ex} />
-                  ))}
-                  <span className="score">{r.score}</span>
+
+          {filteredRadar.length === 0
+            ? <div className="empty">Waiting for signals…<br/>Market opens Mon 9:15 AM</div>
+            : filteredRadar.map((r, i) => {
+              const isMega = r.signals?.includes("ORDER_ALERT") && r.score >= 85;
+              return (
+                <div
+                  className={`radar-card ${isMega ? "mega" : r.score >= 60 ? "high-score" : ""}`}
+                  key={i}
+                >
+                  <div className="rc-top">
+                    <span className="co-name">{r.company}</span>
+                    <div className="rc-badges">
+                      {(r.exchanges || []).map((ex, j) => <ExBadge key={j} exchange={ex} />)}
+                      <span className={`score ${scoreClass(r.score)}`}>{r.score}</span>
+                    </div>
+                  </div>
+                  <div className="sbar">
+                    <div className="sfill" style={{
+                      width: `${Math.min(r.score, 100)}%`,
+                      background: scoreBg(r.score)
+                    }} />
+                  </div>
+                  <div className="tags">
+                    {[...new Set(r.signals)].slice(0, 3).map((s, j) => (
+                      <Tag key={j} type={s} />
+                    ))}
+                  </div>
+                  <div className="rc-foot">
+                    {r.pdfUrl
+                      ? <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="plink">Filing ↗</a>
+                      : <span />
+                    }
+                    <LiveAgo receivedAt={r.receivedAt} exchangeTime={r.time} />
+                  </div>
                 </div>
-              </div>
-              <div className="sbar">
-                <div className="sfill" style={{
-                  width: `${Math.min(r.score, 100)}%`,
-                  background: r.score >= 70 ? "#00ff9c" : r.score >= 40 ? "#ffaa00" : "#0d5bd1"
-                }} />
-              </div>
-              <div className="tags">
-                {[...new Set(r.signals)].slice(0, 3).map((s, j) => <Tag key={j} type={s} />)}
-              </div>
-              <div className="rc-foot">
-                {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="plink">Filing ↗</a>}
-                <LiveAgo receivedAt={r.receivedAt} exchangeTime={r.time} />
-              </div>
-            </div>
-          ))}
+              );
+            })
+          }
         </div>
 
-        {/* ── FEED PANEL ── */}
+        {/* ══ FEED PANEL ══ */}
         <div className={`panel feed-panel ${flash ? "flash" : ""} ${mobilePanel === "feed" ? "mobile-active" : ""}`}>
-          <div className="panel-title">
-            <button
-              className={`tbtn ${activeTab === "bse" ? "active" : ""}`}
-              onClick={() => setActiveTab("bse")}
-            >
-              BSE <span className="count">{bseEvents.length}</span>
-            </button>
-            <button
-              className={`tbtn ${activeTab === "nse" ? "active" : ""}`}
-              onClick={() => setActiveTab("nse")}
-            >
-              NSE <span className="count">{nseEvents.length}</span>
-            </button>
-          </div>
-          {feedEvents.length === 0 && <div className="empty">Waiting for alerts…</div>}
-          {feedEvents.map((e, i) => (
-            <div className="feed-card" key={i}>
-              <div className="fc-head">
-                <span className="co-name">{e.company}</span>
-                <Tag type={e.type} />
-              </div>
-              <div className="fc-text">{e.title}</div>
-              <div className="fc-foot">
-                <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
-                {e.pdfUrl && <a href={e.pdfUrl} target="_blank" rel="noreferrer" className="plink">Filing ↗</a>}
-              </div>
+
+          {/* BSE / NSE tabs */}
+          <div className="panel-header">
+            <div style={{ display: "flex", gap: 4 }}>
+              <button className={`tbtn ${activeTab === "bse" ? "active" : ""}`}
+                onClick={() => setActiveTab("bse")}>
+                BSE <span className="count">{bseEvents.length}</span>
+              </button>
+              <button className={`tbtn ${activeTab === "nse" ? "active" : ""}`}
+                onClick={() => setActiveTab("nse")}>
+                NSE <span className="count">{nseEvents.length}</span>
+              </button>
             </div>
-          ))}
+            <span className="count">{filteredFeed.length} shown</span>
+          </div>
+
+          {/* Filter buttons */}
+          <div className="filter-bar">
+            {FEED_FILTERS.map(f => (
+              <button
+                key={f}
+                className={`fbtn ${feedFilter === f ? "active" : ""}`}
+                onClick={() => setFeedFilter(f)}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          {filteredFeed.length === 0
+            ? <div className="empty">No signals match filter</div>
+            : filteredFeed.map((e, i) => {
+              const crores  = e._orderInfo?.crores || null;
+              const isMega  = e.type === "ORDER_ALERT" && crores >= 1000;
+              const isHigh  = (e.value || 0) >= 70;
+              return (
+                <div
+                  className={`feed-card ${isMega ? "mega-value" : isHigh ? "high-value" : ""}`}
+                  key={i}
+                >
+                  <div className="fc-head">
+                    <span className="co-name">{e.company}</span>
+                    <Tag type={e.type} crores={crores} />
+                  </div>
+                  <div className="fc-text">{e.title}</div>
+                  <div className="fc-foot">
+                    <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {e.value >= 50 && (
+                        <span className="fc-value">Score {e.value}</span>
+                      )}
+                      {e.pdfUrl &&
+                        <a href={e.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>
+                      }
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          }
         </div>
 
-        {/* ── RIGHT PANEL ── */}
+        {/* ══ RIGHT PANEL ══ */}
         <div className={`panel right-panel ${mobilePanel === "right" ? "mobile-active" : ""}`}>
 
-          {opportunities.length > 0 && (
-            <>
-              <div className="panel-title">
-                MULTIBAGGER <span className="count">{opportunities.length}</span>
-              </div>
-              {opportunities.map((o, i) => (
-                <div className="opp-card" key={i}>
-                  <div className="opp-row">
-                    <span className="co-name">{o.company}</span>
-                    <span className="opp-pct">{o.score}%</span>
-                  </div>
-                  <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
+          {/* MEGA ORDERS */}
+          {megaOrders.length > 0 && <>
+            <div className="section-divider">
+              🚨 Mega Orders
+              <span className="count">{megaOrders.length}</span>
+            </div>
+            {megaOrders.map((o, i) => (
+              <div className="mega-card" key={i}>
+                <div className="mega-head">
+                  <span className="co-name">{o.company}</span>
+                  <span className="mega-val">₹{o.crores >= 1000
+                    ? (o.crores/1000).toFixed(1)+"K"
+                    : o.crores}Cr
+                  </span>
                 </div>
-              ))}
-            </>
-          )}
+                {o.periodLabel && (
+                  <div className="mega-sub">
+                    {o.periodLabel} project
+                    {o.annualCrores && ` · ₹${o.annualCrores}Cr/yr`}
+                  </div>
+                )}
+                {o.mcapRatio > 0 && (
+                  <div className="mega-mcap">{o.mcapRatio}% of MCap</div>
+                )}
+                <div className="mega-title">{o.title?.substring(0, 65)}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
+                  {o.pdfUrl &&
+                    <a href={o.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>
+                  }
+                </div>
+              </div>
+            ))}
+          </>}
 
-          <div className="panel-title" style={{ marginTop: opportunities.length > 0 ? 8 : 0 }}>
-            SECTOR <span className="count">{sector.length}</span>
+          {/* MULTIBAGGER */}
+          {opportunities.length > 0 && <>
+            <div className="section-divider" style={{ marginTop: megaOrders.length > 0 ? 8 : 0 }}>
+              🎯 Multibagger
+              <span className="count">{opportunities.length}</span>
+            </div>
+            {opportunities.map((o, i) => (
+              <div className="opp-card" key={i}>
+                <div className="opp-row">
+                  <span className="co-name">{o.company}</span>
+                  <span className="opp-pct">{o.score}%</span>
+                </div>
+                <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
+              </div>
+            ))}
+          </>}
+
+          {/* SECTOR */}
+          <div className="section-divider" style={{ marginTop: 8 }}>
+            🏭 Sectors
+            <span className="count">{sector.length}</span>
           </div>
           {sector.length === 0
             ? <div className="empty">No sector activity yet</div>
@@ -332,8 +480,10 @@ export default function App() {
             ))
           }
 
-          <div className="panel-title" style={{ marginTop: 8 }}>
-            ORDER BOOK <span className="count">{orderBook.length}</span>
+          {/* ORDER BOOK */}
+          <div className="section-divider" style={{ marginTop: 8 }}>
+            📦 Order Book
+            <span className="count">{orderBook.length}</span>
           </div>
           {orderBook.length === 0
             ? <div className="empty">No orders tracked yet</div>
@@ -341,16 +491,28 @@ export default function App() {
               <div className="ord-card" key={i}>
                 <div className="ord-top">
                   <span className="co-name">{o.company}</span>
-                  <span className={`str-lbl ${(o.strength || "").toLowerCase().replace(" ", "-")}`}>
+                  <span className={`str-lbl ${(o.strength || "early").toLowerCase().replace(" ", "-")}`}>
                     {o.strength}
                   </span>
                 </div>
                 <div className="ord-stats">
                   <span className="ord-val">₹{o.orderValue}Cr</span>
-                  <span>Total ₹{o.totalOrderBook?.toFixed(0)}Cr</span>
-                  <span>{o.orders} orders</span>
+                  {o.quarterBook > 0 && (
+                    <span className="ord-book">Q: ₹{o.quarterBook?.toFixed(0)}Cr</span>
+                  )}
+                  {o.estimatedOrderBook && (
+                    <span className="ord-book">Est: ₹{(o.estimatedOrderBook/100).toFixed(0)}K Cr</span>
+                  )}
                 </div>
-                {o.percentage > 0 && <div className="ord-pct">{o.percentage}% of MCap</div>}
+                {o.periodLabel && (
+                  <div className="ord-period">{o.periodLabel} project</div>
+                )}
+                {o.mcapRatio > 0 && (
+                  <div className="ord-pct">{o.mcapRatio}% MCap · {o.quarterOrders} this qtr</div>
+                )}
+                {o.obToRevRatio && (
+                  <div className="ord-pct">OB/Rev {o.obToRevRatio}x</div>
+                )}
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
               </div>
             ))
