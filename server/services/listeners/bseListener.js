@@ -108,7 +108,6 @@ function processItem(item) {
 
   if (!signal) return;
 
-  // use exchange time as savedAt — preserves real filing time
   const exchangeTs = parseExchangeTs(signal.time);
   const signalWithTs = { ...signal, savedAt: (exchangeTs && !isNaN(exchangeTs)) ? exchangeTs : Date.now() };
 
@@ -121,16 +120,16 @@ function processItem(item) {
   if (ioRef) ioRef.emit("bse_events", [signalWithTs]);
   if (ioRef) ioRef.emit("radar_update", radar);
 
-   if (signalWithTs.type === "ORDER_ALERT") {
-    // Pass _orderInfo through to orderBookEngine
+  if (signalWithTs.type === "ORDER_ALERT") {
     const enrichedSignal = { ...signalWithTs, _orderInfo: signal._orderInfo };
 
+    // Order book tracking
     const orderData = orderBookEngine(enrichedSignal);
     if (orderData) {
       persistOrderBook(orderData);
       if (ioRef) ioRef.emit("order_book_update", orderData);
 
-      // 🚨 MEGA ORDER — ₹1000Cr+ or 5%+ of MCap
+      // 🚨 MEGA ORDER — ₹1000Cr+ or 5%+ of MCap or frequency alert
       if (orderData.isMegaOrder || orderData.isMcapAlert || orderData.isFrequencyAlert) {
         if (ioRef) ioRef.emit("mega_order_alert", {
           company: orderData.company,
@@ -151,31 +150,15 @@ function processItem(item) {
       }
     }
 
+    // Opportunity engine
     const opportunity = opportunityEngine(enrichedSignal);
     if (opportunity) {
       persistOpportunity(opportunity);
       if (ioRef) ioRef.emit("opportunity_alert", opportunity);
     }
 
+    // Sector tracking
     const queue = sectorQueue(enrichedSignal);
-    const sectorAlert = sectorRadar(queue);
-    if (sectorAlert) {
-      persistSector(sectorAlert);
-      if (ioRef) ioRef.emit("sector_alerts", [sectorAlert]);
-
-      const boom = sectorBoomEngine(queue);
-      if (boom) {
-        persistSector(boom);
-        if (ioRef) ioRef.emit("sector_boom", boom);
-      }
-
-    const opportunity = opportunityEngine(signalWithTs);
-    if (opportunity) {
-      persistOpportunity(opportunity);
-      if (ioRef) ioRef.emit("opportunity_alert", opportunity);
-    }
-
-    const queue = sectorQueue(signalWithTs);
     const sectorAlert = sectorRadar(queue);
     if (sectorAlert) {
       persistSector(sectorAlert);
