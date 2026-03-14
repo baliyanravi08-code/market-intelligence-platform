@@ -5,19 +5,30 @@
  */
 
 function extractCrores(t) {
-  const croreMatch = t.match(/(?:rs\.?|₹|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i);
+  // Remove regulation/section references first
+  const cleaned = t
+    .replace(/regulation\s+\d+/gi, "")
+    .replace(/reg\.\s*\d+/gi, "")
+    .replace(/section\s+\d+/gi, "")
+    .replace(/\d+\s*months?\b/gi, "")
+    .replace(/\d+\s*years?\b/gi, "")
+    .replace(/\d+\s*mld\b/gi, "")    // 45 MLD — not crores
+    .replace(/\d+\s*mw\b/gi, "")     // 2 MW — not crores
+    .replace(/\d+\s*km\b/gi, "");    // distance
+
+  const croreMatch = cleaned.match(/(?:rs\.?|₹|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i);
   if (croreMatch) return parseFloat(croreMatch[1].replace(/,/g, ""));
 
-  const croreOnly = t.match(/([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i);
+  const croreOnly = cleaned.match(/([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i);
   if (croreOnly) return parseFloat(croreOnly[1].replace(/,/g, ""));
 
-  const billionMatch = t.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*billion/i);
+  const billionMatch = cleaned.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*billion/i);
   if (billionMatch) return parseFloat(billionMatch[1].replace(/,/g, "")) * 100;
 
-  const millionMatch = t.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*million/i);
+  const millionMatch = cleaned.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*million/i);
   if (millionMatch) return parseFloat(millionMatch[1].replace(/,/g, "")) * 0.1;
 
-  const lakhMatch = t.match(/([\d,]+(?:\.\d+)?)\s*lakh/i);
+  const lakhMatch = cleaned.match(/([\d,]+(?:\.\d+)?)\s*lakh/i);
   if (lakhMatch) return parseFloat(lakhMatch[1].replace(/,/g, "")) * 0.01;
 
   return null;

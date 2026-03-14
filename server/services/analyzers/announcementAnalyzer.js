@@ -164,15 +164,19 @@ const ORDER_NEGATIVE = [
 ];
 
 const ORDER_SIZE_KEYWORDS = [
-  { pattern: "'mega' order",  crores: 1000 },
-  { pattern: "mega' order",   crores: 1000 },
-  { pattern: "mega order",    crores: 1000 },
-  { pattern: "mega contract", crores: 1000 },
-  { pattern: "mega project",  crores: 1000 },
-  { pattern: "'major' order", crores: 800  },
-  { pattern: "major' order",  crores: 800  },
-  { pattern: "large order",   crores: 400  },
-  { pattern: "large contract",crores: 400  },
+  { pattern: "\u2018mega\u2019 order",  crores: 1000 }, // curly quotes 'mega'
+  { pattern: "'mega' order",            crores: 1000 }, // straight quotes
+  { pattern: "mega' order",             crores: 1000 },
+  { pattern: "mega order",              crores: 1000 },
+  { pattern: "'mega' ppp",              crores: 1000 }, // WABAG PPP style
+  { pattern: "mega ppp",                crores: 1000 },
+  { pattern: "mega contract",           crores: 1000 },
+  { pattern: "mega project",            crores: 1000 },
+  { pattern: "\u2018major\u2019 order", crores: 800  }, // curly quotes 'major'
+  { pattern: "'major' order",           crores: 800  },
+  { pattern: "major order",             crores: 800  },
+  { pattern: "large order",             crores: 400  },
+  { pattern: "large contract",          crores: 400  },
 ];
 
 const MERGER_POSITIVE = [
