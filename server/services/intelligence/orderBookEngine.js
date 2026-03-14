@@ -1,8 +1,7 @@
-const { addOrder: storeAddOrder }                           = require("../data/orderBookStore");
+const { addOrder: storeAddOrder }              = require("../data/orderBookStore");
 const { getMarketCap, getCompanyData,
-        getEstimatedOrderBook, addNewOrder }                = require("../data/marketCap");
+        getEstimatedOrderBook, addNewOrder }   = require("../data/marketCap");
 
-// Quarterly tracker — resets each quarter
 const quarterlyStore = {};
 
 function getCurrentQuarter() {
@@ -17,16 +16,21 @@ function orderBookEngine(signal) {
   const code    = String(signal.code || signal.company);
   const company = signal.company;
 
-  // Get order info attached by announcementAnalyzer
-  const orderInfo   = signal._orderInfo || {};
-  const crores      = orderInfo.crores      || signal.value || 0;
-  const years       = orderInfo.years       || null;
-  const periodLabel = orderInfo.periodLabel || null;
-  const annualCrores= orderInfo.annualCrores|| crores;
+  // ── ONLY use _orderInfo — never fall back to signal.value ──
+  const orderInfo = signal._orderInfo;
 
-  if (!crores || crores <= 0) return null;
+  if (!orderInfo || !orderInfo.crores || orderInfo.crores <= 0) {
+    // Order keyword detected but no size extracted — skip order book
+    console.log(`⚠️ No order size for ${company} — skipping order book`);
+    return null;
+  }
 
-  // Legacy store (running total)
+  const crores       = orderInfo.crores;
+  const years        = orderInfo.years        || null;
+  const periodLabel  = orderInfo.periodLabel  || null;
+  const annualCrores = orderInfo.annualCrores || crores;
+
+  // Legacy running total store
   const storeData = storeAddOrder(code, crores);
 
   // Add to company data runtime tracker
@@ -36,68 +40,67 @@ function orderBookEngine(signal) {
   const quarter = getCurrentQuarter();
   if (!quarterlyStore[code]) {
     quarterlyStore[code] = {
-      quarterBook: 0,
+      quarterBook:    0,
       currentQuarter: quarter,
-      quarterOrders: 0,
-      recentOrders: []
+      quarterOrders:  0,
+      recentOrders:   []
     };
   }
 
   const qs = quarterlyStore[code];
   if (qs.currentQuarter !== quarter) {
-    qs.quarterBook   = 0;
-    qs.quarterOrders = 0;
+    qs.quarterBook    = 0;
+    qs.quarterOrders  = 0;
     qs.currentQuarter = quarter;
   }
 
-  qs.quarterBook    += crores;
-  qs.quarterOrders  += 1;
+  qs.quarterBook   += crores;
+  qs.quarterOrders += 1;
   qs.recentOrders.unshift({
     crores, years, periodLabel, annualCrores,
     title: (signal.title || "").substring(0, 80),
-    time: signal.time
+    time:  signal.time
   });
   qs.recentOrders = qs.recentOrders.slice(0, 10);
 
-  // MCap data
-  const mcap        = getMarketCap(code) || 0;
-  const mcapRatio   = mcap ? parseFloat(((crores / mcap) * 100).toFixed(2)) : 0;
-  const qMcapRatio  = mcap ? parseFloat(((qs.quarterBook / mcap) * 100).toFixed(2)) : 0;
-  const totalBook   = storeData.totalOrderValue;
-  const totalMcapR  = mcap ? parseFloat(((totalBook / mcap) * 100).toFixed(2)) : 0;
+  // MCap calculations
+  const mcap       = getMarketCap(code) || 0;
+  const mcapRatio  = mcap ? parseFloat(((crores / mcap) * 100).toFixed(2)) : 0;
+  const qMcapRatio = mcap ? parseFloat(((qs.quarterBook / mcap) * 100).toFixed(2)) : 0;
+  const totalBook  = storeData.totalOrderValue;
+  const totalMcapR = mcap ? parseFloat(((totalBook / mcap) * 100).toFixed(2)) : 0;
 
-  // Estimated full order book (confirmed base + new orders - execution)
-  const estBook = getEstimatedOrderBook(code);
+  // Estimated full order book
+  const estBook   = getEstimatedOrderBook(code);
+  const obToRev   = estBook?.obToRevRatio || null;
+  const bookToBill= estBook?.bookToBill   || null;
 
-  // Company fundamentals
-  const compData    = getCompanyData(code);
-  const obToRev     = estBook?.obToRevRatio || null;
-  const bookToBill  = estBook?.bookToBill   || null;
-
-  // Strength
+  // Strength rating
   let strength = "EARLY";
   if (mcap) {
-    if (totalMcapR >= 50)      strength = "DOMINANT";
+    if      (totalMcapR >= 50) strength = "DOMINANT";
     else if (totalMcapR >= 20) strength = "STRONG";
     else if (totalMcapR >= 10) strength = "GROWING";
     else if (totalMcapR >= 5)  strength = "BUILDING";
   } else {
-    if (totalBook >= 2000)     strength = "DOMINANT";
-    else if (totalBook >= 500) strength = "STRONG";
-    else if (totalBook >= 100) strength = "GROWING";
-    else if (totalBook >= 20)  strength = "BUILDING";
+    if      (totalBook >= 2000) strength = "DOMINANT";
+    else if (totalBook >= 500)  strength = "STRONG";
+    else if (totalBook >= 100)  strength = "GROWING";
+    else if (totalBook >= 20)   strength = "BUILDING";
   }
 
   // Alert flags
-  const isMegaOrder       = crores >= 1000;
-  const isMcapAlert       = mcapRatio >= 5 && mcap > 0;
-  const isFrequencyAlert  = qs.quarterOrders >= 5;
-  const isHighObRev       = obToRev && parseFloat(obToRev) >= 3;
+  const isMegaOrder      = crores >= 1000;
+  const isMcapAlert      = mcapRatio >= 5 && mcap > 0;
+  const isFrequencyAlert = qs.quarterOrders >= 5;
+  const isHighObRev      = obToRev && parseFloat(obToRev) >= 3;
 
   let alertLevel = null;
-  if (isMegaOrder)      alertLevel = "MEGA";
-  else if (isMcapAlert) alertLevel = "MCAP";
+  if      (isMegaOrder)      alertLevel = "MEGA";
+  else if (isMcapAlert)      alertLevel = "MCAP";
   else if (isFrequencyAlert) alertLevel = "FREQUENCY";
+
+  console.log(`📊 OrderBook: ${company} ₹${crores}Cr | Q-Book: ₹${qs.quarterBook}Cr | MCap%: ${mcapRatio}% | Alert: ${alertLevel || "none"}`);
 
   return {
     company,
@@ -109,26 +112,26 @@ function orderBookEngine(signal) {
     periodLabel,
     annualCrores,
 
-    // Quarter
-    quarterBook:   qs.quarterBook,
-    quarterOrders: qs.quarterOrders,
+    // Quarter tracking
+    quarterBook:    qs.quarterBook,
+    quarterOrders:  qs.quarterOrders,
     currentQuarter: quarter,
     qMcapRatio,
 
-    // Running total (since server start)
+    // Running total
     totalOrderBook: totalBook,
     orders:         storeData.orders.length,
     totalMcapRatio: totalMcapR,
 
     // Estimated full picture
-    estimatedOrderBook:      estBook?.estimated   || null,
-    confirmedOrderBook:      estBook?.confirmed   || null,
-    confirmedQuarter:        estBook?.confirmedQuarter || null,
-    newOrdersSinceConfirm:   estBook?.newOrders   || null,
+    estimatedOrderBook:    estBook?.estimated        || null,
+    confirmedOrderBook:    estBook?.confirmed        || null,
+    confirmedQuarter:      estBook?.confirmedQuarter || null,
+    newOrdersSinceConfirm: estBook?.newOrders        || null,
 
     // Ratios
     mcapRatio,
-    obToRevRatio:  obToRev,
+    obToRevRatio: obToRev,
     bookToBill,
 
     // Flags
@@ -139,10 +142,8 @@ function orderBookEngine(signal) {
     isHighObRev,
     alertLevel,
 
-    // Pass-through
-    percentage: mcapRatio,
-    time: signal.time,
-
+    percentage:   mcapRatio,
+    time:         signal.time,
     recentOrders: qs.recentOrders.slice(0, 3)
   };
 }

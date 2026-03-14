@@ -164,15 +164,15 @@ const ORDER_NEGATIVE = [
 ];
 
 const ORDER_SIZE_KEYWORDS = [
-  { pattern: "\u2018mega\u2019 order",  crores: 1000 }, // curly quotes 'mega'
-  { pattern: "'mega' order",            crores: 1000 }, // straight quotes
+  { pattern: "\u2018mega\u2019 order",  crores: 1000 },
+  { pattern: "'mega' order",            crores: 1000 },
   { pattern: "mega' order",             crores: 1000 },
   { pattern: "mega order",              crores: 1000 },
-  { pattern: "'mega' ppp",              crores: 1000 }, // WABAG PPP style
+  { pattern: "'mega' ppp",              crores: 1000 },
   { pattern: "mega ppp",                crores: 1000 },
   { pattern: "mega contract",           crores: 1000 },
   { pattern: "mega project",            crores: 1000 },
-  { pattern: "\u2018major\u2019 order", crores: 800  }, // curly quotes 'major'
+  { pattern: "\u2018major\u2019 order", crores: 800  },
   { pattern: "'major' order",           crores: 800  },
   { pattern: "major order",             crores: 800  },
   { pattern: "large order",             crores: 400  },
@@ -315,8 +315,8 @@ function insiderScoreBySize(title) {
   }
   const crMatch = text.match(/rs\.?\s*(\d+\.?\d*)\s*(cr|crore|lakh|lac)/);
   if (crMatch) {
-    const unit = crMatch[2];
-    const val  = parseFloat(crMatch[1]);
+    const unit  = crMatch[2];
+    const val   = parseFloat(crMatch[1]);
     const crVal = unit.startsWith("l") ? val / 100 : val;
     if (crVal >= 100) return 50;
     if (crVal >= 50)  return 40;
@@ -338,18 +338,20 @@ function analyzeAnnouncement(data) {
       ...data,
       type: "NEWS",
       value: 5,
+      _orderInfo: null,
       ago: data.ago || "just now"
     };
   }
 
-  let type = null;
-  let value = 10;
+  let type      = null;
+  let value     = 10;
+  let _orderInfo = null;  // ← declared here, carried through to return
 
   // ── STEP 2: ORDER ALERT ──
   if (matchesAny(text, ORDER_POSITIVE) && !matchesAny(text, ORDER_NEGATIVE)) {
     type = "ORDER_ALERT";
 
-    // Check size keywords first (mega/major labels used by companies like WABAG)
+    // Check size keywords first (mega/major labels)
     let keywordCrores = null;
     for (const k of ORDER_SIZE_KEYWORDS) {
       if (text.includes(k.pattern)) {
@@ -359,7 +361,7 @@ function analyzeAnnouncement(data) {
     }
 
     const orderInfo = orderDetector(data.title);
-    const crores = keywordCrores || (orderInfo && orderInfo.crores) || null;
+    const crores    = keywordCrores || (orderInfo?.crores) || null;
 
     if (crores) {
       if (crores >= 5000)      value = 95;
@@ -374,65 +376,70 @@ function analyzeAnnouncement(data) {
       else if (crores >= 1)    value = 32;
       else                     value = 25;
 
-      data._orderInfo = {
+      // ── _orderInfo stored in local var — always returned below ──
+      _orderInfo = {
         crores,
-        years: orderInfo?.years || null,
-        periodLabel: orderInfo?.periodLabel || null,
+        years:        orderInfo?.years        || null,
+        periodLabel:  orderInfo?.periodLabel  || null,
         annualCrores: orderInfo?.annualCrores || null
       };
+
+      console.log(`📦 ORDER: ${data.company} ₹${crores}Cr score=${value}`);
     } else {
-      value = 30;
+      value = 30; // order keyword found but no size
     }
 
   // ── STEP 3: MERGER ──
   } else if (matchesAny(text, MERGER_POSITIVE) && !matchesAny(text, MERGER_NEGATIVE)) {
-    type = "MERGER";
+    type  = "MERGER";
     value = 80;
 
   // ── STEP 4: CAPEX ──
   } else if (matchesAny(text, CAPEX_POSITIVE) && !matchesAny(text, CAPEX_NEGATIVE)) {
-    type = "CAPEX";
+    type  = "CAPEX";
     value = 60;
 
   // ── STEP 5: INSIDER BUY ──
   } else if (matchesAny(text, INSIDER_BUY_POSITIVE) && !matchesAny(text, INSIDER_BUY_NEGATIVE)) {
-    type = "INSIDER_BUY";
+    type  = "INSIDER_BUY";
     value = insiderScoreBySize(data.title);
 
   // ── STEP 6: PARTNERSHIP ──
   } else if (matchesAny(text, PARTNERSHIP_POSITIVE) && !matchesAny(text, PARTNERSHIP_NEGATIVE)) {
-    type = "PARTNERSHIP";
+    type  = "PARTNERSHIP";
     value = 40;
 
   // ── STEP 7: SMART MONEY ──
   } else if (matchesAny(text, SMART_MONEY_POSITIVE)) {
-    type = "SMART_MONEY";
+    type  = "SMART_MONEY";
     value = 35;
 
   // ── STEP 8: FUNDRAISE ──
   } else if (matchesAny(text, FUNDRAISE_POSITIVE)) {
-    type = "CORPORATE_ACTION";
+    type  = "CORPORATE_ACTION";
     value = 25;
 
   // ── STEP 9: CORPORATE ACTION ──
   } else if (matchesAny(text, CORPORATE_ACTION_POSITIVE)) {
-    type = "CORPORATE_ACTION";
+    type  = "CORPORATE_ACTION";
     value = 30;
 
   // ── STEP 10: RESULT FILING ──
   } else {
     const resultData = analyzeResult(data);
-    if (resultData) return resultData;
+    if (resultData) return resultData; // result returns its own object
 
     // ── STEP 11: FALLBACK ──
-    type = "NEWS";
+    type  = "NEWS";
     value = 5;
   }
 
+  // ── ALWAYS carry _orderInfo through ──
   return {
     ...data,
     type,
     value,
+    _orderInfo,   // ← null for non-orders, populated for ORDER_ALERT with size
     ago: data.ago || "just now"
   };
 }
