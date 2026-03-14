@@ -372,12 +372,33 @@ function analyzeAnnouncement(data) {
   let type = null;
   let value = 10;
 
-  // ── STEP 2: ORDER ALERT ──
+   // ── STEP 2: ORDER ALERT ──
   if (matchesAny(text, ORDER_POSITIVE) && !matchesAny(text, ORDER_NEGATIVE)) {
     type = "ORDER_ALERT";
-    const crores = orderDetector(data.title);
-    value = orderScoreFromCrores(crores);
-  }
+    const orderInfo = orderDetector(data.title);
+
+    if (orderInfo && orderInfo.crores) {
+      const { crores, years, periodLabel, annualCrores } = orderInfo;
+
+      // Score based on ORDER SIZE — time period is context only, never penalizes
+      if (crores >= 5000)      value = 95;
+      else if (crores >= 2000) value = 90;
+      else if (crores >= 1000) value = 85;
+      else if (crores >= 500)  value = 78;
+      else if (crores >= 200)  value = 70;
+      else if (crores >= 100)  value = 62;
+      else if (crores >= 50)   value = 55;
+      else if (crores >= 20)   value = 47;
+      else if (crores >= 10)   value = 40;
+      else if (crores >= 1)    value = 32;
+      else                     value = 25;
+
+      // Attach full order info for orderBookEngine downstream
+      data._orderInfo = { crores, years, periodLabel, annualCrores };
+
+    } else {
+      value = 30; // order keyword found but no size — show but low score
+    }
 
   // ── STEP 3: MERGER ──
   else if (matchesAny(text, MERGER_POSITIVE) && !matchesAny(text, MERGER_NEGATIVE)) {
