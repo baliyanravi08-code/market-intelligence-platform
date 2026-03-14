@@ -17,6 +17,13 @@ const seen = new Set();
 const BSE_HOME = "https://www.bseindia.com/corporates/ann.html";
 const BSE_API  = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C&subcategory=-1";
 
+// ── Historical backfill API — fetches by date range ──
+// BSE supports strPrevDate and strToDate in DD%2FMM%2FYYYY format
+function buildHistoricalUrl(fromDate, toDate) {
+  const fmt = d => `${String(d.getDate()).padStart(2,"0")}%2F${String(d.getMonth()+1).padStart(2,"0")}%2F${d.getFullYear()}`;
+  return `https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=${fmt(fromDate)}&strScrip=&strSearch=P&strToDate=${fmt(toDate)}&strType=C&subcategory=-1`;
+}
+
 const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -78,11 +85,11 @@ function extractList(data) {
     if (data.trim().startsWith("<")) return [];
     try { data = JSON.parse(data); } catch { return []; }
   }
-  if (Array.isArray(data))         return data;
-  if (Array.isArray(data.Table))   return data.Table;
-  if (Array.isArray(data.Table1))  return data.Table1;
-  if (Array.isArray(data.data))    return data.data;
-  if (Array.isArray(data.Data))    return data.Data;
+  if (Array.isArray(data))        return data;
+  if (Array.isArray(data.Table))  return data.Table;
+  if (Array.isArray(data.Table1)) return data.Table1;
+  if (Array.isArray(data.data))   return data.data;
+  if (Array.isArray(data.Data))   return data.Data;
   for (const key of Object.keys(data)) {
     if (Array.isArray(data[key]) && data[key].length > 0) return data[key];
   }
@@ -95,13 +102,13 @@ function processItem(item) {
   seen.add(id);
 
   const signal = analyzeAnnouncement({
-    company: item.SLONGNAME || item.companyname || "Unknown",
-    code:    String(item.SCRIP_CD || ""),
-    title:   item.HEADLINE || "",
-    time:    item.DT_TM || item.NEWS_DT || getIndianTime(),
-    ago:     getTimeAgo(new Date()),
+    company:  item.SLONGNAME || item.companyname || "Unknown",
+    code:     String(item.SCRIP_CD || ""),
+    title:    item.HEADLINE || "",
+    time:     item.DT_TM || item.NEWS_DT || getIndianTime(),
+    ago:      getTimeAgo(new Date()),
     exchange: "BSE",
-    pdfUrl:  item.ATTACHMENTNAME
+    pdfUrl:   item.ATTACHMENTNAME
       ? `https://www.bseindia.com/xml-data/corpfiling/AttachLive/${item.ATTACHMENTNAME}`
       : null
   });
@@ -115,7 +122,6 @@ function processItem(item) {
   };
 
   saveResult(signalWithTs);
-
   updateRadar(signalWithTs.company, signalWithTs);
   const radar = getRadar();
   persistRadar(radar);
@@ -126,47 +132,42 @@ function processItem(item) {
   if (signalWithTs.type === "ORDER_ALERT") {
     const enrichedSignal = { ...signalWithTs, _orderInfo: signal._orderInfo };
 
-    // Order book tracking
     const orderData = orderBookEngine(enrichedSignal);
     if (orderData) {
       persistOrderBook(orderData);
       if (ioRef) ioRef.emit("order_book_update", orderData);
 
-      // 🚨 MEGA ORDER alert
       if (orderData.isMegaOrder || orderData.isMcapAlert || orderData.isFrequencyAlert) {
         if (ioRef) ioRef.emit("mega_order_alert", {
-          company:      orderData.company,
-          crores:       orderData.orderValue,
-          years:        orderData.years,
-          periodLabel:  orderData.periodLabel,
-          annualCrores: orderData.annualCrores,
-          mcapRatio:    orderData.mcapRatio,
-          quarterBook:  orderData.quarterBook,
-          quarterOrders:orderData.quarterOrders,
+          company:       orderData.company,
+          crores:        orderData.orderValue,
+          years:         orderData.years,
+          periodLabel:   orderData.periodLabel,
+          annualCrores:  orderData.annualCrores,
+          mcapRatio:     orderData.mcapRatio,
+          quarterBook:   orderData.quarterBook,
+          quarterOrders: orderData.quarterOrders,
           totalOrderBook:orderData.totalOrderBook,
-          alertLevel:   orderData.alertLevel,
-          title:        signalWithTs.title,
-          pdfUrl:       signalWithTs.pdfUrl,
-          time:         signalWithTs.time,
-          receivedAt:   Date.now()
+          alertLevel:    orderData.alertLevel,
+          title:         signalWithTs.title,
+          pdfUrl:        signalWithTs.pdfUrl,
+          time:          signalWithTs.time,
+          receivedAt:    Date.now()
         });
       }
     }
 
-    // Opportunity engine
     const opportunity = opportunityEngine(enrichedSignal);
     if (opportunity) {
       persistOpportunity(opportunity);
       if (ioRef) ioRef.emit("opportunity_alert", opportunity);
     }
 
-    // Sector tracking
     const queue = sectorQueue(enrichedSignal);
     const sectorAlert = sectorRadar(queue);
     if (sectorAlert) {
       persistSector(sectorAlert);
       if (ioRef) ioRef.emit("sector_alerts", [sectorAlert]);
-
       const boom = sectorBoomEngine(queue);
       if (boom) {
         persistSector(boom);
@@ -212,43 +213,88 @@ async function scan() {
   }
 }
 
+// ── STARTUP BACKFILL — fetch last 4 days on server start ──
+// Covers weekend + any missed filings after a redeploy
+async function backfill() {
+  console.log("🔄 Starting BSE historical backfill...");
+  try {
+    if (!bseCookie) await warmup();
+    if (!bseCookie) {
+      console.log("⚠️ Backfill skipped — no cookie");
+      return;
+    }
+
+    const now     = new Date();
+    const fromDate = new Date(now);
+    fromDate.setDate(fromDate.getDate() - 4); // last 4 days covers full weekend
+
+    const url = buildHistoricalUrl(fromDate, now);
+    console.log(`📅 Backfill: fetching from ${fromDate.toDateString()} to ${now.toDateString()}`);
+
+    const res = await axios.get(url, {
+      headers: {
+        ...BROWSER_HEADERS,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.bseindia.com/corporates/ann.html",
+        "Origin": "https://www.bseindia.com",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Site": "same-origin",
+        "Cookie": bseCookie
+      },
+      timeout: 30000
+    });
+
+    const list = extractList(res.data);
+    if (!list.length) {
+      console.log("⚠️ Backfill returned empty — trying without date range");
+      await scan(); // fallback to normal scan
+      return;
+    }
+
+    console.log(`✅ Backfill: ${list.length} historical announcements found`);
+    list.forEach(processItem);
+    console.log("✅ Backfill complete");
+
+  } catch (err) {
+    console.log("⚠️ Backfill failed:", err.message, "— falling back to normal scan");
+    await scan(); // fallback
+  }
+}
+
 function startBSEListener(io) {
   ioRef = io;
 
   io.on("connection", (socket) => {
     console.log("Client connected:", socket.id);
-
-    // Send current status
     socket.emit("bse_status", bseCookie ? "connected" : "connecting");
 
-    // ── Send ALL stored events from database on connect ──
-    // This is what the user sees when they open the app
+    // Send stored events to new client
     const { getEvents } = require("../../database");
     const storedBse = getEvents("bse") || [];
     const storedNse = getEvents("nse") || [];
 
     if (storedBse.length) {
       socket.emit("bse_events", storedBse);
-      console.log(`📤 Sent ${storedBse.length} stored BSE events to new client`);
+      console.log(`📤 Sent ${storedBse.length} stored BSE events to client`);
     }
     if (storedNse.length) {
       socket.emit("nse_events", storedNse);
-      console.log(`📤 Sent ${storedNse.length} stored NSE events to new client`);
+      console.log(`📤 Sent ${storedNse.length} stored NSE events to client`);
     }
 
-    // Send radar
     socket.emit("radar_update", getRadar());
-
-    // Send retention window info
-    const { getRetentionHours, getWindowLabel } = require("../../database");
     socket.emit("window_info", {
       hours: getRetentionHours(),
       label: getWindowLabel()
     });
   });
 
-  warmup().then(() => scan());
-  setInterval(scan, 8000 + Math.random() * 2000);
+  // ── On startup: warmup → backfill history → then start polling ──
+  warmup().then(async () => {
+    await backfill();                          // fetch last 4 days first
+    await scan();                              // then do a fresh scan
+    setInterval(scan, 8000 + Math.random() * 2000); // then poll every 8-10s
+  });
 }
 
 module.exports = startBSEListener;
