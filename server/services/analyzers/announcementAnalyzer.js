@@ -1,9 +1,7 @@
 const orderDetector = require("../intelligence/orderDetector");
 const analyzeResult = require("./resultAnalyzer");
 
-// ── NEGATIVE CONTEXT — these always override to NEWS ──
 const NEGATIVE_PATTERNS = [
-  // legal / regulatory trouble
   "income tax", "tax demand", "tax notice", "demand notice",
   "assessment order", "penalty order", "show cause",
   "sebi notice", "sebi order", "enforcement notice",
@@ -22,14 +20,12 @@ const NEGATIVE_PATTERNS = [
   "gst notice", "gst demand", "customs notice",
   "fire at", "accident at", "plant shutdown",
   "strike", "lockout", "labour dispute",
-  // guarantees / liabilities
   "corporate guarantee", "guarantee for term loan",
   "guarantee towards", "contingent liability",
   "surety for", "indemnity for",
   "pledge of shares", "encumbrance of shares",
   "issuance of guarantee", "issue of guarantee",
   "invocation of guarantee", "revocation",
-  // accounting / audit issues
   "restatement", "restatement of accounts",
   "qualified opinion", "adverse opinion",
   "whistle blower", "whistleblower",
@@ -42,13 +38,11 @@ const NEGATIVE_PATTERNS = [
   "it department", "it raid",
   "downgrade", "watch negative", "outlook negative",
   "credit watch", "rating withdrawn",
-  // project issues
   "delay in", "delays in", "unable to",
   "postponement", "cancellation of project",
   "project cancelled", "project stalled",
   "force majeure", "natural disaster",
   "flood damage", "fire damage",
-  // routine investor / meeting notices
   "investor meet", "analyst meet", "investor day",
   "earnings call", "conference call scheduled",
   "schedule of meeting", "meeting with investor",
@@ -70,7 +64,6 @@ const NEGATIVE_PATTERNS = [
   "cancellation of investor call", "cancellation of analyst",
   "investor call scheduled", "analyst call scheduled",
   "regulation 46", "schedule iii",
-  // boilerplate / no info filings — NOT regulation 30 (real orders use reg 30)
   "please refer to the attachment",
   "please find attached",
   "please find enclosed",
@@ -105,7 +98,6 @@ const NEGATIVE_PATTERNS = [
   "change in object clause",
   "alteration of moa",
   "alteration of aoa",
-  // inter-se / succession / family transfers
   "inter-se transfer",
   "inter se transfer",
   "by way of gift",
@@ -135,7 +127,6 @@ const NEGATIVE_PATTERNS = [
   "disclosure under sebi sast"
 ];
 
-// ── ORDER — only real business orders ──
 const ORDER_POSITIVE = [
   "received order", "receives order", "new order",
   "work order", "epc order", "supply order",
@@ -155,7 +146,8 @@ const ORDER_POSITIVE = [
   "supply, installation", "supply & installation",
   "o&m contract", "amc contract",
   "commissioning of", "roof top solar",
-  "solar pv system", "solar project"
+  "solar pv system", "solar project",
+  "bagging of order", "bags a", "secures a"
 ];
 
 const ORDER_NEGATIVE = [
@@ -171,7 +163,18 @@ const ORDER_NEGATIVE = [
   "attachment order", "recovery order"
 ];
 
-// ── MERGER — only real M&A ──
+const ORDER_SIZE_KEYWORDS = [
+  { pattern: "'mega' order",  crores: 1000 },
+  { pattern: "mega' order",   crores: 1000 },
+  { pattern: "mega order",    crores: 1000 },
+  { pattern: "mega contract", crores: 1000 },
+  { pattern: "mega project",  crores: 1000 },
+  { pattern: "'major' order", crores: 800  },
+  { pattern: "major' order",  crores: 800  },
+  { pattern: "large order",   crores: 400  },
+  { pattern: "large contract",crores: 400  },
+];
+
 const MERGER_POSITIVE = [
   "merger with", "merger of", "proposed merger",
   "scheme of merger", "scheme of amalgamation",
@@ -196,7 +199,6 @@ const MERGER_NEGATIVE = [
   "sebi exemption order", "regulation 29"
 ];
 
-// ── CAPEX ──
 const CAPEX_POSITIVE = [
   "capex of", "capital expenditure of", "invest rs",
   "investment of rs", "setting up new",
@@ -217,7 +219,6 @@ const CAPEX_NEGATIVE = [
   "reduce capex", "cut capex"
 ];
 
-// ── INSIDER BUY ──
 const INSIDER_BUY_POSITIVE = [
   "promoter buying", "promoter purchase",
   "creeping acquisition", "insider buying",
@@ -241,7 +242,6 @@ const INSIDER_BUY_NEGATIVE = [
   "off market transfer", "off-market transfer"
 ];
 
-// ── PARTNERSHIP ──
 const PARTNERSHIP_POSITIVE = [
   "signs mou", "signed mou", "mou with",
   "joint venture with", "jv with", "forms jv",
@@ -262,7 +262,6 @@ const PARTNERSHIP_NEGATIVE = [
   "winds up jv"
 ];
 
-// ── CORPORATE ACTION ──
 const CORPORATE_ACTION_POSITIVE = [
   "dividend of rs", "interim dividend",
   "final dividend", "special dividend",
@@ -273,7 +272,6 @@ const CORPORATE_ACTION_POSITIVE = [
   "consolidation of shares", "face value change"
 ];
 
-// ── SMART MONEY ──
 const SMART_MONEY_POSITIVE = [
   "fii buying", "dii buying", "institutional buying",
   "mutual fund buying", "bulk deal",
@@ -283,7 +281,6 @@ const SMART_MONEY_POSITIVE = [
   "fpi increases stake", "institutional stake increase"
 ];
 
-// ── FUNDRAISE ──
 const FUNDRAISE_POSITIVE = [
   "qip of", "ipo of", "ncd issue",
   "rights issue proceeds", "fpo of",
@@ -292,18 +289,7 @@ const FUNDRAISE_POSITIVE = [
   "approves qip", "preferential issue of",
   "private placement of"
 ];
-// STRESS_SIGNAL patterns — negative but worth flagging differently
-const STRESS_PATTERNS = [
-  "invocation of pledge",
-  "invocation of shares",
-  "pledge invoked",
-  "margin call",
-  "intraday margin",
-  "against availability of intraday",
-  "collateral for supply of materials",  // pledging to supplier not bank
-  "creation of pledge",                  // new pledge creation worth watching
-];
-// ── HELPERS ──
+
 function matchesAny(text, patterns) {
   return patterns.some(p => text.includes(p));
 }
@@ -312,23 +298,8 @@ function isNegativeContext(text) {
   return matchesAny(text, NEGATIVE_PATTERNS);
 }
 
-// ── ORDER SCORE — convert crore value to signal score ──
-function orderScoreFromCrores(crores) {
-  if (!crores || crores <= 0) return 30; // unknown size — low default
-  if (crores >= 1000) return 90;
-  if (crores >= 500)  return 80;
-  if (crores >= 200)  return 70;
-  if (crores >= 100)  return 60;
-  if (crores >= 50)   return 50;
-  if (crores >= 10)   return 40;
-  if (crores >= 1)    return 30;
-  return 25; // sub-crore
-}
-
-// ── INSIDER SIZE DETECTOR — score by % acquired ──
 function insiderScoreBySize(title) {
   const text = title.toLowerCase();
-
   const pctMatch = text.match(/(\d+\.?\d*)\s*%/);
   if (pctMatch) {
     const pct = parseFloat(pctMatch[1]);
@@ -338,11 +309,10 @@ function insiderScoreBySize(title) {
     if (pct >= 0.1) return 20;
     return 15;
   }
-
   const crMatch = text.match(/rs\.?\s*(\d+\.?\d*)\s*(cr|crore|lakh|lac)/);
   if (crMatch) {
-    const unit  = crMatch[2];
-    const val   = parseFloat(crMatch[1]);
+    const unit = crMatch[2];
+    const val  = parseFloat(crMatch[1]);
     const crVal = unit.startsWith("l") ? val / 100 : val;
     if (crVal >= 100) return 50;
     if (crVal >= 50)  return 40;
@@ -350,7 +320,6 @@ function insiderScoreBySize(title) {
     if (crVal >= 1)   return 20;
     return 15;
   }
-
   return 25;
 }
 
@@ -372,15 +341,23 @@ function analyzeAnnouncement(data) {
   let type = null;
   let value = 10;
 
-   // ── STEP 2: ORDER ALERT ──
+  // ── STEP 2: ORDER ALERT ──
   if (matchesAny(text, ORDER_POSITIVE) && !matchesAny(text, ORDER_NEGATIVE)) {
     type = "ORDER_ALERT";
+
+    // Check size keywords first (mega/major labels used by companies like WABAG)
+    let keywordCrores = null;
+    for (const k of ORDER_SIZE_KEYWORDS) {
+      if (text.includes(k.pattern)) {
+        keywordCrores = k.crores;
+        break;
+      }
+    }
+
     const orderInfo = orderDetector(data.title);
+    const crores = keywordCrores || (orderInfo && orderInfo.crores) || null;
 
-    if (orderInfo && orderInfo.crores) {
-      const { crores, years, periodLabel, annualCrores } = orderInfo;
-
-      // Score based on ORDER SIZE — time period is context only, never penalizes
+    if (crores) {
       if (crores >= 5000)      value = 95;
       else if (crores >= 2000) value = 90;
       else if (crores >= 1000) value = 85;
@@ -393,57 +370,53 @@ function analyzeAnnouncement(data) {
       else if (crores >= 1)    value = 32;
       else                     value = 25;
 
-      // Attach full order info for orderBookEngine downstream
-      data._orderInfo = { crores, years, periodLabel, annualCrores };
-
+      data._orderInfo = {
+        crores,
+        years: orderInfo?.years || null,
+        periodLabel: orderInfo?.periodLabel || null,
+        annualCrores: orderInfo?.annualCrores || null
+      };
     } else {
-      value = 30; // order keyword found but no size — show but low score
+      value = 30;
     }
 
   // ── STEP 3: MERGER ──
-  else if (matchesAny(text, MERGER_POSITIVE) && !matchesAny(text, MERGER_NEGATIVE)) {
+  } else if (matchesAny(text, MERGER_POSITIVE) && !matchesAny(text, MERGER_NEGATIVE)) {
     type = "MERGER";
     value = 80;
-  }
 
   // ── STEP 4: CAPEX ──
-  else if (matchesAny(text, CAPEX_POSITIVE) && !matchesAny(text, CAPEX_NEGATIVE)) {
+  } else if (matchesAny(text, CAPEX_POSITIVE) && !matchesAny(text, CAPEX_NEGATIVE)) {
     type = "CAPEX";
     value = 60;
-  }
 
-  // ── STEP 5: INSIDER BUY — size-aware scoring ──
-  else if (matchesAny(text, INSIDER_BUY_POSITIVE) && !matchesAny(text, INSIDER_BUY_NEGATIVE)) {
+  // ── STEP 5: INSIDER BUY ──
+  } else if (matchesAny(text, INSIDER_BUY_POSITIVE) && !matchesAny(text, INSIDER_BUY_NEGATIVE)) {
     type = "INSIDER_BUY";
     value = insiderScoreBySize(data.title);
-  }
 
   // ── STEP 6: PARTNERSHIP ──
-  else if (matchesAny(text, PARTNERSHIP_POSITIVE) && !matchesAny(text, PARTNERSHIP_NEGATIVE)) {
+  } else if (matchesAny(text, PARTNERSHIP_POSITIVE) && !matchesAny(text, PARTNERSHIP_NEGATIVE)) {
     type = "PARTNERSHIP";
     value = 40;
-  }
 
   // ── STEP 7: SMART MONEY ──
-  else if (matchesAny(text, SMART_MONEY_POSITIVE)) {
+  } else if (matchesAny(text, SMART_MONEY_POSITIVE)) {
     type = "SMART_MONEY";
     value = 35;
-  }
 
   // ── STEP 8: FUNDRAISE ──
-  else if (matchesAny(text, FUNDRAISE_POSITIVE)) {
+  } else if (matchesAny(text, FUNDRAISE_POSITIVE)) {
     type = "CORPORATE_ACTION";
     value = 25;
-  }
 
   // ── STEP 9: CORPORATE ACTION ──
-  else if (matchesAny(text, CORPORATE_ACTION_POSITIVE)) {
+  } else if (matchesAny(text, CORPORATE_ACTION_POSITIVE)) {
     type = "CORPORATE_ACTION";
     value = 30;
-  }
 
   // ── STEP 10: RESULT FILING ──
-  else {
+  } else {
     const resultData = analyzeResult(data);
     if (resultData) return resultData;
 
