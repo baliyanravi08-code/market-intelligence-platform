@@ -1,82 +1,127 @@
 /*
-  MARKET CAP DATABASE
+  COMPANY DATA — MCap + Order Book + Revenue
   Values in crore (INR).
-  Replace/expand with a live API call when available.
-  Source: Approximate values as of early 2025.
+  confirmedOrderBook = from last quarterly result filing
+  confirmedQuarter   = which quarter it was confirmed
+  ttmRevenue         = trailing 12 month revenue
 */
 
-const marketCaps = {
+const companyData = {
 
-  // Infrastructure
-  "500510": 280000,  // L&T
-  "532540": 95000,   // Siemens
-  "500209": 62000,   // Hindustan Construction
+  // ── WATER / EPC ──
+  "533269": { mcap: 8091,   confirmedOrderBook: 16300, confirmedQuarter: "Q3FY26", ttmRevenue: 4200,  name: "VA Tech Wabag" },
+  "500510": { mcap: 280000, confirmedOrderBook: 450000,confirmedQuarter: "Q3FY26", ttmRevenue: 220000,name: "L&T" },
+  "532898": { mcap: 22000,  confirmedOrderBook: 180000,confirmedQuarter: "Q3FY26", ttmRevenue: 6500,  name: "IRFC" },
+  "542649": { mcap: 12000,  confirmedOrderBook: 85000, confirmedQuarter: "Q3FY26", ttmRevenue: 4200,  name: "RVNL" },
 
-  // Power
-  "500400": 320000,  // NTPC
-  "532155": 18000,   // CESC
-  "533122": 35000,   // Inox Wind
+  // ── DEFENSE ──
+  "540678": { mcap: 48000,  confirmedOrderBook: 94000, confirmedQuarter: "Q3FY26", ttmRevenue: 28000, name: "HAL" },
+  "541143": { mcap: 32000,  confirmedOrderBook: 68000, confirmedQuarter: "Q3FY26", ttmRevenue: 18000, name: "BEL" },
+  "500024": { mcap: 15000,  confirmedOrderBook: 19000, confirmedQuarter: "Q3FY26", ttmRevenue: 3200,  name: "Bharat Dynamics" },
 
-  // Railway
-  "532898": 22000,   // IRFC
-  "542649": 12000,   // RVNL
-  "543543": 8500,    // Rail Vikas Nigam
+  // ── POWER ──
+  "500400": { mcap: 320000, confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 180000,name: "NTPC" },
+  "532155": { mcap: 18000,  confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 12000, name: "CESC" },
+  "533122": { mcap: 35000,  confirmedOrderBook: 12000, confirmedQuarter: "Q3FY26", ttmRevenue: 3800,  name: "Inox Wind" },
 
-  // Defense
-  "540678": 48000,   // HAL
-  "541143": 32000,   // BEL
-  "500024": 15000,   // Bharat Dynamics
+  // ── IT ──
+  "532174": { mcap: 1400000,confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 153000,name: "Infosys" },
+  "507685": { mcap: 12000,  confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 14000, name: "Mphasis" },
 
-  // Energy
-  "500325": 420000,  // Reliance
-  "500312": 180000,  // ONGC
-  "532337": 75000,   // Petronet LNG
+  // ── PHARMA ──
+  "500124": { mcap: 210000, confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 28000, name: "Dr Reddy" },
+  "500087": { mcap: 190000, confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 25000, name: "Cipla" },
 
-  // IT
-  "532174": 1400000, // Infosys
-  "500696": 830000,  // Wipro (also mapped to FMCG — use carefully)
-  "507685": 12000,   // Mphasis
+  // ── BANKING ──
+  "500180": { mcap: 1200000,confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 250000,name: "HDFC Bank" },
+  "500247": { mcap: 380000, confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 52000, name: "Kotak Mahindra" },
 
-  // Pharma
-  "500124": 210000,  // Dr Reddy
-  "500087": 190000,  // Cipla
-  "524804": 45000,   // Alkem
+  // ── STEEL ──
+  "500470": { mcap: 230000, confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 220000,name: "Tata Steel" },
+  "500295": { mcap: 95000,  confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 220000,name: "Hindalco" },
 
-  // Banking
-  "500180": 1200000, // HDFC Bank
-  "500247": 380000,  // Kotak Mahindra
+  // ── CEMENT ──
+  "500387": { mcap: 480000, confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 68000, name: "UltraTech" },
+  "532538": { mcap: 95000,  confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 18000, name: "Shree Cement" },
 
-  // Steel
-  "500470": 230000,  // Tata Steel
-  "500295": 95000,   // Hindalco
-  "500790": 420000,  // JSW Steel
+  // ── AUTO ──
+  "500520": { mcap: 320000, confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 125000,name: "M&M" },
+  "532500": { mcap: 270000, confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: 140000,name: "Maruti" },
 
-  // Cement
-  "500387": 480000,  // UltraTech
-  "532538": 95000,   // Shree Cement
-  "500425": 76000,   // Ambuja
-
-  // Auto
-  "500520": 320000,  // M&M
-  "532500": 270000,  // Maruti
-  "500182": 58000,   // Hero MotoCorp
-
-  // Small caps from original
-  "500238": 2100,
-  "532370": 640,
-  "540750": 1200,
-  "532895": 850,
-  "533152": 4500,
-  "532343": 920,
-  "532706": 1500,
-  "539300": 780,
-  "543326": 900,
-  "531780": 1100
-
+  // ── SMALL CAPS ──
+  "500238": { mcap: 2100,   confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
+  "532370": { mcap: 640,    confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
+  "540750": { mcap: 1200,   confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
+  "532895": { mcap: 850,    confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
+  "533152": { mcap: 4500,   confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
+  "532343": { mcap: 920,    confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
+  "532706": { mcap: 1500,   confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
+  "539300": { mcap: 780,    confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
+  "543326": { mcap: 900,    confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
+  "531780": { mcap: 1100,   confirmedOrderBook: null,  confirmedQuarter: null,     ttmRevenue: null,  name: null },
 };
 
+// ── Runtime updates from result filings ──
+// When quarterly result is parsed, this gets updated automatically
+const runtimeUpdates = {};
+
 function getMarketCap(code) {
-  return marketCaps[String(code)] || null;
+  const c = String(code);
+  return (runtimeUpdates[c]?.mcap) || companyData[c]?.mcap || null;
 }
 
-module.exports = { getMarketCap };
+function getCompanyData(code) {
+  const c = String(code);
+  const base = companyData[c] || {};
+  const runtime = runtimeUpdates[c] || {};
+  return { ...base, ...runtime };
+}
+
+// Called by resultAnalyzer when quarterly result is parsed
+function updateFromResult(code, fields) {
+  const c = String(code);
+  if (!runtimeUpdates[c]) runtimeUpdates[c] = {};
+  Object.assign(runtimeUpdates[c], fields, { lastResultUpdate: Date.now() });
+  console.log(`📊 Company data updated for ${c}:`, fields);
+}
+
+// Called by orderBookEngine for each new order
+function getEstimatedOrderBook(code) {
+  const c = String(code);
+  const data = getCompanyData(c);
+  const runtime = runtimeUpdates[c] || {};
+
+  const confirmed = data.confirmedOrderBook || 0;
+  const newOrders = runtime.newOrdersSinceConfirm || 0;
+  const executedEst = data.ttmRevenue ? Math.round(data.ttmRevenue / 4) : 0;
+
+  if (!confirmed) return null; // no baseline — don't guess
+
+  return {
+    estimated: confirmed + newOrders - executedEst,
+    confirmed,
+    confirmedQuarter: data.confirmedQuarter,
+    newOrders,
+    executedEst,
+    obToRevRatio: data.ttmRevenue ? ((confirmed + newOrders) / data.ttmRevenue).toFixed(1) : null,
+    bookToBill: data.ttmRevenue && newOrders
+      ? (newOrders / (data.ttmRevenue / 4)).toFixed(2)
+      : null
+  };
+}
+
+// Add new order to runtime counter
+function addNewOrder(code, crores) {
+  const c = String(code);
+  if (!runtimeUpdates[c]) runtimeUpdates[c] = {};
+  runtimeUpdates[c].newOrdersSinceConfirm =
+    (runtimeUpdates[c].newOrdersSinceConfirm || 0) + crores;
+}
+
+module.exports = {
+  getMarketCap,
+  getCompanyData,
+  updateFromResult,
+  getEstimatedOrderBook,
+  addNewOrder
+};
