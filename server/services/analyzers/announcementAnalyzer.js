@@ -147,7 +147,13 @@ const ORDER_POSITIVE = [
   "o&m contract", "amc contract",
   "commissioning of", "roof top solar",
   "solar pv system", "solar project",
-  "bagging of order", "bags a", "secures a"
+  "bagging of order", "bags a", "secures a",
+  // ── Power sector order keywords ──
+  "power supply agreement", "long-term supply",
+  "long term supply", "thermal power supply",
+  "power purchase agreement", "ppa signed",
+  "mw thermal", "mw solar", "mw wind",
+  "mw power", "gw power", "mw capacity"
 ];
 
 const ORDER_NEGATIVE = [
@@ -160,7 +166,23 @@ const ORDER_NEGATIVE = [
   "high court order", "supreme court order",
   "compliance order", "regulatory order",
   "restraint order", "injunction order",
-  "attachment order", "recovery order"
+  "attachment order", "recovery order",
+  // ── Tax/customs favorable orders — NOT business orders ──
+  "commissioner of customs",
+  "customs order",
+  "favourable order from office",
+  "favorable order from office",
+  "demand has been dropped",
+  "demand dropped",
+  "demand quashed",
+  "tax demand dropped",
+  "igst demand",
+  "customs demand",
+  "excise demand",
+  "relief from tax demand",
+  "contingent liability",
+  "show cause notice",
+  "scn"
 ];
 
 const ORDER_SIZE_KEYWORDS = [
@@ -343,9 +365,9 @@ function analyzeAnnouncement(data) {
     };
   }
 
-  let type      = null;
-  let value     = 10;
-  let _orderInfo = null;  // ← declared here, carried through to return
+  let type       = null;
+  let value      = 10;
+  let _orderInfo = null;
 
   // ── STEP 2: ORDER ALERT ──
   if (matchesAny(text, ORDER_POSITIVE) && !matchesAny(text, ORDER_NEGATIVE)) {
@@ -364,29 +386,33 @@ function analyzeAnnouncement(data) {
     const crores    = keywordCrores || (orderInfo?.crores) || null;
 
     if (crores) {
-      if (crores >= 5000)      value = 95;
-      else if (crores >= 2000) value = 90;
-      else if (crores >= 1000) value = 85;
-      else if (crores >= 500)  value = 78;
-      else if (crores >= 200)  value = 70;
-      else if (crores >= 100)  value = 62;
-      else if (crores >= 50)   value = 55;
-      else if (crores >= 20)   value = 47;
-      else if (crores >= 10)   value = 40;
-      else if (crores >= 1)    value = 32;
-      else                     value = 25;
+      if (crores >= 50000)      value = 98; // 1600MW 25yr ~ ₹85,000Cr
+      else if (crores >= 20000) value = 95;
+      else if (crores >= 10000) value = 93;
+      else if (crores >= 5000)  value = 90;
+      else if (crores >= 2000)  value = 87;
+      else if (crores >= 1000)  value = 85;
+      else if (crores >= 500)   value = 78;
+      else if (crores >= 200)   value = 70;
+      else if (crores >= 100)   value = 62;
+      else if (crores >= 50)    value = 55;
+      else if (crores >= 20)    value = 47;
+      else if (crores >= 10)    value = 40;
+      else if (crores >= 1)     value = 32;
+      else                      value = 25;
 
-      // ── _orderInfo stored in local var — always returned below ──
       _orderInfo = {
         crores,
         years:        orderInfo?.years        || null,
         periodLabel:  orderInfo?.periodLabel  || null,
-        annualCrores: orderInfo?.annualCrores || null
+        annualCrores: orderInfo?.annualCrores || null,
+        mw:           orderInfo?.mw           || null,
+        isMWBased:    orderInfo?.isMWBased    || false
       };
 
-      console.log(`📦 ORDER: ${data.company} ₹${crores}Cr score=${value}`);
+      console.log(`📦 ORDER: ${data.company} ₹${crores}Cr score=${value}${orderInfo?.isMWBased ? " [MW-based]" : ""}`);
     } else {
-      value = 30; // order keyword found but no size
+      value = 30;
     }
 
   // ── STEP 3: MERGER ──
@@ -427,19 +453,17 @@ function analyzeAnnouncement(data) {
   // ── STEP 10: RESULT FILING ──
   } else {
     const resultData = analyzeResult(data);
-    if (resultData) return resultData; // result returns its own object
+    if (resultData) return resultData;
 
-    // ── STEP 11: FALLBACK ──
     type  = "NEWS";
     value = 5;
   }
 
-  // ── ALWAYS carry _orderInfo through ──
   return {
     ...data,
     type,
     value,
-    _orderInfo,   // ← null for non-orders, populated for ORDER_ALERT with size
+    _orderInfo,
     ago: data.ago || "just now"
   };
 }
