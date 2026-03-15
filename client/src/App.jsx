@@ -98,7 +98,6 @@ function filterEvent(e, filter) {
   return true;
 }
 
-// ── Merge + dedup + sort events by savedAt descending ──
 function mergeEvents(incoming, existing) {
   const merged = [...incoming, ...existing];
   const deduped = Object.values(
@@ -179,7 +178,6 @@ export default function App() {
     } catch(e) {}
   }
 
-  // ── Load historical events on mount via REST API ──
   useEffect(() => {
     fetch("/api/events")
       .then(r => r.json())
@@ -195,7 +193,6 @@ export default function App() {
         if (data.windowHours) {
           setWindowInfo({ hours: data.windowHours, label: data.windowLabel });
         }
-        // ── Always reset to ALL so nothing is hidden on load ──
         setFeedFilter("ALL");
       })
       .catch(() => {});
@@ -220,14 +217,11 @@ export default function App() {
 
     socket.on("bse_events", data => {
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
-
-      // Only play sound + flash for single new events, not bulk historical loads
       if (data.length <= 5) {
         triggerFlash();
         const high = stamped.find(e => (e.value || 0) >= 70);
         if (high) playAlert(660, 880);
       }
-
       setBseEvents(prev => mergeEvents(stamped, prev));
     });
 
@@ -273,8 +267,8 @@ export default function App() {
     return () => socket.removeAllListeners();
   }, []);
 
-  const feedEvents   = activeTab === "bse" ? bseEvents : nseEvents;
-  const filteredFeed = feedEvents.filter(e => filterEvent(e, feedFilter));
+  const feedEvents    = activeTab === "bse" ? bseEvents : nseEvents;
+  const filteredFeed  = feedEvents.filter(e => filterEvent(e, feedFilter));
   const filteredRadar = radarSearch
     ? radar.filter(r => r.company.toLowerCase().includes(radarSearch.toLowerCase()))
     : radar;
@@ -338,11 +332,7 @@ export default function App() {
               <span className="count">{filteredRadar.length}</span>
             </span>
             {isWeekend && (
-              <span style={{
-                fontSize: "9px",
-                color: "#ffaa00",
-                fontFamily: "IBM Plex Mono, monospace"
-              }}>
+              <span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono, monospace" }}>
                 Fri–Mon data
               </span>
             )}
@@ -357,18 +347,12 @@ export default function App() {
 
           {filteredRadar.length === 0
             ? <div className="empty">
-                {isWeekend
-                  ? "Weekend mode — showing last 96h\nMarket opens Mon 9:15 AM"
-                  : "Waiting for signals…\nMarket opens Mon 9:15 AM"
-                }
+                {isWeekend ? "Weekend mode — showing last 96h\nMarket opens Mon 9:15 AM" : "Waiting for signals…\nMarket opens Mon 9:15 AM"}
               </div>
             : filteredRadar.map((r, i) => {
               const isMega = r.signals?.includes("ORDER_ALERT") && r.score >= 85;
               return (
-                <div
-                  className={`radar-card ${isMega ? "mega" : r.score >= 60 ? "high-score" : ""}`}
-                  key={i}
-                >
+                <div className={`radar-card ${isMega ? "mega" : r.score >= 60 ? "high-score" : ""}`} key={i}>
                   <div className="rc-top">
                     <span className="co-name">{r.company}</span>
                     <div className="rc-badges">
@@ -383,9 +367,7 @@ export default function App() {
                     }} />
                   </div>
                   <div className="tags">
-                    {[...new Set(r.signals)].slice(0, 3).map((s, j) => (
-                      <Tag key={j} type={s} />
-                    ))}
+                    {[...new Set(r.signals)].slice(0, 3).map((s, j) => <Tag key={j} type={s} />)}
                   </div>
                   <div className="rc-foot">
                     {r.pdfUrl
@@ -405,12 +387,10 @@ export default function App() {
 
           <div className="panel-header">
             <div style={{ display: "flex", gap: 4 }}>
-              <button className={`tbtn ${activeTab === "bse" ? "active" : ""}`}
-                onClick={() => setActiveTab("bse")}>
+              <button className={`tbtn ${activeTab === "bse" ? "active" : ""}`} onClick={() => setActiveTab("bse")}>
                 BSE <span className="count">{bseEvents.length}</span>
               </button>
-              <button className={`tbtn ${activeTab === "nse" ? "active" : ""}`}
-                onClick={() => setActiveTab("nse")}>
+              <button className={`tbtn ${activeTab === "nse" ? "active" : ""}`} onClick={() => setActiveTab("nse")}>
                 NSE <span className="count">{nseEvents.length}</span>
               </button>
             </div>
@@ -425,11 +405,7 @@ export default function App() {
 
           <div className="filter-bar">
             {FEED_FILTERS.map(f => (
-              <button
-                key={f}
-                className={`fbtn ${feedFilter === f ? "active" : ""}`}
-                onClick={() => setFeedFilter(f)}
-              >
+              <button key={f} className={`fbtn ${feedFilter === f ? "active" : ""}`} onClick={() => setFeedFilter(f)}>
                 {f}
               </button>
             ))}
@@ -437,20 +413,14 @@ export default function App() {
 
           {filteredFeed.length === 0
             ? <div className="empty">
-                {isWeekend
-                  ? "Weekend — no new filings\nFriday orders shown above"
-                  : "No signals match filter"
-                }
+                {isWeekend ? "Weekend — no new filings\nFriday orders shown above" : "No signals match filter"}
               </div>
             : filteredFeed.map((e, i) => {
               const crores = e._orderInfo?.crores || null;
               const isMega = e.type === "ORDER_ALERT" && crores >= 1000;
               const isHigh = (e.value || 0) >= 70;
               return (
-                <div
-                  className={`feed-card ${isMega ? "mega-value" : isHigh ? "high-value" : ""}`}
-                  key={i}
-                >
+                <div className={`feed-card ${isMega ? "mega-value" : isHigh ? "high-value" : ""}`} key={i}>
                   <div className="fc-head">
                     <span className="co-name">{e.company}</span>
                     <Tag type={e.type} crores={crores} />
@@ -459,12 +429,8 @@ export default function App() {
                   <div className="fc-foot">
                     <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      {e.value >= 50 && (
-                        <span className="fc-value">Score {e.value}</span>
-                      )}
-                      {e.pdfUrl &&
-                        <a href={e.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>
-                      }
+                      {e.value >= 50 && <span className="fc-value">Score {e.value}</span>}
+                      {e.pdfUrl && <a href={e.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>}
                     </div>
                   </div>
                 </div>
@@ -492,19 +458,14 @@ export default function App() {
                 </div>
                 {o.periodLabel && (
                   <div className="mega-sub">
-                    {o.periodLabel} project
-                    {o.annualCrores && ` · ₹${o.annualCrores}Cr/yr`}
+                    {o.periodLabel} project{o.annualCrores && ` · ₹${o.annualCrores}Cr/yr`}
                   </div>
                 )}
-                {o.mcapRatio > 0 && (
-                  <div className="mega-mcap">{o.mcapRatio}% of MCap</div>
-                )}
+                {o.mcapRatio > 0 && <div className="mega-mcap">{o.mcapRatio}% of MCap</div>}
                 <div className="mega-title">{o.title?.substring(0, 65)}</div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
-                  {o.pdfUrl &&
-                    <a href={o.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>
-                  }
+                  {o.pdfUrl && <a href={o.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>}
                 </div>
               </div>
             ))}
@@ -540,7 +501,11 @@ export default function App() {
                   <span className="sec-name">{s.isBoom ? "🔥 " : ""}{s.sector}</span>
                   <span className="sec-val">₹{s.totalValue?.toFixed(0)}Cr</span>
                 </div>
-                <div className="sec-sub">{s.orders} orders · {s.companies?.slice(0, 3).join(", ")}</div>
+                <div className="sec-sub">
+                  <span>{s.orders} order{s.orders !== 1 ? "s" : ""}</span>
+                  <br />
+                  <span style={{ color: "#1e5070" }}>{s.companies?.slice(0, 3).join(", ")}</span>
+                </div>
               </div>
             ))
           }
@@ -566,20 +531,14 @@ export default function App() {
                     <span className="ord-book">Q: ₹{o.quarterBook?.toFixed(0)}Cr</span>
                   )}
                   {o.estimatedOrderBook && (
-                    <span className="ord-book">
-                      Est: ₹{(o.estimatedOrderBook / 100).toFixed(0)}K Cr
-                    </span>
+                    <span className="ord-book">Est: ₹{(o.estimatedOrderBook / 100).toFixed(0)}K Cr</span>
                   )}
                 </div>
-                {o.periodLabel && (
-                  <div className="ord-period">{o.periodLabel} project</div>
-                )}
+                {o.periodLabel && <div className="ord-period">{o.periodLabel} project</div>}
                 {o.mcapRatio > 0 && (
                   <div className="ord-pct">{o.mcapRatio}% MCap · {o.quarterOrders} this qtr</div>
                 )}
-                {o.obToRevRatio && (
-                  <div className="ord-pct">OB/Rev {o.obToRevRatio}x</div>
-                )}
+                {o.obToRevRatio && <div className="ord-pct">OB/Rev {o.obToRevRatio}x</div>}
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
               </div>
             ))
