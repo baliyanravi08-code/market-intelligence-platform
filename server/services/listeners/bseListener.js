@@ -2,23 +2,21 @@ const axios = require("axios");
 
 const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 const { updateRadar, getRadar } = require("../intelligence/radarEngine");
-const orderBookEngine = require("../intelligence/orderBookEngine");
+const orderBookEngine  = require("../intelligence/orderBookEngine");
 const opportunityEngine = require("../intelligence/opportunityEngine");
-const sectorQueue = require("../intelligence/sectorQueue");
-const sectorRadar = require("../intelligence/sectorRadar");
+const sectorQueue      = require("../intelligence/sectorQueue");
+const sectorRadar      = require("../intelligence/sectorRadar");
 const sectorBoomEngine = require("../intelligence/sectorBoomEngine");
 const { saveResult, getRetentionHours, getWindowLabel } = require("../../database");
 const { persistRadar, persistOrderBook, persistSector, persistOpportunity } = require("../../coordinator");
 
-let ioRef = null;
-let bseCookie = "";
-const seen = new Set();
+let ioRef      = null;
+let bseCookie  = "";
+const seen     = new Set();
 
 const BSE_HOME = "https://www.bseindia.com/corporates/ann.html";
 const BSE_API  = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C&subcategory=-1";
 
-// ── Historical backfill API — fetches by date range ──
-// BSE supports strPrevDate and strToDate in DD%2FMM%2FYYYY format
 function buildHistoricalUrl(fromDate, toDate) {
   const fmt = d => `${String(d.getDate()).padStart(2,"0")}%2F${String(d.getMonth()+1).padStart(2,"0")}%2F${d.getFullYear()}`;
   return `https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=${fmt(fromDate)}&strScrip=&strSearch=P&strToDate=${fmt(toDate)}&strType=C&subcategory=-1`;
@@ -61,12 +59,10 @@ function parseExchangeTs(timeStr) {
 async function warmup() {
   try {
     const res = await axios.get(BSE_HOME, {
-      headers: BROWSER_HEADERS,
-      timeout: 20000,
-      maxRedirects: 5
+      headers: BROWSER_HEADERS, timeout: 20000, maxRedirects: 5
     });
     const cookies = res.headers["set-cookie"];
-    if (cookies && cookies.length) {
+    if (cookies?.length) {
       bseCookie = cookies.map(c => c.split(";")[0]).join("; ");
       console.log("✅ BSE warmup successful");
     } else {
@@ -96,12 +92,14 @@ function extractList(data) {
   return [];
 }
 
-function processItem(item) {
+// ── async processItem — needed for await analyzeAnnouncement ──
+async function processItem(item) {
   const id = String(item.SCRIP_CD || "") + (item.HEADLINE || "");
   if (!id || seen.has(id)) return;
   seen.add(id);
 
-  const signal = analyzeAnnouncement({
+  // ← await here because analyzeAnnouncement is now async (fetches live MCap)
+  const signal = await analyzeAnnouncement({
     company:  item.SLONGNAME || item.companyname || "Unknown",
     code:     String(item.SCRIP_CD || ""),
     title:    item.HEADLINE || "",
@@ -195,7 +193,6 @@ async function scan() {
     });
 
     const list = extractList(res.data);
-
     if (!list.length) {
       console.log("⚠️ BSE returned empty list");
       if (ioRef) ioRef.emit("bse_status", "disconnected");
@@ -204,7 +201,11 @@ async function scan() {
 
     console.log(`✅ BSE announcements: ${list.length}`);
     if (ioRef) ioRef.emit("bse_status", "connected");
-    list.forEach(processItem);
+
+    // ── process items with async — don't await all, fire and forget ──
+    list.forEach(item => processItem(item).catch(e =>
+      console.log("⚠️ processItem error:", e.message)
+    ));
 
   } catch (err) {
     console.log("❌ BSE fetch failed:", err.message);
@@ -213,23 +214,18 @@ async function scan() {
   }
 }
 
-// ── STARTUP BACKFILL — fetch last 4 days on server start ──
-// Covers weekend + any missed filings after a redeploy
 async function backfill() {
   console.log("🔄 Starting BSE historical backfill...");
   try {
     if (!bseCookie) await warmup();
-    if (!bseCookie) {
-      console.log("⚠️ Backfill skipped — no cookie");
-      return;
-    }
+    if (!bseCookie) { console.log("⚠️ Backfill skipped — no cookie"); return; }
 
-    const now     = new Date();
+    const now      = new Date();
     const fromDate = new Date(now);
-    fromDate.setDate(fromDate.getDate() - 4); // last 4 days covers full weekend
+    fromDate.setDate(fromDate.getDate() - 4);
 
     const url = buildHistoricalUrl(fromDate, now);
-    console.log(`📅 Backfill: fetching from ${fromDate.toDateString()} to ${now.toDateString()}`);
+    console.log(`📅 Backfill: ${fromDate.toDateString()} → ${now.toDateString()}`);
 
     const res = await axios.get(url, {
       headers: {
@@ -246,18 +242,20 @@ async function backfill() {
 
     const list = extractList(res.data);
     if (!list.length) {
-      console.log("⚠️ Backfill returned empty — trying without date range");
-      await scan(); // fallback to normal scan
+      console.log("⚠️ Backfill empty — falling back to normal scan");
+      await scan();
       return;
     }
 
-    console.log(`✅ Backfill: ${list.length} historical announcements found`);
-    list.forEach(processItem);
+    console.log(`✅ Backfill: ${list.length} announcements`);
+    list.forEach(item => processItem(item).catch(e =>
+      console.log("⚠️ backfill processItem error:", e.message)
+    ));
     console.log("✅ Backfill complete");
 
   } catch (err) {
-    console.log("⚠️ Backfill failed:", err.message, "— falling back to normal scan");
-    await scan(); // fallback
+    console.log("⚠️ Backfill failed:", err.message, "— falling back");
+    await scan();
   }
 }
 
@@ -268,18 +266,17 @@ function startBSEListener(io) {
     console.log("Client connected:", socket.id);
     socket.emit("bse_status", bseCookie ? "connected" : "connecting");
 
-    // Send stored events to new client
     const { getEvents } = require("../../database");
     const storedBse = getEvents("bse") || [];
     const storedNse = getEvents("nse") || [];
 
     if (storedBse.length) {
       socket.emit("bse_events", storedBse);
-      console.log(`📤 Sent ${storedBse.length} stored BSE events to client`);
+      console.log(`📤 Sent ${storedBse.length} stored BSE events`);
     }
     if (storedNse.length) {
       socket.emit("nse_events", storedNse);
-      console.log(`📤 Sent ${storedNse.length} stored NSE events to client`);
+      console.log(`📤 Sent ${storedNse.length} stored NSE events`);
     }
 
     socket.emit("radar_update", getRadar());
@@ -289,11 +286,10 @@ function startBSEListener(io) {
     });
   });
 
-  // ── On startup: warmup → backfill history → then start polling ──
   warmup().then(async () => {
-    await backfill();                          // fetch last 4 days first
-    await scan();                              // then do a fresh scan
-    setInterval(scan, 8000 + Math.random() * 2000); // then poll every 8-10s
+    await backfill();
+    await scan();
+    setInterval(scan, 8000 + Math.random() * 2000);
   });
 }
 

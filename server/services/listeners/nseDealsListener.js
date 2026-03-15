@@ -1,14 +1,15 @@
 const axios = require("axios");
+const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 const { updateRadar, getRadar } = require("../intelligence/radarEngine");
 const { saveEvent } = require("../../database");
 const { persistRadar } = require("../../coordinator");
 
-let ioRef = null;
-const seen = new Set();
+let ioRef    = null;
+const seen   = new Set();
 let nseCookie = "";
 
 const NSE_HOME = "https://www.nseindia.com";
-const NSE_API = "https://www.nseindia.com/api/corporate-announcements?index=equities";
+const NSE_API  = "https://www.nseindia.com/api/corporate-announcements?index=equities";
 
 const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -40,36 +41,27 @@ function parseExchangeTs(timeStr) {
 function buildPdfUrl(attchmntFile) {
   if (!attchmntFile) return null;
 
-  console.log("RAW attchmntFile:", JSON.stringify(attchmntFile));
-
-  // nuclear option — extract just the actual file path regardless of prefix garbage
-  // match nsearchives.nseindia.com/... or /corporate/... or /content/...
   const archiveMatch = attchmntFile.match(/(nsearchives\.nseindia\.com\/.+)/);
   if (archiveMatch) return `https://${archiveMatch[1]}`;
 
   const nseMatch = attchmntFile.match(/(www\.nseindia\.com\/.+)/);
   if (nseMatch) return `https://${nseMatch[1]}`;
 
-  // fix broken "https//..." without colon
   if (attchmntFile.startsWith("https//")) return attchmntFile.replace("https//", "https://");
   if (attchmntFile.startsWith("http//"))  return attchmntFile.replace("http//",  "http://");
 
-  // already a proper full URL
   if (attchmntFile.startsWith("https://") || attchmntFile.startsWith("http://")) return attchmntFile;
 
-  // relative path — prepend NSE base
   return `https://www.nseindia.com${attchmntFile.startsWith("/") ? "" : "/"}${attchmntFile}`;
 }
 
 async function warmup() {
   try {
     const res = await axios.get(NSE_HOME, {
-      headers: BROWSER_HEADERS,
-      timeout: 20000,
-      maxRedirects: 5
+      headers: BROWSER_HEADERS, timeout: 20000, maxRedirects: 5
     });
     const cookies = res.headers["set-cookie"];
-    if (cookies && cookies.length) {
+    if (cookies?.length) {
       nseCookie = cookies.map(c => c.split(";")[0]).join("; ");
       console.log("✅ NSE warmup successful");
     } else {
@@ -110,38 +102,56 @@ async function scan() {
     console.log(`✅ NSE announcements: ${list.length}`);
     if (ioRef) ioRef.emit("nse_status", "connected");
 
-    list.forEach(item => {
+    // ── async processing for live MCap scoring ──
+    for (const item of list) {
       const id = (item.symbol || "") + (item.an_dt || "") + (item.subject || "");
-      if (!id || seen.has(id)) return;
+      if (!id || seen.has(id)) continue;
       seen.add(id);
 
-      const timeStr = item.an_dt || item.bcast_date || getIndianTime();
+      const timeStr    = item.an_dt || item.bcast_date || getIndianTime();
       const exchangeTs = parseExchangeTs(timeStr);
 
-      const signal = {
-        company: item.sm_name || item.symbol || "Unknown",
-        code: item.symbol || "",
-        type: "NEWS",
-        title: item.subject || item.desc || "",
-        value: 0,
-        time: timeStr,
-        ago: "just now",
-        exchange: "NSE",
-        savedAt: (exchangeTs && !isNaN(exchangeTs)) ? exchangeTs : Date.now(),
-        pdfUrl: buildPdfUrl(item.attchmntFile)
-      };
+      try {
+        // ← await analyzeAnnouncement for live MCap scoring
+        const analyzed = await analyzeAnnouncement({
+          company:  item.sm_name || item.symbol || "Unknown",
+          code:     item.symbol || "",
+          title:    item.subject || item.desc || "",
+          value:    0,
+          time:     timeStr,
+          ago:      "just now",
+          exchange: "NSE",
+          pdfUrl:   buildPdfUrl(item.attchmntFile)
+        });
 
-      saveEvent("nse", signal);
+        const signal = {
+          ...(analyzed || {
+            company:  item.sm_name || item.symbol || "Unknown",
+            code:     item.symbol || "",
+            type:     "NEWS",
+            title:    item.subject || item.desc || "",
+            value:    0,
+            time:     timeStr,
+            ago:      "just now",
+            exchange: "NSE",
+            pdfUrl:   buildPdfUrl(item.attchmntFile)
+          }),
+          savedAt: (exchangeTs && !isNaN(exchangeTs)) ? exchangeTs : Date.now()
+        };
 
-      updateRadar(signal.company, signal);
-      const radar = getRadar();
-      persistRadar(radar);
+        saveEvent("nse", signal);
+        updateRadar(signal.company, signal);
+        const radar = getRadar();
+        persistRadar(radar);
 
-      if (ioRef) {
-        ioRef.emit("nse_events", [signal]);
-        ioRef.emit("radar_update", radar);
+        if (ioRef) {
+          ioRef.emit("nse_events", [signal]);
+          ioRef.emit("radar_update", radar);
+        }
+      } catch(e) {
+        console.log("⚠️ NSE processItem error:", e.message);
       }
-    });
+    }
 
   } catch (err) {
     console.log("❌ NSE scan failed:", err.message);

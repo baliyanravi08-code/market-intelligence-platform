@@ -1,5 +1,7 @@
-const orderDetector = require("../intelligence/orderDetector");
-const analyzeResult = require("./resultAnalyzer");
+const orderDetector  = require("../intelligence/orderDetector");
+const analyzeResult  = require("./resultAnalyzer");
+const { getLiveMcap } = require("../data/liveMcap");
+const { getMarketCap } = require("../data/marketCap");
 
 const NEGATIVE_PATTERNS = [
   "income tax", "tax demand", "tax notice", "demand notice",
@@ -148,7 +150,6 @@ const ORDER_POSITIVE = [
   "commissioning of", "roof top solar",
   "solar pv system", "solar project",
   "bagging of order", "bags a", "secures a",
-  // ── Power sector order keywords ──
   "power supply agreement", "long-term supply",
   "long term supply", "thermal power supply",
   "power purchase agreement", "ppa signed",
@@ -167,7 +168,6 @@ const ORDER_NEGATIVE = [
   "compliance order", "regulatory order",
   "restraint order", "injunction order",
   "attachment order", "recovery order",
-  // ── Tax/customs favorable orders — NOT business orders ──
   "commissioner of customs",
   "customs order",
   "favourable order from office",
@@ -349,20 +349,46 @@ function insiderScoreBySize(title) {
   return 25;
 }
 
-function analyzeAnnouncement(data) {
+// ── MCap-relative scoring ──
+function scoreFromMcapRatio(crores, mcap) {
+  const pct = (crores / mcap) * 100;
+  if      (pct >= 50)  return 98;
+  else if (pct >= 25)  return 95;
+  else if (pct >= 15)  return 92;
+  else if (pct >= 10)  return 88;
+  else if (pct >= 5)   return 82;
+  else if (pct >= 2)   return 72;
+  else if (pct >= 1)   return 62;
+  else if (pct >= 0.5) return 52;
+  else if (pct >= 0.1) return 42;
+  else                 return 28;
+}
+
+// ── Absolute size scoring (fallback when no MCap) ──
+function scoreFromAbsoluteSize(crores) {
+  if      (crores >= 50000) return 98;
+  else if (crores >= 20000) return 95;
+  else if (crores >= 10000) return 93;
+  else if (crores >= 5000)  return 90;
+  else if (crores >= 2000)  return 87;
+  else if (crores >= 1000)  return 85;
+  else if (crores >= 500)   return 78;
+  else if (crores >= 200)   return 70;
+  else if (crores >= 100)   return 62;
+  else if (crores >= 50)    return 55;
+  else if (crores >= 20)    return 47;
+  else if (crores >= 10)    return 40;
+  else                      return 32;
+}
+
+async function analyzeAnnouncement(data) {
   if (!data || !data.title) return null;
 
   const text = data.title.toLowerCase();
 
   // ── STEP 1: Negative context always wins ──
   if (isNegativeContext(text)) {
-    return {
-      ...data,
-      type: "NEWS",
-      value: 5,
-      _orderInfo: null,
-      ago: data.ago || "just now"
-    };
+    return { ...data, type: "NEWS", value: 5, _orderInfo: null, ago: data.ago || "just now" };
   }
 
   let type       = null;
@@ -373,33 +399,26 @@ function analyzeAnnouncement(data) {
   if (matchesAny(text, ORDER_POSITIVE) && !matchesAny(text, ORDER_NEGATIVE)) {
     type = "ORDER_ALERT";
 
-    // Check size keywords first (mega/major labels)
     let keywordCrores = null;
     for (const k of ORDER_SIZE_KEYWORDS) {
-      if (text.includes(k.pattern)) {
-        keywordCrores = k.crores;
-        break;
-      }
+      if (text.includes(k.pattern)) { keywordCrores = k.crores; break; }
     }
 
     const orderInfo = orderDetector(data.title);
     const crores    = keywordCrores || (orderInfo?.crores) || null;
 
     if (crores) {
-      if (crores >= 50000)      value = 98; // 1600MW 25yr ~ ₹85,000Cr
-      else if (crores >= 20000) value = 95;
-      else if (crores >= 10000) value = 93;
-      else if (crores >= 5000)  value = 90;
-      else if (crores >= 2000)  value = 87;
-      else if (crores >= 1000)  value = 85;
-      else if (crores >= 500)   value = 78;
-      else if (crores >= 200)   value = 70;
-      else if (crores >= 100)   value = 62;
-      else if (crores >= 50)    value = 55;
-      else if (crores >= 20)    value = 47;
-      else if (crores >= 10)    value = 40;
-      else if (crores >= 1)     value = 32;
-      else                      value = 25;
+      // ── Fetch live MCap, fall back to static ──
+      const mcap = (await getLiveMcap(data.code)) || getMarketCap(data.code) || null;
+
+      if (mcap && mcap > 0) {
+        value = scoreFromMcapRatio(crores, mcap);
+        const pct = (crores / mcap * 100).toFixed(2);
+        console.log(`📦 ORDER: ${data.company} ₹${crores}Cr = ${pct}% of MCap₹${mcap}Cr → score ${value}`);
+      } else {
+        value = scoreFromAbsoluteSize(crores);
+        console.log(`📦 ORDER: ${data.company} ₹${crores}Cr (no MCap) → score ${value}`);
+      }
 
       _orderInfo = {
         crores,
@@ -407,65 +426,50 @@ function analyzeAnnouncement(data) {
         periodLabel:  orderInfo?.periodLabel  || null,
         annualCrores: orderInfo?.annualCrores || null,
         mw:           orderInfo?.mw           || null,
-        isMWBased:    orderInfo?.isMWBased    || false
+        isMWBased:    orderInfo?.isMWBased    || false,
+        mcap:         mcap || null
       };
 
-      console.log(`📦 ORDER: ${data.company} ₹${crores}Cr score=${value}${orderInfo?.isMWBased ? " [MW-based]" : ""}`);
     } else {
       value = 30;
     }
 
   // ── STEP 3: MERGER ──
   } else if (matchesAny(text, MERGER_POSITIVE) && !matchesAny(text, MERGER_NEGATIVE)) {
-    type  = "MERGER";
-    value = 80;
+    type = "MERGER"; value = 80;
 
   // ── STEP 4: CAPEX ──
   } else if (matchesAny(text, CAPEX_POSITIVE) && !matchesAny(text, CAPEX_NEGATIVE)) {
-    type  = "CAPEX";
-    value = 60;
+    type = "CAPEX"; value = 60;
 
   // ── STEP 5: INSIDER BUY ──
   } else if (matchesAny(text, INSIDER_BUY_POSITIVE) && !matchesAny(text, INSIDER_BUY_NEGATIVE)) {
-    type  = "INSIDER_BUY";
-    value = insiderScoreBySize(data.title);
+    type = "INSIDER_BUY"; value = insiderScoreBySize(data.title);
 
   // ── STEP 6: PARTNERSHIP ──
   } else if (matchesAny(text, PARTNERSHIP_POSITIVE) && !matchesAny(text, PARTNERSHIP_NEGATIVE)) {
-    type  = "PARTNERSHIP";
-    value = 40;
+    type = "PARTNERSHIP"; value = 40;
 
   // ── STEP 7: SMART MONEY ──
   } else if (matchesAny(text, SMART_MONEY_POSITIVE)) {
-    type  = "SMART_MONEY";
-    value = 35;
+    type = "SMART_MONEY"; value = 35;
 
   // ── STEP 8: FUNDRAISE ──
   } else if (matchesAny(text, FUNDRAISE_POSITIVE)) {
-    type  = "CORPORATE_ACTION";
-    value = 25;
+    type = "CORPORATE_ACTION"; value = 25;
 
   // ── STEP 9: CORPORATE ACTION ──
   } else if (matchesAny(text, CORPORATE_ACTION_POSITIVE)) {
-    type  = "CORPORATE_ACTION";
-    value = 30;
+    type = "CORPORATE_ACTION"; value = 30;
 
   // ── STEP 10: RESULT FILING ──
   } else {
     const resultData = analyzeResult(data);
     if (resultData) return resultData;
-
-    type  = "NEWS";
-    value = 5;
+    type = "NEWS"; value = 5;
   }
 
-  return {
-    ...data,
-    type,
-    value,
-    _orderInfo,
-    ago: data.ago || "just now"
-  };
+  return { ...data, type, value, _orderInfo, ago: data.ago || "just now" };
 }
 
 module.exports = analyzeAnnouncement;
