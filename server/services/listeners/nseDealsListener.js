@@ -73,22 +73,42 @@ function buildPdfUrl(attchmntFile) {
 
 async function warmup() {
   try {
-    const res = await client.get(NSE_HOME, {
-      validateStatus: () => true
-    });
 
-    const cookies = res.headers["set-cookie"];
+    const home = await client.get(
+      "https://www.nseindia.com",
+      { validateStatus: () => true }
+    );
 
-    if (cookies?.length) {
-      cookie = cookies.map(c => c.split(";")[0]).join("; ");
+    const page = await client.get(
+      "https://www.nseindia.com/market-data/live-equity-market",
+      { validateStatus: () => true }
+    );
+
+    const cookies = [
+      ...(home.headers["set-cookie"] || []),
+      ...(page.headers["set-cookie"] || [])
+    ];
+
+    if (cookies.length) {
+
+      cookie = cookies
+        .map(c => c.split(";")[0])
+        .join("; ");
+
       client.defaults.headers.Cookie = cookie;
 
-      console.log("✅ NSE warmup successful");
+      console.log("✅ NSE session established");
+
     } else {
-      console.log("⚠️ NSE warmup without cookies");
+
+      console.log("⚠️ NSE still blocked (no cookies)");
+
     }
+
   } catch (err) {
+
     console.log("⚠️ NSE warmup failed:", err.message);
+
   }
 }
 
