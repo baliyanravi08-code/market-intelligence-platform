@@ -117,7 +117,6 @@ app.get("/api/company/:code", async (req, res) => {
 /* ───────────────────────────── */
 /* REST: company search */
 /* ───────────────────────────── */
-
 app.get("/api/search/:query", async (req, res) => {
   try {
 
@@ -126,9 +125,7 @@ app.get("/api/search/:query", async (req, res) => {
     console.log(`🔍 Search: ${q}`);
 
     const r = await axios.get(
-      `https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&shname=${encodeURIComponent(
-        q
-      )}&industry=&segment=Equity&status=Active`,
+      `https://api.bseindia.com/BseIndiaAPI/api/SearchScripData/w?text=${encodeURIComponent(q)}`,
       {
         headers: {
           Referer: "https://www.bseindia.com",
@@ -141,6 +138,25 @@ app.get("/api/search/:query", async (req, res) => {
       }
     );
 
+    const rows = r.data || [];
+
+    const results = rows.slice(0, 10).map(s => ({
+      code: s.scripcode,
+      name: s.scripname,
+      sector: s.industry || null,
+      nseSymbol: s.symbol || null
+    }));
+
+    res.json({ results });
+
+  } catch (e) {
+
+    console.log("❌ Search failed:", e.message);
+
+    res.json({ results: [] });
+
+  }
+});
     const rows =
       r.data?.Table ||
       r.data?.Table1 ||
