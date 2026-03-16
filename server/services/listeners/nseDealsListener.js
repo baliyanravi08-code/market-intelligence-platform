@@ -12,12 +12,16 @@ const NSE_HOME = "https://www.nseindia.com";
 const NSE_API  = "https://www.nseindia.com/api/corporate-announcements?index=equities";
 
 const BROWSER_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  "Accept":
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
   "Accept-Language": "en-US,en;q=0.9",
   "Accept-Encoding": "gzip, deflate, br",
   "Connection": "keep-alive",
-  "Upgrade-Insecure-Requests": "1"
+  "Upgrade-Insecure-Requests": "1",
+  "Cache-Control": "no-cache",
+  "Pragma": "no-cache"
 };
 
 function getIndianTime() {
@@ -58,15 +62,21 @@ function buildPdfUrl(attchmntFile) {
 async function warmup() {
   try {
     const res = await axios.get(NSE_HOME, {
-      headers: BROWSER_HEADERS, timeout: 20000, maxRedirects: 5
+      headers: BROWSER_HEADERS,
+      timeout: 20000,
+      maxRedirects: 5,
+      validateStatus: () => true
     });
+
     const cookies = res.headers["set-cookie"];
-    if (cookies?.length) {
+
+    if (cookies && cookies.length) {
       nseCookie = cookies.map(c => c.split(";")[0]).join("; ");
       console.log("✅ NSE warmup successful");
     } else {
-      console.log("⚠️ NSE warmup without cookies (continuing anyway)");
+      console.log("⚠️ NSE warmup without cookies");
     }
+
     return true;
   } catch (err) {
     console.log("⚠️ NSE warmup failed:", err.message);
@@ -93,11 +103,10 @@ async function scan() {
     const list = Array.isArray(res.data) ? res.data : (res.data?.data || []);
 
     if (!list.length) {
-      console.log("⚠️ NSE empty response");
-      nseCookie = "";
-      if (ioRef) ioRef.emit("nse_status", "disconnected");
-      return;
-    }
+  console.log("⚠️ NSE empty response, retrying later");
+  nseCookie = "";
+  return;
+}
 
     console.log(`✅ NSE announcements: ${list.length}`);
     if (ioRef) ioRef.emit("nse_status", "connected");
@@ -163,7 +172,7 @@ async function scan() {
 function startNSEDealsListener(io) {
   ioRef = io;
   warmup().then(() => scan());
-  setInterval(scan, 8000 + Math.random() * 2000);
+  setInterval(scan, 12000 + Math.random() * 4000);
 }
 
 module.exports = startNSEDealsListener;
