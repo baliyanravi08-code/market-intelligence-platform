@@ -127,27 +127,62 @@ function LiveAgo({ receivedAt, exchangeTime }) {
 }
 
 function Tag({ type, crores, mcap, mcapPct }) {
+
   const c = SIGNAL_COLOR[type] || { bg: "#0d3060", fg: "#fff" };
+
   if (type === "ORDER_ALERT" && crores) {
-    const crLabel = crores >= 1000 ? `₹${(crores/1000).toFixed(1)}K` : `₹${crores}Cr`;
+
+    const crLabel =
+      crores >= 1000
+        ? `₹${(crores / 1000).toFixed(1)}K`
+        : `₹${crores}Cr`;
+
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "3px" }}>
-        <span className="tag" style={{ background: c.bg, color: c.fg }}>ORDER {crLabel}</span>
+
+        <span className="tag" style={{ background: c.bg, color: c.fg }}>
+          ORDER {crLabel}
+        </span>
+
         {mcap && (
-          <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#2a6060", whiteSpace: "nowrap" }}>
+          <span
+            style={{
+              fontSize: "9px",
+              fontFamily: "IBM Plex Mono, monospace",
+              color: "#2a6060",
+              whiteSpace: "nowrap"
+            }}
+          >
             MCap ₹{mcap >= 1000 ? `${(mcap/1000).toFixed(1)}K` : mcap?.toFixed(0)}Cr
+
             {mcapPct && (
-              <span style={{
-                color: parseFloat(mcapPct) >= 10 ? "#ff6622" : parseFloat(mcapPct) >= 5 ? "#ffaa00" : parseFloat(mcapPct) >= 1 ? "#4488aa" : "#2a5060",
-                marginLeft: 5, fontWeight: 700
-              }}>· {mcapPct}%</span>
+              <span
+                style={{
+                  marginLeft: 5,
+                  fontWeight: 700,
+                  color:
+                    parseFloat(mcapPct) >= 10
+                      ? "#ff6622"
+                      : parseFloat(mcapPct) >= 5
+                      ? "#ffaa00"
+                      : "#4488aa"
+                }}
+              >
+                · {mcapPct}%
+              </span>
             )}
           </span>
         )}
+
       </div>
     );
   }
-  return <span className="tag" style={{ background: c.bg, color: c.fg }}>{type}</span>;
+
+  return (
+    <span className="tag" style={{ background: c.bg, color: c.fg }}>
+      {type}
+    </span>
+  );
 }
 
 function ExBadge({ exchange }) {
@@ -681,7 +716,19 @@ export default function App() {
                   <div className="sfill" style={{ width: `${Math.min(r.score, 100)}%`, background: scoreBg(r.score) }} />
                 </div>
                 <div className="tags">
-                  {[...new Set(r.signals)].slice(0, 3).map((s, j) => <Tag key={j} type={s} />)}
+                 {[...new Set(r.signals)].slice(0, 3).map((s, j) => (
+                <Tag
+                key={j}
+                type={s}
+                crores={r._orderInfo?.crores}
+                mcap={r._orderInfo?.mcap}
+                mcapPct={
+                r._orderInfo?.crores && r._orderInfo?.mcap
+                ? ((r._orderInfo.crores / r._orderInfo.mcap) * 100).toFixed(1)
+                : null
+              }
+             />
+          ))}
                 </div>
                 <div className="rc-foot">
                   {r.pdfUrl
