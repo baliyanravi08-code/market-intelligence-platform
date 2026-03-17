@@ -250,26 +250,72 @@ function CompanyScreener({ companyProfile, onClose }) {
       )}
 
       {/* ── 52W BAR ── */}
-        // Calculate the percentage position of the current price between 52-week low and high,
-        // clamp between 2% and 98% to avoid edge overflow, and set to 50% if high equals low.
-        const pct = p.high52 === p.low52
-          ? 50
-          : Math.min(Math.max(((p.price - p.low52) / (p.high52 - p.low52)) * 100, 2), 98);
-          : Math.min(Math.max(((p.price - p.low52) / (p.high52 - p.low52)) * 100, 2), 98);
-        return (
-          <div style={{ marginBottom: "8px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", color: "#1a4060", fontFamily: "IBM Plex Mono, monospace", marginBottom: "3px" }}>
-              <span>52L ₹{p.low52}</span>
-              <span style={{ color: "#1a6040" }}>▼ current</span>
-              <span>52H ₹{p.high52}</span>
-            </div>
-            <div style={{ height: "4px", background: "#081828", borderRadius: "2px", position: "relative" }}>
-              <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, #0044aa, #00cc66)", borderRadius: "2px" }} />
-              <div style={{ position: "absolute", top: "-3px", left: `${pct}%`, transform: "translateX(-50%)", width: "10px", height: "10px", background: "#00ff9c", borderRadius: "50%", border: "2px solid #010a18" }} />
-            </div>
-          </div>
+        {/* Calculate the percentage position of the current price between 52-week low and high,
+        clamp between 2% and 98% to avoid edge overflow, and set to 50% if high equals low. */}
+
+       {p?.high52 > 0 && p?.low52 > 0 && p?.price > 0 && (() => {
+  const pct =
+    p.high52 === p.low52
+      ? 50
+      : Math.min(
+          Math.max(((p.price - p.low52) / (p.high52 - p.low52)) * 100, 2),
+          98
         );
-      })()}
+
+  return (
+    <div style={{ marginBottom: "8px" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: "9px",
+          color: "#1a4060",
+          fontFamily: "IBM Plex Mono, monospace",
+          marginBottom: "3px"
+        }}
+      >
+        <span>52L ₹{p.low52}</span>
+        <span style={{ color: "#1a6040" }}>▼ current</span>
+        <span>52H ₹{p.high52}</span>
+      </div>
+
+      <div
+        style={{
+          height: "4px",
+          background: "#081828",
+          borderRadius: "2px",
+          position: "relative"
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            height: "100%",
+            width: `${pct}%`,
+            background: "linear-gradient(90deg, #0044aa, #00cc66)",
+            borderRadius: "2px"
+          }}
+        />
+
+        <div
+          style={{
+            position: "absolute",
+            top: "-3px",
+            left: `${pct}%`,
+            transform: "translateX(-50%)",
+            width: "10px",
+            height: "10px",
+            background: "#00ff9c",
+            borderRadius: "50%",
+            border: "2px solid #010a18"
+          }}
+        />
+      </div>
+    </div>
+  );
+})()}
 
       {/* ── METRICS GRID ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px", marginBottom: "8px" }}>
@@ -559,25 +605,25 @@ export default function App() {
 
     socket.on("bse_status", s => setBseStatus(s));
     socket.on("nse_status", s => setNseStatus(s));
-    socket.on("radar_update", data => {
-      setRadar(prev => {
-        // Use a composite key for uniqueness and fallback if company is missing
-        const getKey = r => (r.company || "") + (r.code || "");
-        const prevMap = Object.fromEntries(prev.map(r => [getKey(r), r]));
-        return data.map(r => {
-          const key = getKey(r);
-          const prevItem = prevMap[key];
-          return {
-            ...r,
-            receivedAt: prevItem && prevItem.score === r.score
-              ? (prevItem.receivedAt || bestTsRadar(r))
-              : bestTsRadar(r)
-          };
-        });
-      });
+   socket.on("radar_update", data => {
+  setRadar(prev => {
+    const getKey = r => (r.company || "") + (r.code || "");
+    const prevMap = Object.fromEntries(prev.map(r => [getKey(r), r]));
+
+    return data.map(r => {
+      const key = getKey(r);
+      const prevItem = prevMap[key];
+
+      return {
+        ...r,
+        receivedAt:
+          prevItem && prevItem.score === r.score
+            ? (prevItem.receivedAt || bestTsRadar(r))
+            : bestTsRadar(r)
+      };
     });
-      });
-    });
+  });
+});
 
     socket.on("bse_events", data => {
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
@@ -763,7 +809,7 @@ export default function App() {
                 <div className="rc-top">
                   <span className="co-name">{r.company}</span>
                   <div className="rc-badges">
-                    {(r.exchanges || []).map((ex, j) => <ExBadge key={j} exchange={ex} />)}
+                    {(r.exchanges || []).map((ex, j) => <ExBadge key={s} exchange={ex} />)}
                     <span className={`score ${scoreClass(r.score)}`}>{r.score}</span>
                   </div>
                 </div>
@@ -773,17 +819,13 @@ export default function App() {
           <div className="tags">
            {[...new Set(r.signals)].slice(0, 3).map((s) => (
              <Tag
-               key={s}
-               type={s}
-               crores={r._orderInfo?.crores}
-               mcap={r._orderInfo?.mcap}
-               mcapPct={
-                 r._orderInfo?.crores && r._orderInfo?.mcap > 0
-                   ? ((r._orderInfo.crores / r._orderInfo.mcap) * 100).toFixed(1)
-                   : null
-               }
+              key={j}
+              type={s}
+              crores={r._orderInfo?.crores}
+              mcap={r._orderInfo?.mcap}
+              mcapPct={r.mcapRatio}
              />
-           ))}
+              ))}
           </div>
                 <div className="rc-foot">
                   {r.pdfUrl
@@ -830,7 +872,7 @@ export default function App() {
           {filteredFeed.length > 0 && filteredFeed.map((e, i) => {
             const crores  = e._orderInfo?.crores || null;
             const mcap    = e._orderInfo?.mcap   || null;
-            const mcapPct = (crores && mcap) ? ((crores / mcap) * 100).toFixed(1) : null;
+            const mcapPct = e.mcapRatio ?? ((crores && mcap) ? ((crores / mcap) * 100).toFixed(1) : null);
             const isMega  = e.type === "ORDER_ALERT" && crores >= 1000;
             const isHigh  = (e.value || 0) >= 70;
             return (
