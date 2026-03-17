@@ -809,7 +809,7 @@ export default function App() {
                 <div className="rc-top">
                   <span className="co-name">{r.company}</span>
                   <div className="rc-badges">
-                    {(r.exchanges || []).map((ex, j) => <ExBadge key={s} exchange={ex} />)}
+                    {(r.exchanges || []).map((ex, j) => <ExBadge key={j} exchange={ex} />)}
                     <span className={`score ${scoreClass(r.score)}`}>{r.score}</span>
                   </div>
                 </div>
