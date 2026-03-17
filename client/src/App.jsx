@@ -817,15 +817,15 @@ export default function App() {
                   <div className="sfill" style={{ width: `${Math.min(r.score, 100)}%`, background: scoreBg(r.score) }} />
                 </div>
           <div className="tags">
-           {[...new Set(r.signals)].slice(0, 3).map((s) => (
-             <Tag
-              key={j}
-              type={s}
-              crores={r._orderInfo?.crores}
-              mcap={r._orderInfo?.mcap}
-              mcapPct={r.mcapRatio}
-             />
-              ))}
+          {[...new Set(r.signals)].slice(0, 3).map((s, j) => (
+  <Tag
+    key={j}
+    type={s}
+    crores={r._orderInfo?.crores}
+    mcap={r._orderInfo?.mcap}
+    mcapPct={r.mcapRatio}
+  />
+))}
           </div>
                 <div className="rc-foot">
                   {r.pdfUrl
