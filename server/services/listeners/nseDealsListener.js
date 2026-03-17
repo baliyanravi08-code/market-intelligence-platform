@@ -172,7 +172,11 @@ async function scan() {
         saveEvent("nse", signal);
 
         updateRadar(signal.company, signal);
+        
+        const { persistMegaOrder } = require("../../coordinator");
 
+        persistMegaOrder(signal); 
+        
         const radar = getRadar();
 
         persistRadar(radar);
