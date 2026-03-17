@@ -27,7 +27,7 @@ const NEGATIVE_PATTERNS = [
   "surety for", "indemnity for",
   "pledge of shares", "encumbrance of shares",
   "issuance of guarantee", "issue of guarantee",
-  "invocation of guarantee", "revocation",
+  "invocation of guarantee",
   "restatement", "restatement of accounts",
   "qualified opinion", "adverse opinion",
   "whistle blower", "whistleblower",
@@ -115,18 +115,8 @@ const NEGATIVE_PATTERNS = [
   "settlement of shares",
   "off market transfer",
   "off-market transfer",
-  "sebi sast",
-  "substantial acquisition of shares and takeover",
-  "takeover regulations 2011",
-  "regulation 29(1)",
-  "regulation 29(2)",
-  "exempt under regulation 11",
-  "sebi exemption order",
-  "pre-clearance order",
   "intimation received from",
   "disclosure for intimation",
-  "disclosure under regulation 29",
-  "disclosure under sebi sast"
 ];
 
 const ORDER_POSITIVE = [
@@ -186,7 +176,6 @@ const ORDER_NEGATIVE = [
 ];
 
 const ORDER_SIZE_KEYWORDS = [
-  { pattern: "\u2018mega\u2019 order",  crores: 1000 },
   { pattern: "'mega' order",            crores: 1000 },
   { pattern: "mega' order",             crores: 1000 },
   { pattern: "mega order",              crores: 1000 },
@@ -396,7 +385,11 @@ async function analyzeAnnouncement(data) {
   let _orderInfo = null;
 
   // ── STEP 2: ORDER ALERT ──
-  if (matchesAny(text, ORDER_POSITIVE) && !matchesAny(text, ORDER_NEGATIVE)) {
+  if (
+  matchesAny(text, ORDER_POSITIVE) &&
+  !matchesAny(text, ORDER_NEGATIVE) &&
+  !isNegativeContext(text)
+) {
     type = "ORDER_ALERT";
 
     let keywordCrores = null;

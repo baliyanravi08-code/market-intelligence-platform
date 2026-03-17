@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
 
-const socket = io(window.location.origin);
+// Socket initialization moved inside App component
 
 const STATUS_COLOR = {
   connected:    "#00ff9c",
@@ -28,11 +28,16 @@ const SIGNAL_COLOR = {
 
 const FEED_FILTERS = ["ALL", "ORDER", "MERGER", "CAPEX", "RESULT", "INSIDER", ">50"];
 
+/**
+ * Converts a raw date/time string or timestamp into a formatted string for display.
+ * Input: raw date/time string or timestamp (e.g., ISO string, number).
+ * Output: formatted string in "en-IN" locale, Asia/Kolkata timezone, or fallback substring.
+ */
 function formatTime(raw) {
   if (!raw) return null;
   try {
     const d = new Date(raw);
-    if (isNaN(d)) return String(raw).replace("T", " ").substring(0, 16);
+    if (isNaN(d.getTime())) return String(raw).replace("T", " ").substring(0, 16);
     return d.toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
       day: "2-digit", month: "short",
@@ -102,7 +107,7 @@ function mergeEvents(incoming, existing) {
   const merged = [...incoming, ...existing];
   const deduped = Object.values(
     merged.reduce((acc, e) => {
-      const key = (e.company || "") + (e.time || "") + (e.title || "").substring(0, 20);
+      const key = (e.company || "") + (e.time || "") + (e.type || "") + (e.title || "");
       if (!acc[key]) acc[key] = e;
       return acc;
     }, {})
@@ -186,7 +191,8 @@ function Tag({ type, crores, mcap, mcapPct }) {
 }
 
 function ExBadge({ exchange }) {
-  return <span className={`ex-badge ex-${exchange.toLowerCase()}`}>{exchange}</span>;
+  const exName = typeof exchange === "string" ? exchange.toLowerCase() : "unknown";
+  return <span className={`ex-badge ex-${exName}`}>{exchange || "?"}</span>;
 }
 
 // ── FULL SCREENER COMPONENT ──
@@ -231,15 +237,25 @@ function CompanyScreener({ companyProfile, onClose }) {
           </span>
           {p.volume > 0 && (
             <span style={{ fontSize: "9px", color: "#1a4a60", marginLeft: "auto", fontFamily: "IBM Plex Mono, monospace" }}>
-              Vol: {p.volume >= 100000 ? `${(p.volume/100000).toFixed(1)}L` : `${(p.volume/1000).toFixed(0)}K`}
+              Vol: {
+                p.volume >= 100000
+                  ? `${(p.volume/100000).toFixed(1)}L`
+                  : p.volume >= 1000
+                    ? `${(p.volume/1000).toFixed(0)}K`
+                    : `${p.volume}`
+              }
             </span>
           )}
         </div>
       )}
 
       {/* ── 52W BAR ── */}
-      {p?.high52 > 0 && p?.low52 > 0 && p?.price > 0 && (() => {
-        const pct = Math.min(Math.max(((p.price - p.low52) / (p.high52 - p.low52)) * 100, 2), 98);
+        // Calculate the percentage position of the current price between 52-week low and high,
+        // clamp between 2% and 98% to avoid edge overflow, and set to 50% if high equals low.
+        const pct = p.high52 === p.low52
+          ? 50
+          : Math.min(Math.max(((p.price - p.low52) / (p.high52 - p.low52)) * 100, 2), 98);
+          : Math.min(Math.max(((p.price - p.low52) / (p.high52 - p.low52)) * 100, 2), 98);
         return (
           <div style={{ marginBottom: "8px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", color: "#1a4060", fontFamily: "IBM Plex Mono, monospace", marginBottom: "3px" }}>
@@ -374,13 +390,22 @@ function CompanyScreener({ companyProfile, onClose }) {
       )}
 
       {/* ── ABOUT ── */}
-      {p?.about && (
+      {p.about && (
         <div style={{
           fontSize: "9px", color: "#1a3a55", lineHeight: "1.5",
           padding: "6px", background: "#010a18", borderRadius: "3px",
           marginBottom: "8px", maxHeight: "60px", overflow: "hidden"
         }}>
-          {p.about.substring(0, 200)}...
+          {(() => {
+            const about = p.about;
+            if (about.length <= 200) return about;
+            // Try to cut at sentence boundary
+            const sentenceEnd = about.lastIndexOf('.', 200);
+            if (sentenceEnd > 100) return about.substring(0, sentenceEnd + 1) + ' ...';
+            // Otherwise cut at word boundary
+            const wordEnd = about.lastIndexOf(' ', 200);
+            return about.substring(0, wordEnd > 100 ? wordEnd : 200) + ' ...';
+          })()}
         </div>
       )}
 
@@ -414,6 +439,9 @@ function CompanyScreener({ companyProfile, onClose }) {
 }
 
 export default function App() {
+  // Initialize socket inside component, using useRef to persist instance
+  const socketRef = useRef(null);
+
   const [bseEvents,      setBseEvents]      = useState([]);
   const [nseEvents,      setNseEvents]      = useState([]);
   const [radar,          setRadar]          = useState([]);
@@ -426,7 +454,6 @@ export default function App() {
   const [activeTab,      setActiveTab]      = useState("bse");
   const [feedFilter,     setFeedFilter]     = useState("ALL");
   const [flash,          setFlash]          = useState(false);
-  const [radarSearch,    setRadarSearch]    = useState("");
   const [mobilePanel,    setMobilePanel]    = useState("radar");
   const [windowInfo,     setWindowInfo]     = useState({ hours: 24, label: "24h" });
   const [searchQuery,    setSearchQuery]    = useState("");
@@ -437,6 +464,10 @@ export default function App() {
   const flashTimer    = useRef(null);
   const searchTimeout = useRef(null);
 
+  function closeProfile() {
+    setCompanyProfile(null);
+  }
+
   function triggerFlash() {
     setFlash(true);
     clearTimeout(flashTimer.current);
@@ -445,7 +476,12 @@ export default function App() {
 
   function playAlert(freq1 = 880, freq2 = 1100) {
     try {
-      const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return; // Check if AudioContext is available
+      if (!window._audioCtx || window._audioCtx.state === "closed") {
+        window._audioCtx = new AudioCtx();
+      }
+      const ctx = window._audioCtx;
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -456,45 +492,49 @@ export default function App() {
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + 0.5);
-    } catch(e) {}
+    } catch {}
   }
-
   function handleSearchInput(q) {
     setSearchQuery(q);
-    setRadarSearch(q);
     clearTimeout(searchTimeout.current);
-    if (!q || q.length < 2) { setSearchResults([]); return; }
+    if (!q || q.length < 2) {
+      setSearchResults([]);
+      return;
+    }
     searchTimeout.current = setTimeout(async () => {
       try {
         const r = await fetch(`/api/search/${encodeURIComponent(q)}`);
         const d = await r.json();
         setSearchResults(d.results || []);
-      } catch(e) {}
+      } catch {}
     }, 300);
+  }
+
+  function clearSearch() {
+    setSearchQuery("");
+    setSearchResults([]);
   }
 
   async function loadCompanyProfile(code, name, nseSymbol) {
     setSearchResults([]);
     setSearchQuery(name || "");
     setProfileLoading(true);
-    setCompanyProfile(null);
     try {
       const nseParam = nseSymbol ? `?nse=${nseSymbol}` : "";
       const r = await fetch(`/api/company/${code}${nseParam}`);
+      if (!r.ok) {
+        return;
+      }
       const d = await r.json();
       setCompanyProfile({ ...d, code });
-    } catch(e) {}
+    } catch(e) {
+      // Optionally log error or handle it
+    }
     setProfileLoading(false);
   }
 
-  function closeProfile() {
-    setCompanyProfile(null);
-    setSearchQuery("");
-    setRadarSearch("");
-  }
-
   useEffect(() => {
-    fetch("/api/events")
+    fetch("/api/feed")
       .then(r => r.json())
       .then(data => {
         if (data.bse?.length) {
@@ -510,21 +550,32 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
-
   useEffect(() => {
+    // Initialize socket only once
+    if (!socketRef.current) {
+      socketRef.current = io(window.location.origin);
+    }
+    const socket = socketRef.current;
+
     socket.on("bse_status", s => setBseStatus(s));
     socket.on("nse_status", s => setNseStatus(s));
-    socket.on("window_info", info => setWindowInfo(info));
-
     socket.on("radar_update", data => {
       setRadar(prev => {
-        const prevMap = Object.fromEntries(prev.map(r => [r.company, r]));
-        return data.map(r => ({
-          ...r,
-          receivedAt: prevMap[r.company]?.score === r.score
-            ? (prevMap[r.company]?.receivedAt || bestTsRadar(r))
-            : bestTsRadar(r)
-        }));
+        // Use a composite key for uniqueness and fallback if company is missing
+        const getKey = r => (r.company || "") + (r.code || "");
+        const prevMap = Object.fromEntries(prev.map(r => [getKey(r), r]));
+        return data.map(r => {
+          const key = getKey(r);
+          const prevItem = prevMap[key];
+          return {
+            ...r,
+            receivedAt: prevItem && prevItem.score === r.score
+              ? (prevItem.receivedAt || bestTsRadar(r))
+              : bestTsRadar(r)
+          };
+        });
+      });
+    });
       });
     });
 
@@ -577,14 +628,27 @@ export default function App() {
       ].slice(0, 10));
     });
 
-    return () => socket.removeAllListeners();
+    return () => {
+      socket.off("bse_status");
+      socket.off("nse_status");
+      socket.off("window_info");
+      socket.off("radar_update");
+      socket.off("bse_events");
+      socket.off("nse_events");
+      socket.off("order_book_update");
+      socket.off("mega_order_alert");
+      socket.off("sector_alerts");
+      socket.off("sector_boom");
+      socket.off("opportunity_alert");
+      // Optionally disconnect socket on unmount
+      // socket.disconnect();
+    };
   }, []);
 
-  const feedEvents    = activeTab === "bse" ? bseEvents : nseEvents;
-  const filteredFeed  = feedEvents.filter(e => filterEvent(e, feedFilter));
-  const filteredRadar = radarSearch
-    ? radar.filter(r => r.company.toLowerCase().includes(radarSearch.toLowerCase()))
+  const filteredRadar = searchQuery
+    ? radar.filter(r => r.company.toLowerCase().includes(searchQuery.toLowerCase()))
     : radar;
+  const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => filterEvent(e, feedFilter));
   const isWeekend = windowInfo.hours > 24;
 
   return (
@@ -651,7 +715,7 @@ export default function App() {
               onChange={e => handleSearchInput(e.target.value)}
             />
             {searchQuery && (
-              <button onClick={closeProfile} style={{
+              <button onClick={clearSearch} style={{
                 position: "absolute", right: "6px", top: "50%",
                 transform: "translateY(-50%)", background: "none",
                 border: "none", color: "#1a4a60", cursor: "pointer", fontSize: "12px"
@@ -684,17 +748,8 @@ export default function App() {
             </div>
           )}
 
-          {/* FULL SCREENER */}
-          {companyProfile && !profileLoading && (
-            <CompanyScreener companyProfile={companyProfile} onClose={closeProfile} />
-          )}
-
-          {/* EMPTY STATE */}
-          {filteredRadar.length === 0 && !companyProfile && !profileLoading && (
-            <div className="empty">
-              {isWeekend ? "Weekend mode — showing last 96h\nMarket opens Mon 9:15 AM" : "Waiting for signals…\nMarket opens Mon 9:15 AM"}
-            </div>
-          )}
+          {/* COMPANY PROFILE DISPLAY */}
+          {companyProfile && <CompanyScreener companyProfile={companyProfile} onClose={closeProfile} />}
 
           {/* RADAR LIST */}
           {filteredRadar.map((r, i) => {
@@ -715,21 +770,21 @@ export default function App() {
                 <div className="sbar">
                   <div className="sfill" style={{ width: `${Math.min(r.score, 100)}%`, background: scoreBg(r.score) }} />
                 </div>
-                <div className="tags">
-                 {[...new Set(r.signals)].slice(0, 3).map((s, j) => (
-                <Tag
-                key={j}
-                type={s}
-                crores={r._orderInfo?.crores}
-                mcap={r._orderInfo?.mcap}
-                mcapPct={
-                r._orderInfo?.crores && r._orderInfo?.mcap
-                ? ((r._orderInfo.crores / r._orderInfo.mcap) * 100).toFixed(1)
-                : null
-              }
+          <div className="tags">
+           {[...new Set(r.signals)].slice(0, 3).map((s) => (
+             <Tag
+               key={s}
+               type={s}
+               crores={r._orderInfo?.crores}
+               mcap={r._orderInfo?.mcap}
+               mcapPct={
+                 r._orderInfo?.crores && r._orderInfo?.mcap > 0
+                   ? ((r._orderInfo.crores / r._orderInfo.mcap) * 100).toFixed(1)
+                   : null
+               }
              />
-          ))}
-                </div>
+           ))}
+          </div>
                 <div className="rc-foot">
                   {r.pdfUrl
                     ? <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="plink" onClick={e => e.stopPropagation()}>Filing ↗</a>
@@ -765,44 +820,56 @@ export default function App() {
             ))}
           </div>
 
-          {filteredFeed.length === 0
-            ? <div className="empty">{isWeekend ? "Weekend — no new filings" : "No signals match filter"}</div>
-            : filteredFeed.map((e, i) => {
-              const crores  = e._orderInfo?.crores || null;
-              const mcap    = e._orderInfo?.mcap   || null;
-              const mcapPct = (crores && mcap) ? ((crores / mcap) * 100).toFixed(1) : null;
-              const isMega  = e.type === "ORDER_ALERT" && crores >= 1000;
-              const isHigh  = (e.value || 0) >= 70;
-              return (
-                <div className={`feed-card ${isMega ? "mega-value" : isHigh ? "high-value" : ""}`} key={i}>
-                  <div className="fc-head">
-                    <span className="co-name">{e.company}</span>
-                    <Tag type={e.type} crores={crores} mcap={mcap} mcapPct={mcapPct} />
-                  </div>
-                  <div className="fc-text">{e.title}</div>
-                  <div className="fc-foot">
-                    <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      {e.value >= 50 && <span className="fc-value">Score {e.value}</span>}
-                      {e.pdfUrl && <a href={e.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>}
-                    </div>
+          {filteredFeed.length === 0 && (
+            <div className="empty">
+              {isWeekend
+                ? "Weekend — no new filings"
+                : "No signals match filter"}
+            </div>
+          )}
+          {filteredFeed.length > 0 && filteredFeed.map((e, i) => {
+            const crores  = e._orderInfo?.crores || null;
+            const mcap    = e._orderInfo?.mcap   || null;
+            const mcapPct = (crores && mcap) ? ((crores / mcap) * 100).toFixed(1) : null;
+            const isMega  = e.type === "ORDER_ALERT" && crores >= 1000;
+            const isHigh  = (e.value || 0) >= 70;
+            return (
+              <div className={`feed-card ${isMega ? "mega-value" : isHigh ? "high-value" : ""}`} key={i}>
+                <div className="fc-head">
+                  <span className="co-name">{e.company}</span>
+                  <Tag type={e.type} crores={crores} mcap={mcap} mcapPct={mcapPct} />
+                </div>
+                <div className="fc-text">{e.title}</div>
+                <div className="fc-foot">
+                  <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {e.value >= 50 && <span className="fc-value">Score {e.value}</span>}
+                    {e.pdfUrl && <a href={e.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>}
                   </div>
                 </div>
-              );
-            })
-          }
+              </div>
+            );
+          })}
         </div>
 
         {/* ══ RIGHT PANEL ══ */}
         <div className={`panel right-panel ${mobilePanel === "right" ? "mobile-active" : ""}`}>
+          <div className="panel-header" style={{ marginBottom: "8px" }}>
+            <span className="panel-title">📊 Data</span>
+          </div>
 
-          {megaOrders.length > 0 && <>
-            <div className="section-divider">🚨 Mega Orders <span className="count">{megaOrders.length}</span></div>
-            {megaOrders.map((o, i) => (
-              <div className="mega-card" key={i}>
+          <div className="section-divider">🔥 Mega Orders <span className="count">{megaOrders.length}</span></div>
+          {megaOrders.length === 0
+            ? <div className="empty">No mega orders yet</div>
+            : megaOrders.map((o) => (
+              <div className="mega-card" key={o.company}>
                 <div className="mega-head">
                   <span className="co-name">{o.company}</span>
-                  <span className="mega-val">₹{o.crores >= 1000 ? (o.crores/1000).toFixed(1)+"K" : o.crores}Cr</span>
+                  <span className="mega-val">₹{o.crores >= 1000
+                    ? (o.crores/1000).toFixed(1) + "K"
+                    : o.crores < 1
+                      ? "<1"
+                      : o.crores}Cr</span>
                 </div>
                 {o.periodLabel && <div className="mega-sub">{o.periodLabel} project{o.annualCrores && ` · ₹${o.annualCrores}Cr/yr`}</div>}
                 {o.mcapRatio > 0 && <div className="mega-mcap">{o.mcapRatio}% of MCap</div>}
@@ -813,14 +880,12 @@ export default function App() {
                 </div>
               </div>
             ))}
-          </>}
 
-          {opportunities.length > 0 && <>
-            <div className="section-divider" style={{ marginTop: megaOrders.length > 0 ? 8 : 0 }}>
-              🎯 Multibagger <span className="count">{opportunities.length}</span>
-            </div>
-            {opportunities.map((o, i) => (
-              <div className="opp-card" key={i}>
+          <div className="section-divider" style={{ marginTop: 8 }}>💡 Opportunities <span className="count">{opportunities.length}</span></div>
+          {opportunities.length === 0
+            ? <div className="empty">No opportunities yet</div>
+            : opportunities.map((o) => (
+              <div className="opp-card" key={o.company}>
                 <div className="opp-row">
                   <span className="co-name">{o.company}</span>
                   <span className="opp-pct">{o.score}%</span>
@@ -828,13 +893,12 @@ export default function App() {
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
               </div>
             ))}
-          </>}
 
           <div className="section-divider" style={{ marginTop: 8 }}>🏭 Sectors <span className="count">{sector.length}</span></div>
           {sector.length === 0
             ? <div className="empty">No sector activity yet</div>
-            : sector.map((s, i) => (
-              <div className={`sec-card ${s.isBoom ? "boom" : ""}`} key={i}>
+            : sector.map((s) => (
+              <div className={`sec-card ${s.isBoom ? "boom" : ""}`} key={s.sector}>
                 <div className="sec-row">
                   <span className="sec-name">{s.isBoom ? "🔥 " : ""}{s.sector}</span>
                   <span className="sec-val">₹{s.totalValue?.toFixed(0)}Cr</span>
@@ -845,22 +909,27 @@ export default function App() {
                   <span style={{ color: "#1e5070" }}>{s.companies?.slice(0, 3).join(", ")}</span>
                 </div>
               </div>
-            ))
-          }
+            ))}
 
           <div className="section-divider" style={{ marginTop: 8 }}>📦 Order Book <span className="count">{orderBook.length}</span></div>
           {orderBook.length === 0
             ? <div className="empty">No orders tracked yet</div>
-            : orderBook.map((o, i) => (
-              <div className="ord-card" key={i}>
+            : orderBook.map((o) => (
+              <div className="ord-card" key={o.company}>
                 <div className="ord-top">
                   <span className="co-name">{o.company}</span>
                   <span className={`str-lbl ${(o.strength || "early").toLowerCase().replace(" ", "-")}`}>{o.strength}</span>
                 </div>
                 <div className="ord-stats">
-                  <span className="ord-val">₹{o.orderValue}Cr</span>
+                  <span className="ord-val">
+                    ₹{o.orderValue >= 1000
+                      ? (o.orderValue / 1000).toFixed(1) + "K"
+                      : o.orderValue < 1
+                        ? "<1"
+                        : o.orderValue.toFixed(0)}Cr
+                  </span>
                   {o.quarterBook > 0 && <span className="ord-book">Q: ₹{o.quarterBook?.toFixed(0)}Cr</span>}
-                  {o.estimatedOrderBook && <span className="ord-book">Est: ₹{(o.estimatedOrderBook/100).toFixed(0)}K Cr</span>}
+                  {o.estimatedOrderBook && <span className="ord-book">Est: ₹{o.estimatedOrderBook.toFixed(0)}Cr</span>}
                 </div>
                 <div style={{ display: "flex", gap: "8px", fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", marginBottom: "3px", flexWrap: "wrap" }}>
                   {o.mcapRatio > 0 && <>
@@ -872,9 +941,7 @@ export default function App() {
                 {o.periodLabel && <div className="ord-period">{o.periodLabel} project</div>}
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
               </div>
-            ))
-          }
-
+            ))}
         </div>
       </div>
     </div>

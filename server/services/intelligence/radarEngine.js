@@ -113,9 +113,13 @@ function updateRadar(company, signal) {
 
   data.signals.unshift(signal.type);
 
-  if (signal._orderInfo) {
-    data._orderInfo = signal._orderInfo;
-  }
+ if (signal._orderInfo) {
+  data._orderInfo = signal._orderInfo;
+}
+
+if (signal.mcapRatio !== undefined) {
+  data.mcapRatio = signal.mcapRatio;
+}
 
   if (data.signals.length > MAX_SIGNAL_HISTORY) {
     data.signals = data.signals.slice(0, MAX_SIGNAL_HISTORY);

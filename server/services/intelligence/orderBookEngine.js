@@ -102,21 +102,20 @@ function orderBookEngine(signal) {
 
   console.log(`📊 OrderBook: ${company} ₹${crores}Cr | Q-Book: ₹${qs.quarterBook}Cr | MCap%: ${mcapRatio}% | Alert: ${alertLevel || "none"}`);
 
-  return {
-    company,
-    code,
+return {
+  company,
+  code,
 
-    // This order
-    orderValue:    crores,
-    years,
-    periodLabel,
-    annualCrores,
+  orderValue: crores,
+  mcapRatio: mcapRatio,
 
-    // Quarter tracking
-    quarterBook:    qs.quarterBook,
-    quarterOrders:  qs.quarterOrders,
-    currentQuarter: quarter,
-    qMcapRatio,
+  years,
+  periodLabel,
+  annualCrores,
+
+  quarterBook: qs.quarterBook,
+  quarterOrders: qs.quarterOrders,
+  currentQuarter: quarter,
 
     // Running total
     totalOrderBook: totalBook,
