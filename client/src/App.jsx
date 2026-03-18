@@ -1,3 +1,6 @@
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer
+} from "recharts";
 import { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
@@ -505,6 +508,7 @@ export default function App() {
   const [searchQuery,    setSearchQuery]    = useState("");
   const [searchResults,  setSearchResults]  = useState([]);
   const [companyProfile, setCompanyProfile] = useState(null);
+  const [selectedOrder, setSelectedOrder] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
 
   const flashTimer    = useRef(null);
@@ -957,35 +961,174 @@ export default function App() {
           {orderBook.length === 0
             ? <div className="empty">No orders tracked yet</div>
             : orderBook.map((o) => (
-              <div className="ord-card" key={o.company}>
-                <div className="ord-top">
+              <div className="ord-card"
+                   key={o.company}
+                   onClick={() => setSelectedOrder(o)}
+                   style={{ cursor: "pointer" }}
+                   ><div className="ord-top">
                   <span className="co-name">{o.company}</span>
                   <span className={`str-lbl ${(o.strength || "early").toLowerCase().replace(" ", "-")}`}>{o.strength}</span>
                 </div>
-                <div className="ord-stats">
-                  <span className="ord-val">
-                    ₹{o.orderValue >= 1000
-                      ? (o.orderValue / 1000).toFixed(1) + "K"
-                      : o.orderValue < 1
-                        ? "<1"
-                        : o.orderValue.toFixed(0)}Cr
-                  </span>
-                  {o.quarterBook > 0 && <span className="ord-book">Q: ₹{o.quarterBook?.toFixed(0)}Cr</span>}
-                  {o.estimatedOrderBook && <span className="ord-book">Est: ₹{o.estimatedOrderBook.toFixed(0)}Cr</span>}
-                </div>
+                )}
+              <div className="ord-stats">
+
+  {/* 🔥 NEW — CURRENT LIVE OB */}
+  {o.currentLiveOrderBook !== undefined && o.currentLiveOrderBook !== null && (
+  <span className="ord-val">
+    OB ₹{o.currentLiveOrderBook >= 1000
+      ? (o.currentLiveOrderBook / 1000).toFixed(1) + "K"
+      : o.currentLiveOrderBook.toFixed(0)}Cr
+  </span>
+)}
+
+  {/* 🔥 NEW — ADDED SINCE RESULT */}
+  {o.addedSinceResult && o.addedSinceResult > 0 && (
+    <span style={{ color: "#00cc66", fontWeight: 700 }}>
+      +₹{o.addedSinceResult.toFixed(0)}Cr
+    </span>
+  )}
+
+  {/* EXISTING */}
+  {o.quarterBook > 0 && (
+    <span className="ord-book">
+      Q: ₹{o.quarterBook.toFixed(0)}Cr
+    </span>
+  )}
+
+  {o.estimatedOrderBook && (
+    <span className="ord-book">
+      Est: ₹{o.estimatedOrderBook.toFixed(0)}Cr
+    </span>
+  )}
+</div>
                 <div style={{ display: "flex", gap: "8px", fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", marginBottom: "3px", flexWrap: "wrap" }}>
-                  {o.mcapRatio > 0 && <>
-                    <span style={{ color: "#ff8844", fontWeight: 700 }}>{o.mcapRatio}% of MCap</span>
-                    <span style={{ color: "#1a4060" }}>· {o.quarterOrders} orders this qtr</span>
-                  </>}
-                  {o.obToRevRatio && <span style={{ color: "#1a4a30" }}>OB/Rev {o.obToRevRatio}x</span>}
-                </div>
-                {o.periodLabel && <div className="ord-period">{o.periodLabel} project</div>}
-                <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
-              </div>
-            ))}
+
+  {/* 🔥 QoQ Growth */}
+  {o.quarterSeries?.length > 0 && (() => {
+  const g = o.quarterSeries[o.quarterSeries.length - 1]?.qoqGrowth;
+
+  return (
+    <span style={{
+      color:
+        g === null || g === undefined
+          ? "#888"
+          : g > 0
+          ? "#00cc66"
+          : "#ff4444",
+      fontWeight: 700
+    }}>
+      {g !== null && g !== undefined ? `QoQ ${g}%` : "QoQ --"}
+    </span>
+  );
+})()}
+  {/* EXISTING */}
+  {o.mcapRatio > 0 && <>
+    <span style={{ color: "#ff8844", fontWeight: 700 }}>
+      {o.mcapRatio}% of MCap
+    </span>
+    <span style={{ color: "#1a4060" }}>
+      · {o.quarterOrders} orders this qtr
+    </span>
+  </>}
+
+  {o.obToRevRatio && (
+    <span style={{ color: "#1a4a30" }}>
+      OB/Rev {o.obToRevRatio}x
+    </span>
+  )}
+
+      </div>
+
+    </div>
+)}
+{selectedOrder && (
+  <div
+    style={{
+      position: "fixed",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      background: "rgba(0,0,0,0.7)",
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      zIndex: 9999
+    }}
+    onClick={() => setSelectedOrder(null)}
+  >
+    <div
+      style={{
+        width: "90%",
+        maxWidth: "500px",
+        maxHeight: "80%",
+        overflowY: "auto",
+        background: "#020d1e",
+        border: "1px solid #0c3060",
+        borderRadius: "6px",
+        padding: "12px"
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
+        <span style={{ color: "#d0eeff", fontWeight: 700 }}>
+          {selectedOrder.company}
+        </span>
+        <button onClick={() => setSelectedOrder(null)}>✕</button>
+      </div>
+
+      <div style={{ marginBottom: "10px", fontSize: "12px" }}>
+        <div>Current OB: ₹{(selectedOrder.currentLiveOrderBook || 0).toFixed(0)}Cr</div>
+        <div style={{ color: "#00cc66" }}>
+          Added: ₹{(selectedOrder.addedSinceResult || 0).toFixed(0)}Cr
         </div>
       </div>
+
+     {/* 📊 ORDER BOOK TREND CHART */}
+<div style={{ height: "180px", marginBottom: "12px" }}>
+  <ResponsiveContainer width="100%" height="100%">
+    <LineChart data={selectedOrder.quarterSeries || []}>
+      <XAxis dataKey="quarter" stroke="#1a4a60" fontSize={10} />
+      <YAxis stroke="#1a4a60" fontSize={10} />
+      <Tooltip
+        contentStyle={{
+          background: "#020d1e",
+          border: "1px solid #0c3060",
+          fontSize: "10px"
+        }}
+      />
+      <Line
+        type="monotone"
+        dataKey="orderBook"
+        stroke="#00cfff"
+        strokeWidth={2}
+        dot={{ r: 2 }}
+      />
+    </LineChart>
+  </ResponsiveContainer>
+</div>
+
+{/* 📊 QUARTER TABLE */}
+{selectedOrder.quarterSeries?.map((q, i) => (
+  <div key={i} style={{ display: "flex", justifyContent: "space-between" }}>
+    <span>{q.quarter}</span>
+    <span>₹{q.orderBook}</span>
+    <span>
+      {q.qoqGrowth !== null && q.qoqGrowth !== undefined
+        ? `${q.qoqGrowth}%`
+        : "--"}
+    </span>
+  </div>
+))}
+      {/* DAY ORDERS */}
+      {selectedOrder.dayWiseOrders?.map((d, i) => (
+        <div key={i}>
+          ₹{d.crores}Cr — {d.date}
+        </div>
+      ))}
+
     </div>
-  );
-}
+  </div>
+)}
+</div>

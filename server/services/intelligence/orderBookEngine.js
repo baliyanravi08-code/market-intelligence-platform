@@ -6,6 +6,7 @@ const {
 } = require("../data/marketCap");
 
 const quarterlyStore = {};
+const liveOrderBookStore = {}; // ✅ NEW
 
 function getCurrentQuarter() {
   const now = new Date();
@@ -13,6 +14,178 @@ function getCurrentQuarter() {
   return `${now.getFullYear()}Q${q}`;
 }
 
+// ✅ SET BASE FROM RESULT
+function setConfirmedOrderBook(code, company, quarter, value) {
+  if (!liveOrderBookStore[code]) {
+    liveOrderBookStore[code] = {
+      company,
+      code,
+      confirmedQuarter: null,
+      confirmedOrderBook: 0,
+      addedSinceResult: 0,
+      currentOrderBook: 0,
+      dayWiseOrders: [],
+      quarterSeries: []
+    };
+  }
+
+  const item = liveOrderBookStore[code];
+
+  item.company = company;
+  item.code = code;
+  item.confirmedQuarter = quarter;
+  item.confirmedOrderBook = Number(value) || 0;
+  item.addedSinceResult = 0;
+  item.currentOrderBook = item.confirmedOrderBook;
+}
+
+//function addOrderToLiveBook(signal) {
+  if (!signal._orderInfo?.crores) return;
+
+  const code = String(signal.code || signal.company);
+  const company = signal.company;
+  const crores = Number(signal._orderInfo.crores);
+
+  if (!crores || crores <= 0) return;
+
+  if (!liveOrderBookStore[code]) {
+    liveOrderBookStore[code] = {
+      company,
+      code,
+      confirmedQuarter: null,
+      confirmedOrderBook: 0,
+      addedSinceResult: 0,
+      currentOrderBook: 0,
+      dayWiseOrders: [],
+      quarterSeries: []
+    };
+  }
+
+  const item = liveOrderBookStore[code];
+
+  item.company = company;
+  item.addedSinceResult += crores;
+  item.currentOrderBook =
+    (item.confirmedOrderBook || 0) + item.addedSinceResult;
+
+  // ✅ Prevent duplicate same order
+  const orderTime = signal.time || Date.now();
+
+  const exists = item.dayWiseOrders.find(
+    o => o.time === orderTime && o.crores === crores
+  );
+
+  if (exists) return;
+
+  // ✅ Add new order
+  item.dayWiseOrders.unshift({
+    date: new Date(orderTime)
+      .toISOString()
+      .slice(0, 10),
+    crores,
+    title: (signal.title ?? "").slice(0, 80),
+    time: orderTime
+  });
+
+  // keep only latest 50
+  item.dayWiseOrders = item.dayWiseOrders.slice(0, 50);
+}
+function addOrderToLiveBook(signal) {
+  if (!signal._orderInfo?.crores) return;
+
+  const code = String(signal.code || signal.company);
+  const company = signal.company;
+  const crores = Number(signal._orderInfo.crores);
+
+  if (!crores || crores <= 0) return;
+
+  if (!liveOrderBookStore[code]) {
+    liveOrderBookStore[code] = {
+      company,
+      code,
+      confirmedQuarter: null,
+      confirmedOrderBook: 0,
+      addedSinceResult: 0,
+      currentOrderBook: 0,
+      dayWiseOrders: [],
+      quarterSeries: []
+    };
+  }
+
+  const item = liveOrderBookStore[code];
+
+  item.company = company;
+  item.addedSinceResult += crores;
+  item.currentOrderBook =
+    (item.confirmedOrderBook || 0) + item.addedSinceResult;
+
+  const orderTime = signal.time || Date.now();
+
+  const exists = item.dayWiseOrders.find(
+    o => o.time === orderTime && o.crores === crores
+  );
+
+  if (exists) return;
+
+  item.dayWiseOrders.unshift({
+    date: new Date(orderTime).toISOString().slice(0, 10),
+    crores,
+    title: (signal.title ?? "").slice(0, 80),
+    time: orderTime
+  });
+
+  item.dayWiseOrders = item.dayWiseOrders.slice(0, 50);
+}
+function updateQuarterSeries(code, company, quarter, value) {
+  if (!liveOrderBookStore[code]) {
+    liveOrderBookStore[code] = {
+      company,
+      code,
+      confirmedQuarter: null,
+      confirmedOrderBook: 0,
+      addedSinceResult: 0,
+      currentOrderBook: 0,
+      dayWiseOrders: [],
+      quarterSeries: []
+    };
+  }
+
+  const item = liveOrderBookStore[code];
+
+  const numericValue = Number(value) || 0;
+
+  const existing = item.quarterSeries.find(q => q.quarter === quarter);
+
+  if (existing) {
+    existing.orderBook = numericValue;
+  } else {
+    item.quarterSeries.push({
+      quarter,
+      orderBook: numericValue
+    });
+  }
+
+  item.quarterSeries.sort((a, b) => {
+    const [y1, q1] = a.quarter.split("Q").map(Number);
+    const [y2, q2] = b.quarter.split("Q").map(Number);
+    return y1 === y2 ? q1 - q2 : y1 - y2;
+  });
+
+  item.quarterSeries = item.quarterSeries.slice(-4);
+
+  item.quarterSeries = item.quarterSeries.map((q, i, arr) => {
+    if (i === 0) return { ...q, qoqGrowth: null };
+
+    const prev = arr[i - 1].orderBook;
+    const growth =
+      prev > 0 ? ((q.orderBook - prev) / prev) * 100 : null;
+
+    return {
+      ...q,
+      qoqGrowth: growth !== null ? Number(growth.toFixed(2)) : null
+    };
+  });
+}
 function orderBookEngine(signal) {
   if (signal.type !== "ORDER_ALERT") return null;
 
@@ -21,10 +194,7 @@ function orderBookEngine(signal) {
 
   const orderInfo = signal._orderInfo;
 
-  if (!orderInfo || !orderInfo.crores) {
-    console.log(`⚠️ No order size for ${company} — skipping`);
-    return null;
-  }
+  if (!orderInfo || !orderInfo.crores) return null;
 
   const crores = Number(orderInfo.crores);
   if (!crores || crores <= 0) return null;
@@ -34,16 +204,15 @@ function orderBookEngine(signal) {
   const annualCrores =
     orderInfo.annualCrores || (years ? crores / years : crores);
 
-  // ✅ Unique ID for dedupe
   const orderId = `${code}-${crores}-${signal.time}`;
 
-  // ✅ Store updates (pass orderId for dedupe support)
   const storeData = storeAddOrder(code, crores, orderId);
   addNewOrder(code, crores, orderId);
 
-  // ─────────────────────────────
-  // 📊 QUARTERLY TRACKING
-  // ─────────────────────────────
+  // ✅ LIVE ORDER BOOK UPDATE
+  addOrderToLiveBook(signal);
+
+  // ───────── QUARTERLY TRACKING ─────────
 
   const quarter = getCurrentQuarter();
 
@@ -59,9 +228,7 @@ function orderBookEngine(signal) {
 
   const qs = quarterlyStore[code];
 
-  // Reset on new quarter
   if (qs.currentQuarter !== quarter) {
-    // Save previous quarter to history
     qs.quarterHistory.push({
       quarter: qs.currentQuarter,
       value: qs.quarterBook
@@ -74,33 +241,26 @@ function orderBookEngine(signal) {
     qs.currentQuarter = quarter;
   }
 
-  // Update current quarter
   qs.quarterBook += crores;
   qs.quarterOrders += 1;
 
   qs.recentOrders.unshift({
-    crores,
-    years,
-    periodLabel,
-    annualCrores,
-    title: (signal.title || "").substring(0, 80),
-    time: signal.time
-  });
+  crores,
+  years,
+  periodLabel,
+  annualCrores,
+  title: (signal.title ?? "").slice(0, 80),
+  time: signal.time
+});
 
   qs.recentOrders = qs.recentOrders.slice(0, 10);
 
-  // ─────────────────────────────
-  // 📈 CALCULATIONS
-  // ─────────────────────────────
+  // ───────── CALCULATIONS ─────────
 
   const mcap = getMarketCap(code) || 0;
 
   const mcapRatio = mcap
     ? parseFloat(((crores / mcap) * 100).toFixed(2))
-    : 0;
-
-  const qMcapRatio = mcap
-    ? parseFloat(((qs.quarterBook / mcap) * 100).toFixed(2))
     : 0;
 
   const totalBook = storeData.totalOrderValue;
@@ -109,15 +269,12 @@ function orderBookEngine(signal) {
     ? parseFloat(((totalBook / mcap) * 100).toFixed(2))
     : 0;
 
-  // Estimated order book
   const estBook = getEstimatedOrderBook(code);
 
   const obToRev = estBook?.obToRevRatio || null;
   const bookToBill = estBook?.bookToBill || null;
 
-  // ─────────────────────────────
-  // 💪 STRENGTH LOGIC
-  // ─────────────────────────────
+  // ───────── STRENGTH ─────────
 
   let strength = "EARLY";
 
@@ -133,15 +290,12 @@ function orderBookEngine(signal) {
     else if (totalBook >= 20) strength = "BUILDING";
   }
 
-  // ─────────────────────────────
-  // 🚨 ALERT FLAGS
-  // ─────────────────────────────
+  // ───────── ALERTS ─────────
 
   const isMegaOrder = crores >= 1000;
   const isMcapAlert = mcapRatio >= 5 && mcap > 0;
   const isFrequencyAlert =
     qs.quarterBook >= 500 && qs.quarterOrders >= 3;
-  const isHighObRev = obToRev && parseFloat(obToRev) >= 3;
 
   const alertLevel = {
     mega: isMegaOrder,
@@ -149,15 +303,9 @@ function orderBookEngine(signal) {
     freq: isFrequencyAlert
   };
 
-  console.log(
-    `📊 ${company} ₹${crores}Cr | Q: ₹${qs.quarterBook}Cr | MCap%: ${mcapRatio}% | Alert: ${JSON.stringify(
-      alertLevel
-    )}`
-  );
+  // ───────── LIVE BOOK DATA ─────────
 
-  // ─────────────────────────────
-  // 📦 FINAL OUTPUT
-  // ─────────────────────────────
+  const live = liveOrderBookStore[code] || {};
 
   return {
     company,
@@ -176,28 +324,28 @@ function orderBookEngine(signal) {
     quarterHistory: qs.quarterHistory,
 
     totalOrderBook: totalBook,
-    orders: storeData.orders.length,
     totalMcapRatio,
 
     estimatedOrderBook: estBook?.estimated || null,
     confirmedOrderBook: estBook?.confirmed || null,
     confirmedQuarter: estBook?.confirmedQuarter || null,
-    newOrdersSinceConfirm: estBook?.newOrders || null,
 
-    obToRevRatio: obToRev,
-    bookToBill,
+    // ✅ NEW POWER DATA
+    currentLiveOrderBook: live.currentOrderBook || 0,
+    addedSinceResult: live.addedSinceResult || 0,
+    dayWiseOrders: live.dayWiseOrders || [],
+    quarterSeries: live.quarterSeries || [],
 
     strength,
-    isMegaOrder,
-    isMcapAlert,
-    isFrequencyAlert,
-    isHighObRev,
     alertLevel,
 
-    percentage: mcapRatio,
     time: signal.time,
     recentOrders: qs.recentOrders.slice(0, 3)
   };
 }
 
-module.exports = orderBookEngine;
+module.exports = {
+  orderBookEngine,
+  setConfirmedOrderBook,
+  updateQuarterSeries
+};
