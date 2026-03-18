@@ -645,11 +645,16 @@ export default function App() {
     });
 
     socket.on("order_book_update", data => {
-      setOrderBook(prev => [
-        { ...data, receivedAt: bestTsFeed(data) },
-        ...prev.filter(o => o.company !== data.company)
-      ].slice(0, 20));
-    });
+  // 🔥 Alert condition
+  if (data.currentLiveOrderBook >= 1000) {
+    playAlert(900, 1400); // stronger sound
+  }
+
+  setOrderBook(prev => [
+    { ...data, receivedAt: bestTsFeed(data) },
+    ...prev.filter(o => o.company !== data.company)
+  ].slice(0, 20));
+});
 
     socket.on("mega_order_alert", data => {
       setMegaOrders(prev => [
@@ -969,7 +974,7 @@ export default function App() {
                   <span className="co-name">{o.company}</span>
                   <span className={`str-lbl ${(o.strength || "early").toLowerCase().replace(" ", "-")}`}>{o.strength}</span>
                 </div>
-                )}
+                ))}
               <div className="ord-stats">
 
   {/* 🔥 NEW — CURRENT LIVE OB */}
@@ -1058,11 +1063,12 @@ export default function App() {
     onClick={() => setSelectedOrder(null)}
   >
     <div
-      style={{
-        width: "90%",
-        maxWidth: "500px",
-        maxHeight: "80%",
-        overflowY: "auto",
+  className="modal-scroll"
+  style={{
+    width: "90%",
+    maxWidth: "500px",
+    maxHeight: "80%",
+    overflowY: "auto",
         background: "#020d1e",
         border: "1px solid #0c3060",
         borderRadius: "6px",
@@ -1131,4 +1137,3 @@ export default function App() {
     </div>
   </div>
 )}
-</div>
