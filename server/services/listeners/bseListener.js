@@ -2,7 +2,7 @@ const axios = require("axios");
 
 const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 const { updateRadar, getRadar } = require("../intelligence/radarEngine");
-const orderBookEngine  = require("../intelligence/orderBookEngine");
+const { orderBookEngine } = require("../intelligence/orderBookEngine");
 const opportunityEngine = require("../intelligence/opportunityEngine");
 const sectorQueue      = require("../intelligence/sectorQueue");
 const sectorRadar      = require("../intelligence/sectorRadar");
