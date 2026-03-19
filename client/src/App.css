@@ -499,8 +499,15 @@ body {
 .ord-card {
   border-bottom: 1px solid #081828;
   padding: 8px 6px;
+  transition: all 0.2s ease;
 }
-
+.ord-card:hover {
+  background: #041020;
+  transform: translateY(-2px);
+}
+.modal-scroll {
+  scrollbar-width: thin;
+}
 .ord-top {
   display: flex;
   justify-content: space-between;
@@ -714,4 +721,18 @@ body {
 
   .filter-bar { gap: 3px; }
   .fbtn { font-size: 9px; padding: 4px 8px; }
+}
+/* 🔥 Order Card Hover Effect */
+.ord-card {
+  transition: all 0.2s ease;
+}
+
+.ord-card:hover {
+  background: #041020;
+  transform: translateY(-2px);
+}
+
+/* 🔥 Modal Smooth Scroll */
+.modal-scroll {
+  scrollbar-width: thin;
 }

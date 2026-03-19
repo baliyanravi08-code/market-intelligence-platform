@@ -1,11 +1,6 @@
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer
-} from "recharts";
 import { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
-
-// Socket initialization moved inside App component
 
 const STATUS_COLOR = {
   connected:    "#00ff9c",
@@ -31,11 +26,6 @@ const SIGNAL_COLOR = {
 
 const FEED_FILTERS = ["ALL", "ORDER", "MERGER", "CAPEX", "RESULT", "INSIDER", ">50"];
 
-/**
- * Converts a raw date/time string or timestamp into a formatted string for display.
- * Input: raw date/time string or timestamp (e.g., ISO string, number).
- * Output: formatted string in "en-IN" locale, Asia/Kolkata timezone, or fallback substring.
- */
 function formatTime(raw) {
   if (!raw) return null;
   try {
@@ -135,62 +125,27 @@ function LiveAgo({ receivedAt, exchangeTime }) {
 }
 
 function Tag({ type, crores, mcap, mcapPct }) {
-
   const c = SIGNAL_COLOR[type] || { bg: "#0d3060", fg: "#fff" };
-
   if (type === "ORDER_ALERT" && crores) {
-
-    const crLabel =
-      crores >= 1000
-        ? `₹${(crores / 1000).toFixed(1)}K`
-        : `₹${crores}Cr`;
-
+    const crLabel = crores >= 1000 ? `₹${(crores / 1000).toFixed(1)}K` : `₹${crores}Cr`;
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "3px" }}>
-
-        <span className="tag" style={{ background: c.bg, color: c.fg }}>
-          ORDER {crLabel}
-        </span>
-
+        <span className="tag" style={{ background: c.bg, color: c.fg }}>ORDER {crLabel}</span>
         {mcap && (
-          <span
-            style={{
-              fontSize: "9px",
-              fontFamily: "IBM Plex Mono, monospace",
-              color: "#2a6060",
-              whiteSpace: "nowrap"
-            }}
-          >
-            MCap ₹{mcap >= 1000 ? `${(mcap/1000).toFixed(1)}K` : mcap?.toFixed(0)}Cr
-
+          <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#2a6060", whiteSpace: "nowrap" }}>
+            MCap ₹{mcap >= 1000 ? `${(mcap / 1000).toFixed(1)}K` : mcap?.toFixed(0)}Cr
             {mcapPct && (
-              <span
-                style={{
-                  marginLeft: 5,
-                  fontWeight: 700,
-                  color:
-                    parseFloat(mcapPct) >= 10
-                      ? "#ff6622"
-                      : parseFloat(mcapPct) >= 5
-                      ? "#ffaa00"
-                      : "#4488aa"
-                }}
-              >
-                · {mcapPct}%
-              </span>
+              <span style={{
+                marginLeft: 5, fontWeight: 700,
+                color: parseFloat(mcapPct) >= 10 ? "#ff6622" : parseFloat(mcapPct) >= 5 ? "#ffaa00" : "#4488aa"
+              }}>· {mcapPct}%</span>
             )}
           </span>
         )}
-
       </div>
     );
   }
-
-  return (
-    <span className="tag" style={{ background: c.bg, color: c.fg }}>
-      {type}
-    </span>
-  );
+  return <span className="tag" style={{ background: c.bg, color: c.fg }}>{type}</span>;
 }
 
 function ExBadge({ exchange }) {
@@ -198,7 +153,6 @@ function ExBadge({ exchange }) {
   return <span className={`ex-badge ex-${exName}`}>{exchange || "?"}</span>;
 }
 
-// ── FULL SCREENER COMPONENT ──
 function CompanyScreener({ companyProfile, onClose }) {
   const p  = companyProfile.profile;
   const fi = companyProfile.financials;
@@ -207,137 +161,69 @@ function CompanyScreener({ companyProfile, onClose }) {
   const isUp = (p?.changePct || 0) >= 0;
 
   return (
-    <div style={{
-      background: "#020d1e", border: "1px solid #0c3060",
-      borderRadius: "6px", padding: "10px", marginBottom: "8px"
-    }}>
+    <div style={{ background: "#020d1e", border: "1px solid #0c3060", borderRadius: "6px", padding: "10px", marginBottom: "8px" }}>
 
-      {/* ── NAME + SECTOR ── */}
+      {/* NAME + SECTOR */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: "12px", fontWeight: 700, color: "#d0eeff", marginBottom: "2px" }}>
-            {p?.name || "Company"}
-          </div>
-          <div style={{ fontSize: "9px", color: "#1a5060" }}>
-            {p?.sector}{p?.industry ? ` · ${p.industry}` : ""}
-          </div>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "#d0eeff", marginBottom: "2px" }}>{p?.name || "Company"}</div>
+          <div style={{ fontSize: "9px", color: "#1a5060" }}>{p?.sector}{p?.industry ? ` · ${p.industry}` : ""}</div>
         </div>
         <button onClick={onClose} style={{ background: "none", border: "none", color: "#1a4a60", cursor: "pointer", fontSize: "14px", flexShrink: 0 }}>✕</button>
       </div>
 
-      {/* ── LIVE PRICE ── */}
+      {/* LIVE PRICE */}
       {p?.price && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: "10px",
-          padding: "8px", background: "#010a18", borderRadius: "4px", marginBottom: "8px"
-        }}>
-          <span style={{ fontSize: "18px", fontWeight: 700, color: "#d0eeff", fontFamily: "IBM Plex Mono, monospace" }}>
-            ₹{p.price}
-          </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px", background: "#010a18", borderRadius: "4px", marginBottom: "8px" }}>
+          <span style={{ fontSize: "18px", fontWeight: 700, color: "#d0eeff", fontFamily: "IBM Plex Mono, monospace" }}>₹{p.price}</span>
           <span style={{ fontSize: "12px", fontWeight: 700, fontFamily: "IBM Plex Mono, monospace", color: isUp ? "#00cc66" : "#ff4444" }}>
             {isUp ? "▲" : "▼"} {Math.abs(p.changePct || 0)}%
             <span style={{ fontSize: "10px", marginLeft: 4, opacity: 0.7 }}>({isUp ? "+" : ""}{p.change})</span>
           </span>
           {p.volume > 0 && (
             <span style={{ fontSize: "9px", color: "#1a4a60", marginLeft: "auto", fontFamily: "IBM Plex Mono, monospace" }}>
-              Vol: {
-                p.volume >= 100000
-                  ? `${(p.volume/100000).toFixed(1)}L`
-                  : p.volume >= 1000
-                    ? `${(p.volume/1000).toFixed(0)}K`
-                    : `${p.volume}`
-              }
+              Vol: {p.volume >= 100000 ? `${(p.volume / 100000).toFixed(1)}L` : p.volume >= 1000 ? `${(p.volume / 1000).toFixed(0)}K` : `${p.volume}`}
             </span>
           )}
         </div>
       )}
 
-      {/* ── 52W BAR ── */}
-        {/* Calculate the percentage position of the current price between 52-week low and high,
-        clamp between 2% and 98% to avoid edge overflow, and set to 50% if high equals low. */}
-
-       {p?.high52 > 0 && p?.low52 > 0 && p?.price > 0 && (() => {
-  const pct =
-    p.high52 === p.low52
-      ? 50
-      : Math.min(
-          Math.max(((p.price - p.low52) / (p.high52 - p.low52)) * 100, 2),
-          98
+      {/* 52W BAR */}
+      {p?.high52 > 0 && p?.low52 > 0 && p?.price > 0 && (() => {
+        const pct = p.high52 === p.low52 ? 50 : Math.min(Math.max(((p.price - p.low52) / (p.high52 - p.low52)) * 100, 2), 98);
+        return (
+          <div style={{ marginBottom: "8px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", color: "#1a4060", fontFamily: "IBM Plex Mono, monospace", marginBottom: "3px" }}>
+              <span>52L ₹{p.low52}</span>
+              <span style={{ color: "#1a6040" }}>▼ current</span>
+              <span>52H ₹{p.high52}</span>
+            </div>
+            <div style={{ height: "4px", background: "#081828", borderRadius: "2px", position: "relative" }}>
+              <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, #0044aa, #00cc66)", borderRadius: "2px" }} />
+              <div style={{ position: "absolute", top: "-3px", left: `${pct}%`, transform: "translateX(-50%)", width: "10px", height: "10px", background: "#00ff9c", borderRadius: "50%", border: "2px solid #010a18" }} />
+            </div>
+          </div>
         );
+      })()}
 
-  return (
-    <div style={{ marginBottom: "8px" }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          fontSize: "9px",
-          color: "#1a4060",
-          fontFamily: "IBM Plex Mono, monospace",
-          marginBottom: "3px"
-        }}
-      >
-        <span>52L ₹{p.low52}</span>
-        <span style={{ color: "#1a6040" }}>▼ current</span>
-        <span>52H ₹{p.high52}</span>
-      </div>
-
-      <div
-        style={{
-          height: "4px",
-          background: "#081828",
-          borderRadius: "2px",
-          position: "relative"
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            height: "100%",
-            width: `${pct}%`,
-            background: "linear-gradient(90deg, #0044aa, #00cc66)",
-            borderRadius: "2px"
-          }}
-        />
-
-        <div
-          style={{
-            position: "absolute",
-            top: "-3px",
-            left: `${pct}%`,
-            transform: "translateX(-50%)",
-            width: "10px",
-            height: "10px",
-            background: "#00ff9c",
-            borderRadius: "50%",
-            border: "2px solid #010a18"
-          }}
-        />
-      </div>
-    </div>
-  );
-})()}
-
-      {/* ── METRICS GRID ── */}
+      {/* METRICS GRID */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px", marginBottom: "8px" }}>
         {[
-          { label: "MCap",    value: p?.mcap        ? `₹${p.mcap >= 1000 ? `${(p.mcap/1000).toFixed(1)}K` : p.mcap?.toFixed(0)}Cr` : null },
-          { label: "PE",      value: p?.pe           ? `${p.pe}x`              : null },
-          { label: "EPS",     value: p?.eps          ? `₹${p.eps}`             : null },
-          { label: "BV/sh",   value: p?.bookValue    ? `₹${p.bookValue}`       : null },
-          { label: "Div Yld", value: p?.dividendYield? `${p.dividendYield}%`   : null },
-          { label: "Face Val",value: p?.faceValue    ? `₹${p.faceValue}`       : null },
-          { label: "D/E",     value: fi?.debtToEquity? `${fi.debtToEquity}x`   : null },
-          { label: "Debt",    value: fi?.totalDebt   ? `₹${fi.totalDebt}Cr`    : null },
-          { label: "Cash",    value: fi?.totalCash   ? `₹${fi.totalCash}Cr`    : null },
-          { label: "ROE",     value: fi?.returnOnEquity  ? `${fi.returnOnEquity}%`   : null },
-          { label: "ROA",     value: fi?.returnOnAssets  ? `${fi.returnOnAssets}%`   : null },
-          { label: "Net Mgn", value: fi?.profitMargin    ? `${fi.profitMargin}%`     : null },
-          { label: "Op Mgn",  value: fi?.operatingMargin ? `${fi.operatingMargin}%`  : null },
-          { label: "Rev Grw", value: fi?.revenueGrowth   ? `${fi.revenueGrowth}%`    : null },
-          { label: "Cur Rat", value: fi?.currentRatio    ? `${fi.currentRatio}x`     : null },
+          { label: "MCap",    value: p?.mcap         ? `₹${p.mcap >= 1000 ? `${(p.mcap / 1000).toFixed(1)}K` : p.mcap?.toFixed(0)}Cr` : null },
+          { label: "PE",      value: p?.pe            ? `${p.pe}x`            : null },
+          { label: "EPS",     value: p?.eps           ? `₹${p.eps}`           : null },
+          { label: "BV/sh",   value: p?.bookValue     ? `₹${p.bookValue}`     : null },
+          { label: "Div Yld", value: p?.dividendYield ? `${p.dividendYield}%` : null },
+          { label: "Face Val",value: p?.faceValue     ? `₹${p.faceValue}`     : null },
+          { label: "D/E",     value: fi?.debtToEquity ? `${fi.debtToEquity}x` : null },
+          { label: "Debt",    value: fi?.totalDebt    ? `₹${fi.totalDebt}Cr`  : null },
+          { label: "Cash",    value: fi?.totalCash    ? `₹${fi.totalCash}Cr`  : null },
+          { label: "ROE",     value: fi?.returnOnEquity   ? `${fi.returnOnEquity}%`   : null },
+          { label: "ROA",     value: fi?.returnOnAssets   ? `${fi.returnOnAssets}%`   : null },
+          { label: "Net Mgn", value: fi?.profitMargin     ? `${fi.profitMargin}%`     : null },
+          { label: "Op Mgn",  value: fi?.operatingMargin  ? `${fi.operatingMargin}%`  : null },
+          { label: "Rev Grw", value: fi?.revenueGrowth    ? `${fi.revenueGrowth}%`    : null },
+          { label: "Cur Rat", value: fi?.currentRatio     ? `${fi.currentRatio}x`     : null },
         ].filter(m => m.value).map((m, i) => (
           <div key={i} style={{ background: "#010a18", borderRadius: "3px", padding: "5px 6px", border: "1px solid #081828" }}>
             <div style={{ fontSize: "8px", color: "#1a4060", fontFamily: "IBM Plex Mono, monospace", marginBottom: "2px" }}>{m.label}</div>
@@ -346,7 +232,7 @@ function CompanyScreener({ companyProfile, onClose }) {
         ))}
       </div>
 
-      {/* ── DAY HIGH/LOW ── */}
+      {/* DAY HIGH/LOW */}
       {(p?.dayHigh > 0 || p?.dayLow > 0) && (
         <div style={{ display: "flex", gap: "8px", marginBottom: "8px", fontSize: "9px", fontFamily: "IBM Plex Mono, monospace" }}>
           {p.dayHigh > 0 && <span style={{ color: "#00cc66" }}>Day H ₹{p.dayHigh}</span>}
@@ -354,7 +240,7 @@ function CompanyScreener({ companyProfile, onClose }) {
         </div>
       )}
 
-      {/* ── SHAREHOLDING ── */}
+      {/* SHAREHOLDING */}
       {sh && (sh.promoter || sh.fii || sh.dii) && (
         <div style={{ marginBottom: "8px" }}>
           <div style={{ fontSize: "9px", color: "#1a4a60", fontFamily: "IBM Plex Mono, monospace", letterSpacing: "1px", marginBottom: "5px", textTransform: "uppercase" }}>
@@ -382,7 +268,7 @@ function CompanyScreener({ companyProfile, onClose }) {
         </div>
       )}
 
-      {/* ── QUARTERLY FINANCIALS ── */}
+      {/* QUARTERLY FINANCIALS */}
       {fi?.quarters?.length > 0 && (
         <div style={{ marginBottom: "8px" }}>
           <div style={{ fontSize: "9px", color: "#1a4a60", fontFamily: "IBM Plex Mono, monospace", letterSpacing: "1px", marginBottom: "5px", textTransform: "uppercase" }}>
@@ -391,31 +277,17 @@ function CompanyScreener({ companyProfile, onClose }) {
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(fi.quarters.length, 4)}, 1fr)`, gap: "4px" }}>
             {fi.quarters.slice(0, 4).map((q, i) => (
               <div key={i} style={{ background: "#010a18", borderRadius: "3px", padding: "5px 4px", border: "1px solid #081828", textAlign: "center" }}>
-                <div style={{ fontSize: "8px", color: "#1a4060", marginBottom: "3px" }}>
-                  {q.date ? q.date.substring(0, 7) : `Q${i+1}`}
-                </div>
-                {q.revenue != null && (
-                  <div style={{ fontSize: "9px", color: "#4488aa", fontFamily: "IBM Plex Mono, monospace" }}>
-                    Rev {q.revenue}
-                  </div>
-                )}
-                {q.profit != null && (
-                  <div style={{ fontSize: "9px", fontWeight: 700, fontFamily: "IBM Plex Mono, monospace", color: q.profit >= 0 ? "#00cc66" : "#ff4444" }}>
-                    PAT {q.profit}
-                  </div>
-                )}
-                {q.ebitda != null && (
-                  <div style={{ fontSize: "8px", color: "#2a6060", fontFamily: "IBM Plex Mono, monospace" }}>
-                    EBITDA {q.ebitda}
-                  </div>
-                )}
+                <div style={{ fontSize: "8px", color: "#1a4060", marginBottom: "3px" }}>{q.date ? q.date.substring(0, 7) : `Q${i + 1}`}</div>
+                {q.revenue != null && <div style={{ fontSize: "9px", color: "#4488aa", fontFamily: "IBM Plex Mono, monospace" }}>Rev {q.revenue}</div>}
+                {q.profit  != null && <div style={{ fontSize: "9px", fontWeight: 700, fontFamily: "IBM Plex Mono, monospace", color: q.profit >= 0 ? "#00cc66" : "#ff4444" }}>PAT {q.profit}</div>}
+                {q.ebitda  != null && <div style={{ fontSize: "8px", color: "#2a6060", fontFamily: "IBM Plex Mono, monospace" }}>EBITDA {q.ebitda}</div>}
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* ── ORDERS FROM SCANNER ── */}
+      {/* ORDERS FROM SCANNER */}
       {rf.some(f => f.type === "ORDER_ALERT") && (
         <div style={{ marginBottom: "8px" }}>
           <div style={{ fontSize: "9px", color: "#1a4a60", fontFamily: "IBM Plex Mono, monospace", letterSpacing: "1px", marginBottom: "5px", textTransform: "uppercase" }}>
@@ -424,13 +296,11 @@ function CompanyScreener({ companyProfile, onClose }) {
           {rf.filter(f => f.type === "ORDER_ALERT").slice(0, 4).map((f, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: "1px solid #081828", gap: "6px" }}>
               <span style={{ fontSize: "9px", color: "#2a6060" }}>
-                {f._orderInfo?.crores ? `₹${f._orderInfo.crores >= 1000 ? `${(f._orderInfo.crores/1000).toFixed(1)}K` : f._orderInfo.crores}Cr` : "Order"}
+                {f._orderInfo?.crores ? `₹${f._orderInfo.crores >= 1000 ? `${(f._orderInfo.crores / 1000).toFixed(1)}K` : f._orderInfo.crores}Cr` : "Order"}
                 {f._orderInfo?.periodLabel ? ` · ${f._orderInfo.periodLabel}` : ""}
               </span>
               <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <span style={{ fontSize: "9px", color: "#1a4060", fontFamily: "IBM Plex Mono, monospace" }}>
-                  {f.time?.substring(0, 10)}
-                </span>
+                <span style={{ fontSize: "9px", color: "#1a4060", fontFamily: "IBM Plex Mono, monospace" }}>{f.time?.substring(0, 10)}</span>
                 {f.pdfUrl && <a href={f.pdfUrl} target="_blank" rel="noreferrer" className="plink">↗</a>}
               </div>
             </div>
@@ -438,27 +308,14 @@ function CompanyScreener({ companyProfile, onClose }) {
         </div>
       )}
 
-      {/* ── ABOUT ── */}
-      {p.about && (
-        <div style={{
-          fontSize: "9px", color: "#1a3a55", lineHeight: "1.5",
-          padding: "6px", background: "#010a18", borderRadius: "3px",
-          marginBottom: "8px", maxHeight: "60px", overflow: "hidden"
-        }}>
-          {(() => {
-            const about = p.about;
-            if (about.length <= 200) return about;
-            // Try to cut at sentence boundary
-            const sentenceEnd = about.lastIndexOf('.', 200);
-            if (sentenceEnd > 100) return about.substring(0, sentenceEnd + 1) + ' ...';
-            // Otherwise cut at word boundary
-            const wordEnd = about.lastIndexOf(' ', 200);
-            return about.substring(0, wordEnd > 100 ? wordEnd : 200) + ' ...';
-          })()}
+      {/* ABOUT */}
+      {p?.about && (
+        <div style={{ fontSize: "9px", color: "#1a3a55", lineHeight: "1.5", padding: "6px", background: "#010a18", borderRadius: "3px", marginBottom: "8px", maxHeight: "60px", overflow: "hidden" }}>
+          {p.about.length <= 200 ? p.about : p.about.substring(0, 200) + "..."}
         </div>
       )}
 
-      {/* ── RECENT SIGNALS ── */}
+      {/* RECENT SIGNALS */}
       {rf.length > 0 && (
         <>
           <div style={{ fontSize: "9px", color: "#1a4a60", fontFamily: "IBM Plex Mono, monospace", letterSpacing: "1px", marginBottom: "5px", textTransform: "uppercase" }}>
@@ -470,16 +327,13 @@ function CompanyScreener({ companyProfile, onClose }) {
                 {f.title?.substring(0, 38)}
               </span>
               <div style={{ display: "flex", gap: "4px", alignItems: "center", flexShrink: 0 }}>
-                <span className="tag" style={{ background: SIGNAL_COLOR[f.type]?.bg || "#081828", color: SIGNAL_COLOR[f.type]?.fg || "#2a5a7a", fontSize: "8px", padding: "1px 4px" }}>
-                  {f.type}
-                </span>
+                <span className="tag" style={{ background: SIGNAL_COLOR[f.type]?.bg || "#081828", color: SIGNAL_COLOR[f.type]?.fg || "#2a5a7a", fontSize: "8px", padding: "1px 4px" }}>{f.type}</span>
                 {f.pdfUrl && <a href={f.pdfUrl} target="_blank" rel="noreferrer" className="plink">↗</a>}
               </div>
             </div>
           ))}
         </>
       )}
-
       {rf.length === 0 && (
         <div style={{ fontSize: "9px", color: "#1a3a55", fontStyle: "italic" }}>No recent filings in database</div>
       )}
@@ -488,7 +342,6 @@ function CompanyScreener({ companyProfile, onClose }) {
 }
 
 export default function App() {
-  // Initialize socket inside component, using useRef to persist instance
   const socketRef = useRef(null);
 
   const [bseEvents,      setBseEvents]      = useState([]);
@@ -508,13 +361,20 @@ export default function App() {
   const [searchQuery,    setSearchQuery]    = useState("");
   const [searchResults,  setSearchResults]  = useState([]);
   const [companyProfile, setCompanyProfile] = useState(null);
-  const [selectedOrder, setSelectedOrder] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
 
   const flashTimer    = useRef(null);
   const searchTimeout = useRef(null);
 
   function closeProfile() {
+    setCompanyProfile(null);
+    setSearchQuery("");
+    setSearchResults([]);
+  }
+
+  function clearSearch() {
+    setSearchQuery("");
+    setSearchResults([]);
     setCompanyProfile(null);
   }
 
@@ -527,11 +387,11 @@ export default function App() {
   function playAlert(freq1 = 880, freq2 = 1100) {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return; // Check if AudioContext is available
+      if (!AudioCtx) return;
       if (!window._audioCtx || window._audioCtx.state === "closed") {
         window._audioCtx = new AudioCtx();
       }
-      const ctx = window._audioCtx;
+      const ctx  = window._audioCtx;
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -544,13 +404,11 @@ export default function App() {
       osc.stop(ctx.currentTime + 0.5);
     } catch {}
   }
+
   function handleSearchInput(q) {
     setSearchQuery(q);
     clearTimeout(searchTimeout.current);
-    if (!q || q.length < 2) {
-      setSearchResults([]);
-      return;
-    }
+    if (!q || q.length < 2) { setSearchResults([]); return; }
     searchTimeout.current = setTimeout(async () => {
       try {
         const r = await fetch(`/api/search/${encodeURIComponent(q)}`);
@@ -560,31 +418,23 @@ export default function App() {
     }, 300);
   }
 
-  function clearSearch() {
-    setSearchQuery("");
-    setSearchResults([]);
-  }
-
   async function loadCompanyProfile(code, name, nseSymbol) {
     setSearchResults([]);
     setSearchQuery(name || "");
     setProfileLoading(true);
+    setCompanyProfile(null);
     try {
       const nseParam = nseSymbol ? `?nse=${nseSymbol}` : "";
       const r = await fetch(`/api/company/${code}${nseParam}`);
-      if (!r.ok) {
-        return;
-      }
+      if (!r.ok) { setProfileLoading(false); return; }
       const d = await r.json();
       setCompanyProfile({ ...d, code });
-    } catch(e) {
-      // Optionally log error or handle it
-    }
+    } catch {}
     setProfileLoading(false);
   }
 
   useEffect(() => {
-    fetch("/api/feed")
+    fetch("/api/events")
       .then(r => r.json())
       .then(data => {
         if (data.bse?.length) {
@@ -600,34 +450,32 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
+
   useEffect(() => {
-    // Initialize socket only once
     if (!socketRef.current) {
       socketRef.current = io(window.location.origin);
     }
     const socket = socketRef.current;
 
-    socket.on("bse_status", s => setBseStatus(s));
-    socket.on("nse_status", s => setNseStatus(s));
-   socket.on("radar_update", data => {
-  setRadar(prev => {
-    const getKey = r => (r.company || "") + (r.code || "");
-    const prevMap = Object.fromEntries(prev.map(r => [getKey(r), r]));
+    socket.on("bse_status",  s    => setBseStatus(s));
+    socket.on("nse_status",  s    => setNseStatus(s));
+    socket.on("window_info", info => setWindowInfo(info));
 
-    return data.map(r => {
-      const key = getKey(r);
-      const prevItem = prevMap[key];
-
-      return {
-        ...r,
-        receivedAt:
-          prevItem && prevItem.score === r.score
-            ? (prevItem.receivedAt || bestTsRadar(r))
-            : bestTsRadar(r)
-      };
+    socket.on("radar_update", data => {
+      setRadar(prev => {
+        const getKey  = r => (r.company || "") + (r.code || "");
+        const prevMap = Object.fromEntries(prev.map(r => [getKey(r), r]));
+        return data.map(r => {
+          const prevItem = prevMap[getKey(r)];
+          return {
+            ...r,
+            receivedAt: prevItem && prevItem.score === r.score
+              ? (prevItem.receivedAt || bestTsRadar(r))
+              : bestTsRadar(r)
+          };
+        });
+      });
     });
-  });
-});
 
     socket.on("bse_events", data => {
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
@@ -645,16 +493,12 @@ export default function App() {
     });
 
     socket.on("order_book_update", data => {
-  // 🔥 Alert condition
-  if (data.currentLiveOrderBook >= 1000) {
-    playAlert(900, 1400); // stronger sound
-  }
-
-  setOrderBook(prev => [
-    { ...data, receivedAt: bestTsFeed(data) },
-    ...prev.filter(o => o.company !== data.company)
-  ].slice(0, 20));
-});
+      if (data.currentLiveOrderBook >= 1000) playAlert(900, 1400);
+      setOrderBook(prev => [
+        { ...data, receivedAt: bestTsFeed(data) },
+        ...prev.filter(o => o.company !== data.company)
+      ].slice(0, 20));
+    });
 
     socket.on("mega_order_alert", data => {
       setMegaOrders(prev => [
@@ -695,8 +539,6 @@ export default function App() {
       socket.off("sector_alerts");
       socket.off("sector_boom");
       socket.off("opportunity_alert");
-      // Optionally disconnect socket on unmount
-      // socket.disconnect();
     };
   }, []);
 
@@ -704,12 +546,12 @@ export default function App() {
     ? radar.filter(r => r.company.toLowerCase().includes(searchQuery.toLowerCase()))
     : radar;
   const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => filterEvent(e, feedFilter));
-  const isWeekend = windowInfo.hours > 24;
+  const isWeekend    = windowInfo.hours > 24;
 
   return (
     <div className="terminal">
 
-      {/* ── HEADER ── */}
+      {/* HEADER */}
       <div className="header">
         <div className="header-left">
           <span className="star">★</span>
@@ -735,28 +577,21 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── MOBILE TABS ── */}
+      {/* MOBILE TABS */}
       <div className="mobile-tabs">
-        <button className={`mobile-tab ${mobilePanel === "radar" ? "active" : ""}`}
-          onClick={() => setMobilePanel("radar")}>📡 Radar</button>
-        <button className={`mobile-tab ${mobilePanel === "feed" ? "active" : ""}`}
-          onClick={() => setMobilePanel("feed")}>📋 Feed</button>
-        <button className={`mobile-tab ${mobilePanel === "right" ? "active" : ""}`}
-          onClick={() => setMobilePanel("right")}>📊 Data</button>
+        <button className={`mobile-tab ${mobilePanel === "radar" ? "active" : ""}`} onClick={() => setMobilePanel("radar")}>📡 Radar</button>
+        <button className={`mobile-tab ${mobilePanel === "feed"  ? "active" : ""}`} onClick={() => setMobilePanel("feed")}>📋 Feed</button>
+        <button className={`mobile-tab ${mobilePanel === "right" ? "active" : ""}`} onClick={() => setMobilePanel("right")}>📊 Data</button>
       </div>
 
       <div className="layout">
 
-        {/* ══ RADAR PANEL ══ */}
+        {/* RADAR PANEL */}
         <div className={`panel radar-panel ${mobilePanel === "radar" ? "mobile-active" : ""}`}>
           <div className="panel-header">
-            <span className="panel-title">
-              📡 Radar <span className="count">{filteredRadar.length}</span>
-            </span>
+            <span className="panel-title">📡 Radar <span className="count">{filteredRadar.length}</span></span>
             {isWeekend && (
-              <span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono, monospace" }}>
-                Fri–Mon data
-              </span>
+              <span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono, monospace" }}>Fri–Mon data</span>
             )}
           </div>
 
@@ -803,10 +638,19 @@ export default function App() {
             </div>
           )}
 
-          {/* COMPANY PROFILE DISPLAY */}
-          {companyProfile && <CompanyScreener companyProfile={companyProfile} onClose={closeProfile} />}
+          {/* SCREENER */}
+          {companyProfile && !profileLoading && (
+            <CompanyScreener companyProfile={companyProfile} onClose={closeProfile} />
+          )}
 
-          {/* RADAR LIST */}
+          {/* EMPTY */}
+          {filteredRadar.length === 0 && !companyProfile && !profileLoading && (
+            <div className="empty">
+              {isWeekend ? "Weekend mode — showing last 96h\nMarket opens Mon 9:15 AM" : "Waiting for signals…"}
+            </div>
+          )}
+
+          {/* RADAR CARDS */}
           {filteredRadar.map((r, i) => {
             const isMega = r.signals?.includes("ORDER_ALERT") && r.score >= 85;
             return (
@@ -825,17 +669,11 @@ export default function App() {
                 <div className="sbar">
                   <div className="sfill" style={{ width: `${Math.min(r.score, 100)}%`, background: scoreBg(r.score) }} />
                 </div>
-          <div className="tags">
-          {[...new Set(r.signals)].slice(0, 3).map((s, j) => (
-  <Tag
-    key={j}
-    type={s}
-    crores={r._orderInfo?.crores}
-    mcap={r._orderInfo?.mcap}
-    mcapPct={r.mcapRatio}
-  />
-))}
-          </div>
+                <div className="tags">
+                  {[...new Set(r.signals)].slice(0, 3).map((s, j) => (
+                    <Tag key={j} type={s} crores={r._orderInfo?.crores} mcap={r._orderInfo?.mcap} mcapPct={r.mcapRatio} />
+                  ))}
+                </div>
                 <div className="rc-foot">
                   {r.pdfUrl
                     ? <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="plink" onClick={e => e.stopPropagation()}>Filing ↗</a>
@@ -848,9 +686,8 @@ export default function App() {
           })}
         </div>
 
-        {/* ══ FEED PANEL ══ */}
+        {/* FEED PANEL */}
         <div className={`panel feed-panel ${flash ? "flash" : ""} ${mobilePanel === "feed" ? "mobile-active" : ""}`}>
-
           <div className="panel-header">
             <div style={{ display: "flex", gap: 4 }}>
               <button className={`tbtn ${activeTab === "bse" ? "active" : ""}`} onClick={() => setActiveTab("bse")}>
@@ -871,56 +708,50 @@ export default function App() {
             ))}
           </div>
 
-          {filteredFeed.length === 0 && (
-            <div className="empty">
-              {isWeekend
-                ? "Weekend — no new filings"
-                : "No signals match filter"}
-            </div>
-          )}
-          {filteredFeed.length > 0 && filteredFeed.map((e, i) => {
-            const crores  = e._orderInfo?.crores || null;
-            const mcap    = e._orderInfo?.mcap   || null;
-            const mcapPct = e.mcapRatio ?? ((crores && mcap) ? ((crores / mcap) * 100).toFixed(1) : null);
-            const isMega  = e.type === "ORDER_ALERT" && crores >= 1000;
-            const isHigh  = (e.value || 0) >= 70;
-            return (
-              <div className={`feed-card ${isMega ? "mega-value" : isHigh ? "high-value" : ""}`} key={i}>
-                <div className="fc-head">
-                  <span className="co-name">{e.company}</span>
-                  <Tag type={e.type} crores={crores} mcap={mcap} mcapPct={mcapPct} />
-                </div>
-                <div className="fc-text">{e.title}</div>
-                <div className="fc-foot">
-                  <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    {e.value >= 50 && <span className="fc-value">Score {e.value}</span>}
-                    {e.pdfUrl && <a href={e.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>}
+          {filteredFeed.length === 0
+            ? <div className="empty">{isWeekend ? "Weekend — no new filings" : "No signals match filter"}</div>
+            : filteredFeed.map((e, i) => {
+              const crores  = e._orderInfo?.crores || null;
+              const mcap    = e._orderInfo?.mcap   || null;
+              const mcapPct = e.mcapRatio ?? ((crores && mcap) ? ((crores / mcap) * 100).toFixed(1) : null);
+              const isMega  = e.type === "ORDER_ALERT" && crores >= 1000;
+              const isHigh  = (e.value || 0) >= 70;
+              return (
+                <div className={`feed-card ${isMega ? "mega-value" : isHigh ? "high-value" : ""}`} key={i}>
+                  <div className="fc-head">
+                    <span className="co-name">{e.company}</span>
+                    <Tag type={e.type} crores={crores} mcap={mcap} mcapPct={mcapPct} />
+                  </div>
+                  <div className="fc-text">{e.title}</div>
+                  <div className="fc-foot">
+                    <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {e.value >= 50 && <span className="fc-value">Score {e.value}</span>}
+                      {e.pdfUrl && <a href={e.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          }
         </div>
 
-        {/* ══ RIGHT PANEL ══ */}
+        {/* RIGHT PANEL */}
         <div className={`panel right-panel ${mobilePanel === "right" ? "mobile-active" : ""}`}>
-          <div className="panel-header" style={{ marginBottom: "8px" }}>
-            <span className="panel-title">📊 Data</span>
-          </div>
 
-          <div className="section-divider">🔥 Mega Orders <span className="count">{megaOrders.length}</span></div>
+          {/* MEGA ORDERS */}
+          <div className="section-divider">
+            🔥 Mega Orders <span className="count">{megaOrders.length}</span>
+          </div>
           {megaOrders.length === 0
             ? <div className="empty">No mega orders yet</div>
-            : megaOrders.map((o) => (
-              <div className="mega-card" key={o.company}>
+            : megaOrders.map((o, i) => (
+              <div className="mega-card" key={i}>
                 <div className="mega-head">
                   <span className="co-name">{o.company}</span>
-                  <span className="mega-val">₹{o.crores >= 1000
-                    ? (o.crores/1000).toFixed(1) + "K"
-                    : o.crores < 1
-                      ? "<1"
-                      : o.crores}Cr</span>
+                  <span className="mega-val">
+                    ₹{o.crores >= 1000 ? (o.crores / 1000).toFixed(1) + "K" : o.crores < 1 ? "<1" : o.crores}Cr
+                  </span>
                 </div>
                 {o.periodLabel && <div className="mega-sub">{o.periodLabel} project{o.annualCrores && ` · ₹${o.annualCrores}Cr/yr`}</div>}
                 {o.mcapRatio > 0 && <div className="mega-mcap">{o.mcapRatio}% of MCap</div>}
@@ -930,26 +761,34 @@ export default function App() {
                   {o.pdfUrl && <a href={o.pdfUrl} target="_blank" rel="noreferrer" className="plink">PDF ↗</a>}
                 </div>
               </div>
-            ))}
+            ))
+          }
 
-          <div className="section-divider" style={{ marginTop: 8 }}>💡 Opportunities <span className="count">{opportunities.length}</span></div>
+          {/* OPPORTUNITIES */}
+          <div className="section-divider" style={{ marginTop: 8 }}>
+            💡 Opportunities <span className="count">{opportunities.length}</span>
+          </div>
           {opportunities.length === 0
             ? <div className="empty">No opportunities yet</div>
-            : opportunities.map((o) => (
-              <div className="opp-card" key={o.company}>
+            : opportunities.map((o, i) => (
+              <div className="opp-card" key={i}>
                 <div className="opp-row">
                   <span className="co-name">{o.company}</span>
                   <span className="opp-pct">{o.score}%</span>
                 </div>
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
               </div>
-            ))}
+            ))
+          }
 
-          <div className="section-divider" style={{ marginTop: 8 }}>🏭 Sectors <span className="count">{sector.length}</span></div>
+          {/* SECTORS */}
+          <div className="section-divider" style={{ marginTop: 8 }}>
+            🏭 Sectors <span className="count">{sector.length}</span>
+          </div>
           {sector.length === 0
             ? <div className="empty">No sector activity yet</div>
-            : sector.map((s) => (
-              <div className={`sec-card ${s.isBoom ? "boom" : ""}`} key={s.sector}>
+            : sector.map((s, i) => (
+              <div className={`sec-card ${s.isBoom ? "boom" : ""}`} key={i}>
                 <div className="sec-row">
                   <span className="sec-name">{s.isBoom ? "🔥 " : ""}{s.sector}</span>
                   <span className="sec-val">₹{s.totalValue?.toFixed(0)}Cr</span>
@@ -960,99 +799,41 @@ export default function App() {
                   <span style={{ color: "#1e5070" }}>{s.companies?.slice(0, 3).join(", ")}</span>
                 </div>
               </div>
-            ))}
+            ))
+          }
 
+          {/* ORDER BOOK */}
           <div className="section-divider" style={{ marginTop: 8 }}>
-  📦 Order Book <span className="count">{orderBook.length}</span>
-</div>
+            📦 Order Book <span className="count">{orderBook.length}</span>
+          </div>
+          {orderBook.length === 0
+            ? <div className="empty">No orders tracked yet</div>
+            : orderBook.map((o, i) => (
+              <div className="ord-card" key={i}>
+                <div className="ord-top">
+                  <span className="co-name">{o.company}</span>
+                  <span className={`str-lbl ${(o.strength || "early").toLowerCase().replace(" ", "-")}`}>{o.strength}</span>
+                </div>
+                <div className="ord-stats">
+                  <span className="ord-val">₹{o.orderValue}Cr</span>
+                  {o.quarterBook > 0 && <span className="ord-book">Q: ₹{o.quarterBook?.toFixed(0)}Cr</span>}
+                  {o.estimatedOrderBook && <span className="ord-book">Est: ₹{(o.estimatedOrderBook / 100).toFixed(0)}K Cr</span>}
+                </div>
+                <div style={{ display: "flex", gap: "8px", fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", marginBottom: "3px", flexWrap: "wrap" }}>
+                  {o.mcapRatio > 0 && <>
+                    <span style={{ color: "#ff8844", fontWeight: 700 }}>{o.mcapRatio}% of MCap</span>
+                    <span style={{ color: "#1a4060" }}>· {o.quarterOrders} orders this qtr</span>
+                  </>}
+                  {o.obToRevRatio && <span style={{ color: "#1a4a30" }}>OB/Rev {o.obToRevRatio}x</span>}
+                </div>
+                {o.periodLabel && <div className="ord-period">{o.periodLabel} project</div>}
+                <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
+              </div>
+            ))
+          }
 
-{orderBook.length === 0 ? (
-  <div className="empty">No orders tracked yet</div>
-) : (
-  orderBook.map((o) => (
-    <div
-      className="ord-card"
-      key={o.company}
-      onClick={() => setSelectedOrder(o)}
-      style={{ cursor: "pointer" }}
-    >
-      <div className="ord-top">
-        <span className="co-name">{o.company}</span>
-        <span className={`str-lbl ${(o.strength || "early").toLowerCase().replace(" ", "-")}`}>
-          {o.strength}
-        </span>
-      </div>
-
-      <div className="ord-stats">
-        {o.currentLiveOrderBook !== undefined && o.currentLiveOrderBook !== null && (
-          <span className="ord-val">
-            OB ₹{o.currentLiveOrderBook >= 1000
-              ? (o.currentLiveOrderBook / 1000).toFixed(1) + "K"
-              : o.currentLiveOrderBook.toFixed(0)}Cr
-          </span>
-        )}
-
-        {o.addedSinceResult && o.addedSinceResult > 0 && (
-          <span style={{ color: "#00cc66", fontWeight: 700 }}>
-            +₹{o.addedSinceResult.toFixed(0)}Cr
-          </span>
-        )}
-
-        {o.quarterBook > 0 && (
-          <span className="ord-book">
-            Q: ₹{o.quarterBook.toFixed(0)}Cr
-          </span>
-        )}
-
-        {o.estimatedOrderBook && (
-          <span className="ord-book">
-            Est: ₹{o.estimatedOrderBook.toFixed(0)}Cr
-          </span>
-        )}
-      </div>
-
-      <div style={{
-        display: "flex",
-        gap: "8px",
-        fontSize: "9px",
-        fontFamily: "IBM Plex Mono, monospace",
-        marginBottom: "3px",
-        flexWrap: "wrap"
-      }}>
-        {o.quarterSeries?.length > 0 && (() => {
-          const g = o.quarterSeries[o.quarterSeries.length - 1]?.qoqGrowth;
-          return (
-            <span style={{
-              color:
-                g === null || g === undefined
-                  ? "#888"
-                  : g > 0
-                  ? "#00cc66"
-                  : "#ff4444",
-              fontWeight: 700
-            }}>
-              {g !== null && g !== undefined ? `QoQ ${g}%` : "QoQ --"}
-            </span>
-          );
-        })()}
-
-        {o.mcapRatio > 0 && (
-          <>
-            <span style={{ color: "#ff8844", fontWeight: 700 }}>
-              {o.mcapRatio}% of MCap
-            </span>
-            <span style={{ color: "#1a4060" }}>
-              · {o.quarterOrders} orders this qtr
-            </span>
-          </>
-        )}
-
-        {o.obToRevRatio && (
-          <span style={{ color: "#1a4a30" }}>
-            OB/Rev {o.obToRevRatio}x
-          </span>
-        )}
+        </div>
       </div>
     </div>
-  ))
-)}
+  );
+}
