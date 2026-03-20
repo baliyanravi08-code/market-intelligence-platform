@@ -152,7 +152,35 @@ function ExBadge({ exchange }) {
   const exName = typeof exchange === "string" ? exchange.toLowerCase() : "unknown";
   return <span className={`ex-badge ex-${exName}`}>{exchange || "?"}</span>;
 }
-
+function MarketStatus() {
+  const [status, setStatus] = useState(getMarketStatus());
+  useEffect(() => {
+    const t = setInterval(() => setStatus(getMarketStatus()), 60000);
+    return () => clearInterval(t);
+  }, []);
+  function getMarketStatus() {
+    const now = new Date();
+    const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const day  = ist.getDay();
+    const mins = ist.getHours() * 60 + ist.getMinutes();
+    const open = 9 * 60 + 15, close = 15 * 60 + 30;
+    if (day === 0 || day === 6) return { open: false, label: "CLOSED" };
+    if (mins >= open && mins < close) return { open: true, label: "LIVE" };
+    if (mins < open) return { open: false, label: "Pre-Open" };
+    return { open: false, label: "CLOSED" };
+  }
+  return (
+    <span style={{
+      fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700,
+      color: status.open ? "#00ff9c" : "#334455",
+      background: status.open ? "#001a0a" : "#0a0a0a",
+      border: `1px solid ${status.open ? "#00ff9c33" : "#222"}`,
+      borderRadius: "3px", padding: "1px 6px", flexShrink: 0
+    }}>
+      {status.open ? "● " : "○ "}{status.label}
+    </span>
+  );
+}
 function CompanyScreener({ companyProfile, onClose }) {
   const p  = companyProfile.profile;
   const fi = companyProfile.financials;
@@ -492,26 +520,19 @@ export default function App() {
       setNseEvents(prev => mergeEvents(stamped, prev));
     });
 
-    socket.on("order_book_update", data => {
-  console.log("OB RAW:", data); // DEBUG
-
-  const normalized = {
-    ...data,
-    company: data.company || data.name || "Unknown",
-    orderValue: data.orderValue || data.value || (data._orderInfo && data._orderInfo.crores) || 0,
-    currentOrderBook: data.currentOrderBook || data.estimatedOrderBook || 0,
-    quarterBook: data.quarterBook || data.currentOrderBook || 0,
-    mcapRatio: data.mcapRatio || 0,
-    quarterOrders: data.quarterOrders || 0,
-    strength: data.strength || "EARLY"
-  };
-
-  if (normalized.currentOrderBook >= 1000) playAlert(900, 1400);
-
-  setOrderBook(prev => [
-    { ...normalized, receivedAt: bestTsFeed(normalized) },
-    ...prev.filter(o => o.company !== normalized.company)
-  ].slice(0, 20));
+   socket.on("order_book_update", data => {
+  if ((data.currentLiveOrderBook || 0) >= 1000) playAlert(900, 1400);
+  setOrderBook(prev => {
+    const updated = [
+      { ...data, receivedAt: bestTsFeed(data) },
+      ...prev.filter(o => o.company !== data.company)
+    ];
+    // Keep orders for 48 hours
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    return updated
+      .filter(o => (o.receivedAt || 0) > cutoff)
+      .slice(0, 50);
+  });
 });
 
     socket.on("mega_order_alert", data => {
@@ -570,6 +591,7 @@ export default function App() {
         <div className="header-left">
           <span className="star">★</span>
           <span className="title">Market Intelligence</span>
+<MarketStatus />
           {isWeekend && (
             <span style={{
               fontFamily: "IBM Plex Mono, monospace", fontSize: "9px",
@@ -805,7 +827,11 @@ export default function App() {
               <div className={`sec-card ${s.isBoom ? "boom" : ""}`} key={i}>
                 <div className="sec-row">
                   <span className="sec-name">{s.isBoom ? "🔥 " : ""}{s.sector}</span>
-                  <span className="sec-val">₹{s.totalValue?.toFixed(0)}Cr</span>
+                  <span className="sec-val">
+  {s.totalValue > 0
+    ? `₹${s.totalValue >= 1000 ? `${(s.totalValue/1000).toFixed(1)}K` : s.totalValue.toFixed(0)}Cr`
+    : `${s.orders} order${s.orders !== 1 ? "s" : ""}`}
+</span>
                 </div>
                 <div className="sec-sub">
                   <span>{s.orders} order{s.orders !== 1 ? "s" : ""}</span>
@@ -829,7 +855,11 @@ export default function App() {
                   <span className={`str-lbl ${((o.strength || "EARLY").toLowerCase())}`}>{o.strength || "EARLY"}</span>
                 </div>
                 <div className="ord-stats">
-                  <span className="ord-val">₹{(o.orderValue || o.value || (o._orderInfo && o._orderInfo.crores) || 0)}Cr</span>
+                  <span className="ord-val">
+  {o.orderValue > 0
+    ? `₹${o.orderValue >= 1000 ? `${(o.orderValue/1000).toFixed(1)}K` : o.orderValue}Cr`
+    : "Order"}
+</span>
                   {(o.quarterBook || o.currentOrderBook) > 0 && (
   <span className="ord-book">
     Q: ₹{(o.quarterBook || o.currentOrderBook || 0).toFixed(0)}Cr
