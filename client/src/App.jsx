@@ -493,12 +493,26 @@ export default function App() {
     });
 
     socket.on("order_book_update", data => {
-      if (data.currentLiveOrderBook >= 1000) playAlert(900, 1400);
-      setOrderBook(prev => [
-        { ...data, receivedAt: bestTsFeed(data) },
-        ...prev.filter(o => o.company !== data.company)
-      ].slice(0, 20));
-    });
+  console.log("OB RAW:", data); // DEBUG
+
+  const normalized = {
+    ...data,
+    company: data.company || data.name || "Unknown",
+    orderValue: data.orderValue || data.value || (data._orderInfo && data._orderInfo.crores) || 0,
+    currentOrderBook: data.currentOrderBook || data.estimatedOrderBook || 0,
+    quarterBook: data.quarterBook || data.currentOrderBook || 0,
+    mcapRatio: data.mcapRatio || 0,
+    quarterOrders: data.quarterOrders || 0,
+    strength: data.strength || "EARLY"
+  };
+
+  if (normalized.currentOrderBook >= 1000) playAlert(900, 1400);
+
+  setOrderBook(prev => [
+    { ...normalized, receivedAt: bestTsFeed(normalized) },
+    ...prev.filter(o => o.company !== normalized.company)
+  ].slice(0, 20));
+});
 
     socket.on("mega_order_alert", data => {
       setMegaOrders(prev => [
@@ -812,12 +826,20 @@ export default function App() {
               <div className="ord-card" key={i}>
                 <div className="ord-top">
                   <span className="co-name">{o.company}</span>
-                  <span className={`str-lbl ${(o.strength || "early").toLowerCase().replace(" ", "-")}`}>{o.strength}</span>
+                  <span className={`str-lbl ${((o.strength || "EARLY").toLowerCase())}`}>{o.strength || "EARLY"}</span>
                 </div>
                 <div className="ord-stats">
-                  <span className="ord-val">₹{o.orderValue}Cr</span>
-                  {o.quarterBook > 0 && <span className="ord-book">Q: ₹{o.quarterBook?.toFixed(0)}Cr</span>}
-                  {o.estimatedOrderBook && <span className="ord-book">Est: ₹{(o.estimatedOrderBook / 100).toFixed(0)}K Cr</span>}
+                  <span className="ord-val">₹{(o.orderValue || o.value || (o._orderInfo && o._orderInfo.crores) || 0)}Cr</span>
+                  {(o.quarterBook || o.currentOrderBook) > 0 && (
+  <span className="ord-book">
+    Q: ₹{(o.quarterBook || o.currentOrderBook || 0).toFixed(0)}Cr
+  </span>
+)}
+                  {(o.estimatedOrderBook || o.currentOrderBook) && (
+  <span className="ord-book">
+    Est: ₹{((o.estimatedOrderBook || o.currentOrderBook || 0) / 100).toFixed(0)}K Cr
+  </span>
+)}
                 </div>
                 <div style={{ display: "flex", gap: "8px", fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", marginBottom: "3px", flexWrap: "wrap" }}>
                   {o.mcapRatio > 0 && <>
