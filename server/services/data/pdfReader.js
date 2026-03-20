@@ -1,11 +1,10 @@
 /**
  * pdfReader.js
- * Fetches a BSE PDF and extracts order value from text.
- * Only called for ORDER_ALERT signals with no crore value in headline.
+ * Fetches BSE PDFs and extracts order values.
+ * Polyfills DOMMatrix etc for Render deployment (no native canvas).
  */
 
-const axios    = require("axios");
-const pdfParse = require("pdf-parse");
+const axios = require("axios");
 
 const BSE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -14,7 +13,30 @@ const BSE_HEADERS = {
 };
 
 const pdfCache  = {};
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const CACHE_TTL = 60 * 60 * 1000;
+
+// ── Polyfills for pdf-parse on Render (no native canvas) ──
+function applyPolyfills() {
+  if (typeof globalThis.DOMMatrix === "undefined") {
+    globalThis.DOMMatrix = class DOMMatrix {
+      constructor() { this.a=1;this.b=0;this.c=0;this.d=1;this.e=0;this.f=0; }
+      multiply() { return this; }
+      translate() { return this; }
+      scale() { return this; }
+      rotate() { return this; }
+      inverse() { return this; }
+      transformPoint(p) { return p || {x:0,y:0}; }
+    };
+  }
+  if (typeof globalThis.ImageData === "undefined") {
+    globalThis.ImageData = class ImageData {
+      constructor(w,h) { this.width=w; this.height=h; this.data=new Uint8ClampedArray(w*h*4); }
+    };
+  }
+  if (typeof globalThis.Path2D === "undefined") {
+    globalThis.Path2D = class Path2D { addPath(){} };
+  }
+}
 
 async function extractOrderValueFromPDF(pdfUrl) {
   if (!pdfUrl) return null;
@@ -32,12 +54,13 @@ async function extractOrderValueFromPDF(pdfUrl) {
       timeout:      12000
     });
 
-    const data   = await pdfParse(Buffer.from(res.data));
-    const text   = data.text || "";
-    const crores = extractCroresFromText(text);
+    applyPolyfills();
+    const pdfParse = require("pdf-parse");
+    const data     = await pdfParse(Buffer.from(res.data), { max: 0 });
+    const text     = data.text || "";
+    const crores   = extractCroresFromText(text);
 
     console.log(`📄 PDF result: ${crores ? `₹${crores}Cr` : "no value found"}`);
-
     pdfCache[pdfUrl] = { crores, fetchedAt: Date.now() };
     return crores;
 
@@ -51,79 +74,68 @@ async function extractOrderValueFromPDF(pdfUrl) {
 function extractCroresFromText(rawText) {
   if (!rawText) return null;
 
-  // Normalize whitespace + common OCR artifacts
   const t = rawText
     .replace(/\n/g, " ")
     .replace(/\s+/g, " ")
-    // Fix OCR artifacts: 't5.50' or 'tS.50' → '5.50', ',5.50' → '5.50'
-    .replace(/[',`´''](\d)/g, " $1")
-    // Fix 'tS.50' where t = ₹ in bad OCR
+    .replace(/[',`\u2018\u2019](\d)/g, " $1")
     .replace(/\bt(\d)/g, " $1");
 
-  // ── 1. Explicit crore/cr mention with currency symbol ──
-  // "Rs.7,51,10,062" or "₹62.36 Crores" or "INR 5.50 crore"
-  const croreWithSymbol = t.match(/(?:rs\.?|₹|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/gi);
-  if (croreWithSymbol) {
-    const vals = croreWithSymbol.map(m => {
+  // 1. Symbol + crore: "Rs.62.36 Crores" "₹22.50 crore"
+  const sym = t.match(/(?:rs\.?|₹|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/gi);
+  if (sym) {
+    const vals = sym.map(m => {
       const n = m.match(/([\d,]+(?:\.\d+)?)/);
-      return n ? parseFloat(n[1].replace(/,/g, "")) : 0;
-    }).filter(v => v > 0);
+      return n ? parseFloat(n[1].replace(/,/g,"")) : 0;
+    }).filter(v => v > 0 && v < 100000);
     if (vals.length) return Math.max(...vals);
   }
 
-  // ── 2. Crore mention without symbol ──
-  // "5.50 crores" "62.36 Crore"
-  const croreOnly = t.match(/([\d,]+(?:\.\d+)?)\s*(?:crores?)\b/gi);
-  if (croreOnly) {
-    const vals = croreOnly.map(m => {
+  // 2. Crore only: "22.50 crores"
+  const cr = t.match(/([\d,]+(?:\.\d+)?)\s*(?:crores?)\b/gi);
+  if (cr) {
+    const vals = cr.map(m => {
       const n = m.match(/([\d,]+(?:\.\d+)?)/);
-      return n ? parseFloat(n[1].replace(/,/g, "")) : 0;
-    }).filter(v => v > 0 && v < 100000); // sanity: <1 lakh crores
+      return n ? parseFloat(n[1].replace(/,/g,"")) : 0;
+    }).filter(v => v > 0 && v < 100000);
     if (vals.length) return Math.max(...vals);
   }
 
-  // ── 3. OCR artifact: "worth ,5.50 crores" or "worth '5.50 crores" ──
-  const ocrWorth = t.match(/(?:worth|value|amount|order of)\s*[,.'`'´~t₹]\s*([\d.]+)\s*(?:crores?|cr)\b/gi);
-  if (ocrWorth) {
-    const vals = ocrWorth.map(m => {
+  // 3. OCR artifact: "worth ,5.50 crores" or "worth t5.50"
+  const ocr = t.match(/(?:worth|value|amount|order of)\s*[,.'`~t₹]\s*([\d.]+)\s*(?:crores?|cr)\b/gi);
+  if (ocr) {
+    const vals = ocr.map(m => {
       const n = m.match(/([\d.]+)\s*(?:crores?|cr)/i);
       return n ? parseFloat(n[1]) : 0;
     }).filter(v => v > 0);
     if (vals.length) return Math.max(...vals);
   }
 
-  // ── 4. Raw Indian rupee number ──
-  // "Rs.7,51,10,062.06" → 7.51 Cr
-  const rawRupee = t.match(/(?:rs\.?|₹)\s*([\d,]+(?:\.\d+)?)\b/gi);
-  if (rawRupee) {
-    let maxCrores = null;
-    for (const match of rawRupee) {
-      const n = match.match(/([\d,]+(?:\.\d+)?)/);
+  // 4. Raw Indian rupee number: Rs.7,51,10,062
+  const raw = t.match(/(?:rs\.?|₹)\s*([\d,]+(?:\.\d+)?)\b/gi);
+  if (raw) {
+    let max = null;
+    for (const m of raw) {
+      const n = m.match(/([\d,]+(?:\.\d+)?)/);
       if (!n) continue;
-      const raw = parseFloat(n[1].replace(/,/g, ""));
-      if (raw >= 100000) {
-        const cr = parseFloat((raw / 10000000).toFixed(2));
-        if (!maxCrores || cr > maxCrores) maxCrores = cr;
+      const v = parseFloat(n[1].replace(/,/g,""));
+      if (v >= 100000) {
+        const c = parseFloat((v/10000000).toFixed(2));
+        if (!max || c > max) max = c;
       }
     }
-    if (maxCrores) return maxCrores;
+    if (max) return max;
   }
 
-  // ── 5. Word amounts: "Seven Crore Fifty One Lakh" ──
-  const wordMatch = t.match(
-    /(?:total\s+)?(?:order|contract|project|work)?\s*(?:value|amount|worth)[^.]{0,80}((?:(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|lakh|crore)\s*)+)/i
-  );
-  if (wordMatch) {
-    const cr = wordsToNumber(wordMatch[1]);
-    if (cr) return cr;
-  }
+  // 5. Word amounts: "Seven Crore Fifty One Lakh"
+  const wm = t.match(/(?:total\s+)?(?:order|contract|project|work)?\s*(?:value|amount|worth)[^.]{0,80}((?:(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|lakh|crore)\s*)+)/i);
+  if (wm) { const c = wordsToNumber(wm[1]); if (c) return c; }
 
-  // ── 6. Million amounts ──
-  const millionMatch = t.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*million/gi);
-  if (millionMatch) {
-    const vals = millionMatch.map(m => {
+  // 6. Million
+  const mil = t.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*million/gi);
+  if (mil) {
+    const vals = mil.map(m => {
       const n = m.match(/([\d,]+(?:\.\d+)?)/);
-      return n ? parseFloat(n[1].replace(/,/g, "")) * 0.1 : 0;
+      return n ? parseFloat(n[1].replace(/,/g,"")) * 0.1 : 0;
     }).filter(v => v > 0);
     if (vals.length) return Math.max(...vals);
   }
@@ -133,36 +145,21 @@ function extractCroresFromText(rawText) {
 
 function wordsToNumber(text) {
   const t = text.toLowerCase().trim();
-  const ones = [
-    "zero","one","two","three","four","five","six","seven","eight","nine",
-    "ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen",
-    "seventeen","eighteen","nineteen"
-  ];
+  const ones = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
   const tens = ["","","twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"];
-
-  let total   = 0;
-  let current = 0;
-
+  let total = 0, current = 0;
   for (const w of t.split(/\s+/)) {
-    const oi = ones.indexOf(w);
-    const ti = tens.indexOf(w);
-    if      (oi !== -1)   current += oi;
-    else if (ti !== -1)   current += ti * 10;
-    else if (w === "hundred")            current *= 100;
-    else if (w === "thousand")           current *= 1000;
-    else if (w === "lakh" || w === "lakhs") {
-      total   += current * 100000;
-      current  = 0;
-    }
-    else if (w === "crore" || w === "crores") {
-      total   += current * 10000000;
-      current  = 0;
-    }
+    const oi=ones.indexOf(w), ti=tens.indexOf(w);
+    if      (oi!==-1)                       current+=oi;
+    else if (ti!==-1)                       current+=ti*10;
+    else if (w==="hundred")                 current*=100;
+    else if (w==="thousand")                current*=1000;
+    else if (w==="lakh"||w==="lakhs")     { total+=current*100000; current=0; }
+    else if (w==="crore"||w==="crores")   { total+=current*10000000; current=0; }
   }
-  total += current;
-
-  if (total === 0) return null;
-  return parseFloat((total / 10000000).toFixed(2));
+  total+=current;
+  if (total===0) return null;
+  return parseFloat((total/10000000).toFixed(2));
 }
 
 module.exports = { extractOrderValueFromPDF };

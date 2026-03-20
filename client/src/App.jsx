@@ -521,17 +521,14 @@ export default function App() {
     });
 
    
+  socket.on("order_book_update", data => {
   if ((data.currentLiveOrderBook || 0) >= 1000) playAlert(900, 1400);
   setOrderBook(prev => {
-    const updated = [
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    return [
       { ...data, receivedAt: bestTsFeed(data) },
       ...prev.filter(o => o.company !== data.company)
-    ];
-    // Keep orders for 48 hours
-    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
-    return updated
-      .filter(o => (o.receivedAt || 0) > cutoff)
-      .slice(0, 50);
+    ].filter(o => (o.receivedAt || 0) > cutoff).slice(0, 50);
   });
 });
 
