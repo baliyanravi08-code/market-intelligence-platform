@@ -492,5 +492,5 @@ async function analyzeAnnouncement(data) {
 }
 
 module.exports = analyzeAnnouncement;
-module.exports.scoreFromMcapRatio   = scoreFromMcapRatio;
+module.exports.scoreFromMcapRatio = scoreFromMcapRatio;
 module.exports.scoreFromAbsoluteSize = scoreFromAbsoluteSize;
