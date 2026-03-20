@@ -112,6 +112,34 @@ async function processItem(item) {
   });
 
   if (!signal) return;
+  // ── PDF enrichment for ORDER_ALERT with no crore value ──
+if (signal.type === "ORDER_ALERT" && !signal._orderInfo?.crores && signal.pdfUrl) {
+  try {
+    const { extractOrderValueFromPDF } = require("../data/pdfReader");
+    const { getLiveMcap } = require("../data/liveMcap");
+    const { scoreFromMcapRatio, scoreFromAbsoluteSize } = require("../analyzers/announcementAnalyzer");
+
+    const pdfCrores = await extractOrderValueFromPDF(signal.pdfUrl);
+    if (pdfCrores && pdfCrores > 0) {
+      console.log(`📄 PDF enriched: ${signal.company} ₹${pdfCrores}Cr`);
+
+      const mcap = (await getLiveMcap(signal.code)) || null;
+      const newScore = mcap ? scoreFromMcapRatio(pdfCrores, mcap) : scoreFromAbsoluteSize(pdfCrores);
+
+      signal._orderInfo = {
+        crores:      pdfCrores,
+        years:       null,
+        periodLabel: null,
+        annualCrores:null,
+        mcap:        mcap || null,
+        fromPDF:     true   // flag so we know it came from PDF
+      };
+      signal.value = newScore;
+    }
+  } catch(e) {
+    console.log(`📄 PDF enrichment failed: ${e.message}`);
+  }
+}
 
   const exchangeTs   = parseExchangeTs(signal.time);
   const signalWithTs = {

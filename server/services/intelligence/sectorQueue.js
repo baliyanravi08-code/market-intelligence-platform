@@ -23,11 +23,12 @@ function sectorQueue(signal) {
 
   q.orders++;
 
-  // ── FIX: use actual crore value not signal score ──
-  // signal.value = score (30, 40, 82) — NOT money
-  // signal._orderInfo.crores = actual ₹ amount
-  const crores = signal._orderInfo?.crores || 0;
-  q.totalValue += crores;
+  // ── Use actual crore value, not signal score ──
+  // If no crore in headline, don't add 0 — just count the order
+  const crores = signal._orderInfo?.crores;
+  if (crores && crores > 0) {
+    q.totalValue += crores;
+  }
 
   q.lastUpdated = Date.now();
 

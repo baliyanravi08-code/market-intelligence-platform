@@ -1,11 +1,10 @@
 /**
  * orderDetector.js
  * Returns { crores, years, periodLabel, annualCrores } from announcement text.
- * Also handles MW-based power orders where crore value is not in headline.
+ * Handles: crore/lakh amounts, raw rupee numbers, MW-based power orders.
  */
 
 function extractCrores(t) {
-  // Remove time/unit references that could be mistaken for crore values
   const cleaned = t
     .replace(/regulation\s+\d+/gi, "")
     .replace(/reg\.\s*\d+/gi, "")
@@ -18,32 +17,35 @@ function extractCrores(t) {
     .replace(/\d+\s*km\b/gi, "")
     .replace(/\d+\s*kwh\b/gi, "");
 
-  // ₹62.36 Crores / Rs. 62 crore / INR 62 Cr
+  // ── Rs. 62.36 Crores / ₹62 Cr / INR 62 crore ──
   const croreMatch = cleaned.match(/(?:rs\.?|₹|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i);
   if (croreMatch) return parseFloat(croreMatch[1].replace(/,/g, ""));
 
-  // 62 Crores (no currency symbol)
+  // ── 62 Crores (no currency symbol) ──
   const croreOnly = cleaned.match(/([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i);
   if (croreOnly) return parseFloat(croreOnly[1].replace(/,/g, ""));
 
-  // billion → crore
+  // ── billion → crore ──
   const billionMatch = cleaned.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*billion/i);
   if (billionMatch) return parseFloat(billionMatch[1].replace(/,/g, "")) * 100;
 
-  // million → crore
+  // ── million → crore ──
   const millionMatch = cleaned.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*million/i);
   if (millionMatch) return parseFloat(millionMatch[1].replace(/,/g, "")) * 0.1;
 
-  // lakh / lakhs → crore
+  // ── lakh / lakhs → crore ──
   const lakhMatch = cleaned.match(/([\d,]+(?:\.\d+)?)\s*lakhs?\b/i);
   if (lakhMatch) return parseFloat(lakhMatch[1].replace(/,/g, "")) / 100;
 
-  // Raw rupee amounts like "Rs.64,47,840" — 7+ digit numbers
-  const rupeeMatch = cleaned.match(/(?:rs\.?|₹)\s*([\d,]+)\b(?!\s*(?:crores?|lakhs?|million|billion|cr\b))/i);
+  // ── Raw Indian rupee number: Rs.7,51,10,062 or Rs.64,47,840 ──
+  // Indian format: 2,3,2,3 comma grouping
+  // 7,51,10,062 = 75110062 = ~7.51 Cr
+  const rupeeMatch = cleaned.match(/(?:rs\.?|₹)\s*([\d,]+(?:\.\d+)?)\b/i);
   if (rupeeMatch) {
     const raw = parseFloat(rupeeMatch[1].replace(/,/g, ""));
-    if (raw >= 10000000) return Math.round(raw / 10000000);            // ≥1Cr
-    if (raw >= 100000)   return parseFloat((raw / 10000000).toFixed(3)); // lakhs → Cr
+    if (raw >= 10000000) return parseFloat((raw / 10000000).toFixed(2));  // ≥1Cr
+    if (raw >= 100000)   return parseFloat((raw / 10000000).toFixed(3));  // lakhs → Cr
+    // Below 1 lakh — too small, ignore
   }
 
   return null;
@@ -86,7 +88,7 @@ function extractMWOrder(t) {
   const annualCrores = Math.round(mw * 0.7 * 8760 * tariff / 10000000);
   const totalCrores  = Math.round(annualCrores * years);
 
-  console.log(`⚡ MW Order: ${mw}MW × ₹${tariff}/kWh × ${years}yr = ₹${totalCrores}Cr total`);
+  console.log(`⚡ MW Order: ${mw}MW × ₹${tariff}/kWh × ${years}yr = ₹${totalCrores}Cr`);
 
   return {
     crores:      totalCrores,
@@ -103,7 +105,7 @@ function orderDetector(text) {
   const t = text.toLowerCase();
 
   const crores = extractCrores(t);
-  if (crores) {
+  if (crores && crores > 0) {
     const period = extractPeriod(t);
     return {
       crores,
