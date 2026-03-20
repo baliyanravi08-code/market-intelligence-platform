@@ -55,8 +55,9 @@ async function extractOrderValueFromPDF(pdfUrl) {
     });
 
     applyPolyfills();
-    const pdfParse = require("pdf-parse");
-    const data     = await pdfParse(Buffer.from(res.data), { max: 0 });
+    const pdfParseModule = require("pdf-parse");
+const pdfParse = pdfParseModule.default || pdfParseModule;
+const data     = await pdfParse(Buffer.from(res.data), { max: 0 });
     const text     = data.text || "";
     const crores   = extractCroresFromText(text);
 
