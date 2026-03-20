@@ -520,7 +520,7 @@ export default function App() {
       setNseEvents(prev => mergeEvents(stamped, prev));
     });
 
-   socket.on("order_book_update", data => {
+   
   if ((data.currentLiveOrderBook || 0) >= 1000) playAlert(900, 1400);
   setOrderBook(prev => {
     const updated = [
@@ -827,12 +827,8 @@ export default function App() {
               <div className={`sec-card ${s.isBoom ? "boom" : ""}`} key={i}>
                 <div className="sec-row">
                   <span className="sec-name">{s.isBoom ? "🔥 " : ""}{s.sector}</span>
-                  <span className="sec-val">
-  {s.totalValue > 0
-    ? `₹${s.totalValue >= 1000 ? `${(s.totalValue/1000).toFixed(1)}K` : s.totalValue.toFixed(0)}Cr`
-    : `${s.orders} order${s.orders !== 1 ? "s" : ""}`}
-</span>
-                </div>
+                  <span className="sec-val">{s.totalValue > 0 ? `₹${s.totalValue >= 1000 ? `${(s.totalValue/1000).toFixed(1)}K` : s.totalValue.toFixed(0)}Cr` : `${s.orders} order${s.orders!==1?"s":""}`}
+</span>     </div>
                 <div className="sec-sub">
                   <span>{s.orders} order{s.orders !== 1 ? "s" : ""}</span>
                   <br />
