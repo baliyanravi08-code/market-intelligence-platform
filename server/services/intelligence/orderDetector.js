@@ -18,20 +18,33 @@ function extractCrores(t) {
     .replace(/\d+\s*km\b/gi, "")
     .replace(/\d+\s*kwh\b/gi, "");
 
-  const croreMatch = cleaned.match(/(?:rs\.?|₹|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i);
+  // ₹62.36 Crores / Rs. 62 crore / INR 62 Cr
+  const croreMatch = cleaned.match(/(?:rs\.?|₹|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i);
   if (croreMatch) return parseFloat(croreMatch[1].replace(/,/g, ""));
 
-  const croreOnly = cleaned.match(/([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i);
+  // 62 Crores (no currency symbol)
+  const croreOnly = cleaned.match(/([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i);
   if (croreOnly) return parseFloat(croreOnly[1].replace(/,/g, ""));
 
+  // billion → crore
   const billionMatch = cleaned.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*billion/i);
   if (billionMatch) return parseFloat(billionMatch[1].replace(/,/g, "")) * 100;
 
+  // million → crore
   const millionMatch = cleaned.match(/(?:rs\.?|₹|inr|usd|\$)?\s*([\d,]+(?:\.\d+)?)\s*million/i);
   if (millionMatch) return parseFloat(millionMatch[1].replace(/,/g, "")) * 0.1;
 
-  const lakhMatch = cleaned.match(/([\d,]+(?:\.\d+)?)\s*lakh/i);
-  if (lakhMatch) return parseFloat(lakhMatch[1].replace(/,/g, "")) * 0.01;
+  // lakh / lakhs → crore
+  const lakhMatch = cleaned.match(/([\d,]+(?:\.\d+)?)\s*lakhs?\b/i);
+  if (lakhMatch) return parseFloat(lakhMatch[1].replace(/,/g, "")) / 100;
+
+  // Raw rupee amounts like "Rs.64,47,840" — 7+ digit numbers
+  const rupeeMatch = cleaned.match(/(?:rs\.?|₹)\s*([\d,]+)\b(?!\s*(?:crores?|lakhs?|million|billion|cr\b))/i);
+  if (rupeeMatch) {
+    const raw = parseFloat(rupeeMatch[1].replace(/,/g, ""));
+    if (raw >= 10000000) return Math.round(raw / 10000000);            // ≥1Cr
+    if (raw >= 100000)   return parseFloat((raw / 10000000).toFixed(3)); // lakhs → Cr
+  }
 
   return null;
 }
@@ -57,35 +70,31 @@ function extractPeriod(t) {
 
 // ── MW-based power orders ──
 // Adani Power style: "1600 MW Thermal Power for 25 years at Rs 5.30/kWh"
-// No crore value in headline — estimate from MW × tariff × years
 function extractMWOrder(t) {
   const mwMatch = t.match(/([\d,]+(?:\.\d+)?)\s*(?:,\s*)?\s*mw\b/i);
   if (!mwMatch) return null;
 
   const mw = parseFloat(mwMatch[1].replace(/,/g, ""));
-  if (mw < 10 || mw > 100000) return null; // sanity check
+  if (mw < 10 || mw > 100000) return null;
 
-  // Extract tariff: "Rs 5.30/kWh", "₹4.50 per unit"
   const tariffMatch = t.match(/(?:rs\.?|₹)\s*(\d+\.?\d*)\s*(?:\/kwh|per\s*unit|\/unit|per\s*kwh)/i);
-  const tariff = tariffMatch ? parseFloat(tariffMatch[1]) : 4.5; // default ₹4.5/kWh thermal
+  const tariff = tariffMatch ? parseFloat(tariffMatch[1]) : 4.5;
 
-  // Extract years
   const period = extractPeriod(t);
-  const years  = period?.years || 25; // default 25yr for power PSA
+  const years  = period?.years || 25;
 
-  // Annual revenue estimate: MW × PLF(0.7) × 8760hrs × tariff(₹/kWh) ÷ 1Cr(10M)
   const annualCrores = Math.round(mw * 0.7 * 8760 * tariff / 10000000);
   const totalCrores  = Math.round(annualCrores * years);
 
-  console.log(`⚡ MW Order detected: ${mw}MW × ₹${tariff}/kWh × ${years}yr = ₹${totalCrores}Cr total, ₹${annualCrores}Cr/yr`);
+  console.log(`⚡ MW Order: ${mw}MW × ₹${tariff}/kWh × ${years}yr = ₹${totalCrores}Cr total`);
 
   return {
-    crores:       totalCrores,
+    crores:      totalCrores,
     annualCrores,
     years,
-    periodLabel:  `${years}yr`,
+    periodLabel: `${years}yr`,
     mw,
-    isMWBased:    true
+    isMWBased:   true
   };
 }
 
@@ -93,7 +102,6 @@ function orderDetector(text) {
   if (!text) return null;
   const t = text.toLowerCase();
 
-  // Try crore extraction first
   const crores = extractCrores(t);
   if (crores) {
     const period = extractPeriod(t);
