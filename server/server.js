@@ -118,42 +118,81 @@ app.get("/api/company/:code", async (req, res) => {
 
 app.get("/api/search/:query", async (req, res) => {
   try {
-
     const q = req.params.query;
     console.log("🔍 Search:", q);
 
+    // Try multiple BSE search APIs
+    const results = await searchBSE(q);
+    res.json({ results });
+
+  } catch (e) {
+    console.log("❌ Search failed:", e.message);
+    res.json({ results: [] });
+  }
+});
+
+async function searchBSE(q) {
+  // API 1: ListofScripData — most reliable
+  try {
     const r = await axios.get(
-      `https://api.bseindia.com/BseIndiaAPI/api/SearchScripData/w?text=${encodeURIComponent(q)}`,
+      `https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&shname=${encodeURIComponent(q)}&industry=&segment=Equity&status=Active`,
       {
         headers: {
-          Referer: "https://www.bseindia.com",
-          Origin: "https://www.bseindia.com",
-          "User-Agent": "Mozilla/5.0",
-          Accept: "application/json, text/plain, */*"
+          "Referer": "https://www.bseindia.com",
+          "Origin":  "https://www.bseindia.com",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Accept": "application/json, text/plain, */*"
         },
         timeout: 8000
       }
     );
 
-    const rows = Array.isArray(r.data) ? r.data : [];
+    const rows = r.data?.Table || r.data?.Table1 || r.data?.data || (Array.isArray(r.data) ? r.data : []);
+    console.log(`🔍 BSE rows: ${rows.length}, keys: ${JSON.stringify(Object.keys(r.data || {}))}`);
 
-    const results = rows.slice(0, 10).map(s => ({
-      code: s.scripcode,
-      name: s.scripname,
-      sector: s.industry || null,
-      nseSymbol: s.symbol || null
-    }));
-
-    res.json({ results });
-
-  } catch (e) {
-
-    console.log("❌ Search failed:", e.message);
-
-    res.json({ results: [] });
-
+    if (rows.length > 0) {
+      return rows.slice(0, 10).map(s => ({
+        code:      s.SCRIP_CD   || s.scripCd   || s.scrip_cd   || s.Scrip_Cd,
+        name:      s.Scrip_Name || s.LONG_NAME  || s.scrip_name || s.CompanyName || s.longname,
+        sector:    s.SECTOR     || s.sector     || s.Industry   || s.industry,
+        nseSymbol: s.NSE_Symbol || s.NSESymbol  || s.nse_symbol || s.symbol || null,
+      })).filter(s => s.code && s.name);
+    }
+  } catch(e) {
+    console.log("⚠️ ListofScripData failed:", e.message);
   }
-});
+
+  // API 2: BSE search autocomplete fallback
+  try {
+    const r = await axios.get(
+      `https://api.bseindia.com/BseIndiaAPI/api/getScripSearchData/w?strSearch=${encodeURIComponent(q)}`,
+      {
+        headers: {
+          "Referer": "https://www.bseindia.com",
+          "User-Agent": "Mozilla/5.0",
+          "Accept": "application/json"
+        },
+        timeout: 6000
+      }
+    );
+
+    const rows = r.data?.Table || r.data?.data || (Array.isArray(r.data) ? r.data : []);
+    console.log(`🔍 Autocomplete rows: ${rows.length}`);
+
+    if (rows.length > 0) {
+      return rows.slice(0, 10).map(s => ({
+        code:      s.SCRIP_CD || s.scripcode || s.Scrip_Cd,
+        name:      s.Scrip_Name || s.scripname || s.LONG_NAME,
+        sector:    s.SECTOR || s.industry || null,
+        nseSymbol: s.NSE_Symbol || s.symbol || null,
+      })).filter(s => s.code && s.name);
+    }
+  } catch(e) {
+    console.log("⚠️ Autocomplete failed:", e.message);
+  }
+
+  return [];
+}
 
 /* ───────────────────────────── */
 /* SPA FALLBACK */
