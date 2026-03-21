@@ -1,103 +1,164 @@
-const fs   = require("fs");
-const path = require("path");
+/*
+ * database.js
+ * Dual storage: MongoDB (persistent) + in-memory (fast access).
+ * Falls back to in-memory only if MongoDB is unavailable.
+ */
 
-const DB_FILE   = path.join(__dirname, "data.json");
-const MAX_EVENTS = 500;
+const mongoose = require("mongoose");
+const MONGO_URI = process.env.MONGO_URI;
 
-// ── Smart retention window based on Indian market calendar ──
-// Weekday: 24 hours
-// Friday after 3:30 PM → Monday 9:15 AM: keep 96 hours (full weekend)
-// Saturday/Sunday: keep 96 hours so Monday morning shows everything
+// ── MongoDB Schema ──
+const SignalSchema = new mongoose.Schema({
+  company:    { type: String, index: true },
+  code:       { type: String, index: true },
+  type:       { type: String, index: true },
+  title:      String,
+  value:      Number,
+  exchange:   { type: String, index: true },
+  time:       String,
+  savedAt:    { type: Number, index: true },
+  pdfUrl:     String,
+  _orderInfo: mongoose.Schema.Types.Mixed,
+  mcapRatio:  Number,
+  ago:        String
+}, {
+  timestamps: true,
+  strict: false  // allow extra fields
+});
+
+// TTL index — auto-delete documents older than 4 days (96h)
+SignalSchema.index({ createdAt: 1 }, { expireAfterSeconds: 96 * 60 * 60 });
+
+let Signal = null;
+let mongoConnected = false;
+
+// ── In-memory store (always available as fallback) ──
+const memoryStore = {
+  bse: [],
+  nse: []
+};
+
+// ── Retention window ──
+const RETENTION_MS = 96 * 60 * 60 * 1000; // 96 hours
 
 function getRetentionHours() {
-  // Use IST timezone
-  const now = new Date();
-  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-
-  const day  = ist.getDay();  // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-  const hour = ist.getHours();
-  const min  = ist.getMinutes();
-
-  // Saturday — always keep 96h (Friday orders still fresh)
-  if (day === 6) return 96;
-
-  // Sunday — always keep 96h
-  if (day === 0) return 96;
-
-  // Monday before 9:15 AM — keep 96h so weekend orders visible
-  if (day === 1 && (hour < 9 || (hour === 9 && min < 15))) return 96;
-
-  // Friday after 3:30 PM — market closed, extend to 96h
-  if (day === 5 && (hour > 15 || (hour === 15 && min >= 30))) return 96;
-
-  // Normal weekday market hours — 24h
-  return 24;
+  return 96;
 }
 
 function getWindowLabel() {
-  const h = getRetentionHours();
-  if (h > 24) return `${h}h (weekend)`;
+  const now  = new Date();
+  const day  = now.getDay();
+  const hour = now.getHours();
+  // Weekend — show extended window label
+  if (day === 0 || day === 6 || (day === 5 && hour >= 15) || (day === 1 && hour < 9)) {
+    return "96h (weekend)";
+  }
   return "24h";
 }
 
-function loadDB() {
+// ── Connect to MongoDB ──
+async function connectDB() {
   try {
-    if (fs.existsSync(DB_FILE)) {
-      const raw = fs.readFileSync(DB_FILE, "utf8");
-      return JSON.parse(raw);
+    await mongoose.connect(MONGO_URI, {
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 10000,
+    });
+    Signal = mongoose.model("Signal", SignalSchema);
+    mongoConnected = true;
+    console.log("✅ MongoDB Connected");
+
+    // Load recent events from MongoDB into memory on startup
+    await loadFromMongo();
+
+  } catch (err) {
+    console.log("⚠️ MongoDB unavailable, using in-memory only:", err.message);
+    mongoConnected = false;
+  }
+}
+
+// ── Load recent events from MongoDB into memory ──
+async function loadFromMongo() {
+  if (!Signal) return;
+  try {
+    const cutoff = Date.now() - RETENTION_MS;
+    const docs   = await Signal.find({ savedAt: { $gt: cutoff } })
+      .sort({ savedAt: -1 })
+      .limit(1000)
+      .lean();
+
+    let bseCount = 0, nseCount = 0;
+    for (const doc of docs) {
+      const exchange = (doc.exchange || "bse").toLowerCase();
+      if (exchange === "bse") { memoryStore.bse.push(doc); bseCount++; }
+      else                    { memoryStore.nse.push(doc); nseCount++; }
     }
-  } catch (e) {
-    console.log("⚠️ DB load error:", e.message);
-  }
-  return { bse: [], nse: [], radar: [], orderBook: [], sectors: [], opportunities: [] };
-}
 
-function saveDB(db) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db), "utf8");
-  } catch (e) {
-    console.log("⚠️ DB save error:", e.message);
+    // Sort by savedAt desc
+    memoryStore.bse.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+    memoryStore.nse.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+
+    console.log(`📦 MongoDB loaded: ${bseCount} BSE + ${nseCount} NSE events`);
+  } catch (err) {
+    console.log("⚠️ MongoDB load failed:", err.message);
   }
 }
 
-function pruneOld(arr) {
-  const hours  = getRetentionHours();
-  const cutoff = Date.now() - hours * 60 * 60 * 1000;
-  return arr.filter(e => (e.savedAt || 0) > cutoff);
+// ── Save a signal ──
+function saveResult(data) {
+  if (!data) return;
+
+  const exchange = (data.exchange || "bse").toLowerCase();
+  const store    = memoryStore[exchange] || memoryStore.bse;
+
+  // Dedup by company+time+title
+  const key = (data.company || "") + (data.time || "") + (data.title || "");
+  const exists = store.some(e =>
+    ((e.company || "") + (e.time || "") + (e.title || "")) === key
+  );
+  if (exists) return;
+
+  // Add to memory
+  store.unshift(data);
+
+  // Trim memory to last 96h + max 500 per exchange
+  const cutoff = Date.now() - RETENTION_MS;
+  memoryStore.bse = memoryStore.bse.filter(e => (e.savedAt || 0) > cutoff).slice(0, 500);
+  memoryStore.nse = memoryStore.nse.filter(e => (e.savedAt || 0) > cutoff).slice(0, 500);
+
+  // Persist to MongoDB async (don't block)
+  if (mongoConnected && Signal) {
+    Signal.create(data).catch(err => {
+      if (!err.message.includes("duplicate")) {
+        console.log("⚠️ MongoDB save error:", err.message);
+      }
+    });
+  }
 }
 
-function parseExchangeTs(timeStr) {
-  if (!timeStr) return null;
-  try {
-    const d = new Date(timeStr);
-    if (!isNaN(d)) return d.getTime();
-  } catch {}
-  return null;
+// ── Get events by exchange ──
+function getEvents(exchange) {
+  const ex      = (exchange || "bse").toLowerCase();
+  const cutoff  = Date.now() - RETENTION_MS;
+  const store   = memoryStore[ex] || [];
+  return store
+    .filter(e => (e.savedAt || 0) > cutoff)
+    .slice(0, 500);
 }
 
-function saveEvent(type, event) {
-  const db        = loadDB();
-  const exchangeTs = parseExchangeTs(event.time);
-  const entry      = { ...event, savedAt: exchangeTs || Date.now() };
-  db[type]         = pruneOld([entry, ...(db[type] || [])]).slice(0, MAX_EVENTS);
-  saveDB(db);
+// ── Legacy: get all results ──
+function getResults() {
+  return [...memoryStore.bse, ...memoryStore.nse]
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
 }
 
-function getEvents(type) {
-  const db = loadDB();
-  return pruneOld(db[type] || []);
-}
-
-function saveResult(signal) {
-  saveEvent("bse", signal);
-}
+// ── Connect on module load ──
+connectDB();
 
 module.exports = {
+  connectDB,
   saveResult,
-  saveEvent,
+  getResults,
   getEvents,
-  loadDB,
-  saveDB,
   getRetentionHours,
   getWindowLabel
 };
