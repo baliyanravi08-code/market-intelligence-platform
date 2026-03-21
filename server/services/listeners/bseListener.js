@@ -8,11 +8,18 @@ const sectorQueue      = require("../intelligence/sectorQueue");
 const sectorRadar      = require("../intelligence/sectorRadar");
 const sectorBoomEngine = require("../intelligence/sectorBoomEngine");
 const { saveResult, getRetentionHours, getWindowLabel } = require("../../database");
-const { persistRadar, persistOrderBook, persistSector, persistOpportunity } = require("../../coordinator");
+const {
+  persistRadar,
+  persistOrderBook,
+  persistSector,
+  persistOpportunity,
+  persistMegaOrder,
+  sendStoredToClient
+} = require("../../coordinator");
 
-let ioRef      = null;
-let bseCookie  = "";
-const seen     = new Set();
+let ioRef     = null;
+let bseCookie = "";
+const seen    = new Set();
 
 const BSE_HOME = "https://www.bseindia.com/corporates/ann.html";
 const BSE_API  = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C&subcategory=-1";
@@ -92,13 +99,11 @@ function extractList(data) {
   return [];
 }
 
-// ── async processItem — needed for await analyzeAnnouncement ──
 async function processItem(item) {
   const id = String(item.SCRIP_CD || "") + (item.HEADLINE || "");
   if (!id || seen.has(id)) return;
   seen.add(id);
 
-  // ← await here because analyzeAnnouncement is now async (fetches live MCap)
   const signal = await analyzeAnnouncement({
     company:  item.SLONGNAME || item.companyname || "Unknown",
     code:     String(item.SCRIP_CD || ""),
@@ -112,34 +117,29 @@ async function processItem(item) {
   });
 
   if (!signal) return;
+
   // ── PDF enrichment for ORDER_ALERT with no crore value ──
-if (signal.type === "ORDER_ALERT" && !signal._orderInfo?.crores && signal.pdfUrl) {
-  try {
-    const { extractOrderValueFromPDF } = require("../data/pdfReader");
-    const { getLiveMcap } = require("../data/liveMcap");
-    const { scoreFromMcapRatio, scoreFromAbsoluteSize } = require("../analyzers/announcementAnalyzer");
+  if (signal.type === "ORDER_ALERT" && !signal._orderInfo?.crores && signal.pdfUrl) {
+    try {
+      const { extractOrderValueFromPDF } = require("../data/pdfReader");
+      const { getLiveMcap }              = require("../data/liveMcap");
+      const { scoreFromMcapRatio, scoreFromAbsoluteSize } = require("../analyzers/announcementAnalyzer");
 
-    const pdfCrores = await extractOrderValueFromPDF(signal.pdfUrl);
-    if (pdfCrores && pdfCrores > 0) {
-      console.log(`📄 PDF enriched: ${signal.company} ₹${pdfCrores}Cr`);
-
-      const mcap = (await getLiveMcap(signal.code)) || null;
-      const newScore = mcap ? scoreFromMcapRatio(pdfCrores, mcap) : scoreFromAbsoluteSize(pdfCrores);
-
-      signal._orderInfo = {
-        crores:      pdfCrores,
-        years:       null,
-        periodLabel: null,
-        annualCrores:null,
-        mcap:        mcap || null,
-        fromPDF:     true   // flag so we know it came from PDF
-      };
-      signal.value = newScore;
+      const pdfCrores = await extractOrderValueFromPDF(signal.pdfUrl);
+      if (pdfCrores && pdfCrores > 0) {
+        console.log(`📄 PDF enriched: ${signal.company} ₹${pdfCrores}Cr`);
+        const mcap     = (await getLiveMcap(signal.code)) || null;
+        const newScore = mcap ? scoreFromMcapRatio(pdfCrores, mcap) : scoreFromAbsoluteSize(pdfCrores);
+        signal._orderInfo = {
+          crores: pdfCrores, years: null, periodLabel: null,
+          annualCrores: null, mcap: mcap || null, fromPDF: true
+        };
+        signal.value = newScore;
+      }
+    } catch(e) {
+      console.log(`📄 PDF enrichment failed: ${e.message}`);
     }
-  } catch(e) {
-    console.log(`📄 PDF enrichment failed: ${e.message}`);
   }
-}
 
   const exchangeTs   = parseExchangeTs(signal.time);
   const signalWithTs = {
@@ -164,22 +164,25 @@ if (signal.type === "ORDER_ALERT" && !signal._orderInfo?.crores && signal.pdfUrl
       if (ioRef) ioRef.emit("order_book_update", orderData);
 
       if (orderData.isMegaOrder || orderData.isMcapAlert || orderData.isFrequencyAlert) {
-        if (ioRef) ioRef.emit("mega_order_alert", {
-          company:       orderData.company,
-          crores:        orderData.orderValue,
-          years:         orderData.years,
-          periodLabel:   orderData.periodLabel,
-          annualCrores:  orderData.annualCrores,
-          mcapRatio:     orderData.mcapRatio,
-          quarterBook:   orderData.quarterBook,
-          quarterOrders: orderData.quarterOrders,
-          totalOrderBook:orderData.totalOrderBook,
-          alertLevel:    orderData.alertLevel,
-          title:         signalWithTs.title,
-          pdfUrl:        signalWithTs.pdfUrl,
-          time:          signalWithTs.time,
-          receivedAt:    Date.now()
-        });
+        const megaPayload = {
+          company:        orderData.company,
+          crores:         orderData.orderValue,
+          years:          orderData.years,
+          periodLabel:    orderData.periodLabel,
+          annualCrores:   orderData.annualCrores,
+          mcapRatio:      orderData.mcapRatio,
+          quarterBook:    orderData.quarterBook,
+          quarterOrders:  orderData.quarterOrders,
+          totalOrderBook: orderData.totalOrderBook,
+          alertLevel:     orderData.alertLevel,
+          title:          signalWithTs.title,
+          pdfUrl:         signalWithTs.pdfUrl,
+          time:           signalWithTs.time,
+          receivedAt:     Date.now()
+        };
+        // ── Persist mega order so it survives refresh ──
+        persistMegaOrder(megaPayload);
+        if (ioRef) ioRef.emit("mega_order_alert", megaPayload);
       }
     }
 
@@ -189,7 +192,7 @@ if (signal.type === "ORDER_ALERT" && !signal._orderInfo?.crores && signal.pdfUrl
       if (ioRef) ioRef.emit("opportunity_alert", opportunity);
     }
 
-    const queue = sectorQueue(enrichedSignal);
+    const queue       = sectorQueue(enrichedSignal);
     const sectorAlert = sectorRadar(queue);
     if (sectorAlert) {
       persistSector(sectorAlert);
@@ -230,7 +233,6 @@ async function scan() {
     console.log(`✅ BSE announcements: ${list.length}`);
     if (ioRef) ioRef.emit("bse_status", "connected");
 
-    // ── process items with async — don't await all, fire and forget ──
     list.forEach(item => processItem(item).catch(e =>
       console.log("⚠️ processItem error:", e.message)
     ));
@@ -312,6 +314,9 @@ function startBSEListener(io) {
       hours: getRetentionHours(),
       label: getWindowLabel()
     });
+
+    // ── Send stored orderBook, sectors, mega orders, opportunities ──
+    sendStoredToClient(socket);
   });
 
   warmup().then(async () => {

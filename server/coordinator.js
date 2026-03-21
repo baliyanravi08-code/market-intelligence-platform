@@ -1,105 +1,116 @@
-const { loadDB, saveDB } = require("./database");
+/**
+ * coordinator.js
+ * Persists radar, orderBook, sectors, opportunities to disk.
+ * Sends stored data to new clients on connect.
+ */
 
-let ioRef = null;
-let megaOrders = [];
-function startCoordinator(io) {
-  ioRef = io;
+const fs   = require("fs");
+const path = require("path");
 
-io.on("connection", (socket) => {
-  console.log("Client connected:", socket.id);
+const DATA_FILE = path.join(__dirname, "data/coordinator.json");
 
+let stored = {
+  radar:         [],
+  orderBook:     [],
+  sectors:       [],
+  opportunities: [],
+  megaOrders:    []
+};
+
+function loadFromDisk() {
   try {
-    const db = loadDB();
-    if (db.bse?.length)           socket.emit("bse_events",        db.bse.slice(0, 500));
-    if (db.nse?.length)           socket.emit("nse_events",        db.nse.slice(0, 500));
-    if (db.radar?.length)         socket.emit("radar_update",      db.radar.slice(0, 500));
-    if (db.sectors?.length)       socket.emit("sector_alerts",     db.sectors);
-    if (db.orderBook?.length)     socket.emit("order_book_update", db.orderBook[0]);
-    if (db.opportunities?.length) socket.emit("opportunity_alert", db.opportunities[0]);
-
-    // ✅ ADD THIS BLOCK HERE
-    if (megaOrders.length) {
-      socket.emit("mega_orders", megaOrders);
+    if (fs.existsSync(DATA_FILE)) {
+      const raw  = fs.readFileSync(DATA_FILE, "utf8");
+      stored = { ...stored, ...JSON.parse(raw) };
+      console.log(`📦 Coordinator loaded: ${stored.orderBook.length} orders, ${stored.sectors.length} sectors`);
     }
-
-  } catch (e) {
-    console.log("⚠️ History load error:", e.message);
+  } catch(e) {
+    console.log("⚠️ Coordinator load failed:", e.message);
   }
-});
-
-  setInterval(() => {
-    try {
-      const db = loadDB();
-      if (db.radar?.length && ioRef) ioRef.emit("radar_update", db.radar.slice(0, 500));
-    } catch (e) {}
-  }, 30000);
-
-  console.log("🚀 Coordinator Running");
 }
 
+function saveToDisk() {
+  try {
+    const dir = path.dirname(DATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(stored), "utf8");
+  } catch(e) {
+    console.log("⚠️ Coordinator save failed:", e.message);
+  }
+}
+
+loadFromDisk();
+setInterval(saveToDisk, 2 * 60 * 1000);
+
+// ── Persist functions called by listeners ──
 function persistRadar(radar) {
-  try {
-    const db = loadDB();
-    db.radar = radar.slice(0, 500);
-    saveDB(db);
-  } catch (e) {}
+  stored.radar = radar || [];
 }
 
-function persistOrderBook(order) {
-  try {
-    const db = loadDB();
-    db.orderBook = [order, ...(db.orderBook || []).filter(o => o.company !== order.company)].slice(0, 20);
-    saveDB(db);
-  } catch (e) {}
+function persistOrderBook(orderData) {
+  if (!orderData) return;
+  const existing = stored.orderBook.filter(o => o.company !== orderData.company);
+  stored.orderBook = [orderData, ...existing].slice(0, 100);
+  saveToDisk();
 }
 
-function persistSector(sector) {
-  try {
-    const db = loadDB();
-    const filtered = (db.sectors || []).filter(s => s.sector !== sector.sector);
-    db.sectors = [sector, ...filtered].slice(0, 15);
-    saveDB(db);
-  } catch (e) {}
+function persistSector(sectorData) {
+  if (!sectorData) return;
+  const existing = stored.sectors.filter(s => s.sector !== sectorData.sector);
+  stored.sectors = [sectorData, ...existing].slice(0, 20);
+  saveToDisk();
 }
 
 function persistOpportunity(opp) {
-  try {
-    const db = loadDB();
-    db.opportunities = [opp, ...(db.opportunities || [])].slice(0, 20);
-    saveDB(db);
-  } catch (e) {}
+  if (!opp) return;
+  const existing = stored.opportunities.filter(o => o.company !== opp.company);
+  stored.opportunities = [opp, ...existing].slice(0, 20);
+  saveToDisk();
 }
 
-// ✅ NOW OUTSIDE
-function persistMegaOrder(signal) {
-  try {
-    if (!signal?._orderInfo?.crores) return;
+function persistMegaOrder(order) {
+  if (!order) return;
+  const existing = stored.megaOrders.filter(o => o.company !== order.company);
+  stored.megaOrders = [order, ...existing].slice(0, 20);
+  saveToDisk();
+}
 
-    if (signal._orderInfo.crores < 100) return;
-
-    const order = {
-      company: signal.company,
-      value: signal._orderInfo.crores,
-      title: signal.title,
-      time: Date.now()
-    };
-
-    megaOrders.unshift(order);
-    megaOrders = megaOrders.slice(0, 50);
-
-    if (ioRef) {
-      ioRef.emit("mega_orders", megaOrders);
-    }
-
-  } catch (e) {
-    console.log("⚠️ Mega order error:", e.message);
+// ── Called from bseListener on each new socket connection ──
+function sendStoredToClient(socket) {
+  if (stored.orderBook.length > 0) {
+    stored.orderBook.forEach(o => socket.emit("order_book_update", o));
+    console.log(`📤 Sent ${stored.orderBook.length} stored orders to client`);
+  }
+  if (stored.sectors.length > 0) {
+    socket.emit("sector_alerts", stored.sectors);
+  }
+  if (stored.opportunities.length > 0) {
+    stored.opportunities.forEach(o => socket.emit("opportunity_alert", o));
+  }
+  if (stored.megaOrders.length > 0) {
+    stored.megaOrders.forEach(o => socket.emit("mega_order_alert", o));
   }
 }
+
+function getStored() {
+  return stored;
+}
+
+function startCoordinator(io) {
+  console.log("🚀 Coordinator Running");
+  // Heartbeat only — connection handling is done in bseListener.js
+  setInterval(() => {
+    io.emit("system_event", { type: "heartbeat", time: new Date().toISOString() });
+  }, 30000);
+}
+
 module.exports = {
   startCoordinator,
   persistRadar,
   persistOrderBook,
   persistSector,
   persistOpportunity,
-  persistMegaOrder
+  persistMegaOrder,
+  sendStoredToClient,
+  getStored
 };

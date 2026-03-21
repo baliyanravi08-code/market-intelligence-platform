@@ -460,7 +460,6 @@ export default function App() {
     } catch {}
     setProfileLoading(false);
   }
-
   useEffect(() => {
     fetch("/api/events")
       .then(r => r.json())
@@ -474,6 +473,12 @@ export default function App() {
           setNseEvents(stamped.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0)).slice(0, 500));
         }
         if (data.windowHours) setWindowInfo({ hours: data.windowHours, label: data.windowLabel });
+        // ── Restore persisted data on page load/refresh ──
+        if (data.orderBook?.length) {
+          setOrderBook(data.orderBook.map(o => ({ ...o, receivedAt: o.receivedAt || o.savedAt || Date.now() })));
+        }
+        if (data.sectors?.length)    setSector(data.sectors);
+        if (data.megaOrders?.length) setMegaOrders(data.megaOrders.map(o => ({ ...o, receivedAt: o.receivedAt || Date.now() })));
         setFeedFilter("ALL");
       })
       .catch(() => {});

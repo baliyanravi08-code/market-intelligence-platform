@@ -736,3 +736,21 @@ body {
 .modal-scroll {
   scrollbar-width: thin;
 }
+/* Order book card — highlight new orders */
+.ord-card.fresh {
+  border-left: 3px solid #00ff9c;
+  animation: fresh-pulse 2s ease-out forwards;
+}
+
+@keyframes fresh-pulse {
+  0%   { border-left-color: #00ff9c; background: #001a0a; }
+  100% { border-left-color: #0c2a4a; background: transparent; }
+}
+
+/* Order book value colors by strength */
+.str-lbl.dominant { background: #1a0030; color: #cc44ff; border: 1px solid #cc44ff44; }
+.str-lbl.strong   { background: #001a10; color: #00cc66; border: 1px solid #00cc6644; }
+.str-lbl.growing  { background: #1a1000; color: #ffaa00; border: 1px solid #ffaa0044; }
+.str-lbl.building { background: #001020; color: #4488cc; border: 1px solid #4488cc44; }
+.str-lbl.early    { background: #080808; color: #334455; border: 1px solid #334455; 
+}

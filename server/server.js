@@ -51,21 +51,19 @@ app.get("/health", (req, res) => {
 
 app.get("/api/events", (req, res) => {
   try {
+    const { getStored } = require("./coordinator");
+    const stored = getStored();
     res.json({
-      bse: getEvents("bse") || [],
-      nse: getEvents("nse") || [],
+      bse:         getEvents("bse") || [],
+      nse:         getEvents("nse") || [],
+      orderBook:   stored.orderBook || [],
+      sectors:     stored.sectors   || [],
+      megaOrders:  stored.megaOrders || [],
       windowHours: getRetentionHours(),
       windowLabel: getWindowLabel()
     });
   } catch (e) {
-    console.log("❌ /api/events error:", e.message);
-
-    res.json({
-      bse: [],
-      nse: [],
-      windowHours: 24,
-      windowLabel: "24h"
-    });
+    res.json({ bse: [], nse: [], orderBook: [], sectors: [], megaOrders: [], windowHours: 24, windowLabel: "24h" });
   }
 });
 
