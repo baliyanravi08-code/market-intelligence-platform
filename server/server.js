@@ -1,4 +1,7 @@
-require("dotenv").config();
+// Only load .env locally — Render injects env vars automatically
+if (process.env.NODE_ENV !== "production") {
+  require("dotenv").config();
+}
 
 const express = require("express");
 const http = require("http");
