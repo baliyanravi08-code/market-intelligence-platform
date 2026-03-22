@@ -129,7 +129,19 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 220px 1fr 380px 180px;
+  grid-template-columns: 220px 1fr 320px 200px;
+  gap: 8px;
+  width: 100%;
+}
+.layout > * {
+  min-width: 0;
+}
+body, html, #root {
+  width: 100%;
+  height: 100%;
+}
+
+.terminal {
   width: 100%;
 }
 
@@ -784,11 +796,12 @@ body {
 }
 /* STEP 1: RIGHT PANEL GRID */
 .right-panel {
-  display: grid;
-  grid-template-rows: auto auto auto auto auto auto;
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   overflow-y: auto;
 }
+
 /* STEP 3: COMPACT CARDS */
 .mini-card,
 .ord-card,
@@ -830,4 +843,16 @@ body {
 .ultra-panel .mini-card:hover {
   background: #041020;
   border-left: 2px solid #ffaa00;
+}
+.mini-card {
+  font-size: 10px;
+  padding: 6px;
+  border-bottom: 1px solid #081828;
+  color: #a0c0e0;
+}
+.intelligence-panel {
+  padding: 6px;
+}
+.feed-panel {
+  max-width: 600px;
 }

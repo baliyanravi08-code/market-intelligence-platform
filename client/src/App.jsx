@@ -793,54 +793,15 @@ export default function App() {
 
         {/* RIGHT PANEL */}
         <div className={`panel right-panel ${mobilePanel === "right" ? "mobile-active" : ""}`}>
-          {/* ULTRA RIGHT PANEL */}
-<div className="panel ultra-panel">
-
-  {/* TICKER */}
-  <div className="section">
-    <div className="section-divider">⚡ Market</div>
-
-    <div className="mini-card">NIFTY ▲0.8%</div>
-    <div className="mini-card">BANKNIFTY ▲1.2%</div>
-
-  </div>
-
-  {/* ALERT STREAM */}
-  <div className="section">
-    <div className="section-divider">🔔 Alerts</div>
-
-    {filteredFeed.slice(0, 6).map((e, i) => (
-      <div key={i} className="mini-card">
-        {e.company?.substring(0, 10)} → {e.type}
-      </div>
-    ))}
-
-  </div>
-
-  {/* MARKET PULSE */}
-  <div className="section">
-    <div className="section-divider">⚡ Pulse</div>
-
-    <div className="mini-card">
-      Orders: {activity.orders}
-    </div>
-
-    <div className="mini-card">
-      Results: {activity.results}
-    </div>
-
-  </div>
-
-</div>
-
+         
           {/* MEGA ORDERS */}
           <div className="section">
 
   <div className="section-divider">
     🔥 Mega Orders <span className="count">{megaOrders.length}</span>
   </div>
-
-  {megaOrders.length === 0
+  
+ {megaOrders.length === 0
     ? <div className="empty">No mega orders yet</div>
     : megaOrders.map((o, i) => (
       <div className="mega-card" key={i}>
@@ -946,6 +907,7 @@ export default function App() {
   </span>
 )}
                 </div>
+                
                 <div style={{ display: "flex", gap: "8px", fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", marginBottom: "3px", flexWrap: "wrap" }}>
                   {o.mcapRatio > 0 && <>
   <span style={{
@@ -965,9 +927,39 @@ export default function App() {
                 {o.periodLabel && <div className="ord-period">{o.periodLabel} project</div>}
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
               </div>
+              
+              
             ))
           }
+<div className="panel intelligence-panel">
 
+  <div className="section">
+    <div className="section-divider">⚡ Market</div>
+    <div className="mini-card">NIFTY</div>
+    <div className="mini-card">BANKNIFTY</div>
+  </div>
+
+  <div className="section">
+    <div className="section-divider">🔔 Alerts</div>
+
+    {Array.isArray(filteredFeed) && filteredFeed.length > 0 ? (
+      filteredFeed.slice(0, 5).map((e, i) => (
+        <div key={i} className="mini-card">
+          {(e?.company || "").substring(0, 10)} → {e?.type || "NA"}
+        </div>
+      ))
+    ) : (
+      <div className="mini-card">No alerts</div>
+    )}
+  </div>
+
+  <div className="section">
+    <div className="section-divider">⚡ Pulse</div>
+    <div className="mini-card">Orders: {orderBook.length}</div>
+    <div className="mini-card">Signals: {filteredFeed.length}</div>
+  </div>
+
+</div>
         </div>
       </div>
     </div>
