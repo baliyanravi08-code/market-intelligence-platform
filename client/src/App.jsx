@@ -707,7 +707,13 @@ export default function App() {
                 </div>
                 <div className="tags">
                   {[...new Set(r.signals)].slice(0, 3).map((s, j) => (
-                    <Tag key={j} type={s} crores={r._orderInfo?.crores} mcap={r._orderInfo?.mcap} mcapPct={r.mcapRatio} />
+                    <Tag key={j} type={s}
+  crores={r._orderInfo?.crores}
+  mcap={r._orderInfo?.mcap}
+  mcapPct={r.mcapRatio ?? (r._orderInfo?.crores && r._orderInfo?.mcap
+    ? ((r._orderInfo.crores / r._orderInfo.mcap) * 100).toFixed(2)
+    : null)}
+/>
                   ))}
                 </div>
                 <div className="rc-foot">
@@ -749,7 +755,11 @@ export default function App() {
             : filteredFeed.map((e, i) => {
               const crores  = e._orderInfo?.crores || null;
               const mcap    = e._orderInfo?.mcap   || null;
-              const mcapPct = e.mcapRatio ?? ((crores && mcap) ? ((crores / mcap) * 100).toFixed(1) : null);
+              const mcapPct = (e.mcapRatio && e.mcapRatio > 0)
+  ? e.mcapRatio
+  : (crores && mcap)
+    ? ((crores / mcap) * 100).toFixed(2)
+    : null;
               const isMega  = e.type === "ORDER_ALERT" && crores >= 1000;
               const isHigh  = (e.value || 0) >= 70;
               return (
@@ -869,9 +879,18 @@ export default function App() {
                 </div>
                 <div style={{ display: "flex", gap: "8px", fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", marginBottom: "3px", flexWrap: "wrap" }}>
                   {o.mcapRatio > 0 && <>
-                    <span style={{ color: "#ff8844", fontWeight: 700 }}>{o.mcapRatio}% of MCap</span>
-                    <span style={{ color: "#1a4060" }}>· {o.quarterOrders} orders this qtr</span>
-                  </>}
+  <span style={{
+    color: o.mcapRatio >= 10 ? "#ff4400" : o.mcapRatio >= 5 ? "#ffaa00" : "#4488aa",
+    fontWeight: 700,
+    background: o.mcapRatio >= 10 ? "#1a0800" : o.mcapRatio >= 5 ? "#1a1000" : "#001020",
+    padding: "1px 5px", borderRadius: "3px",
+    fontFamily: "IBM Plex Mono, monospace", fontSize: "9px"
+  }}>{o.mcapRatio}% of MCap</span>
+  {o.mcap > 0 && <span style={{ color: "#1a4060", fontSize: "9px" }}>
+    MCap ₹{o.mcap >= 1000 ? `${(o.mcap/1000).toFixed(1)}K` : o.mcap?.toFixed(0)}Cr
+  </span>}
+  <span style={{ color: "#1a4060" }}>· {o.quarterOrders} orders this qtr</span>
+</>}
                   {o.obToRevRatio && <span style={{ color: "#1a4a30" }}>OB/Rev {o.obToRevRatio}x</span>}
                 </div>
                 {o.periodLabel && <div className="ord-period">{o.periodLabel} project</div>}
