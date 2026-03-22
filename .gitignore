@@ -1,4 +1,4 @@
-"node_modules/" 
-"client/node_modules/" 
-"server/data.json" 
-".env" 
+node_modules/
+client/node_modules/
+server/data.json
+.env*
