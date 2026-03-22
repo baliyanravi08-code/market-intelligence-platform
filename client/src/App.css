@@ -607,19 +607,12 @@ body {
 /* ── SECTION DIVIDER ── */
 
 .section-divider {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
-  color: #1a3a55;
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  padding: 6px 0 4px;
-  border-bottom: 1px solid #081828;
-  margin-bottom: 6px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
+  color: #00cfff;
+  padding: 4px 6px;
+  border-bottom: 1px solid #0c2a4a;
+  margin-bottom: 4px;
 }
 
 .section-divider .count { margin-left: auto; }
@@ -792,4 +785,30 @@ body {
 /* new event flash effect */
 .feed-panel.flash {
   box-shadow: inset 0 0 40px rgba(255, 170, 0, 0.15);
+}
+/* STEP 1: RIGHT PANEL GRID */
+.right-panel {
+  display: grid;
+  grid-template-rows: auto auto auto auto auto auto;
+  gap: 6px;
+  overflow-y: auto;
+}
+/* STEP 3: COMPACT CARDS */
+.mini-card,
+.ord-card,
+.mega-card,
+.sec-card,
+.opp-card {
+  padding: 4px 5px !important;
+  margin-bottom: 4px !important;
+  border-radius: 4px;
+  font-size: 10px;
+}
+/* STEP 4: REMOVE EXTRA SPACE */
+.right-panel > * {
+  margin: 0 !important;
+}
+/* STEP 4: REMOVE EXTRA SPACE */
+.right-panel > * {
+  margin: 0 !important;
 }
