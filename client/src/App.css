@@ -129,12 +129,8 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 250px 0.55fr 380px;
-  gap: 4px;
-  flex: 1;
-  overflow: hidden;
-  padding: 4px;
-  background: #010812;
+  grid-template-columns: 220px 1fr 380px 180px;
+  width: 100%;
 }
 
 /* ── PANELS ── */
@@ -811,4 +807,27 @@ body {
 /* STEP 4: REMOVE EXTRA SPACE */
 .right-panel > * {
   margin: 0 !important;
+}
+/* =========================
+   ULTRA PANEL (LIVE STRIP)
+========================= */
+
+.ultra-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 9px;
+  overflow-y: auto;
+}
+
+.ultra-panel .mini-card {
+  padding: 4px 5px;
+  border: 1px solid #0c2a4a;
+  border-radius: 4px;
+  background: #020c1a;
+}
+
+.ultra-panel .mini-card:hover {
+  background: #041020;
+  border-left: 2px solid #ffaa00;
 }
