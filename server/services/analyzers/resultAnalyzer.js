@@ -2,8 +2,8 @@
  * resultAnalyzer.js
  * Detects quarterly result filings and extracts:
  * - PAT / Revenue / EBITDA growth signals
- * - ORDER BOOK value (for EPC/infra companies)
- * Updates marketCap.js store with confirmed order book per quarter.
+ * - ORDER BOOK value from headline patterns
+ * PDF order book extraction is handled in bseListener.js
  */
 
 const { updateFromResult, getCurrentFYQuarter } = require("../data/marketCap");
@@ -36,7 +36,7 @@ const NEGATIVE_DIRECTION = ["down","fall","falls","fell","drop","drops","decline
 function isPositive(word) { return POSITIVE_DIRECTION.some(w => word?.toLowerCase().includes(w)); }
 function isNegative(word) { return NEGATIVE_DIRECTION.some(w => word?.toLowerCase().includes(w)); }
 
-// ── ORDER BOOK PATTERNS — matches various headline formats ──
+// ── ORDER BOOK patterns in result headlines ──
 const ORDER_BOOK_PATTERNS = [
   /order\s*book\s*(?:stands?\s*at|of|at|:)\s*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i,
   /order\s*book\s*(?:of|at)\s*(?:rs\.?|₹|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i,
@@ -45,6 +45,10 @@ const ORDER_BOOK_PATTERNS = [
   /order\s*inflow\s*(?:of|at)\s*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i,
   /unexecuted\s*order\s*book\s*(?:of|at)?\s*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i,
   /total\s*order\s*book\s*(?:of|at|:)?\s*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i,
+  // Additional patterns for result headlines
+  /order\s*book\s*(?:position|size|value)\s*(?:of|at)?\s*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i,
+  /strong\s*order\s*book\s*of\s*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i,
+  /robust\s*order\s*book\s*of\s*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i,
 ];
 
 const REVENUE_PATTERNS = [
@@ -54,21 +58,13 @@ const REVENUE_PATTERNS = [
   /turnover\s*(?:of|at)\s*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|cr)\b/i,
 ];
 
-// ── Extract quarter from text ──
 function extractQuarter(text) {
-  // "Q3FY26", "Q3 FY26", "Q3FY2026"
   const qMatch = text.match(/q([1-4])\s*fy?\s*(\d{2,4})/i);
-  if (qMatch) {
-    const fy = String(qMatch[2]).slice(-2);
-    return `Q${qMatch[1]}FY${fy}`;
-  }
-  // "H1FY26"
+  if (qMatch) return `Q${qMatch[1]}FY${String(qMatch[2]).slice(-2)}`;
   const h1 = text.match(/h1\s*fy?\s*(\d{2,4})/i);
   if (h1) return `H1FY${String(h1[1]).slice(-2)}`;
   const h2 = text.match(/h2\s*fy?\s*(\d{2,4})/i);
   if (h2) return `H2FY${String(h2[1]).slice(-2)}`;
-
-  // Fall back to current quarter
   return getCurrentFYQuarter();
 }
 
@@ -93,7 +89,7 @@ function analyzeResult(data) {
   let score = 10;
   let signals = [];
 
-  // ── PAT / Net Profit ──
+  // ── PAT ──
   const patMatch =
     text.match(/(?:pat|net\s*profit|profit\s*after\s*tax)\s*(up|down|rises?|risen|falls?|fell|jumps?|drops?|surges?|declines?|grows?|grew)\s*(\d+\.?\d*)\s*%/i) ||
     text.match(/(\d+\.?\d*)\s*%\s*(?:rise|jump|surge|growth|increase|fall|drop|decline)\s*in\s*(?:pat|net\s*profit)/i);
@@ -128,7 +124,7 @@ function analyzeResult(data) {
     else { signals.push(`EBITDA -${pct}%`); }
   }
 
-  // ── BANK SPECIFIC ──
+  // ── BANK ──
   if (isBank) {
     const niiMatch = text.match(/nii\s*(up|down|rises?|falls?|grew|declined?)\s*(\d+\.?\d*)\s*%/i);
     if (niiMatch) {
@@ -138,13 +134,13 @@ function analyzeResult(data) {
     }
     const npaMatch = text.match(/(?:gross\s*npa|gnpa|net\s*npa|nnpa)\s*(up|down|improved?|declined?|reduced?)\s*(\d+\.?\d*)\s*%?/i);
     if (npaMatch) {
-      if (isNegative(npaMatch[1]) || npaMatch[1].toLowerCase().includes("reduc") || npaMatch[1].toLowerCase().includes("improv")) {
-        signals.push("NPA↓"); score += 20;
-      } else { signals.push("NPA↑"); score = Math.max(5, score - 20); }
+      const d = npaMatch[1].toLowerCase();
+      if (isNegative(npaMatch[1]) || d.includes("reduc") || d.includes("improv")) { signals.push("NPA↓"); score += 20; }
+      else { signals.push("NPA↑"); score = Math.max(5, score - 20); }
     }
   }
 
-  // ── SPECIAL KEYWORDS ──
+  // ── Special ──
   if (text.includes("record profit") || text.includes("highest ever") || text.includes("all time high")) { signals.push("RECORD"); score += 25; }
   if (text.includes("turnaround") || text.includes("back to profit") || text.includes("returns to profit")) { signals.push("TURNAROUND"); score += 30; }
   if (text.includes("beat") || text.includes("above estimate")) { signals.push("BEAT"); score += 15; }
@@ -153,25 +149,24 @@ function analyzeResult(data) {
 
   if (signals.length === 0) { score = 8; signals.push("RESULT FILED"); }
 
-  // ── EXTRACT ORDER BOOK + REVENUE → update persistent store ──
+  // ── Extract order book + revenue from headline → update store ──
   if (data.code) {
     const orderBook = extractValue(data.title, ORDER_BOOK_PATTERNS);
     const revenue   = extractValue(data.title, REVENUE_PATTERNS);
     const quarter   = extractQuarter(data.title);
-
-    const update = {};
+    const update    = {};
 
     if (orderBook && orderBook > 0) {
       update.confirmedOrderBook    = orderBook;
       update.confirmedQuarter      = quarter;
-      update.newOrdersSinceConfirm = 0; // reset counter — new baseline set
+      update.newOrdersSinceConfirm = 0;
       signals.push(`OB ₹${orderBook >= 1000 ? (orderBook/1000).toFixed(1)+"K" : orderBook}Cr`);
       score += 5;
-      console.log(`📦 Order book confirmed: ${data.company} ₹${orderBook}Cr (${quarter})`);
+      console.log(`📦 Order book from headline: ${data.company} ₹${orderBook}Cr (${quarter})`);
     }
 
     if (revenue && revenue > 0) {
-      update.ttmRevenue = revenue * 4; // quarterly → annualize TTM estimate
+      update.ttmRevenue = revenue * 4;
     }
 
     if (Object.keys(update).length > 0) {

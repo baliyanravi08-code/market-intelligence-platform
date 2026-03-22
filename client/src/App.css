@@ -129,7 +129,7 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 250px 1fr 340px;
+  grid-template-columns: 250px 0.55fr 380px;
   gap: 4px;
   flex: 1;
   overflow: hidden;
@@ -148,6 +148,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0;
+  box-shadow: inset 0 0 30px rgba(0, 80, 160, 0.2);
 }
 
 .flash { animation: flash-border 0.6s ease; }
@@ -354,12 +355,11 @@ body {
 /* ── RADAR CARD ── */
 
 .radar-card {
-  padding: 7px 6px;
-  border-bottom: 1px solid #081828;
-  transition: background 0.15s;
+  border-top: 1px solid rgba(0, 255, 156, 0.35);
+  box-shadow: inset 0 0 25px rgba(0, 255, 156, 0.05);
 }
 
-.radar-card:hover { background: #040f20; }
+.radar-card:hover {  border-left: 2px solid #00ff9c; background: #001a0a; }
 
 .radar-card.mega {
   border-left: 3px solid #ff4400;
@@ -406,12 +406,11 @@ body {
 /* ── FEED CARD ── */
 
 .feed-card {
-  border-bottom: 1px solid #081828;
-  padding: 7px 6px;
-  transition: background 0.15s;
+   border-top: 1px solid rgba(255, 170, 0, 0.35);
+  box-shadow: inset 0 0 25px rgba(255, 170, 0, 0.05);
 }
 
-.feed-card:hover { background: #040f20; }
+.feed-card:hover {  border-left: 2px solid #ffaa00; background: #1a1000; }
 
 .feed-card.high-value  { border-left: 2px solid #00ff9c44; }
 .feed-card.mega-value  { border-left: 3px solid #ff4400; background: #0c0400; }
@@ -501,9 +500,7 @@ body {
   padding: 8px 6px;
   transition: all 0.2s ease;
 }
-.ord-card:hover {
-  background: #041020;
-  transform: translateY(-2px);
+.ord-card:hover {border-left: 2px solid #00cfff; background: #001a0a; transform: translateY(-2px);
 }
 .modal-scroll {
   scrollbar-width: thin;
@@ -728,9 +725,7 @@ body {
 }
 
 .ord-card:hover {
-  background: #041020;
-  transform: translateY(-2px);
-}
+ border-left: 2px solid #00cfff; background: #001a0a; transform: translateY(-2px) }
 
 /* 🔥 Modal Smooth Scroll */
 .modal-scroll {
@@ -753,4 +748,48 @@ body {
 .str-lbl.growing  { background: #1a1000; color: #ffaa00; border: 1px solid #ffaa0044; }
 .str-lbl.building { background: #001020; color: #4488cc; border: 1px solid #4488cc44; }
 .str-lbl.early    { background: #080808; color: #334455; border: 1px solid #334455; 
+}
+/* =========================
+   FEED COMPACT MODE (PRO)
+========================= */
+
+.feed-card {
+  padding: 4px 6px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.fc-head {
+  margin-bottom: 2px;
+}
+
+.fc-text {
+  font-size: 9px;
+  opacity: 0.8;
+  line-height: 1.3;
+}
+
+.fc-foot {
+  margin-top: 2px;
+  font-size: 9px;
+}
+
+/* reduce spacing between cards */
+.feed-card + .feed-card {
+  margin-top: 4px;
+}
+
+/* tighten tags */
+.tag {
+  font-size: 8px;
+  padding: 1px 4px;
+}
+
+/* reduce time text size */
+.time-row {
+  font-size: 8px;
+}
+/* new event flash effect */
+.feed-panel.flash {
+  box-shadow: inset 0 0 40px rgba(255, 170, 0, 0.15);
 }

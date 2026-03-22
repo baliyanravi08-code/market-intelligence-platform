@@ -24,6 +24,21 @@ const seen    = new Set();
 const BSE_HOME = "https://www.bseindia.com/corporates/ann.html";
 const BSE_API  = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C&subcategory=-1";
 
+// Companies we track order book for — EPC, Infra, Defense, Railway, Solar, Water
+// Loaded from marketCapDB + static list — any company that has ever had ORDER_ALERT
+const ORDER_BOOK_SECTORS = [
+  "infra", "epc", "engineer", "construct", "railway", "defense", "defence",
+  "solar", "renewable", "power", "water", "wabag", "rites", "rvnl", "irfc",
+  "hal", "bel", "bharat", "ntpc", "l&t", "larsen", "kec", "kalpataru",
+  "patel", "techno", "thermax", "cummins", "bhel", "suzlon", "adani green",
+  "torrent", "tata power", "greenko", "inox wind"
+];
+
+function isOrderBookCompany(company) {
+  const c = (company || "").toLowerCase();
+  return ORDER_BOOK_SECTORS.some(k => c.includes(k));
+}
+
 function buildHistoricalUrl(fromDate, toDate) {
   const fmt = d => `${String(d.getDate()).padStart(2,"0")}%2F${String(d.getMonth()+1).padStart(2,"0")}%2F${d.getFullYear()}`;
   return `https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=${fmt(fromDate)}&strScrip=&strSearch=P&strToDate=${fmt(toDate)}&strType=C&subcategory=-1`;
@@ -99,6 +114,49 @@ function extractList(data) {
   return [];
 }
 
+// ── Extract order book from result PDF ──
+async function enrichResultWithPDF(signal) {
+  if (!signal.pdfUrl) return signal;
+
+  // Only fetch PDF for EPC/infra/order-book companies
+  const { getMarketCap } = require("../data/marketCap");
+  const hasExistingOB    = getMarketCap(signal.code); // proxy — if we know the company
+  const isTrackedCompany = isOrderBookCompany(signal.company) || hasExistingOB;
+
+  if (!isTrackedCompany) return signal;
+
+  try {
+    const { extractOrderValueFromPDF } = require("../data/pdfReader");
+    const { updateFromResult, getCurrentFYQuarter } = require("../data/marketCap");
+
+    console.log(`📄 Result PDF scan: ${signal.company}`);
+    const pdfText = await extractOrderValueFromPDF(signal.pdfUrl);
+
+    if (pdfText && pdfText > 0) {
+      // pdfText is a crore value from pdfReader
+      // But for results we need to look for "order book" specifically
+      // pdfReader already returns the largest crore value — which in results is usually order book
+      const quarter = getCurrentFYQuarter();
+
+      updateFromResult(String(signal.code), {
+        confirmedOrderBook:    pdfText,
+        confirmedQuarter:      quarter,
+        newOrdersSinceConfirm: 0
+      });
+
+      console.log(`📦 Result PDF order book: ${signal.company} ₹${pdfText}Cr (${quarter})`);
+
+      // Add to signal for display
+      if (!signal.resultSignals) signal.resultSignals = [];
+      signal.resultSignals.push(`OB ₹${pdfText >= 1000 ? (pdfText/1000).toFixed(1)+"K" : pdfText}Cr (PDF)`);
+    }
+  } catch(e) {
+    console.log(`📄 Result PDF failed: ${e.message}`);
+  }
+
+  return signal;
+}
+
 async function processItem(item) {
   const id = String(item.SCRIP_CD || "") + (item.HEADLINE || "");
   if (!id || seen.has(id)) return;
@@ -141,6 +199,12 @@ async function processItem(item) {
     }
   }
 
+  // ── PDF enrichment for RESULT — extract order book ──
+  // Only for EPC/infra companies, runs async without blocking
+  if ((signal.type === "RESULT" || signal.type === "BANK_RESULT") && signal.pdfUrl) {
+    enrichResultWithPDF(signal).catch(() => {});
+  }
+
   const exchangeTs   = parseExchangeTs(signal.time);
   const signalWithTs = {
     ...signal,
@@ -171,6 +235,7 @@ async function processItem(item) {
           periodLabel:    orderData.periodLabel,
           annualCrores:   orderData.annualCrores,
           mcapRatio:      orderData.mcapRatio,
+          mcap:           orderData.mcap,
           quarterBook:    orderData.quarterBook,
           quarterOrders:  orderData.quarterOrders,
           totalOrderBook: orderData.totalOrderBook,
@@ -178,9 +243,8 @@ async function processItem(item) {
           title:          signalWithTs.title,
           pdfUrl:         signalWithTs.pdfUrl,
           time:           signalWithTs.time,
-          receivedAt:     Date.now()
+          receivedAt:     signalWithTs.savedAt || Date.now()
         };
-        // ── Persist mega order so it survives refresh ──
         persistMegaOrder(megaPayload);
         if (ioRef) ioRef.emit("mega_order_alert", megaPayload);
       }
@@ -315,7 +379,6 @@ function startBSEListener(io) {
       label: getWindowLabel()
     });
 
-    // ── Send stored orderBook, sectors, mega orders, opportunities ──
     sendStoredToClient(socket);
   });
 
