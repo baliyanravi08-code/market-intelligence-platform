@@ -61,6 +61,7 @@ function toAgo(ts) {
 
 function bestTsRadar(e) {
   if (e.savedAt) return e.savedAt;
+  if (e.receivedAt && e.receivedAt < Date.now() - 5000) return e.receivedAt;
   const et = exchangeToTs(e.time);
   if (et) return et;
   return Date.now();
@@ -111,11 +112,19 @@ function mergeEvents(incoming, existing) {
 }
 
 function LiveAgo({ receivedAt, exchangeTime }) {
-  const [ago, setAgo] = useState(toAgo(receivedAt));
+  // Lock the timestamp on first render — don't reset if receivedAt changes
+  const lockedAt = useRef(receivedAt);
+  const [ago, setAgo] = useState(toAgo(lockedAt.current));
+
   useEffect(() => {
-    const t = setInterval(() => setAgo(toAgo(receivedAt)), 1000);
+    // Only update lock if new receivedAt is significantly different (>10s)
+    if (Math.abs((receivedAt || 0) - (lockedAt.current || 0)) > 10000) {
+      lockedAt.current = receivedAt;
+    }
+    const t = setInterval(() => setAgo(toAgo(lockedAt.current)), 1000);
     return () => clearInterval(t);
   }, [receivedAt]);
+
   return (
     <div className="time-row">
       <span className="ago">{ago}</span>
@@ -493,20 +502,20 @@ export default function App() {
     socket.on("window_info", info => setWindowInfo(info));
 
     socket.on("radar_update", data => {
-      setRadar(prev => {
-        const getKey  = r => (r.company || "") + (r.code || "");
-        const prevMap = Object.fromEntries(prev.map(r => [getKey(r), r]));
-        return data.map(r => {
-          const prevItem = prevMap[getKey(r)];
-          return {
-            ...r,
-            receivedAt: prevItem && prevItem.score === r.score
-              ? (prevItem.receivedAt || bestTsRadar(r))
-              : bestTsRadar(r)
-          };
-        });
-      });
+  setRadar(prev => {
+    const getKey  = r => (r.company || "") + (r.code || "");
+    const prevMap = Object.fromEntries(prev.map(r => [getKey(r), r]));
+    return data.map(r => {
+      const prevItem = prevMap[getKey(r)];
+      return {
+        ...r,
+        receivedAt: prevItem && prevItem.score === r.score
+          ? (prevItem.receivedAt || bestTsRadar(r))
+          : bestTsRadar(r)
+      };
     });
+  });
+});
 
     socket.on("bse_events", data => {
       const stamped = data.map(e => ({ ...e, receivedAt: bestTsFeed(e) }));
@@ -536,8 +545,8 @@ export default function App() {
 });
 
     socket.on("mega_order_alert", data => {
-      setMegaOrders(prev => [
-        { ...data, receivedAt: Date.now() },
+  setMegaOrders(prev => [
+    { ...data, receivedAt: data.receivedAt || data.savedAt || Date.now() },
         ...prev.filter(o => o.company !== data.company)
       ].slice(0, 10));
       playAlert(880, 1320);
