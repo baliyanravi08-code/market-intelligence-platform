@@ -1,19 +1,21 @@
 /**
  * liveMcap.js
- * Fetches live data from BSE, Yahoo Finance, NSE, FMP APIs.
- * All cached to avoid hammering APIs.
+ * Fetches live MCap + company data from BSE.
+ * Caches aggressively to avoid rate limits.
+ * Also updates static marketCap store when live data is fetched.
  */
 
 const axios = require("axios");
 
 const FMP_KEY = "ch4kAf6MzKzLUkpdPD2pc2BX6XWkF3MQ";
 
-const mcapCache       = {};
-const profileCache    = {};
-const yahooCache      = {};
-const holdingCache    = {};
-const CACHE_TTL       = 24 * 60 * 60 * 1000; // 24h for static data
-const LIVE_CACHE_TTL  =       30 * 1000;      // 30s for live price
+const mcapCache    = {};
+const profileCache = {};
+const yahooCache   = {};
+const holdingCache = {};
+
+const LIVE_CACHE_TTL   =  2 * 60 * 1000; // 2 min for live price (was 30s — too aggressive)
+const PROFILE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h for profile
 
 const BSE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -28,69 +30,95 @@ const NSE_HEADERS = {
 };
 
 function parseMcap(d) {
-  const raw = d?.MarketCapCr || d?.Mktcap || d?.mktcap || d?.MktCap || d?.mktCap || null;
+  // Try all known MCap field names from BSE API
+  const raw = d?.MarketCapCr || d?.Mktcap || d?.mktcap || d?.MktCap
+            || d?.mktCap     || d?.MKTCAP  || d?.market_cap || null;
   if (!raw) return null;
   const v = parseFloat(String(raw).replace(/,/g, ""));
   return v > 0 ? v : null;
 }
 
-// ── 1. BSE Live Quote ──
+// ── 1. BSE Live Quote — MCap only ──
 async function getLiveMcap(code) {
   if (!code) return null;
   const c = String(code).trim();
   if (!c || c === "0" || c.length < 4) return null;
 
+  // Return cached if fresh
   if (mcapCache[c] && (Date.now() - mcapCache[c].fetchedAt) < LIVE_CACHE_TTL) {
     return mcapCache[c].mcap;
   }
 
+  // Try BSE getScripHeaderData
   try {
     const res = await axios.get(
       `https://api.bseindia.com/BseIndiaAPI/api/getScripHeaderData/w?Scrip_Cd=${c}`,
       { headers: BSE_HEADERS, timeout: 5000 }
     );
     const mcap = parseMcap(res.data);
-    if (mcap) {
+    if (mcap && mcap > 0) {
       mcapCache[c] = { mcap, fetchedAt: Date.now() };
+
+      // ── Also update static marketCap store so orderBookEngine can use it ──
+      try {
+        const { updateFromResult } = require("./marketCap");
+        updateFromResult(c, { mcap });
+      } catch(e) {}
+
       return mcap;
     }
-  } catch (err) {}
+  } catch(e) {}
+
+  // Try BSE quote API as fallback
+  try {
+    const res = await axios.get(
+      `https://api.bseindia.com/BseIndiaAPI/api/getQuote/w?scripcode=${c}&type=EQ`,
+      { headers: BSE_HEADERS, timeout: 5000 }
+    );
+    const d    = res.data?.Header || res.data || {};
+    const mcap = parseMcap(d);
+    if (mcap && mcap > 0) {
+      mcapCache[c] = { mcap, fetchedAt: Date.now() };
+      try {
+        const { updateFromResult } = require("./marketCap");
+        updateFromResult(c, { mcap });
+      } catch(e) {}
+      return mcap;
+    }
+  } catch(e) {}
+
   return null;
 }
 
-// ── 2. BSE + FMP Full Company Profile ──
+// ── 2. BSE Full Company Profile ──
 async function getCompanyProfile(code) {
   if (!code) return null;
   const c = String(code).trim();
   if (!c || c.length < 4) return null;
 
-  if (profileCache[c] && (Date.now() - profileCache[c].fetchedAt) < CACHE_TTL) {
+  if (profileCache[c] && (Date.now() - profileCache[c].fetchedAt) < PROFILE_CACHE_TTL) {
     return profileCache[c].profile;
   }
 
   try {
-    // Fetch BSE header + about in parallel
     const [headerRes, aboutRes] = await Promise.allSettled([
-      axios.get(
-        `https://api.bseindia.com/BseIndiaAPI/api/getScripHeaderData/w?Scrip_Cd=${c}`,
-        { headers: BSE_HEADERS, timeout: 6000 }
-      ),
-      axios.get(
-        `https://api.bseindia.com/BseIndiaAPI/api/CompanyProfile/w?scrip_cd=${c}`,
-        { headers: BSE_HEADERS, timeout: 6000 }
-      )
+      axios.get(`https://api.bseindia.com/BseIndiaAPI/api/getScripHeaderData/w?Scrip_Cd=${c}`, { headers: BSE_HEADERS, timeout: 6000 }),
+      axios.get(`https://api.bseindia.com/BseIndiaAPI/api/CompanyProfile/w?scrip_cd=${c}`,     { headers: BSE_HEADERS, timeout: 6000 })
     ]);
 
     const h = headerRes.status === "fulfilled" ? (headerRes.value.data || {}) : {};
     const a = aboutRes.status  === "fulfilled" ? (aboutRes.value.data  || {}) : {};
 
-    const mcap  = parseMcap(h);
-    const price = parseFloat(h?.CurrRate || h?.Ltrade || 0) || null;
-    const prev  = parseFloat(h?.PrevClose || 0) || null;
+    const mcap      = parseMcap(h);
+    const price     = parseFloat(h?.CurrRate || h?.Ltrade || 0) || null;
+    const prev      = parseFloat(h?.PrevClose || 0) || null;
     const change    = price && prev ? parseFloat((price - prev).toFixed(2)) : null;
     const changePct = price && prev ? parseFloat(((price - prev) / prev * 100).toFixed(2)) : null;
 
-    if (mcap) mcapCache[c] = { mcap, fetchedAt: Date.now() };
+    if (mcap) {
+      mcapCache[c] = { mcap, fetchedAt: Date.now() };
+      try { const { updateFromResult } = require("./marketCap"); updateFromResult(c, { mcap }); } catch(e) {}
+    }
 
     const profile = {
       code,
@@ -99,17 +127,10 @@ async function getCompanyProfile(code) {
       industry:      h?.Industry      || a?.Industry     || null,
       about:         a?.CompanyProfile|| a?.About        || a?.CompanyDesc || null,
       nseSymbol:     h?.NSESymbol     || a?.NSESymbol    || null,
-
-      // Price data
-      price,
-      prev,
-      change,
-      changePct,
+      price, prev, change, changePct,
       dayHigh:       parseFloat(h?.DayHigh   || 0) || null,
       dayLow:        parseFloat(h?.DayLow    || 0) || null,
       volume:        parseFloat(h?.TotalTradedQty || h?.Volume || 0) || null,
-
-      // Valuation
       mcap,
       pe:            parseFloat(h?.PE        || 0) || null,
       eps:           parseFloat(h?.EPS       || 0) || null,
@@ -122,215 +143,138 @@ async function getCompanyProfile(code) {
 
     profileCache[c] = { profile, fetchedAt: Date.now() };
     return profile;
-
-  } catch (err) {
-    return null;
-  }
+  } catch(e) { return null; }
 }
 
-// ── 3. Yahoo Finance — Debt, Quarterly Revenue/Profit ──
+// ── 3. Yahoo Finance ──
 async function getYahooData(bseCode) {
   const c = String(bseCode).trim();
-
-  if (yahooCache[c] && (Date.now() - yahooCache[c].fetchedAt) < CACHE_TTL) {
-    return yahooCache[c].data;
-  }
-
-  const symbol = `${c}.BO`; // BSE symbol for Yahoo
+  if (yahooCache[c] && (Date.now() - yahooCache[c].fetchedAt) < PROFILE_CACHE_TTL) return yahooCache[c].data;
 
   try {
     const res = await axios.get(
-      `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=financialData,defaultKeyStatistics,incomeStatementHistoryQuarterly,balanceSheetHistoryQuarterly`,
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          "Accept": "application/json"
-        },
-        timeout: 8000
-      }
+      `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${c}.BO?modules=financialData,defaultKeyStatistics,incomeStatementHistoryQuarterly,balanceSheetHistoryQuarterly`,
+      { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" }, timeout: 8000 }
     );
-
-    const result  = res.data?.quoteSummary?.result?.[0];
+    const result = res.data?.quoteSummary?.result?.[0];
     if (!result) return null;
 
-    const fin  = result.financialData        || {};
-    const stat = result.defaultKeyStatistics || {};
-    const inc  = result.incomeStatementHistoryQuarterly?.incomeStatementHistory || [];
-    const bal  = result.balanceSheetHistoryQuarterly?.balanceSheetStatements    || [];
-
-    // Quarterly revenue + profit (last 4 quarters)
-    const quarters = inc.slice(0, 4).map(q => ({
-      date:    q.endDate?.fmt || null,
-      revenue: q.totalRevenue?.raw ? Math.round(q.totalRevenue.raw / 10000000) : null, // to Cr
-      profit:  q.netIncome?.raw    ? Math.round(q.netIncome.raw    / 10000000) : null,
-      ebitda:  q.ebitda?.raw       ? Math.round(q.ebitda.raw       / 10000000) : null,
-    }));
-
-    // Balance sheet — latest
+    const fin = result.financialData || {};
+    const inc = result.incomeStatementHistoryQuarterly?.incomeStatementHistory || [];
+    const bal = result.balanceSheetHistoryQuarterly?.balanceSheetStatements    || [];
     const latestBal = bal[0] || {};
 
     const data = {
-      // Debt
-      totalDebt:       latestBal.totalDebt?.raw
-        ? Math.round(latestBal.totalDebt.raw / 10000000) : null,
-      totalCash:       latestBal.cash?.raw
-        ? Math.round(latestBal.cash.raw      / 10000000) : null,
-      debtToEquity:    fin.debtToEquity?.raw    || stat.debtToEquity?.raw    || null,
+      totalDebt:       latestBal.totalDebt?.raw ? Math.round(latestBal.totalDebt.raw / 10000000) : null,
+      totalCash:       latestBal.cash?.raw       ? Math.round(latestBal.cash.raw      / 10000000) : null,
+      debtToEquity:    fin.debtToEquity?.raw    || null,
       currentRatio:    fin.currentRatio?.raw    || null,
-      returnOnEquity:  fin.returnOnEquity?.raw  ? (fin.returnOnEquity.raw * 100).toFixed(1)  : null,
-      returnOnAssets:  fin.returnOnAssets?.raw  ? (fin.returnOnAssets.raw * 100).toFixed(1)  : null,
-      revenueGrowth:   fin.revenueGrowth?.raw   ? (fin.revenueGrowth.raw  * 100).toFixed(1)  : null,
-      profitMargin:    fin.profitMargins?.raw    ? (fin.profitMargins.raw  * 100).toFixed(1)  : null,
-      operatingMargin: fin.operatingMargins?.raw ? (fin.operatingMargins.raw * 100).toFixed(1): null,
-
-      // Quarterly breakdown
-      quarters,
+      returnOnEquity:  fin.returnOnEquity?.raw  ? (fin.returnOnEquity.raw  * 100).toFixed(1) : null,
+      returnOnAssets:  fin.returnOnAssets?.raw  ? (fin.returnOnAssets.raw  * 100).toFixed(1) : null,
+      revenueGrowth:   fin.revenueGrowth?.raw   ? (fin.revenueGrowth.raw   * 100).toFixed(1) : null,
+      profitMargin:    fin.profitMargins?.raw    ? (fin.profitMargins.raw   * 100).toFixed(1) : null,
+      operatingMargin: fin.operatingMargins?.raw ? (fin.operatingMargins.raw* 100).toFixed(1) : null,
+      quarters: inc.slice(0, 4).map(q => ({
+        date:    q.endDate?.fmt || null,
+        revenue: q.totalRevenue?.raw ? Math.round(q.totalRevenue.raw / 10000000) : null,
+        profit:  q.netIncome?.raw    ? Math.round(q.netIncome.raw    / 10000000) : null,
+        ebitda:  q.ebitda?.raw       ? Math.round(q.ebitda.raw       / 10000000) : null,
+      }))
     };
-
     yahooCache[c] = { data, fetchedAt: Date.now() };
     return data;
-
-  } catch (err) {
-    return null;
-  }
+  } catch(e) { return null; }
 }
 
-// ── 4. FMP — Detailed Financials ──
+// ── 4. FMP ──
 async function getFMPData(nseSymbol) {
   if (!nseSymbol) return null;
   const sym = `${nseSymbol}.NS`;
-  const cacheKey = `fmp_${sym}`;
-
-  if (yahooCache[cacheKey] && (Date.now() - yahooCache[cacheKey].fetchedAt) < CACHE_TTL) {
-    return yahooCache[cacheKey].data;
-  }
+  const key = `fmp_${sym}`;
+  if (yahooCache[key] && (Date.now() - yahooCache[key].fetchedAt) < PROFILE_CACHE_TTL) return yahooCache[key].data;
 
   try {
     const [incomeRes, balanceRes, ratioRes] = await Promise.allSettled([
-      axios.get(`https://financialmodelingprep.com/api/v3/income-statement/${sym}?period=quarter&limit=4&apikey=${FMP_KEY}`,
-        { timeout: 8000 }),
-      axios.get(`https://financialmodelingprep.com/api/v3/balance-sheet-statement/${sym}?period=quarter&limit=1&apikey=${FMP_KEY}`,
-        { timeout: 8000 }),
-      axios.get(`https://financialmodelingprep.com/api/v3/ratios-ttm/${sym}?apikey=${FMP_KEY}`,
-        { timeout: 8000 })
+      axios.get(`https://financialmodelingprep.com/api/v3/income-statement/${sym}?period=quarter&limit=4&apikey=${FMP_KEY}`, { timeout: 8000 }),
+      axios.get(`https://financialmodelingprep.com/api/v3/balance-sheet-statement/${sym}?period=quarter&limit=1&apikey=${FMP_KEY}`, { timeout: 8000 }),
+      axios.get(`https://financialmodelingprep.com/api/v3/ratios-ttm/${sym}?apikey=${FMP_KEY}`, { timeout: 8000 })
     ]);
-
     const income  = incomeRes.status  === "fulfilled" ? (incomeRes.value.data  || []) : [];
     const balance = balanceRes.status === "fulfilled" ? (balanceRes.value.data || []) : [];
     const ratios  = ratioRes.status   === "fulfilled" ? (ratioRes.value.data?.[0] || {}) : {};
-
-    const latestBal = balance[0] || {};
-
-    const quarters = income.slice(0, 4).map(q => ({
-      date:    q.date || null,
-      revenue: q.revenue       ? Math.round(q.revenue       / 10000000) : null,
-      profit:  q.netIncome     ? Math.round(q.netIncome     / 10000000) : null,
-      ebitda:  q.ebitda        ? Math.round(q.ebitda        / 10000000) : null,
-      eps:     q.eps           || null,
-    }));
-
+    const lb      = balance[0] || {};
     const data = {
-      totalDebt:       latestBal.totalDebt       ? Math.round(latestBal.totalDebt       / 10000000) : null,
-      totalCash:       latestBal.cashAndEquivalents ? Math.round(latestBal.cashAndEquivalents / 10000000) : null,
-      debtToEquity:    latestBal.totalDebt && latestBal.totalEquity
-        ? (latestBal.totalDebt / latestBal.totalEquity).toFixed(2) : null,
-      currentRatio:    ratios.currentRatioTTM     || null,
-      returnOnEquity:  ratios.returnOnEquityTTM   ? (ratios.returnOnEquityTTM  * 100).toFixed(1) : null,
-      returnOnAssets:  ratios.returnOnAssetsTTM   ? (ratios.returnOnAssetsTTM  * 100).toFixed(1) : null,
-      profitMargin:    ratios.netProfitMarginTTM  ? (ratios.netProfitMarginTTM * 100).toFixed(1) : null,
+      totalDebt:       lb.totalDebt           ? Math.round(lb.totalDebt           / 10000000) : null,
+      totalCash:       lb.cashAndEquivalents   ? Math.round(lb.cashAndEquivalents  / 10000000) : null,
+      debtToEquity:    lb.totalDebt && lb.totalEquity ? (lb.totalDebt / lb.totalEquity).toFixed(2) : null,
+      currentRatio:    ratios.currentRatioTTM    || null,
+      returnOnEquity:  ratios.returnOnEquityTTM  ? (ratios.returnOnEquityTTM  * 100).toFixed(1) : null,
+      returnOnAssets:  ratios.returnOnAssetsTTM  ? (ratios.returnOnAssetsTTM  * 100).toFixed(1) : null,
+      profitMargin:    ratios.netProfitMarginTTM ? (ratios.netProfitMarginTTM  * 100).toFixed(1) : null,
       operatingMargin: ratios.operatingProfitMarginTTM ? (ratios.operatingProfitMarginTTM * 100).toFixed(1) : null,
-      quarters,
+      quarters: income.slice(0, 4).map(q => ({
+        date:    q.date || null,
+        revenue: q.revenue   ? Math.round(q.revenue   / 10000000) : null,
+        profit:  q.netIncome ? Math.round(q.netIncome / 10000000) : null,
+        ebitda:  q.ebitda    ? Math.round(q.ebitda    / 10000000) : null,
+        eps:     q.eps || null,
+      })),
       source: "FMP"
     };
-
-    yahooCache[cacheKey] = { data, fetchedAt: Date.now() };
+    yahooCache[key] = { data, fetchedAt: Date.now() };
     return data;
-
-  } catch (err) {
-    return null;
-  }
+  } catch(e) { return null; }
 }
 
-// ── 5. BSE Shareholding Pattern ──
+// ── 5. Shareholding ──
 async function getShareholding(bseCode, nseSymbol) {
   const c = String(bseCode).trim();
+  if (holdingCache[c] && (Date.now() - holdingCache[c].fetchedAt) < PROFILE_CACHE_TTL) return holdingCache[c].data;
 
-  if (holdingCache[c] && (Date.now() - holdingCache[c].fetchedAt) < CACHE_TTL) {
-    return holdingCache[c].data;
-  }
-
-  // Try BSE first
   try {
-    const res = await axios.get(
-      `https://api.bseindia.com/BseIndiaAPI/api/ShareHoldingPatterns/w?scripcd=${c}`,
-      { headers: BSE_HEADERS, timeout: 6000 }
-    );
-
-    const d = res.data;
-    const rows = d?.Table || d?.table || d?.data || [];
-
+    const res  = await axios.get(`https://api.bseindia.com/BseIndiaAPI/api/ShareHoldingPatterns/w?scripcd=${c}`, { headers: BSE_HEADERS, timeout: 6000 });
+    const rows = res.data?.Table || res.data?.table || res.data?.data || [];
     if (rows.length) {
-      // BSE returns rows like { category: "Promoter", percentage: "52.34" }
       let promoter = null, fii = null, dii = null, pub = null;
-
       rows.forEach(row => {
         const cat = (row.category || row.Category || row.CATEGORY || "").toLowerCase();
         const pct = parseFloat(row.percentage || row.Percentage || row.PCNHOT || 0);
-        if (cat.includes("promoter"))  promoter = pct;
+        if (cat.includes("promoter")) promoter = pct;
         if (cat.includes("fii") || cat.includes("fpi") || cat.includes("foreign")) fii = pct;
         if (cat.includes("dii") || cat.includes("mutual") || cat.includes("institution")) dii = pct;
         if (cat.includes("public") || cat.includes("retail")) pub = pct;
       });
-
       const data = { promoter, fii, dii, public: pub, source: "BSE" };
       holdingCache[c] = { data, fetchedAt: Date.now() };
       return data;
     }
-  } catch(err) {}
+  } catch(e) {}
 
-  // Fallback: NSE shareholding
   if (nseSymbol) {
     try {
-      const res = await axios.get(
-        `https://www.nseindia.com/api/corporate-share-holdings-master?index=shareholding&symbol=${nseSymbol}`,
-        { headers: NSE_HEADERS, timeout: 6000 }
-      );
-
-      const d = res.data;
-      // NSE format varies — try to extract
-      const data = {
-        promoter: d?.promoter    || d?.Promoter    || null,
-        fii:      d?.fii         || d?.FII         || d?.FPI || null,
-        dii:      d?.dii         || d?.DII         || null,
-        public:   d?.public      || d?.Public      || null,
-        source:   "NSE"
-      };
-
+      const res  = await axios.get(`https://www.nseindia.com/api/corporate-share-holdings-master?index=shareholding&symbol=${nseSymbol}`, { headers: NSE_HEADERS, timeout: 6000 });
+      const d    = res.data;
+      const data = { promoter: d?.promoter || null, fii: d?.fii || d?.FPI || null, dii: d?.dii || null, public: d?.public || null, source: "NSE" };
       holdingCache[c] = { data, fetchedAt: Date.now() };
       return data;
-    } catch(err) {}
+    } catch(e) {}
   }
-
   return null;
 }
 
-// ── 6. Full Screener Data — combines all sources ──
+// ── 6. Full Screener ──
 async function getFullScreenerData(bseCode, nseSymbol) {
-  console.log(`🔍 Screener: fetching full data for ${bseCode} / ${nseSymbol}`);
-
+  console.log(`🔍 Screener: ${bseCode} / ${nseSymbol}`);
   const [profile, yahoo, fmp, holding] = await Promise.allSettled([
     getCompanyProfile(bseCode),
     getYahooData(bseCode),
     nseSymbol ? getFMPData(nseSymbol) : Promise.resolve(null),
     getShareholding(bseCode, nseSymbol)
   ]);
-
-  const p = profile.status  === "fulfilled" ? profile.value  : null;
-  const y = yahoo.status    === "fulfilled" ? yahoo.value    : null;
-  const f = fmp.status      === "fulfilled" ? fmp.value      : null;
-  const h = holding.status  === "fulfilled" ? holding.value  : null;
-
-  // Merge financial data — FMP preferred, Yahoo as fallback
+  const p = profile.status === "fulfilled" ? profile.value : null;
+  const y = yahoo.status   === "fulfilled" ? yahoo.value   : null;
+  const f = fmp.status     === "fulfilled" ? fmp.value     : null;
+  const h = holding.status === "fulfilled" ? holding.value : null;
   const fin = {
     totalDebt:       f?.totalDebt       || y?.totalDebt       || null,
     totalCash:       f?.totalCash       || y?.totalCash       || null,
@@ -343,7 +287,6 @@ async function getFullScreenerData(bseCode, nseSymbol) {
     revenueGrowth:   y?.revenueGrowth   || null,
     quarters:        f?.quarters        || y?.quarters        || [],
   };
-
   return { profile: p, financials: fin, shareholding: h };
 }
 
