@@ -107,6 +107,34 @@ export default function App() {
 }, []);
 
   const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => feedFilter === "ALL" || e.type.includes(feedFilter));
+  // ===== FRONTEND INTELLIGENCE =====
+
+// Radar = latest active companies
+const computedRadar = (bseEvents || []).slice(0, 10).map(e => ({
+  company: e.company,
+  score: 50,
+  receivedAt: e.receivedAt,
+  time: e.time
+}));
+
+// Mega Orders = detect keywords
+const computedMegaOrders = (bseEvents || []).filter(e => {
+  const t = (e.title || "").toLowerCase();
+  return t.includes("order") || t.includes("contract") || t.includes("agreement");
+}).map(e => ({
+  company: e.company,
+  crores: e._orderInfo?.crores || 0,
+  receivedAt: e.receivedAt,
+  time: e.time
+}));
+
+// Opportunities (basic)
+const computedOpportunities = (bseEvents || []).slice(0, 5).map(e => ({
+  company: e.company,
+  score: 60,
+  receivedAt: e.receivedAt,
+  time: e.time
+}));
 
   return (
     <div className="terminal">
@@ -207,12 +235,16 @@ export default function App() {
           </div>
           <div className="section">
             <div className="section-divider">🔔 Alerts</div>
-            <div className="mini-card">No recent alerts</div>
+            {(bseEvents || []).slice(0, 5).map((e, i) => (
+  <div key={i} className="mini-card">
+    {e.company} → {e.category || "NEWS"}
+  </div>
+))}
           </div>
           <div className="section">
             <div className="section-divider">⚡ Pulse</div>
             <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
-            <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {filteredFeed.length}</div>
+            <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {radar.length}</div>
           </div>
         </div>
       </div>
