@@ -110,7 +110,7 @@ export default function App() {
   // ===== FRONTEND INTELLIGENCE =====
 
 // Radar = latest active companies
-const computedRadar = (bseEvents || []).slice(0, 10).map(e => ({
+const computedRadar = (bseEvents || []).slice(0, 50).map(e => ({
   company: e.company,
   score: 50,
   receivedAt: e.receivedAt,
