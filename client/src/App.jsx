@@ -110,18 +110,38 @@ export default function App() {
   // ===== FRONTEND INTELLIGENCE =====
 
 // Radar = latest active companies
-const computedRadar = (bseEvents || []).slice(0, 50).map(e => ({
-  company: e.company,
-  score: 50,
-  receivedAt: e.receivedAt,
-  time: e.time
-}));
+const isSignal = (text) => {
+  text = (text || "").toLowerCase();
+
+  return (
+    text.includes("order") ||
+    text.includes("contract") ||
+    text.includes("result") ||
+    text.includes("acquisition") ||
+    text.includes("deal") ||
+    text.includes("expansion")
+  );
+};
+
+const computedRadar = (bseEvents || [])
+  .filter(e => isSignal(e.title))   // 🔥 THIS IS KEY
+  .slice(0, 50)
+  .map(e => ({
+    company: e.company,
+    score: 80,
+    receivedAt: e.receivedAt,
+    time: e.time
+  }));
 
 // Mega Orders = detect keywords
 const computedMegaOrders = (bseEvents || []).filter(e => {
   const t = (e.title || "").toLowerCase();
-  return t.includes("order") || t.includes("contract") || t.includes("agreement");
-}).map(e => ({
+
+  return (
+    (t.includes("order") || t.includes("contract")) &&
+    (t.includes("crore") || t.includes("₹") || t.includes("rs"))
+  );
+}).slice(0, 10).map(e => ({
   company: e.company,
   crores: e._orderInfo?.crores || 0,
   receivedAt: e.receivedAt,
@@ -129,12 +149,15 @@ const computedMegaOrders = (bseEvents || []).filter(e => {
 }));
 
 // Opportunities (basic)
-const computedOpportunities = (bseEvents || []).slice(0, 5).map(e => ({
-  company: e.company,
-  score: 60,
-  receivedAt: e.receivedAt,
-  time: e.time
-}));
+const computedOpportunities = computedRadar
+  .filter(r => r.score >= 70)
+  .slice(0, 5)
+  .map(r => ({
+    company: r.company,
+    score: r.score,
+    receivedAt: r.receivedAt,
+    time: r.time
+  }));
 
   return (
     <div className="terminal">
@@ -150,7 +173,7 @@ const computedOpportunities = (bseEvents || []).slice(0, 5).map(e => ({
         {/* COL 1: RADAR */}
         <div className="panel radar-panel">
           <div className="panel-header"><span className="panel-title">📡 Radar <span className="count">{computedRadar.length}</span></span></div>
-          {computedRadar.length === 0 ? <div className="empty">Waiting for signals...</div> : radar.map((r, i) => (
+          {computedRadar.length === 0 ? <div className="empty">Waiting for signals...</div> : computedRadar.map((r, i) => (
             <div className="radar-card" key={i}>
               <div className="rc-top"><span className="co-name">{r.company}</span><span className="score score-high">{r.score}</span></div>
               <LiveAgo receivedAt={r.receivedAt} exchangeTime={r.time} />
@@ -180,7 +203,7 @@ const computedOpportunities = (bseEvents || []).slice(0, 5).map(e => ({
         <div className="panel right-panel">
           <div className="section">
             <div className="section-divider">🔥 Mega Orders <span className="count">{computedMegaOrders.length}</span></div>
-            {megaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : computedMegaOrders.map((o, i) => (
+            {computedMegaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : computedMegaOrders.map((o, i) => (
               <div className="mega-card" key={i}>
                 <div className="mega-head"><span className="co-name">{o.company}</span><span className="mega-val">₹{o.crores}Cr</span></div>
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
@@ -190,7 +213,7 @@ const computedOpportunities = (bseEvents || []).slice(0, 5).map(e => ({
 
           <div className="section">
             <div className="section-divider">💡 Opportunities <span className="count">{computedOpportunities.length}</span></div>
-            {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div> : opportunities.map((o, i) => (
+            {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div> : computedOpportunities.map((o, i) => (
               <div className="opp-card" key={i}>
                 <div className="opp-row"><span className="co-name">{o.company}</span><span className="opp-pct">{o.score}%</span></div>
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
