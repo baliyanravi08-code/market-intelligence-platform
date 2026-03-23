@@ -106,7 +106,7 @@ export default function App() {
     .catch(err => console.log("API error:", err));
 }, []);
 
-  const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => feedFilter === "ALL" || e.type.includes(feedFilter));
+  const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => feedFilter === "ALL" || (e.type || "").includes(feedFilter));
   // ===== FRONTEND INTELLIGENCE =====
 
 // Radar = latest active companies
@@ -149,8 +149,8 @@ const computedOpportunities = (bseEvents || []).slice(0, 5).map(e => ({
       <div className="layout">
         {/* COL 1: RADAR */}
         <div className="panel radar-panel">
-          <div className="panel-header"><span className="panel-title">📡 Radar <span className="count">{radar.length}</span></span></div>
-          {radar.length === 0 ? <div className="empty">Waiting for signals...</div> : radar.map((r, i) => (
+          <div className="panel-header"><span className="panel-title">📡 Radar <span className="count">{computedRadar.length}</span></span></div>
+          {computedRadar.length === 0 ? <div className="empty">Waiting for signals...</div> : radar.map((r, i) => (
             <div className="radar-card" key={i}>
               <div className="rc-top"><span className="co-name">{r.company}</span><span className="score score-high">{r.score}</span></div>
               <LiveAgo receivedAt={r.receivedAt} exchangeTime={r.time} />
@@ -179,8 +179,8 @@ const computedOpportunities = (bseEvents || []).slice(0, 5).map(e => ({
         {/* COL 3: DATA (Mega to Order Book) - TIGHTENED LAYOUT */}
         <div className="panel right-panel">
           <div className="section">
-            <div className="section-divider">🔥 Mega Orders <span className="count">{megaOrders.length}</span></div>
-            {megaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : megaOrders.map((o, i) => (
+            <div className="section-divider">🔥 Mega Orders <span className="count">{computedMegaOrders.length}</span></div>
+            {megaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : computedMegaOrders.map((o, i) => (
               <div className="mega-card" key={i}>
                 <div className="mega-head"><span className="co-name">{o.company}</span><span className="mega-val">₹{o.crores}Cr</span></div>
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
@@ -189,8 +189,8 @@ const computedOpportunities = (bseEvents || []).slice(0, 5).map(e => ({
           </div>
 
           <div className="section">
-            <div className="section-divider">💡 Opportunities <span className="count">{opportunities.length}</span></div>
-            {opportunities.length === 0 ? <div className="empty">No opportunities yet</div> : opportunities.map((o, i) => (
+            <div className="section-divider">💡 Opportunities <span className="count">{computedOpportunities.length}</span></div>
+            {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div> : opportunities.map((o, i) => (
               <div className="opp-card" key={i}>
                 <div className="opp-row"><span className="co-name">{o.company}</span><span className="opp-pct">{o.score}%</span></div>
                 <LiveAgo receivedAt={o.receivedAt} exchangeTime={o.time} />
@@ -244,7 +244,7 @@ const computedOpportunities = (bseEvents || []).slice(0, 5).map(e => ({
           <div className="section">
             <div className="section-divider">⚡ Pulse</div>
             <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
-            <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {radar.length}</div>
+            <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
           </div>
         </div>
       </div>
