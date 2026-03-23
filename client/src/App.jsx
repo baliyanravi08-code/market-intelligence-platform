@@ -92,8 +92,19 @@ export default function App() {
   ];
 
   useEffect(() => {
-    // Socket logic would go here
-  }, []);
+  fetch("/api/events")
+    .then(res => res.json())
+    .then(data => {
+      console.log("API DATA:", data);
+
+      setBseEvents(data.bse || []);
+      setNseEvents(data.nse || []);
+      setOrderBook(data.orderBook || []);
+      setSector(data.sectors || []);
+      setMegaOrders(data.megaOrders || []);
+    })
+    .catch(err => console.log("API error:", err));
+}, []);
 
   const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => feedFilter === "ALL" || e.type.includes(feedFilter));
 
