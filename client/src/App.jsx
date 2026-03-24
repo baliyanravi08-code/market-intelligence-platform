@@ -84,6 +84,7 @@ export default function App() {
   const [sector, setSector] = useState([]);
   const [orderBook, setOrderBook] = useState([]);
   const [opportunities, setOpportunities] = useState([]);
+  const [radarQuery, setRadarQuery] = useState('');
   const [megaOrders, setMegaOrders] = useState([]);
   const [activeTab, setActiveTab] = useState("bse");
   const [feedFilter, setFeedFilter] = useState("ALL");
@@ -162,18 +163,28 @@ export default function App() {
     });
 
   const computedMegaOrders = (bseEvents || []).filter(e => {
-    const t = (e?.title || "").toLowerCase();
-    return (
-      (t.includes("order") || t.includes("contract")) &&
-      (t.includes("crore") || t.includes("₹") || t.includes("rs"))
-    );
-  }).slice(0, 10).map(e => ({
-    company: e.company,
-    crores: e._orderInfo?.crores || extractAmount(e.title),
-    receivedAt: e.receivedAt,
-    time: e.time
-  }));
-
+  const t = (e?.title || "").toLowerCase();
+  const isOrder = (t.includes("order") || t.includes("contract")) &&
+    (t.includes("crore") || t.includes("₹") || t.includes("rs"));
+  if (!isOrder) return false;
+  const cr = e._orderInfo?.crores || extractAmount(e.title);
+  if (!cr) return false;
+  const above500 = cr >= 500;
+  const mcapEntry = window._mcapDb?.find?.(m =>
+    (m.company || "").toLowerCase() === (e.company || "").toLowerCase()
+  );
+  const mcap = mcapEntry?.mcap || 0;
+  const pctTrigger = mcap > 0 && (cr / mcap) >= 0.08;
+  return above500 || pctTrigger;
+}).sort((a, b) =>
+  (b._orderInfo?.crores || extractAmount(b.title)) -
+  (a._orderInfo?.crores || extractAmount(a.title))
+).slice(0, 10).map(e => ({
+  company: e.company,
+  crores: e._orderInfo?.crores || extractAmount(e.title),
+  receivedAt: e.receivedAt,
+  time: e.time
+}));
   const computedOpportunities = computedRadar
     .filter(r => r.score >= 70)
     .slice(0, 5)
@@ -199,39 +210,61 @@ export default function App() {
 
         {/* COL 1: RADAR */}
         <div className="panel radar-panel">
-          <div className="panel-header">
-            <span className="panel-title">
-              📡 Radar <span className="count">{computedRadar.length}</span>
-            </span>
-          </div>
+  <div className="panel-header">
+    <span className="panel-title">
+      📡 Radar <span className="count">{computedRadar.filter(r => !radarQuery || r.company.toLowerCase().includes(radarQuery.toLowerCase()) || r.type.toLowerCase().includes(radarQuery.toLowerCase())).length}</span>
+    </span>
+  </div>
 
-          {computedRadar.length === 0 ? (
-            <div className="empty">Waiting for signals...</div>
-          ) : (
-            computedRadar.map((r, i) => (
-              <div className="radar-card" key={i}>
-                <div className="rc-top">
-                  <span className="co-name">{r.company}</span>
-                  <div>
-                    <span className="score score-high">{r.score}</span>
-                    <span className="type">{r.type}</span>
-                    {r.orderValue > 0 && (
-                      <span className="order-val">₹{r.orderValue}Cr</span>
-                    )}
-                  </div>
-                </div>
-                <div className="time-label compact-time">
-                  {formatTime(r.time)}
-                </div>
-                {r.pdfUrl && (
-                  <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
-                    📄 Filing
-                  </a>
-                )}
-              </div>
-            ))
+  <div className="search-wrap">
+    <span className="search-icon">⌕</span>
+    <input
+      type="text"
+      className="radar-search"
+      placeholder="Search company, type..."
+      value={radarQuery}
+      onChange={e => setRadarQuery(e.target.value)}
+    />
+    {radarQuery && <button className="clear-btn" onClick={() => setRadarQuery('')}>✕</button>}
+  </div>
+
+  {computedRadar.filter(r =>
+    !radarQuery ||
+    r.company.toLowerCase().includes(radarQuery.toLowerCase()) ||
+    r.type.toLowerCase().includes(radarQuery.toLowerCase())
+  ).length === 0 ? (
+    <div className="empty">No matches for "{radarQuery}"</div>
+  ) : (
+    computedRadar
+      .filter(r =>
+        !radarQuery ||
+        r.company.toLowerCase().includes(radarQuery.toLowerCase()) ||
+        r.type.toLowerCase().includes(radarQuery.toLowerCase())
+      )
+      .map((r, i) => (
+        <div className="radar-card" key={i}>
+          <div className="rc-top">
+            <span className="co-name">{r.company}</span>
+            <div>
+              <span className="score score-high">{r.score}</span>
+              <span className="type">{r.type}</span>
+              {r.orderValue > 0 && (
+                <span className="order-val">₹{r.orderValue}Cr</span>
+              )}
+            </div>
+          </div>
+          <div className="time-label compact-time">
+            {formatTime(r.time)}
+          </div>
+          {r.pdfUrl && (
+            <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
+              📄 Filing
+            </a>
           )}
         </div>
+      ))
+  )}
+</div>
 
         {/* COL 2: FEED */}
         <div className="panel feed-panel">
@@ -243,7 +276,13 @@ export default function App() {
           </div>
           <div className="filter-bar">{FEED_FILTERS.map(f => <button key={f} className={`fbtn ${feedFilter === f ? "active" : ""}`} onClick={() => setFeedFilter(f)}>{f}</button>)}</div>
           {filteredFeed.length === 0 ? <div className="empty">No signals match filter</div> : filteredFeed.map((e, i) => (
-            <div className="feed-card" key={i}>
+            <div className={`feed-card ${
+  e.type?.includes("ORDER") ? "fc-order" :
+  e.type?.includes("MERGER") ? "fc-merger" :
+  e.type?.includes("RESULT") ? "fc-result" :
+  e.type?.includes("INSIDER") ? "fc-insider" :
+  e.type?.includes("CAPEX") ? "fc-capex" : "fc-news"
+}`} key={i}>
               <div className="fc-head"><span className="co-name">{e.company}</span><Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} /></div>
               <div className="fc-text">{e.title}</div>
               <div className="time-label">{formatTime(e.time) || "—"}</div>
