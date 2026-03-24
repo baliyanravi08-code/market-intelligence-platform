@@ -134,22 +134,16 @@ const computedRadar = (bseEvents || [])
   .filter(e => {
     const t = (e?.title || "").toLowerCase();
 
-    // ❌ remove noise
     if (
       t.includes("trading window") ||
       t.includes("postal ballot") ||
       t.includes("scrutinizer") ||
-      t.includes("voting") ||
+      t.includes("voting result") ||
       t.includes("esg") ||
-      t.includes("analyst")
+      t.includes("analyst meeting")
     ) return false;
 
-    return (
-  isSignal(t) ||
-  t.includes("result") ||
-  t.includes("board meeting") ||
-  t.includes("strategic")
-);   // ✅ SAFE NOW
+    return isSignal(t);
   })
   .slice(0, 50)
   .map(e => {
@@ -162,14 +156,13 @@ const computedRadar = (bseEvents || [])
     else if (t.includes("fraud") || t.includes("penalty")) type = "RISK";
 
     return {
-      company: e.company || "Unknown",
+      company: e?.company || "Unknown",
       score: type === "ORDER" ? 90 : type === "RISK" ? 95 : 80,
       type,
-      receivedAt: e.receivedAt,
-      time: e.time
+      receivedAt: e?.receivedAt,
+      time: e?.time
     };
   });
-
 // Mega Orders = detect keywords
 const computedMegaOrders = (bseEvents || []).filter(e => {
   const t = (e.title || "").toLowerCase();
