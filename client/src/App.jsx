@@ -247,7 +247,6 @@ export default function App() {
   <span className="co-name">{r.company}</span>
   <div>
     <span className="score score-high">{r.score}</span>
-    <span className="type">{r.type}</span>
     {r.orderValue > 0 && (
       <span className="order-val">₹{r.orderValue}Cr</span>
     )}
