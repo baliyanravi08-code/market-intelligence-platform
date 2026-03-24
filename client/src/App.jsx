@@ -77,6 +77,50 @@ function MarketStatus() {
 }
 
 export default function App() {
+  const [marketIndices, setMarketIndices] = useState([
+  { name: "NIFTY 50",    price: "—", change: "—", pct: "—", up: null },
+  { name: "SENSEX",      price: "—", change: "—", pct: "—", up: null },
+  { name: "BANK NIFTY",  price: "—", change: "—", pct: "—", up: null },
+]);
+
+useEffect(() => {
+  const symbols = ["^NSEI", "^BSESN", "^NSEBANK"];
+  const names   = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
+
+  const fetchMarket = async () => {
+    try {
+      const results = await Promise.all(symbols.map(sym =>
+        fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`)
+          .then(r => r.json())
+      ));
+
+      const updated = results.map((data, i) => {
+        const meta   = data?.chart?.result?.[0]?.meta;
+        if (!meta) return { name: names[i], price: "—", change: "—", pct: "—", up: null };
+        const price  = meta.regularMarketPrice;
+        const prev   = meta.previousClose || meta.chartPreviousClose;
+        const diff   = price - prev;
+        const pct    = ((diff / prev) * 100);
+        const up     = diff >= 0;
+        return {
+          name:   names[i],
+          price:  price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
+          change: (up ? "+" : "") + diff.toFixed(2),
+          pct:    (up ? "+" : "") + pct.toFixed(2) + "%",
+          up
+        };
+      });
+
+      setMarketIndices(updated);
+    } catch(e) {
+      console.log("Market fetch error:", e);
+    }
+  };
+
+  fetchMarket();
+  const interval = setInterval(fetchMarket, 5000); // refresh every 5s
+  return () => clearInterval(interval);
+}, []);
   const socketRef = useRef(null);
   const [bseEvents, setBseEvents] = useState([]);
   const [nseEvents, setNseEvents] = useState([]);
@@ -89,12 +133,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("bse");
   const [feedFilter, setFeedFilter] = useState("ALL");
 
-  const marketIndices = [
-    { name: "NIFTY 50", price: "22,663.55", change: "-450.95", pct: "-1.95%" },
-    { name: "SENSEX", price: "73,235.39", change: "-1297.57", pct: "-1.74%" },
-    { name: "BANK NIFTY", price: "53,427.05", change: "-23.95", pct: "-0.04%" }
-  ];
-
+ 
   useEffect(() => {
     fetch("/api/events")
       .then(res => res.json())
@@ -344,14 +383,19 @@ export default function App() {
           <div className="section">
             <div className="section-divider">⚡ Market</div>
             {marketIndices.map((m, i) => (
-              <div key={i} className="mini-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: "10px", fontWeight: 600 }}>{m.name}</span>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ color: "#fff", fontWeight: 700, fontSize: "11px" }}>{m.price}</div>
-                  <div style={{ color: "#ff5c5c", fontSize: "9px", fontFamily: "IBM Plex Mono" }}>{m.change} ({m.pct})</div>
-                </div>
-              </div>
-            ))}
+  <div key={i} className="mini-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <span style={{ fontSize: "10px", fontWeight: 600 }}>{m.name}</span>
+    <div style={{ textAlign: "right" }}>
+      <div style={{ color: "#fff", fontWeight: 700, fontSize: "11px", fontFamily: "IBM Plex Mono" }}>{m.price}</div>
+      <div style={{
+        color: m.up === null ? "#555" : m.up ? "#00ff9c" : "#ff5c5c",
+        fontSize: "9px", fontFamily: "IBM Plex Mono"
+      }}>
+        {m.change} ({m.pct})
+      </div>
+    </div>
+  </div>
+))}
           </div>
           <div className="section">
             <div className="section-divider">🔔 Alerts</div>
