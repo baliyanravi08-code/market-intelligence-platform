@@ -158,3 +158,37 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .section {
   margin-bottom: 14px;
 }
+.compact-time {
+  font-size: 10px;
+  color: #00cfff;
+  margin-top: 2px;
+}
+
+.filing-link {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 10px;
+  color: #00ff9c;
+  text-decoration: none;
+}
+
+.filing-link:hover {
+  text-decoration: underline;
+}
+.compact-time {
+  font-size: 10px;
+  color: #00cfff;
+  margin-top: 2px;
+}
+
+.filing-link {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 10px;
+  color: #00ff9c;
+  text-decoration: none;
+}
+
+.filing-link:hover {
+  text-decoration: underline;
+}
