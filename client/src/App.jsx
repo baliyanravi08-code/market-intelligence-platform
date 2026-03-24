@@ -244,15 +244,15 @@ export default function App() {
       .map((r, i) => (
         <div className="radar-card" key={i}>
           <div className="rc-top">
-            <span className="co-name">{r.company}</span>
-            <div>
-              <span className="score score-high">{r.score}</span>
-              <span className="type">{r.type}</span>
-              {r.orderValue > 0 && (
-                <span className="order-val">₹{r.orderValue}Cr</span>
-              )}
-            </div>
-          </div>
+  <span className="co-name">{r.company}</span>
+  <div>
+    <span className="score score-high">{r.score}</span>
+    <span className="type">{r.type}</span>
+    {r.orderValue > 0 && (
+      <span className="order-val">₹{r.orderValue}Cr</span>
+    )}
+  </div>
+</div>
           <div className="tag-row">
   <span className="type">{r.type}</span>
   {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
