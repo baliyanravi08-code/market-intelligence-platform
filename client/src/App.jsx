@@ -324,6 +324,6 @@ export default function App() {
         </div>
 
       </div> {/* ✅ end .layout */}
-    </div> // end .terminal
+    </div>
   );
 }
