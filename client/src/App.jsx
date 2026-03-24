@@ -113,15 +113,22 @@ export default function App() {
   // ===== FRONTEND INTELLIGENCE =====
 
 // Radar = latest active companies
-const isSignal = (text) => {
-  text = (text || "").toLowerCase();
+const isSignal = (e) => {
+  const text = (e?.title || "").toLowerCase();
+  const type = (e?.type || "").toUpperCase();
 
   return (
+    // ✅ DIRECT TYPE CHECK (MOST IMPORTANT)
+    type.includes("ORDER") ||
+    type.includes("MERGER") ||
+
+    // 🔥 TEXT BASED
     text.includes("order") ||
     text.includes("contract") ||
     text.includes("merger") ||
     text.includes("acquisition") ||
-    text.includes("deal") ||
+
+    // 🔥 NEGATIVE SIGNALS
     text.includes("fraud") ||
     text.includes("penalty") ||
     text.includes("default") ||
@@ -143,7 +150,7 @@ const computedRadar = (bseEvents || [])
       t.includes("analyst meeting")
     ) return false;
 
-    return isSignal(t);
+    return isSignal(e);
   })
   .slice(0, 50)
   .map(e => {
@@ -205,7 +212,10 @@ const computedOpportunities = computedRadar
           <div className="panel-header"><span className="panel-title">📡 Radar <span className="count">{computedRadar.length}</span></span></div>
           {computedRadar.length === 0 ? <div className="empty">Waiting for signals...</div> : computedRadar.map((r, i) => (
             <div className="radar-card" key={i}>
-              <div className="rc-top"><span className="co-name">{r.company}</span><span className="score score-high">{r.score}</span></div>
+              <div className="rc-top"><span className="co-name">{r.company}</span><div>
+  <span className="score score-high">{r.score}</span>
+  <span className="type">{r.type}</span>
+</div></div>
               <div className="time-label">
   {formatTime(r.time) || "—"}
 </div>

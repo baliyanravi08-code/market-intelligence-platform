@@ -109,3 +109,52 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   color: #ffcc00;
   margin-left: 6px;
 }
+/* --- PREMIUM RADAR --- */
+.radar-card {
+  background: linear-gradient(145deg, #020c1a, #041a30);
+  border: 1px solid #0c2240;
+  padding: 10px;
+  margin-bottom: 6px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.radar-card:hover {
+  transform: translateY(-2px);
+  border-color: #00cfff;
+  box-shadow: 0 0 12px rgba(0, 200, 255, 0.2);
+}
+
+/* score glow */
+.score-high {
+  color: #00ff9c;
+  text-shadow: 0 0 6px #00ff9c88;
+}
+
+/* signal type badge */
+.type {
+  font-size: 9px;
+  background: #0c2a4a;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  color: #ffcc00;
+}
+
+/* mega highlight */
+.mega-val {
+  color: #ff4400;
+  font-weight: bold;
+  text-shadow: 0 0 8px rgba(255, 68, 0, 0.4);
+}
+
+/* feed compact */
+.feed-card {
+  padding: 6px;
+  font-size: 12px;
+}
+
+/* section spacing */
+.section {
+  margin-bottom: 14px;
+}
