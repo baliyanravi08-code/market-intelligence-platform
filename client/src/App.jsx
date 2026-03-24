@@ -95,119 +95,94 @@ export default function App() {
   ];
 
   useEffect(() => {
-  fetch("/api/events")
-    .then(res => res.json())
-    .then(data => {
-      console.log("API DATA:", data);
-
-      setBseEvents(data.bse || []);
-      setNseEvents(data.nse || []);
-      setOrderBook(data.orderBook || []);
-      setSector(data.sectors || []);
-      setMegaOrders(data.megaOrders || []);
-    })
-    .catch(err => console.log("API error:", err));
-}, []);
+    fetch("/api/events")
+      .then(res => res.json())
+      .then(data => {
+        console.log("API DATA:", data);
+        setBseEvents(data.bse || []);
+        setNseEvents(data.nse || []);
+        setOrderBook(data.orderBook || []);
+        setSector(data.sectors || []);
+        setMegaOrders(data.megaOrders || []);
+      })
+      .catch(err => console.log("API error:", err));
+  }, []);
 
   const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => feedFilter === "ALL" || (e.type || "").includes(feedFilter));
+
   // ===== FRONTEND INTELLIGENCE =====
+  const isSignal = (e) => {
+    const text = (e?.title || "").toLowerCase();
+    const type = (e?.type || "").toUpperCase();
+    return (
+      type.includes("ORDER") ||
+      type.includes("MERGER") ||
+      text.includes("order") ||
+      text.includes("contract") ||
+      text.includes("merger") ||
+      text.includes("acquisition") ||
+      text.includes("fraud") ||
+      text.includes("penalty") ||
+      text.includes("default") ||
+      text.includes("insolvency") ||
+      text.includes("nclt")
+    );
+  };
 
-// Radar = latest active companies
-const isSignal = (e) => {
-  const text = (e?.title || "").toLowerCase();
-  const type = (e?.type || "").toUpperCase();
+  const computedRadar = (bseEvents || [])
+    .filter(e => {
+      const t = (e?.title || "").toLowerCase();
+      if (
+        t.includes("trading window") ||
+        t.includes("postal ballot") ||
+        t.includes("scrutinizer") ||
+        t.includes("voting result") ||
+        t.includes("esg") ||
+        t.includes("analyst meeting")
+      ) return false;
+      return isSignal(e);
+    })
+    .slice(0, 50)
+    .map(e => {
+      const t = (e?.title || "").toLowerCase();
+      let type = "NEWS";
+      let score = 10;
+      if (t.includes("order") || t.includes("contract")) { type = "ORDER"; score = 90; }
+      else if (t.includes("merger") || t.includes("acquisition")) { type = "MERGER"; score = 80; }
+      else if (t.includes("fraud") || t.includes("penalty")) { type = "RISK"; score = 95; }
+      return {
+        company: e?.company || "Unknown",
+        score,
+        type,
+        receivedAt: e?.receivedAt,
+        time: e?.time,
+        pdfUrl: e?.pdfUrl || e?.attachment || null,
+        orderValue: extractAmount(e?.title)
+      };
+    });
 
-  return (
-    // ✅ DIRECT TYPE CHECK (MOST IMPORTANT)
-    type.includes("ORDER") ||
-    type.includes("MERGER") ||
-
-    // 🔥 TEXT BASED
-    text.includes("order") ||
-    text.includes("contract") ||
-    text.includes("merger") ||
-    text.includes("acquisition") ||
-
-    // 🔥 NEGATIVE SIGNALS
-    text.includes("fraud") ||
-    text.includes("penalty") ||
-    text.includes("default") ||
-    text.includes("insolvency") ||
-    text.includes("nclt")
-  );
-};
-
-const computedRadar = (bseEvents || [])
-  .filter(e => {
+  const computedMegaOrders = (bseEvents || []).filter(e => {
     const t = (e?.title || "").toLowerCase();
-
-    if (
-      t.includes("trading window") ||
-      t.includes("postal ballot") ||
-      t.includes("scrutinizer") ||
-      t.includes("voting result") ||
-      t.includes("esg") ||
-      t.includes("analyst meeting")
-    ) return false;
-
-    return isSignal(e);
-  })
-  .slice(0, 50)
-  .map(e => {
-    const t = (e?.title || "").toLowerCase();
-
-    let type = "NEWS";
-let score = 10;
-
-if (t.includes("order") || t.includes("contract")) {
-  type = "ORDER";
-  score = 90;
-}
-else if (t.includes("merger") || t.includes("acquisition")) {
-  type = "MERGER";
-  score = 80;
-}
-else if (t.includes("fraud") || t.includes("penalty")) {
-  type = "RISK";
-  score = 95;
-}
-
-return {
-  company: e?.company || "Unknown",
-  score,
-  type,
-  receivedAt: e?.receivedAt,
-  time: e?.time,
-  pdfUrl: e?.pdfUrl || e?.attachment || null,
-  orderValue: extractAmount(e?.title)
-  
-};
-  });
-// Mega Orders = detect keywords
-const computedMegaOrders = (bseEvents || []).filter(e => {
-  const t = (e?.title || "").toLowerCase();
-
-  return (
-    (t.includes("order") || t.includes("contract")) &&
-    (t.includes("crore") || t.includes("₹") || t.includes("rs"))
-  );
-}).slice(0, 10).map(e => ({
-  company: e.company,
- crores: e._orderInfo?.crores || extractAmount(e.title),
-  receivedAt: e.receivedAt,
-  time: e.time
-}));
-
-// Opportunities (basic)
-const computedOpportunities = computedRadar
-  .filter(r => r.score >= 70)
-  .slice(0, 5)
-  .map(r => ({
-    company: r.company,
-    score: r.score,
-    receivedAt: r.receivedAt,
-    time: r.time
+    return (
+      (t.includes("order") || t.includes("contract")) &&
+      (t.includes("crore") || t.includes("₹") || t.includes("rs"))
+    );
+  }).slice(0, 10).map(e => ({
+    company: e.company,
+    crores: e._orderInfo?.crores || extractAmount(e.title),
+    receivedAt: e.receivedAt,
+    time: e.time
   }));
+
+  const computedOpportunities = computedRadar
+    .filter(r => r.score >= 70)
+    .slice(0, 5)
+    .map(r => ({
+      company: r.company,
+      score: r.score,
+      receivedAt: r.receivedAt,
+      time: r.time
+    }));
 
   return (
     <div className="terminal">
@@ -219,50 +194,44 @@ const computedOpportunities = computedRadar
         </div>
       </div>
 
-     {/* COL 1: RADAR */}
-<div className="panel radar-panel">
-  <div className="panel-header">
-    <span className="panel-title">
-      📡 Radar <span className="count">{computedRadar.length}</span>
-    </span>
-  </div>
+      {/* ✅ FIX: .layout wrapper added — this was missing, causing black screen */}
+      <div className="layout">
 
-  {computedRadar.length === 0 ? (
-    <div className="empty">Waiting for signals...</div>
-  ) : (
-    computedRadar.map((r, i) => (
-      <div className="radar-card" key={i}>
-        <div className="rc-top">
-          <span className="co-name">{r.company}</span>
-
-          <div>
-            <span className="score score-high">{r.score}</span>
-            <span className="type">{r.type}</span>
-
-            {r.orderValue > 0 && (
-              <span className="order-val">₹{r.orderValue}Cr</span>
-            )}
+        {/* COL 1: RADAR */}
+        <div className="panel radar-panel">
+          <div className="panel-header">
+            <span className="panel-title">
+              📡 Radar <span className="count">{computedRadar.length}</span>
+            </span>
           </div>
-        </div>
 
-        <div className="time-label compact-time">
-          {formatTime(r.time)}
+          {computedRadar.length === 0 ? (
+            <div className="empty">Waiting for signals...</div>
+          ) : (
+            computedRadar.map((r, i) => (
+              <div className="radar-card" key={i}>
+                <div className="rc-top">
+                  <span className="co-name">{r.company}</span>
+                  <div>
+                    <span className="score score-high">{r.score}</span>
+                    <span className="type">{r.type}</span>
+                    {r.orderValue > 0 && (
+                      <span className="order-val">₹{r.orderValue}Cr</span>
+                    )}
+                  </div>
+                </div>
+                <div className="time-label compact-time">
+                  {formatTime(r.time)}
+                </div>
+                {r.pdfUrl && (
+                  <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
+                    📄 Filing
+                  </a>
+                )}
+              </div>
+            ))
+          )}
         </div>
-
-        {r.pdfUrl && (
-          <a
-            href={r.pdfUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="filing-link"
-          >
-            📄 Filing
-          </a>
-        )}
-      </div>
-    ))
-  )}
-</div>
 
         {/* COL 2: FEED */}
         <div className="panel feed-panel">
@@ -275,25 +244,21 @@ const computedOpportunities = computedRadar
           <div className="filter-bar">{FEED_FILTERS.map(f => <button key={f} className={`fbtn ${feedFilter === f ? "active" : ""}`} onClick={() => setFeedFilter(f)}>{f}</button>)}</div>
           {filteredFeed.length === 0 ? <div className="empty">No signals match filter</div> : filteredFeed.map((e, i) => (
             <div className="feed-card" key={i}>
-              <div className="fc-head"><span className="co-name">{e.company}</span><Tag  type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)}/></div>
+              <div className="fc-head"><span className="co-name">{e.company}</span><Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} /></div>
               <div className="fc-text">{e.title}</div>
-              <div className="time-label">
-  {formatTime(e.time) || "—"}
-</div>
+              <div className="time-label">{formatTime(e.time) || "—"}</div>
             </div>
           ))}
         </div>
 
-        {/* COL 3: DATA (Mega to Order Book) - TIGHTENED LAYOUT */}
+        {/* COL 3: DATA */}
         <div className="panel right-panel">
           <div className="section">
             <div className="section-divider">🔥 Mega Orders <span className="count">{computedMegaOrders.length}</span></div>
             {computedMegaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : computedMegaOrders.map((o, i) => (
               <div className="mega-card" key={i}>
                 <div className="mega-head"><span className="co-name">{o.company}</span><span className="mega-val">₹{o.crores}Cr</span></div>
-                <div className="time-label">
-  {formatTime(o.time) || "—"}
-</div>
+                <div className="time-label">{formatTime(o.time) || "—"}</div>
               </div>
             ))}
           </div>
@@ -303,10 +268,7 @@ const computedOpportunities = computedRadar
             {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div> : computedOpportunities.map((o, i) => (
               <div className="opp-card" key={i}>
                 <div className="opp-row"><span className="co-name">{o.company}</span><span className="opp-pct">{o.score}%</span></div>
-              <div className="time-label">
-                 {formatTime(o.time) || "—"} 
-  
-</div>
+                <div className="time-label">{formatTime(o.time) || "—"}</div>
               </div>
             ))}
           </div>
@@ -326,7 +288,7 @@ const computedOpportunities = computedRadar
               <div className="ord-card" key={i}>
                 <div className="ord-top"><span className="co-name">{o.company}</span><span className="str-lbl building">BUILDING</span></div>
                 <div className="ord-stats"><span className="ord-val">₹{o.orderValue}Cr</span></div>
-                <div className="time-label"> {o.time || "—"}</div>
+                <div className="time-label">{o.time || "—"}</div>
               </div>
             ))}
           </div>
@@ -349,10 +311,10 @@ const computedOpportunities = computedRadar
           <div className="section">
             <div className="section-divider">🔔 Alerts</div>
             {(bseEvents || []).slice(0, 5).map((e, i) => (
-  <div key={i} className="mini-card">
-    {e.company} → {e.type || "NEWS"}
-  </div>
-))}
+              <div key={i} className="mini-card">
+                {e.company} → {e.type || "NEWS"}
+              </div>
+            ))}
           </div>
           <div className="section">
             <div className="section-divider">⚡ Pulse</div>
@@ -360,7 +322,8 @@ const computedOpportunities = computedRadar
             <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
           </div>
         </div>
-      </div>
-    
+
+      </div> {/* ✅ end .layout */}
+    </div> // end .terminal
   );
 }
