@@ -115,18 +115,71 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   font-size: 11px; padding: 6px; margin-bottom: 3px;
   border-left: 3px solid #1a5090; position: relative;
 }
-.feed-card.fc-order  { border-left-color: #ff4400; background: linear-gradient(90deg, #150800 0%, #020c1a 60%); }
-.feed-card.fc-merger { border-left-color: #ff9c00; background: linear-gradient(90deg, #150b00 0%, #020c1a 60%); }
-.feed-card.fc-result { border-left-color: #0088dd; background: linear-gradient(90deg, #000d18 0%, #020c1a 60%); }
-.feed-card.fc-insider{ border-left-color: #ff5cff; background: linear-gradient(90deg, #150015 0%, #020c1a 60%); }
-.feed-card.fc-capex  { border-left-color: #00cfff; background: linear-gradient(90deg, #001020 0%, #020c1a 60%); }
-.feed-card.fc-news { border-left-color: #0d3060; }
-.feed-card.fc-news .fc-text { color: #4a7a96; }
-.feed-card.fc-news .fc-text .hl { color: #7aaec8; }
+.feed-card { border-left: 3px solid #1a5090; border-radius: 5px; margin-bottom: 5px; padding: 8px 10px; }
+
+.feed-card.fc-order  {
+  border-left-color: #ff4400;
+  background: linear-gradient(135deg, #1a0600 0%, #0d0200 50%, #020c1a 100%);
+  box-shadow: inset 0 0 20px rgba(255,68,0,0.06);
+}
+.feed-card.fc-merger {
+  border-left-color: #ff9c00;
+  background: linear-gradient(135deg, #1a0e00 0%, #0d0800 50%, #020c1a 100%);
+  box-shadow: inset 0 0 20px rgba(255,156,0,0.06);
+}
+.feed-card.fc-result {
+  border-left-color: #0088dd;
+  background: linear-gradient(135deg, #001525 0%, #000e18 50%, #020c1a 100%);
+  box-shadow: inset 0 0 20px rgba(0,136,221,0.06);
+}
+.feed-card.fc-insider {
+  border-left-color: #ff5cff;
+  background: linear-gradient(135deg, #180018 0%, #0e000e 50%, #020c1a 100%);
+  box-shadow: inset 0 0 20px rgba(255,92,255,0.06);
+}
+.feed-card.fc-capex {
+  border-left-color: #00cfff;
+  background: linear-gradient(135deg, #001820 0%, #001015 50%, #020c1a 100%);
+  box-shadow: inset 0 0 20px rgba(0,207,255,0.06);
+}
+.feed-card.fc-news {
+  border-left-color: #1a4060;
+  background: #020c1a;
+}
+
+/* company name color per type */
+.feed-card.fc-order  .fc-company { color: #ff7744; }
+.feed-card.fc-merger .fc-company { color: #ffbb44; }
+.feed-card.fc-result .fc-company { color: #44aaff; }
+.feed-card.fc-insider .fc-company { color: #ff88ff; }
+.feed-card.fc-capex  .fc-company { color: #00cfff; }
+.feed-card.fc-news   .fc-company { color: #6090b0; }
+
+/* NEWS tag badge */
+.feed-card.fc-news .fc-tag-news {
+  font-size: 8px; font-weight: 700;
+  background: #0a1f35; color: #2a6888;
+  border: 1px solid #0d3060;
+  padding: 1px 5px; border-radius: 3px;
+  margin-left: 5px; vertical-align: middle;
+}
+
+/* body text */
+.feed-card.fc-news .fc-text   { color: #3d6a80; }
+.feed-card.fc-order .fc-text  { color: #a05540; }
+.feed-card.fc-merger .fc-text { color: #a07030; }
+.feed-card.fc-result .fc-text { color: #3070a0; }
+.feed-card.fc-capex .fc-text  { color: #2090a0; }
+.feed-card.fc-insider .fc-text{ color: #904090; }
+
+/* time */
+.feed-card .fc-time { font-size: 9px; color: #1a5070; margin-top: 4px; font-family: 'IBM Plex Mono', monospace; }
 
 .fc-text {
-  font-size: 11px;
-  line-height: 1.3;
+  font-size: 10px;
+  line-height: 1.45;
+  margin-top: 3px;
+  letter-spacing: 0.1px;
 }
 
 .co-name {

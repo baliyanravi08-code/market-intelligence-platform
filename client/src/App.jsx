@@ -284,11 +284,14 @@ export default function App() {
   e.type?.includes("INSIDER") ? "fc-insider" :
   e.type?.includes("CAPEX") ? "fc-capex" : "fc-news"
 }`} key={i}>
-              <div className="fc-head"><span className="co-name">{e.company}</span><Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} /></div>
-              <div className="fc-text">
-  <span className="hl">{e.title}</span>
+              <div className="fc-head">
+  <span className="fc-company">{e.company}
+    {e.type === "NEWS" && <span className="fc-tag-news">NEWS</span>}
+  </span>
+  {e.type !== "NEWS" && <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />}
 </div>
-              <div className="time-label">{formatTime(e.time) || "—"}</div>
+<div className="fc-text">{e.title}</div>
+<div className="fc-time">{formatTime(e.time) || "—"}</div>
             </div>
           ))}
         </div>
