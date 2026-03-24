@@ -253,14 +253,16 @@ export default function App() {
               )}
             </div>
           </div>
-          <div className="time-label compact-time">
-            {formatTime(r.time)}
-          </div>
-          {r.pdfUrl && (
-            <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
-              📄 Filing
-            </a>
-          )}
+          <div className="tag-row">
+  <span className="type">{r.type}</span>
+  {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
+  {r.pdfUrl && (
+    <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
+      ▪ Filing
+    </a>
+  )}
+</div>
+<div className="compact-time">{formatTime(r.time)}</div>
         </div>
       ))
   )}
@@ -284,7 +286,9 @@ export default function App() {
   e.type?.includes("CAPEX") ? "fc-capex" : "fc-news"
 }`} key={i}>
               <div className="fc-head"><span className="co-name">{e.company}</span><Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} /></div>
-              <div className="fc-text">{e.title}</div>
+              <div className="fc-text">
+  <span className="hl">{e.title}</span>
+</div>
               <div className="time-label">{formatTime(e.time) || "—"}</div>
             </div>
           ))}

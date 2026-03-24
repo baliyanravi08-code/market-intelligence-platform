@@ -87,6 +87,10 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 
 .tbtn, .fbtn { background: #020c1c; border: 1px solid #0c2240; color: #2a5070; cursor: pointer; padding: 2px 6px; font-size: 9px; }
 .active { background: #0d3060; color: #fff; }
+.tag-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 4px; flex-wrap: wrap;
+}
 .search-wrap { position: relative; margin-bottom: 6px; }
 .radar-search {
   width: 100%; background: #010a18; border: 1px solid #0c2240;
@@ -116,7 +120,9 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .feed-card.fc-result { border-left-color: #0088dd; background: linear-gradient(90deg, #000d18 0%, #020c1a 60%); }
 .feed-card.fc-insider{ border-left-color: #ff5cff; background: linear-gradient(90deg, #150015 0%, #020c1a 60%); }
 .feed-card.fc-capex  { border-left-color: #00cfff; background: linear-gradient(90deg, #001020 0%, #020c1a 60%); }
-.feed-card.fc-news   { border-left-color: #0d3060; }
+.feed-card.fc-news { border-left-color: #0d3060; }
+.feed-card.fc-news .fc-text { color: #4a7a96; }
+.feed-card.fc-news .fc-text .hl { color: #7aaec8; }
 
 .fc-text {
   font-size: 11px;
@@ -187,30 +193,17 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 }
 
 .filing-link {
-  display: inline-block;
-  margin-top: 3px;
-  font-size: 10px;
-  color: #00ff9c;
+  font-size: 9px;
+  color: #00cfff;
   text-decoration: none;
+  opacity: .75;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
-
-.filing-link:hover {
-  text-decoration: underline;
-}
+.filing-link:hover { opacity: 1; text-decoration: underline; }
 .compact-time {
   font-size: 10px;
   color: #00cfff;
   margin-top: 2px;
-}
-
-.filing-link {
-  display: inline-block;
-  margin-top: 3px;
-  font-size: 10px;
-  color: #00ff9c;
-  text-decoration: none;
-}
-
-.filing-link:hover {
-  text-decoration: underline;
 }
