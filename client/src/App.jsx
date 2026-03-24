@@ -219,33 +219,48 @@ const computedOpportunities = computedRadar
         </div>
       </div>
 
+     {/* COL 1: RADAR */}
+<div className="panel radar-panel">
+  <div className="panel-header">
+    <span className="panel-title">
+      📡 Radar <span className="count">{computedRadar.length}</span>
+    </span>
+  </div>
+
+  {computedRadar.length === 0 ? (
+    <div className="empty">Waiting for signals...</div>
+  ) : (
+    computedRadar.map((r, i) => (
       <div className="radar-card" key={i}>
-  <div className="rc-top">
-    <span className="co-name">{r.company}</span>
+        <div className="rc-top">
+          <span className="co-name">{r.company}</span>
 
-    <div>
-      <span className="score score-high">{r.score}</span>
-      <span className="type">{r.type}</span>
+          <div>
+            <span className="score score-high">{r.score}</span>
+            <span className="type">{r.type}</span>
 
-      {r.orderValue > 0 && (
-        <span className="order-val">₹{r.orderValue}Cr</span>
-      )}
-    </div>
-  </div>
+            {r.orderValue > 0 && (
+              <span className="order-val">₹{r.orderValue}Cr</span>
+            )}
+          </div>
+        </div>
 
-  <div className="time-label compact-time">
-    {formatTime(r.time)}
-  </div>
+        <div className="time-label compact-time">
+          {formatTime(r.time)}
+        </div>
 
-  {r.pdfUrl && (
-    <a
-      href={r.pdfUrl}
-      target="_blank"
-      rel="noreferrer"
-      className="filing-link"
-    >
-      📄 Filing
-    </a>
+        {r.pdfUrl && (
+          <a
+            href={r.pdfUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="filing-link"
+          >
+            📄 Filing
+          </a>
+        )}
+      </div>
+    ))
   )}
 </div>
 
