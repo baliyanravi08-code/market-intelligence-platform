@@ -104,3 +104,8 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .co-name {
   font-size: 10px;
 }
+.type {
+  font-size: 9px;
+  color: #ffcc00;
+  margin-left: 6px;
+}
