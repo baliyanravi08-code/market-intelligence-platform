@@ -43,7 +43,10 @@ function toAgo(ts) {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   return `${Math.floor(s / 3600)}h ago`;
 }
-
+function extractAmount(text) {
+  const match = text?.match(/(\d+(?:\.\d+)?)\s?(crore|cr)/i);
+  return match ? parseFloat(match[1]) : 0;
+}
 // --- Components ---
 function LiveAgo({ receivedAt, exchangeTime }) {
   const [ago, setAgo] = useState(toAgo(receivedAt));
@@ -141,7 +144,12 @@ const computedRadar = (bseEvents || [])
       t.includes("analyst")
     ) return false;
 
-    return isSignal(t);   // ✅ SAFE NOW
+    return (
+  isSignal(t) ||
+  t.includes("result") ||
+  t.includes("board meeting") ||
+  t.includes("strategic")
+);   // ✅ SAFE NOW
   })
   .slice(0, 50)
   .map(e => {
@@ -172,7 +180,7 @@ const computedMegaOrders = (bseEvents || []).filter(e => {
   );
 }).slice(0, 10).map(e => ({
   company: e.company,
-  crores: e._orderInfo?.crores || 0,
+ crores: e._orderInfo?.crores || extractAmount(e.title),
   receivedAt: e.receivedAt,
   time: e.time
 }));
@@ -206,7 +214,7 @@ const computedOpportunities = computedRadar
             <div className="radar-card" key={i}>
               <div className="rc-top"><span className="co-name">{r.company}</span><span className="score score-high">{r.score}</span></div>
               <div className="time-label">
-  {r.time || "—"}
+  {formatTime(r.time) || "—"}
 </div>
             </div>
           ))}
@@ -223,10 +231,10 @@ const computedOpportunities = computedRadar
           <div className="filter-bar">{FEED_FILTERS.map(f => <button key={f} className={`fbtn ${feedFilter === f ? "active" : ""}`} onClick={() => setFeedFilter(f)}>{f}</button>)}</div>
           {filteredFeed.length === 0 ? <div className="empty">No signals match filter</div> : filteredFeed.map((e, i) => (
             <div className="feed-card" key={i}>
-              <div className="fc-head"><span className="co-name">{e.company}</span><Tag type={e.type} crores={e._orderInfo?.crores} /></div>
+              <div className="fc-head"><span className="co-name">{e.company}</span><Tag  type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)}/></div>
               <div className="fc-text">{e.title}</div>
               <div className="time-label">
-  {r.time || "—"}
+  {formatTime(e.time) || "—"}
 </div>
             </div>
           ))}
@@ -240,7 +248,7 @@ const computedOpportunities = computedRadar
               <div className="mega-card" key={i}>
                 <div className="mega-head"><span className="co-name">{o.company}</span><span className="mega-val">₹{o.crores}Cr</span></div>
                 <div className="time-label">
-  {r.time || "—"}
+  {formatTime(o.time) || "—"}
 </div>
               </div>
             ))}
@@ -251,8 +259,9 @@ const computedOpportunities = computedRadar
             {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div> : computedOpportunities.map((o, i) => (
               <div className="opp-card" key={i}>
                 <div className="opp-row"><span className="co-name">{o.company}</span><span className="opp-pct">{o.score}%</span></div>
-                <div className="time-label">
-  {r.time || "—"}
+              <div className="time-label">
+                 {o.time || "—"} 
+  
 </div>
               </div>
             ))}
@@ -273,7 +282,7 @@ const computedOpportunities = computedRadar
               <div className="ord-card" key={i}>
                 <div className="ord-top"><span className="co-name">{o.company}</span><span className="str-lbl building">BUILDING</span></div>
                 <div className="ord-stats"><span className="ord-val">₹{o.orderValue}Cr</span></div>
-                <div className="time-label"> {r.time || "—"}</div>
+                <div className="time-label"> {o.time || "—"}</div>
               </div>
             ))}
           </div>
