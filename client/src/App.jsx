@@ -254,7 +254,7 @@ export default function App() {
   </div>
 </div>
           <div className="tag-row">
-  <span className="type">{r.type}</span>
+  <span className={`type type-${r.type}`}>{r.type}</span>
   {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
   {r.pdfUrl && (
     <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">

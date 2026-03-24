@@ -132,11 +132,6 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .co-name {
   font-size: 10px;
 }
-.type {
-  font-size: 9px;
-  color: #ffcc00;
-  margin-left: 6px;
-}
 /* --- PREMIUM RADAR --- */
 .radar-card {
   background: linear-gradient(145deg, #020c1a, #041a30);
@@ -159,15 +154,20 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   text-shadow: 0 0 6px #00ff9c88;
 }
 
-/* signal type badge */
 .type {
   font-size: 9px;
-  background: #0c2a4a;
   padding: 2px 6px;
   border-radius: 3px;
-  margin-left: 6px;
-  color: #ffcc00;
+  font-weight: 700;
+  letter-spacing: 0.4px;
 }
+.type-ORDER    { background: #00ff9c; color: #000; }
+.type-MERGER   { background: #ff9c00; color: #000; }
+.type-CAPEX    { background: #00cfff; color: #000; }
+.type-INSIDER  { background: #ff5cff; color: #000; }
+.type-RESULT   { background: #0088dd; color: #fff; }
+.type-RISK     { background: #ff2d55; color: #fff; }
+.type-NEWS     { background: #081828; color: #2a5a7a; border: 1px solid #0d3060; }
 
 /* mega highlight */
 .mega-val {
