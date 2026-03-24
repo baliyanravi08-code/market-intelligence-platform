@@ -114,45 +114,53 @@ const isSignal = (text) => {
   text = (text || "").toLowerCase();
 
   return (
-    // 🔥 POSITIVE SIGNALS
     text.includes("order") ||
     text.includes("contract") ||
     text.includes("merger") ||
     text.includes("acquisition") ||
-
-    // 🔥 NEGATIVE (IMPORTANT)
+    text.includes("deal") ||
     text.includes("fraud") ||
     text.includes("penalty") ||
     text.includes("default") ||
     text.includes("insolvency") ||
-    text.includes("nclt") ||
-    text.includes("sebi action") ||
-    text.includes("resignation of auditor")
+    text.includes("nclt")
   );
 };
+
 const computedRadar = (bseEvents || [])
   .filter(e => {
-  const t = (e.title || "").toLowerCase();
+    const t = (e?.title || "").toLowerCase();
 
-  // ❌ REMOVE NOISE
-  if (
-    t.includes("trading window") ||
-    t.includes("postal ballot") ||
-    t.includes("scrutinizer") ||
-    t.includes("voting result") ||
-    t.includes("esg") ||
-    t.includes("analyst meeting")
-  ) return false;
+    // ❌ remove noise
+    if (
+      t.includes("trading window") ||
+      t.includes("postal ballot") ||
+      t.includes("scrutinizer") ||
+      t.includes("voting") ||
+      t.includes("esg") ||
+      t.includes("analyst")
+    ) return false;
 
-  return isSignal(t);
-})
+    return isSignal(t);   // ✅ SAFE NOW
+  })
   .slice(0, 50)
-  .map(e => ({
-    company: e.company,
-    score: 80,
-    receivedAt: e.receivedAt,
-    time: e.time
-  }));
+  .map(e => {
+    const t = (e?.title || "").toLowerCase();
+
+    let type = "NEWS";
+
+    if (t.includes("order") || t.includes("contract")) type = "ORDER";
+    else if (t.includes("merger") || t.includes("acquisition")) type = "MERGER";
+    else if (t.includes("fraud") || t.includes("penalty")) type = "RISK";
+
+    return {
+      company: e.company || "Unknown",
+      score: type === "ORDER" ? 90 : type === "RISK" ? 95 : 80,
+      type,
+      receivedAt: e.receivedAt,
+      time: e.time
+    };
+  });
 
 // Mega Orders = detect keywords
 const computedMegaOrders = (bseEvents || []).filter(e => {
