@@ -189,72 +189,80 @@ export default function App() {
   // Mobile panel switcher (only active on mobile via CSS)
   const [mobilePanelTab, setMobilePanelTab] = useState("feed");
   const [cryptoAssets, setCryptoAssets] = useState([]);
-// Fetch BTC, PI, Gold, Silver
+
+  // Fetch BTC, PI, Gold, Silver
   useEffect(() => {
-    const fmt = (n, prefix="$") => {
-      if (!n && n !== 0) return "—";
-      if (n >= 1000) return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
-      if (n >= 1)    return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
-      return prefix + n.toFixed(4);
-    };
-
     const fetchAssets = async () => {
-      const assets = [];
-
-      // BTC + PI + Gold
       try {
-        const cgRes = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
-          { headers: { "Accept": "application/json" } }
-        );
-        const cg = await cgRes.json();
-        if (cg?.bitcoin) assets.push({
-          name: "BTC", icon: "₿", type: "crypto",
-          price: fmt(cg.bitcoin.usd),
-          change24h: cg.bitcoin.usd_24h_change || 0
-        });
-        if (cg?.["pi-network"]) assets.push({
-          name: "PI", icon: "π", type: "crypto",
-          price: fmt(cg["pi-network"].usd),
-          change24h: cg["pi-network"].usd_24h_change || 0
-        });
-        if (cg?.["tether-gold"]) assets.push({
-          name: "GOLD", icon: "Au", type: "gold",
-          price: fmt(cg["tether-gold"].usd),
-          change24h: cg["tether-gold"].usd_24h_change || 0
-        });
-      } catch(e) {
-        console.error("CoinGecko error:", e);
-        // Push placeholders so ticker still shows
-        assets.push({ name: "BTC",  icon: "₿", type: "crypto", price: "—", change24h: 0 });
-        assets.push({ name: "PI",   icon: "π", type: "crypto", price: "—", change24h: 0 });
-        assets.push({ name: "GOLD", icon: "Au", type: "gold",  price: "—", change24h: 0 });
+        const fmt = (n, prefix="$") => {
+          if (!n && n !== 0) return "—";
+          if (n >= 1000) return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+          if (n >= 1)    return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+          return prefix + n.toFixed(4);
+        };
+
+        const assets = [];
+
+        // CoinGecko: BTC + PI + Gold (XAUT)
+        try {
+          const cgRes = await fetch(
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
+            { headers: { "Accept": "application/json" } }
+          );
+          const cg = await cgRes.json();
+
+          if (cg.bitcoin) assets.push({
+            name: "BTC", icon: "₿", type: "crypto",
+            price: fmt(cg.bitcoin.usd),
+            change24h: cg.bitcoin.usd_24h_change || 0
+          });
+
+          if (cg["pi-network"]) assets.push({
+            name: "PI", icon: "π", type: "crypto",
+            price: fmt(cg["pi-network"].usd),
+            change24h: cg["pi-network"].usd_24h_change || 0
+          });
+
+          if (cg["tether-gold"]) assets.push({
+            name: "GOLD", icon: "Au", type: "gold",
+            price: fmt(cg["tether-gold"].usd),
+            change24h: cg["tether-gold"].usd_24h_change || 0
+          });
+        } catch(e) { console.error("CoinGecko error:", e); }
+
+        // Silver via Metals-API free tier (frankfurter-style open endpoint)
+        // Fallback: use CoinGecko's silver token "silver" id
+        try {
+          const svRes = await fetch(
+            "https://api.coingecko.com/api/v3/simple/price?ids=silver&vs_currencies=usd&include_24hr_change=true"
+          );
+          const sv = await svRes.json();
+          if (sv.silver && sv.silver.usd) {
+            assets.push({
+              name: "SILVER", icon: "Ag", type: "silver",
+              price: fmt(sv.silver.usd),
+              change24h: sv.silver.usd_24h_change || 0
+            });
+          } else {
+            // Fallback: open metals price from metals.live (no key needed)
+            const mlRes = await fetch("https://api.metals.live/v1/spot/silver");
+            const ml = await mlRes.json();
+            const price = ml?.[0]?.price || ml?.price;
+            if (price) {
+              assets.push({
+                name: "SILVER", icon: "Ag", type: "silver",
+                price: fmt(price),
+                change24h: 0
+              });
+            }
+          }
+        } catch(e) { console.error("Silver fetch error:", e); }
+
+        if (assets.length > 0) setCryptoAssets(assets);
+      } catch(err) {
+        console.error("Asset fetch error:", err);
       }
-
-      // Silver — always push, never skip
-      let silverPrice = 33.50;
-      try {
-        const r = await fetch("https://api.metals.live/v1/spot");
-        const data = await r.json();
-        if (Array.isArray(data)) {
-          data.forEach(obj => { if (obj.silver && obj.silver > 5) silverPrice = obj.silver; });
-        } else if (data?.silver > 5) {
-          silverPrice = data.silver;
-        }
-      } catch(e) {
-        console.warn("metals.live failed, using fallback:", e.message);
-      }
-
-      assets.push({
-        name: "SILVER", icon: "Ag", type: "silver",
-        price: fmt(silverPrice),
-        change24h: 0
-      });
-
-      // Always update — even if some failed
-      setCryptoAssets(assets);
     };
-
     fetchAssets();
     const interval = setInterval(fetchAssets, 60000);
     return () => clearInterval(interval);
@@ -324,26 +332,61 @@ export default function App() {
       let type = "NEWS";
       let score = 10;
 
-      const isPurchaseOrder = (
-        t.includes("purchase order") ||
-        t.includes("work order") ||
-        t.includes("supply order") ||
-        t.includes("receipt of order") ||
-        t.includes("order received") ||
-        t.includes("order secured") ||
-        t.includes("major order") ||
-        t.includes("letter of acceptance") ||
-        t.includes("rate contract") ||
-        t.includes("bagged") ||
-        t.includes("contract awarded") ||
-        t.includes("loa") ||
-        (t.includes("order") && (t.includes("crore") || t.includes("lakh") || t.includes("₹") || t.includes("rs.")))
+      // Noise keywords that should never be ORDER
+      const isNonOrder = (
+        t.includes("solar") || t.includes("renewable") || t.includes("green energy") ||
+        t.includes("spv") || t.includes("equity stake") || t.includes("power purchase") ||
+        t.includes("subscribe") || t.includes("invest") ||
+        t.includes("income tax") || t.includes("assessment") || t.includes("tax demand") ||
+        t.includes("penalty") || t.includes("nclt")
       );
 
-      if (isPurchaseOrder)                              { type = "ORDER"; score = 90; }
-      else if (t.includes("merger") || t.includes("acquisition")) { type = "MERGER"; score = 80; }
-      else if (t.includes("fraud") || t.includes("penalty"))      { type = "RISK";   score = 95; }
-      else if (t.includes("insolvency") || t.includes("default")) { type = "RISK";   score = 85; }
+      // RISK — highest priority
+      if (t.includes("fraud") || t.includes("insolvency") || t.includes("default")) {
+        type = "RISK"; score = 95;
+      }
+      else if (t.includes("penalty") || t.includes("nclt")) {
+        type = "RISK"; score = 85;
+      }
+
+      // CAPEX / INVESTMENT — before ORDER so solar invest doesn't get misclassified
+      else if (
+        t.includes("solar") || t.includes("renewable") || t.includes("green energy") ||
+        t.includes("power purchase") || t.includes("spv") ||
+        (t.includes("equity stake") || (t.includes("subscribe") && t.includes("equity"))) ||
+        t.includes("capex") || t.includes("greenfield") || t.includes("brownfield") ||
+        t.includes("expansion") ||
+        (t.includes("invest") && !t.includes("investor") && !t.includes("investment in"))
+      ) { type = "CAPEX"; score = 75; }
+
+      // PURCHASE ORDER — strict, no solar/invest crossover
+      else if (
+        t.includes("purchase order") || t.includes("work order") ||
+        t.includes("supply order") || t.includes("receipt of order") ||
+        t.includes("order received") || t.includes("order secured") ||
+        t.includes("major order") || t.includes("letter of acceptance") ||
+        t.includes("rate contract") || t.includes("bagged") ||
+        t.includes("contract awarded") || t.includes("loa") ||
+        (
+          t.includes("order") &&
+          (t.includes("crore") || t.includes("lakh") || t.includes("₹") || t.includes("rs.")) &&
+          !isNonOrder
+        )
+      ) { type = "ORDER"; score = 90; }
+
+      // MERGER — strict, no equity stake / SPV / invest
+      else if (
+        t.includes("merger") || t.includes("amalgamation") ||
+        (t.includes("acquisition") && !t.includes("solar") && !t.includes("invest") &&
+         !t.includes("subscribe") && !t.includes("equity shares of") &&
+         !t.includes("spv") && !t.includes("stake") && !t.includes("power"))
+      ) { type = "MERGER"; score = 80; }
+
+      else if (t.includes("result") || t.includes("quarterly")) { type = "RESULT";      score = 65; }
+      else if (t.includes("insider") || t.includes("promoter") || t.includes("bulk deal")) { type = "INSIDER"; score = 70; }
+      else if (t.includes("buyback"))    { type = "BUYBACK";     score = 78; }
+      else if (t.includes("dividend"))   { type = "DIVIDEND";    score = 60; }
+      else if (t.includes("partnership") || t.includes("joint venture") || t.includes("mou")) { type = "PARTNERSHIP"; score = 72; }
 
       return {
         company: e?.company || "Unknown",
@@ -358,9 +401,13 @@ export default function App() {
 
   const computedMegaOrders = (bseEvents || []).filter(e => {
     const t = (e?.title || "").toLowerCase();
-    const isOrder = (t.includes("order") || t.includes("contract")) &&
-      (t.includes("crore") || t.includes("₹") || t.includes("rs"));
-    if (!isOrder) return false;
+    // Must be a real purchase/supply order, not solar invest or tax order
+    const isRealOrder = (t.includes("order") || t.includes("contract")) &&
+      (t.includes("crore") || t.includes("₹") || t.includes("rs")) &&
+      !t.includes("solar") && !t.includes("renewable") && !t.includes("invest") &&
+      !t.includes("spv") && !t.includes("equity") && !t.includes("subscribe") &&
+      !t.includes("income tax") && !t.includes("penalty") && !t.includes("nclt");
+    if (!isRealOrder) return false;
     const cr = e._orderInfo?.crores || extractAmount(e.title);
     if (!cr) return false;
     const above500 = cr >= 500;
