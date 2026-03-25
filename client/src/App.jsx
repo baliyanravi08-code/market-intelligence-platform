@@ -284,14 +284,9 @@ useEffect(() => {
         <div className="radar-card" key={i}>
           <div className="rc-top">
   <span className="co-name">{r.company}</span>
-  <div>
-    <span className="score score-high">{r.score}</span>
-    {r.orderValue > 0 && (
-      <span className="order-val">₹{r.orderValue}Cr</span>
-    )}
-  </div>
+  <span className="score score-high">{r.score}</span>
 </div>
-          <div className="tag-row">
+         <div className="tag-row">
   <span className={`type type-${r.type}`}>{r.type}</span>
   {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
   {r.pdfUrl && (
