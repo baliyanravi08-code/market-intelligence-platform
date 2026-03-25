@@ -87,74 +87,10 @@ function MarketStatus() {
 
 export default function App() {
   const [marketIndices, setMarketIndices] = useState([
-  { name: "NIFTY 50",    price: "—", change: "—", pct: "—", up: null },
-  { name: "SENSEX",      price: "—", change: "—", pct: "—", up: null },
-  { name: "BANK NIFTY",  price: "—", change: "—", pct: "—", up: null },
-]);
-
-useEffect(() => {
-  const symbols = ["^NSEI", "^BSESN", "^NSEBANK"];
-  const names   = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
-
-  const fetchMarket = async () => {
-    try {
-      const results = await Promise.all(symbols.map(sym =>
-        fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`)
-          .then(r => r.json())
-      ));
-      const updated = results.map((data, i) => {
-        const meta   = data?.chart?.result?.[0]?.meta;
-        if (!meta) return { name: names[i], price: "—", change: "—", pct: "—", up: null };
-        const price  = meta.regularMarketPrice;
-        const prev   = meta.previousClose || meta.chartPreviousClose;
-        const diff   = price - prev;
-        const pct    = ((diff / prev) * 100);
-        const up     = diff >= 0;
-        return {
-          name:   names[i],
-          price:  price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
-          change: (up ? "+" : "") + diff.toFixed(2),
-          pct:    (up ? "+" : "") + pct.toFixed(2) + "%",
-          up
-        };
-      });
-
-      setMarketIndices(updated);
-    } catch(err) {
-      console.error("Market fetch error:", err);
-      // try fallback proxy
-      try {
-        const results2 = await Promise.all(symbols.map(sym =>
-          fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent("https://query1.finance.yahoo.com/v8/finance/chart/" + sym + "?interval=1d&range=1d")}`)
-            .then(r => r.json())
-        ));
-        const updated = results2.map((data, i) => {
-          const meta = data?.chart?.result?.[0]?.meta;
-          if (!meta) return { name: names[i], price: "—", change: "—", pct: "—", up: null };
-          const price = meta.regularMarketPrice;
-          const prev  = meta.previousClose || meta.chartPreviousClose;
-          const diff  = price - prev;
-          const pct   = ((diff / prev) * 100);
-          const up    = diff >= 0;
-          return {
-            name:   names[i],
-            price:  price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
-            change: (up ? "+" : "") + diff.toFixed(2),
-            pct:    (up ? "+" : "") + pct.toFixed(2) + "%",
-            up
-          };
-        });
-        setMarketIndices(updated);
-      } catch(err2) {
-        console.error("Fallback proxy also failed:", err2);
-      }
-    }
-  };
-
-  fetchMarket();
-  const interval = setInterval(fetchMarket, 5000); // refresh every 5s
-  return () => clearInterval(interval);
-}, []);
+    { name: "NIFTY 50",   price: "—", change: "—", pct: "—", up: null },
+    { name: "SENSEX",     price: "—", change: "—", pct: "—", up: null },
+    { name: "BANK NIFTY", price: "—", change: "—", pct: "—", up: null },
+  ]);
   const socketRef = useRef(null);
   const [bseEvents, setBseEvents] = useState([]);
   const [nseEvents, setNseEvents] = useState([]);
@@ -169,17 +105,17 @@ useEffect(() => {
 
  
   useEffect(() => {
-    fetch("/api/events")
-      .then(res => res.json())
-      .then(data => {
-        console.log("API DATA:", data);
-        setBseEvents(data.bse || []);
-        setNseEvents(data.nse || []);
-        setOrderBook(data.orderBook || []);
-        setSector(data.sectors || []);
-        setMegaOrders(data.megaOrders || []);
-      })
-      .catch(err => console.log("API error:", err));
+    const fetchMarket = async () => {
+      try {
+        const data = await fetch("/api/market").then(r => r.json());
+        if (Array.isArray(data)) setMarketIndices(data);
+      } catch(err) {
+        console.error("Market fetch error:", err);
+      }
+    };
+    fetchMarket();
+    const interval = setInterval(fetchMarket, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => feedFilter === "ALL" || (e.type || "").includes(feedFilter));

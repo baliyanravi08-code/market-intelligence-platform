@@ -33,22 +33,33 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 }
 
 @media (max-width: 768px) {
-  html, body, #root { overflow: auto; }
+  html, body, #root { overflow-x: hidden; overflow-y: auto; height: auto; }
   .terminal { height: auto; min-height: 100vh; }
   .layout {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto;
+    display: flex;
+    flex-direction: column;
     overflow: visible;
     padding: 6px;
     gap: 6px;
+    height: auto;
   }
-  .panel { overflow-y: visible; max-height: none; }
-  .radar-panel  { order: 2; }
-  .feed-panel   { order: 1; }
-  .right-panel  { order: 3; }
-  .intelligence-panel { order: 4; display: flex; }
+  .panel {
+    overflow-y: visible;
+    max-height: none;
+    width: 100%;
+  }
+  .radar-panel        { order: 2; }
+  .feed-panel         { order: 1; }
+  .right-panel        { order: 3; }
+  .intelligence-panel { order: 4; display: flex; flex-direction: column; }
   .header { padding: 0 10px; }
   .title { font-size: 9px; letter-spacing: 1px; }
+
+  /* mega grid 1 col on mobile */
+  .mega-grid { grid-template-columns: 1fr; }
+
+  /* filter bar scrollable */
+  .filter-bar { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
 }
 
 @media (max-width: 480px) {

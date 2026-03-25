@@ -77,7 +77,41 @@ app.get("/api/company/:code", async (req, res) => {
     res.json({ profile: null, financials: null, shareholding: null, recentFilings: [] });
   }
 });
-
+app.get("/api/market", async (req, res) => {
+  const symbols = ["^NSEI", "^BSESN", "^NSEBANK"];
+  const names   = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
+  try {
+    const results = await Promise.all(symbols.map(sym =>
+      axios.get(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Accept": "application/json"
+        },
+        timeout: 8000
+      }).then(r => r.data)
+    ));
+    const data = results.map((d, i) => {
+      const meta = d?.chart?.result?.[0]?.meta;
+      if (!meta) return { name: names[i], price: "—", change: "—", pct: "—", up: null };
+      const price = meta.regularMarketPrice;
+      const prev  = meta.previousClose || meta.chartPreviousClose;
+      const diff  = price - prev;
+      const pct   = (diff / prev) * 100;
+      const up    = diff >= 0;
+      return {
+        name:   names[i],
+        price:  price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
+        change: (up ? "+" : "") + diff.toFixed(2),
+        pct:    (up ? "+" : "") + pct.toFixed(2) + "%",
+        up
+      };
+    });
+    res.json(data);
+  } catch(e) {
+    console.error("❌ Market fetch failed:", e.message);
+    res.json(names.map(name => ({ name, price: "—", change: "—", pct: "—", up: null })));
+  }
+});
 app.get("/api/search/:query", async (req, res) => {
   try {
     const q = req.params.query;
