@@ -152,22 +152,48 @@ useEffect(() => {
 
   // ===== FRONTEND INTELLIGENCE =====
   const isSignal = (e) => {
-    const text = (e?.title || "").toLowerCase();
-    const type = (e?.type || "").toUpperCase();
-    return (
-      type.includes("ORDER") ||
-      type.includes("MERGER") ||
-      text.includes("order") ||
-      text.includes("contract") ||
-      text.includes("merger") ||
-      text.includes("acquisition") ||
-      text.includes("fraud") ||
-      text.includes("penalty") ||
-      text.includes("default") ||
-      text.includes("insolvency") ||
-      text.includes("nclt")
-    );
-  };
+  const text = (e?.title || "").toLowerCase();
+  const type = (e?.type || "").toUpperCase();
+
+  // exclude legal/tax/compliance noise
+  const isNoise = (
+    text.includes("assessment order") ||
+    text.includes("income tax") ||
+    text.includes("tax demand") ||
+    text.includes("tax litigation") ||
+    text.includes("nclt order") ||
+    text.includes("demerger") ||
+    text.includes("scheme of") ||
+    text.includes("trading window") ||
+    text.includes("postal ballot") ||
+    text.includes("scrutinizer") ||
+    text.includes("voting result") ||
+    text.includes("esg") ||
+    text.includes("analyst meeting") ||
+    text.includes("regulation 30") ||
+    text.includes("compliance officer") ||
+    text.includes("board meeting")
+  );
+  if (isNoise) return false;
+
+  return (
+    type.includes("ORDER") ||
+    type.includes("MERGER") ||
+    text.includes("purchase order") ||
+    text.includes("work order") ||
+    text.includes("supply order") ||
+    text.includes("bagged") ||
+    text.includes("contract awarded") ||
+    text.includes("order received") ||
+    text.includes("receipt of order") ||
+    text.includes("merger") ||
+    text.includes("acquisition") ||
+    text.includes("fraud") ||
+    text.includes("penalty") ||
+    text.includes("default") ||
+    text.includes("insolvency")
+  );
+};
 
   const computedRadar = (bseEvents || [])
     .filter(e => {
@@ -186,10 +212,23 @@ useEffect(() => {
     .map(e => {
       const t = (e?.title || "").toLowerCase();
       let type = "NEWS";
-      let score = 10;
-      if (t.includes("order") || t.includes("contract")) { type = "ORDER"; score = 90; }
-      else if (t.includes("merger") || t.includes("acquisition")) { type = "MERGER"; score = 80; }
-      else if (t.includes("fraud") || t.includes("penalty")) { type = "RISK"; score = 95; }
+let score = 10;
+
+const isPurchaseOrder = (
+  t.includes("purchase order") ||
+  t.includes("work order") ||
+  t.includes("supply order") ||
+  t.includes("receipt of order") ||
+  t.includes("order received") ||
+  t.includes("bagged") ||
+  t.includes("contract awarded") ||
+  (t.includes("order") && (t.includes("crore") || t.includes("lakh") || t.includes("₹") || t.includes("rs.")))
+);
+
+if (isPurchaseOrder) { type = "ORDER"; score = 90; }
+else if (t.includes("merger") || t.includes("acquisition")) { type = "MERGER"; score = 80; }
+else if (t.includes("fraud") || t.includes("penalty")) { type = "RISK"; score = 95; }
+else if (t.includes("insolvency") || t.includes("default")) { type = "RISK"; score = 85; }
       return {
         company: e?.company || "Unknown",
         score,
