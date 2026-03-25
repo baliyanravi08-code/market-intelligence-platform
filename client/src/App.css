@@ -495,3 +495,67 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   color: #ffaa00;
   font-size: 14px;
 }
+
+/* ===== MOBILE LAYOUT (tab-switched, replaces desktop grid on small screens) ===== */
+.mobile-layout { display: none; }
+
+@media (max-width: 768px) {
+  /* Hide the desktop grid entirely on mobile */
+  .desktop-layout { display: none !important; }
+
+  /* Show the mobile tab layout */
+  .mobile-layout {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+    height: calc(100vh - 40px); /* full height minus header */
+  }
+
+  /* Top tab switcher bar */
+  .mobile-tab-bar {
+    display: flex;
+    background: #020d1f;
+    border-bottom: 1px solid #0d3560;
+    flex-shrink: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mobile-tab-btn {
+    flex: 1;
+    padding: 8px 4px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #2a5070;
+    font-size: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+  }
+  .mobile-tab-btn.active {
+    color: #00cfff;
+    border-bottom-color: #00cfff;
+    background: #030e1e;
+  }
+  .mobile-tab-btn:hover:not(.active) {
+    color: #4a9abb;
+    background: #020c1a;
+  }
+
+  /* Panel content area — scrollable */
+  .mobile-panel-wrap {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Panels inside mobile wrap fill naturally */
+  .mobile-panel-wrap .panel {
+    height: auto;
+    overflow-y: visible;
+    min-height: auto;
+  }
+}
