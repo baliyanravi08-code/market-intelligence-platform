@@ -103,7 +103,24 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("bse");
   const [feedFilter, setFeedFilter] = useState("ALL");
 
- 
+ useEffect(() => {
+    const fetchEvents = () => {
+      fetch("/api/events")
+        .then(res => res.json())
+        .then(data => {
+          console.log("API DATA:", data);
+          setBseEvents(data.bse || []);
+          setNseEvents(data.nse || []);
+          setOrderBook(data.orderBook || []);
+          setSector(data.sectors || []);
+          setMegaOrders(data.megaOrders || []);
+        })
+        .catch(err => console.log("API error:", err));
+    };
+    fetchEvents();
+    const interval = setInterval(fetchEvents, 15000);
+    return () => clearInterval(interval);
+  }, []);
   useEffect(() => {
     const fetchMarket = async () => {
       try {
@@ -118,7 +135,11 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => feedFilter === "ALL" || (e.type || "").includes(feedFilter));
+ const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => {
+    if (feedFilter === "ALL") return true;
+    if (feedFilter === ">50") return (e._orderInfo?.crores || extractAmount(e.title || "")) >= 50;
+    return (e.type || "NEWS").toUpperCase().includes(feedFilter);
+  });
 
   // ===== FRONTEND INTELLIGENCE =====
   const isSignal = (e) => {
@@ -174,9 +195,16 @@ export default function App() {
         t.includes("scrutinizer") ||
         t.includes("voting result") ||
         t.includes("esg") ||
-        t.includes("analyst meeting")
+        t.includes("analyst meeting") ||
+        t.includes("closure of trading") ||
+        t.includes("book closure") ||
+        t.includes("intimation of board meeting") ||
+        t.includes("change in director") ||
+        t.includes("change of address") ||
+        t.includes("regulation 30") ||
+        t.includes("compliance officer")
       ) return false;
-      return isSignal(e);
+      return true;
     })
     .slice(0, 50)
     .map(e => {
