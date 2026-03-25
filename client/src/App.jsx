@@ -99,10 +99,9 @@ useEffect(() => {
   const fetchMarket = async () => {
     try {
       const results = await Promise.all(symbols.map(sym =>
-        fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`)
+        fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`)
           .then(r => r.json())
       ));
-
       const updated = results.map((data, i) => {
         const meta   = data?.chart?.result?.[0]?.meta;
         if (!meta) return { name: names[i], price: "—", change: "—", pct: "—", up: null };
@@ -121,8 +120,34 @@ useEffect(() => {
       });
 
       setMarketIndices(updated);
-    } catch(e) {
-      console.log("Market fetch error:", e);
+    } catch(err) {
+      console.error("Market fetch error:", err);
+      // try fallback proxy
+      try {
+        const results2 = await Promise.all(symbols.map(sym =>
+          fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent("https://query1.finance.yahoo.com/v8/finance/chart/" + sym + "?interval=1d&range=1d")}`)
+            .then(r => r.json())
+        ));
+        const updated = results2.map((data, i) => {
+          const meta = data?.chart?.result?.[0]?.meta;
+          if (!meta) return { name: names[i], price: "—", change: "—", pct: "—", up: null };
+          const price = meta.regularMarketPrice;
+          const prev  = meta.previousClose || meta.chartPreviousClose;
+          const diff  = price - prev;
+          const pct   = ((diff / prev) * 100);
+          const up    = diff >= 0;
+          return {
+            name:   names[i],
+            price:  price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
+            change: (up ? "+" : "") + diff.toFixed(2),
+            pct:    (up ? "+" : "") + pct.toFixed(2) + "%",
+            up
+          };
+        });
+        setMarketIndices(updated);
+      } catch(err2) {
+        console.error("Fallback proxy also failed:", err2);
+      }
     }
   };
 

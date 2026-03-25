@@ -338,9 +338,9 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 }
 .mega-time {
   font-size: 8px;
-  color: #1a5070;
-  margin-top: 2px;
+  color: #4a9abb;
   font-family: 'IBM Plex Mono', monospace;
+  margin-top: 2px;
 }
 
 /* FEED CARD word highlights */
@@ -373,6 +373,6 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 /* OPPORTUNITIES date */
 .opp-card .time-label {
   font-size: 9px;
-  color: #1a5070;
+  color: #4a9abb;
   font-family: 'IBM Plex Mono', monospace;
 }
