@@ -15,6 +15,120 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 
 .title { font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #fff; letter-spacing: 2px; text-transform: uppercase; }
 
+/* ===== TICKER BAR ===== */
+.ticker-bar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: #020b18;
+  border-bottom: 1px solid #0d3560;
+  flex-shrink: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.ticker-bar::-webkit-scrollbar { display: none; }
+
+.ticker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px;
+  height: 100%;
+  border-right: 1px solid #0a2540;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  cursor: default;
+}
+.ticker-item:hover { background: #030f20; }
+.ticker-item.secondary .ticker-name  { color: #3a6888; }
+.ticker-item.secondary .ticker-price { font-size: 12px; color: #b0c8e0; }
+
+.ticker-name {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: #7ab0d0;
+  letter-spacing: 0.5px;
+}
+.ticker-price {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e8f4ff;
+}
+.ticker-change {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  min-width: 60px;
+  text-align: center;
+}
+.ticker-change.up   { background: #003322; color: #00ff9c; border: 1px solid #00ff9c33; }
+.ticker-change.down { background: #220010; color: #ff5c5c; border: 1px solid #ff5c5c33; }
+.ticker-change.flat { background: #0a1828; color: #4a7090; border: 1px solid #0d2a40; }
+
+.ticker-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  flex-shrink: 0;
+  border-left: 1px solid #0a2540;
+  height: 100%;
+}
+.ticker-clock {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #2a6080;
+  letter-spacing: 1px;
+}
+.ticker-session {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.ticker-session.open   { background: #002210; color: #00ff9c; border: 1px solid #00cc7733; }
+.ticker-session.closed { background: #1a0800; color: #ff6600; border: 1px solid #ff660033; }
+.ticker-session.pre    { background: #0a1800; color: #aacc00; border: 1px solid #aacc0033; }
+
+@media (max-width: 768px) {
+  .ticker-bar { height: 32px; }
+  .ticker-item { padding: 0 12px; gap: 7px; }
+  .ticker-price { font-size: 12px; }
+  .ticker-change { font-size: 9px; min-width: 50px; padding: 1px 5px; }
+  .ticker-right { padding: 0 10px; gap: 8px; }
+}
+
+/* Asset type icons */
+.ticker-asset-icon {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.ticker-asset-icon.crypto { background: #0a1a30; color: #f7931a; border: 1px solid #f7931a44; }
+.ticker-asset-icon.gold   { background: #1a1400; color: #ffd700; border: 1px solid #ffd70044; }
+.ticker-asset-icon.silver { background: #0f1520; color: #aab8c8; border: 1px solid #aab8c844; }
+
+/* Ticker vertical separator between indices and crypto */
+.ticker-sep {
+  color: #0a2540;
+  font-size: 20px;
+  padding: 0 4px;
+  flex-shrink: 0;
+  line-height: 36px;
+  user-select: none;
+}
+
 /* ===== DESKTOP LAYOUT: 4 columns, all panels visible ===== */
 .layout {
   display: grid;

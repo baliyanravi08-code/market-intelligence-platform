@@ -91,6 +91,80 @@ function MarketStatus() {
   );
 }
 
+// Live IST clock
+function LiveClock() {
+  const [time, setTime] = useState(() =>
+    new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
+  );
+  useEffect(() => {
+    const t = setInterval(() => {
+      setTime(new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }));
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+  return <span className="ticker-clock">{time} IST</span>;
+}
+
+function getSession() {
+  const now = new Date();
+  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const h = ist.getHours(), m = ist.getMinutes();
+  const mins = h * 60 + m;
+  const day = ist.getDay();
+  if (day === 0 || day === 6) return { label: "CLOSED", cls: "closed" };
+  if (mins >= 9 * 60 + 15 && mins < 15 * 60 + 30) return { label: "MARKET OPEN", cls: "open" };
+  if (mins >= 9 * 60 && mins < 9 * 60 + 15)       return { label: "PRE-OPEN", cls: "pre" };
+  return { label: "CLOSED", cls: "closed" };
+}
+
+function TickerBar({ indices, assets }) {
+  const session = getSession();
+  return (
+    <div className="ticker-bar">
+      {/* NSE Indices */}
+      {indices.map((m, i) => {
+        const isUp   = m.up === true;
+        const isDown = m.up === false;
+        const cls    = isUp ? "up" : isDown ? "down" : "flat";
+        return (
+          <div className="ticker-item" key={`idx-${i}`}>
+            <span className="ticker-name">{m.name}</span>
+            <span className="ticker-price">{m.price}</span>
+            <span className={`ticker-change ${cls}`}>
+              {isUp ? "▲" : isDown ? "▼" : "●"} {m.change} ({m.pct})
+            </span>
+          </div>
+        );
+      })}
+
+      {/* Divider */}
+      {assets.length > 0 && <div className="ticker-sep">│</div>}
+
+      {/* Crypto & Commodities */}
+      {assets.map((a, i) => {
+        const isUp   = a.change24h > 0;
+        const isDown = a.change24h < 0;
+        const cls    = isUp ? "up" : isDown ? "down" : "flat";
+        return (
+          <div className="ticker-item secondary" key={`asset-${i}`}>
+            <span className={`ticker-asset-icon ${a.type}`}>{a.icon}</span>
+            <span className="ticker-name">{a.name}</span>
+            <span className="ticker-price">{a.price}</span>
+            <span className={`ticker-change ${cls}`}>
+              {isUp ? "▲" : isDown ? "▼" : "●"} {Math.abs(a.change24h).toFixed(2)}%
+            </span>
+          </div>
+        );
+      })}
+
+      <div className="ticker-right">
+        <LiveClock />
+        <span className={`ticker-session ${session.cls}`}>{session.label}</span>
+      </div>
+    </div>
+  );
+}
+
 // Mobile bottom nav tabs
 const MOBILE_TABS = [
   { key: "feed",  label: "📡 Feed"   },
@@ -114,6 +188,60 @@ export default function App() {
   const [feedFilter, setFeedFilter] = useState("ALL");
   // Mobile panel switcher (only active on mobile via CSS)
   const [mobilePanelTab, setMobilePanelTab] = useState("feed");
+  const [cryptoAssets, setCryptoAssets] = useState([]);
+
+  // Fetch BTC, PI, Gold, Silver from CoinGecko (free, no key)
+  useEffect(() => {
+    const fetchAssets = async () => {
+      try {
+        // CoinGecko free API — bitcoin, pi-network, gold (tether-gold as proxy), silver
+        const res = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,pi-network,tether-gold,silver&vs_currencies=usd&include_24hr_change=true"
+        );
+        const d = await res.json();
+
+        const fmt = (n) => {
+          if (!n && n !== 0) return "—";
+          if (n >= 1000) return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+          if (n >= 1)    return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+          return "$" + n.toFixed(4);
+        };
+
+        const assets = [];
+
+        if (d.bitcoin) assets.push({
+          name: "BTC", icon: "₿", type: "crypto",
+          price: fmt(d.bitcoin.usd),
+          change24h: d.bitcoin.usd_24h_change || 0
+        });
+
+        if (d["pi-network"]) assets.push({
+          name: "PI", icon: "π", type: "crypto",
+          price: fmt(d["pi-network"].usd),
+          change24h: d["pi-network"].usd_24h_change || 0
+        });
+
+        if (d["tether-gold"]) assets.push({
+          name: "GOLD", icon: "Au", type: "gold",
+          price: fmt(d["tether-gold"].usd),
+          change24h: d["tether-gold"].usd_24h_change || 0
+        });
+
+        if (d.silver) assets.push({
+          name: "SILVER", icon: "Ag", type: "silver",
+          price: fmt(d.silver.usd),
+          change24h: d.silver.usd_24h_change || 0
+        });
+
+        if (assets.length > 0) setCryptoAssets(assets);
+      } catch(err) {
+        console.error("Asset fetch error:", err);
+      }
+    };
+    fetchAssets();
+    const interval = setInterval(fetchAssets, 60000); // refresh every 60s
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const fetchEvents = () => {
@@ -434,21 +562,6 @@ export default function App() {
   const IntelPanel = () => (
     <div className="panel intelligence-panel">
       <div className="section">
-        <div className="section-divider">⚡ Market</div>
-        {marketIndices.map((m, i) => (
-          <div key={i} className="mini-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "10px", fontWeight: 600 }}>{m.name}</span>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ color: "#fff", fontWeight: 700, fontSize: "11px", fontFamily: "IBM Plex Mono" }}>{m.price}</div>
-              <div style={{
-                color: m.up === null ? "#555" : m.up ? "#00ff9c" : "#ff5c5c",
-                fontSize: "9px", fontFamily: "IBM Plex Mono"
-              }}>
-                {m.change} ({m.pct})
-              </div>
-            </div>
-          </div>
-        ))}
       </div>
       <div className="section">
         <div className="section-divider">🔔 Alerts</div>
@@ -475,6 +588,9 @@ export default function App() {
           <MarketStatus />
         </div>
       </div>
+
+      {/* TICKER BAR — spans full width below header */}
+      <TickerBar indices={marketIndices} assets={cryptoAssets} />
 
       {/* DESKTOP: All 4 panels in grid. MOBILE: hidden, controlled by mobilePanelTab */}
       <div className="layout desktop-layout">
