@@ -19,21 +19,23 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .ticker-bar {
   display: flex;
   align-items: center;
-  height: 36px;
+  height: 32px;
   background: #020b18;
   border-bottom: 1px solid #0d3560;
   flex-shrink: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+  white-space: nowrap;
 }
 .ticker-bar::-webkit-scrollbar { display: none; }
 
 .ticker-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 18px;
+  gap: 5px;
+  padding: 0 10px;
   height: 100%;
   border-right: 1px solid #0a2540;
   white-space: nowrap;
@@ -43,29 +45,28 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 }
 .ticker-item:hover { background: #030f20; }
 .ticker-item.secondary .ticker-name  { color: #3a6888; }
-.ticker-item.secondary .ticker-price { font-size: 12px; color: #b0c8e0; }
+.ticker-item.secondary .ticker-price { font-size: 11px; color: #b0c8e0; }
 
 .ticker-name {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   color: #7ab0d0;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
 }
 .ticker-price {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   color: #e8f4ff;
 }
 .ticker-change {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
-  padding: 2px 7px;
+  padding: 1px 5px;
   border-radius: 3px;
-  min-width: 60px;
-  text-align: center;
+  white-space: nowrap;
 }
 .ticker-change.up   { background: #003322; color: #00ff9c; border: 1px solid #00ff9c33; }
 .ticker-change.down { background: #220010; color: #ff5c5c; border: 1px solid #ff5c5c33; }
@@ -73,45 +74,38 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 
 .ticker-right {
   margin-left: auto;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 14px;
+  gap: 8px;
+  padding: 0 10px;
   flex-shrink: 0;
   border-left: 1px solid #0a2540;
   height: 100%;
 }
 .ticker-clock {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
+  font-size: 10px;
   color: #2a6080;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
 }
 .ticker-session {
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 700;
-  padding: 2px 7px;
+  padding: 1px 6px;
   border-radius: 3px;
   font-family: 'IBM Plex Mono', monospace;
+  white-space: nowrap;
 }
 .ticker-session.open   { background: #002210; color: #00ff9c; border: 1px solid #00cc7733; }
 .ticker-session.closed { background: #1a0800; color: #ff6600; border: 1px solid #ff660033; }
 .ticker-session.pre    { background: #0a1800; color: #aacc00; border: 1px solid #aacc0033; }
 
-@media (max-width: 768px) {
-  .ticker-bar { height: 32px; }
-  .ticker-item { padding: 0 12px; gap: 7px; }
-  .ticker-price { font-size: 12px; }
-  .ticker-change { font-size: 9px; min-width: 50px; padding: 1px 5px; }
-  .ticker-right { padding: 0 10px; gap: 8px; }
-}
-
 /* Asset type icons */
 .ticker-asset-icon {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
-  padding: 1px 5px;
+  padding: 1px 4px;
   border-radius: 3px;
   flex-shrink: 0;
 }
@@ -122,10 +116,10 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 /* Ticker vertical separator between indices and crypto */
 .ticker-sep {
   color: #0a2540;
-  font-size: 20px;
-  padding: 0 4px;
+  font-size: 18px;
+  padding: 0 2px;
   flex-shrink: 0;
-  line-height: 36px;
+  line-height: 32px;
   user-select: none;
 }
 

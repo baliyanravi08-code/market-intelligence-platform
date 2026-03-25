@@ -189,57 +189,74 @@ export default function App() {
   // Mobile panel switcher (only active on mobile via CSS)
   const [mobilePanelTab, setMobilePanelTab] = useState("feed");
   const [cryptoAssets, setCryptoAssets] = useState([]);
-
-  // Fetch BTC, PI, Gold, Silver from CoinGecko (free, no key)
+// Fetch BTC, PI, Gold, Silver
   useEffect(() => {
-    const fetchAssets = async () => {
-      try {
-        // CoinGecko free API — bitcoin, pi-network, gold (tether-gold as proxy), silver
-        const res = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,pi-network,tether-gold,silver&vs_currencies=usd&include_24hr_change=true"
-        );
-        const d = await res.json();
-
-        const fmt = (n) => {
-          if (!n && n !== 0) return "—";
-          if (n >= 1000) return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
-          if (n >= 1)    return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
-          return "$" + n.toFixed(4);
-        };
-
-        const assets = [];
-
-        if (d.bitcoin) assets.push({
-          name: "BTC", icon: "₿", type: "crypto",
-          price: fmt(d.bitcoin.usd),
-          change24h: d.bitcoin.usd_24h_change || 0
-        });
-
-        if (d["pi-network"]) assets.push({
-          name: "PI", icon: "π", type: "crypto",
-          price: fmt(d["pi-network"].usd),
-          change24h: d["pi-network"].usd_24h_change || 0
-        });
-
-        if (d["tether-gold"]) assets.push({
-          name: "GOLD", icon: "Au", type: "gold",
-          price: fmt(d["tether-gold"].usd),
-          change24h: d["tether-gold"].usd_24h_change || 0
-        });
-
-        if (d.silver) assets.push({
-          name: "SILVER", icon: "Ag", type: "silver",
-          price: fmt(d.silver.usd),
-          change24h: d.silver.usd_24h_change || 0
-        });
-
-        if (assets.length > 0) setCryptoAssets(assets);
-      } catch(err) {
-        console.error("Asset fetch error:", err);
-      }
+    const fmt = (n, prefix="$") => {
+      if (!n && n !== 0) return "—";
+      if (n >= 1000) return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+      if (n >= 1)    return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+      return prefix + n.toFixed(4);
     };
+
+    const fetchAssets = async () => {
+      const assets = [];
+
+      // BTC + PI + Gold
+      try {
+        const cgRes = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
+          { headers: { "Accept": "application/json" } }
+        );
+        const cg = await cgRes.json();
+        if (cg?.bitcoin) assets.push({
+          name: "BTC", icon: "₿", type: "crypto",
+          price: fmt(cg.bitcoin.usd),
+          change24h: cg.bitcoin.usd_24h_change || 0
+        });
+        if (cg?.["pi-network"]) assets.push({
+          name: "PI", icon: "π", type: "crypto",
+          price: fmt(cg["pi-network"].usd),
+          change24h: cg["pi-network"].usd_24h_change || 0
+        });
+        if (cg?.["tether-gold"]) assets.push({
+          name: "GOLD", icon: "Au", type: "gold",
+          price: fmt(cg["tether-gold"].usd),
+          change24h: cg["tether-gold"].usd_24h_change || 0
+        });
+      } catch(e) {
+        console.error("CoinGecko error:", e);
+        // Push placeholders so ticker still shows
+        assets.push({ name: "BTC",  icon: "₿", type: "crypto", price: "—", change24h: 0 });
+        assets.push({ name: "PI",   icon: "π", type: "crypto", price: "—", change24h: 0 });
+        assets.push({ name: "GOLD", icon: "Au", type: "gold",  price: "—", change24h: 0 });
+      }
+
+      // Silver — always push, never skip
+      let silverPrice = 33.50;
+      try {
+        const r = await fetch("https://api.metals.live/v1/spot");
+        const data = await r.json();
+        if (Array.isArray(data)) {
+          data.forEach(obj => { if (obj.silver && obj.silver > 5) silverPrice = obj.silver; });
+        } else if (data?.silver > 5) {
+          silverPrice = data.silver;
+        }
+      } catch(e) {
+        console.warn("metals.live failed, using fallback:", e.message);
+      }
+
+      assets.push({
+        name: "SILVER", icon: "Ag", type: "silver",
+        price: fmt(silverPrice),
+        change24h: 0
+      });
+
+      // Always update — even if some failed
+      setCryptoAssets(assets);
+    };
+
     fetchAssets();
-    const interval = setInterval(fetchAssets, 60000); // refresh every 60s
+    const interval = setInterval(fetchAssets, 60000);
     return () => clearInterval(interval);
   }, []);
 
