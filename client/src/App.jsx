@@ -32,10 +32,19 @@ function formatTime(raw) {
   try {
     const d = new Date(raw);
     if (isNaN(d.getTime())) return String(raw).replace("T", " ").substring(0, 16);
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffHr = Math.floor(diffMs / 3600000);
+    const diffDay = Math.floor(diffMs / 86400000);
+    if (diffMin < 1)  return "just now";
+    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffHr  < 24) return `${diffHr}h ago`;
+    if (diffDay < 2)  return "yesterday";
+    if (diffDay < 7)  return `${diffDay}d ago`;
     return d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true });
   } catch { return String(raw).substring(0, 16); }
 }
-
 function toAgo(ts) {
   if (!ts) return "just now";
   const s = Math.floor((Date.now() - ts) / 1000);
@@ -220,8 +229,13 @@ const isPurchaseOrder = (
   t.includes("supply order") ||
   t.includes("receipt of order") ||
   t.includes("order received") ||
+  t.includes("order secured") ||
+  t.includes("major order") ||
+  t.includes("letter of acceptance") ||
+  t.includes("rate contract") ||
   t.includes("bagged") ||
   t.includes("contract awarded") ||
+  t.includes("loa") ||
   (t.includes("order") && (t.includes("crore") || t.includes("lakh") || t.includes("₹") || t.includes("rs.")))
 );
 
@@ -349,37 +363,82 @@ else if (t.includes("insolvency") || t.includes("default")) { type = "RISK"; sco
             </div>
           </div>
           <div className="filter-bar">{FEED_FILTERS.map(f => <button key={f} className={`fbtn ${feedFilter === f ? "active" : ""}`} onClick={() => setFeedFilter(f)}>{f}</button>)}</div>
-          {filteredFeed.length === 0 ? <div className="empty">No signals match filter</div> : filteredFeed.map((e, i) => (
-            <div className={`feed-card ${
-  e.type?.includes("ORDER") ? "fc-order" :
-  e.type?.includes("MERGER") ? "fc-merger" :
-  e.type?.includes("RESULT") ? "fc-result" :
-  e.type?.includes("INSIDER") ? "fc-insider" :
-  e.type?.includes("CAPEX") ? "fc-capex" : "fc-news"
-}`} key={i}>
-              <div className="fc-head">
-  <span className="fc-company">{e.company}
-    {e.type === "NEWS" && <span className="fc-tag-news">NEWS</span>}
-  </span>
-  {e.type !== "NEWS" && <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />}
-</div>
-<div className="fc-text">{e.title}</div>
-<div className="fc-time">{formatTime(e.time) || "—"}</div>
-            </div>
-          ))}
-        </div>
+          {filteredFeed.length === 0 ? (
+            <div className="empty">No signals match filter</div>
+          ) : (
+            filteredFeed.map((e, i) => {
+              const cardClass = [
+                "feed-card",
+                e.type?.includes("ORDER")   ? "fc-order"  :
+                e.type?.includes("MERGER")  ? "fc-merger" :
+                e.type?.includes("RESULT")  ? "fc-result" :
+                e.type?.includes("INSIDER") ? "fc-insider":
+                e.type?.includes("CAPEX")   ? "fc-capex"  : "fc-news"
+              ].join(" ");
+              const hotWords = ["crore","cr","lakh","order","contract","merger","acquisition","fraud","penalty","rs"];
+              return (
+                <div className={cardClass} key={i}>
+                  <div className="fc-head">
+                    <span className="fc-company">
+                      {e.company}
+                      {e.type === "NEWS" && (
+                        <span className="fc-tag-news">NEWS</span>
+                      )}
+                    </span>
+                    {e.type !== "NEWS" && (
+                      <Tag
+                        type={e.type}
+                        crores={e._orderInfo?.crores || extractAmount(e.title)}
+                      />
+                    )}
+                  </div>
+                  <div className="fc-text">
+                    {(e.title || "").split(" ").map(function(word, wi) {
+                      const w = word.toLowerCase().replace(/[^a-z0-9]/g, "");
+                      const isHot =
+                        hotWords.indexOf(w) !== -1 ||
+                        /[0-9]{2,}/.test(word) ||
+                        word.indexOf("\u20B9") !== -1;
+                      return (
+                        <span key={wi} className={isHot ? "fc-word-hot" : "fc-word"}>
+                          {word}{" "}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <div className="fc-time">{formatTime(e.time) || "\u2014"}</div>
+                </div>
+              );
+            })
+          )}
+          </div>
 
         {/* COL 3: DATA */}
         <div className="panel right-panel">
           <div className="section">
-            <div className="section-divider">🔥 Mega Orders <span className="count">{computedMegaOrders.length}</span></div>
-            {computedMegaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : computedMegaOrders.map((o, i) => (
-              <div className="mega-card" key={i}>
-                <div className="mega-head"><span className="co-name">{o.company}</span><span className="mega-val">₹{o.crores}Cr</span></div>
-                <div className="time-label">{formatTime(o.time) || "—"}</div>
-              </div>
-            ))}
+  <div className="section-divider">🔥 Mega Orders <span className="count">{computedMegaOrders.length}</span></div>
+  {computedMegaOrders.length === 0 ? (
+    <div className="empty">No mega orders yet</div>
+  ) : (
+    <div className="mega-grid">
+      {computedMegaOrders.slice(0, 10).map((o, i) => {
+        const mcapEntry = window._mcapDb?.find?.(m =>
+          (m.company || "").toLowerCase() === (o.company || "").toLowerCase()
+        );
+        const mcap = mcapEntry?.mcap || 0;
+        const pct = mcap > 0 ? ((o.crores / mcap) * 100).toFixed(1) : null;
+        return (
+          <div className="mega-card-grid" key={i}>
+            <div className="mega-company">{o.company}</div>
+            <div className="mega-val">₹{o.crores}Cr</div>
+            {pct && <div className="mega-pct">{pct}% of MCap</div>}
+            <div className="mega-time">{formatTime(o.time) || "—"}</div>
           </div>
+        );
+      })}
+    </div>
+  )}
+</div>
 
           <div className="section">
             <div className="section-divider">💡 Opportunities <span className="count">{computedOpportunities.length}</span></div>
