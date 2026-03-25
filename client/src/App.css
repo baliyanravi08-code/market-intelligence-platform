@@ -302,3 +302,77 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   color: #00cfff;
   margin-top: 2px;
 }
+/* MEGA ORDERS GRID - 2 per row */
+.mega-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.mega-card-grid {
+  background: linear-gradient(145deg, #0a0f1a, #050d18);
+  border: 1px solid #0c2240;
+  border-left: 3px solid #ff4400;
+  border-radius: 5px;
+  padding: 7px 8px;
+}
+.mega-company {
+  font-size: 9px;
+  font-weight: 700;
+  color: #d8eeff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mega-val {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ff4400;
+  font-family: 'IBM Plex Mono', monospace;
+  text-shadow: 0 0 8px rgba(255,68,0,0.4);
+}
+.mega-pct {
+  font-size: 8px;
+  color: #ff8844;
+  font-family: 'IBM Plex Mono', monospace;
+  margin-top: 1px;
+}
+.mega-time {
+  font-size: 8px;
+  color: #1a5070;
+  margin-top: 2px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+/* FEED CARD word highlights */
+.fc-word {
+  color: #3d6a80;
+}
+.fc-word-hot {
+  color: #8ab8d4;
+  font-weight: 600;
+}
+.feed-card.fc-order .fc-word     { color: #7a4030; }
+.feed-card.fc-order .fc-word-hot { color: #ff8855; font-weight: 700; }
+.feed-card.fc-merger .fc-word     { color: #7a6020; }
+.feed-card.fc-merger .fc-word-hot { color: #ffbb44; font-weight: 700; }
+.feed-card.fc-result .fc-word     { color: #204060; }
+.feed-card.fc-result .fc-word-hot { color: #44aaff; font-weight: 700; }
+.feed-card.fc-capex .fc-word      { color: #1a5060; }
+.feed-card.fc-capex .fc-word-hot  { color: #00cfff; font-weight: 700; }
+.feed-card.fc-insider .fc-word     { color: #602060; }
+.feed-card.fc-insider .fc-word-hot { color: #ff88ff; font-weight: 700; }
+
+/* fc-time */
+.fc-time {
+  font-size: 9px;
+  color: #1a5070;
+  margin-top: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+/* OPPORTUNITIES date */
+.opp-card .time-label {
+  font-size: 9px;
+  color: #1a5070;
+  font-family: 'IBM Plex Mono', monospace;
+}
