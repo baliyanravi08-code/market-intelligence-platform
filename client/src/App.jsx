@@ -66,10 +66,23 @@ function extractAmount(text) {
 
 // --- Components ---
 function LiveAgo({ receivedAt, exchangeTime }) {
-  const [ago, setAgo] = useState(() => toAgo(receivedAt));
+  // Use the best available timestamp — savedAt comes as seconds from backend
+  const getBestTs = () => {
+    const ts = receivedAt;
+    if (!ts) return null;
+    // Auto-detect seconds vs ms: seconds timestamps are < 2e10
+    return ts < 2e10 ? ts * 1000 : ts;
+  };
+
+  const [ago, setAgo] = useState(() => {
+    const ms = getBestTs();
+    return ms ? toAgo(ms) : "—";
+  });
 
   useEffect(() => {
-    const tick = () => setAgo(toAgo(receivedAt));
+    const ms = getBestTs();
+    if (!ms) { setAgo("—"); return; }
+    const tick = () => setAgo(toAgo(ms));
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
@@ -403,6 +416,7 @@ export default function App() {
         company: e?.company || "Unknown",
         score,
         type,
+        savedAt: e?.savedAt,
         receivedAt: e?.receivedAt,
         time: e?.time,
         pdfUrl: e?.pdfUrl || e?.attachment || null,
@@ -491,7 +505,7 @@ export default function App() {
                 </a>
               )}
             </div>
-            <LiveAgo receivedAt={r.receivedAt} exchangeTime={r.time} />
+            <LiveAgo receivedAt={r.savedAt || r.receivedAt} exchangeTime={r.time} />
           </div>
         ))
       )}
@@ -525,16 +539,35 @@ export default function App() {
             e.type?.includes("CAPEX")   ? "fc-capex"  : "fc-news"
           ].join(" ");
           const hotWords = ["crore","cr","lakh","order","contract","merger","acquisition","fraud","penalty","rs"];
+          const pdfUrl = e.pdfUrl || e.attachment || e.url || null;
           return (
-            <div className={cardClass} key={i}>
+            <div
+              className={cardClass}
+              key={i}
+              onClick={() => pdfUrl && window.open(pdfUrl, "_blank", "noopener")}
+              style={{ cursor: pdfUrl ? "pointer" : "default" }}
+            >
               <div className="fc-head">
                 <span className="fc-company">
                   {e.company}
                   {e.type === "NEWS" && <span className="fc-tag-news">NEWS</span>}
                 </span>
-                {e.type !== "NEWS" && (
-                  <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />
-                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  {e.type !== "NEWS" && (
+                    <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />
+                  )}
+                  {pdfUrl && (
+                    <a
+                      href={pdfUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="filing-link"
+                      onClick={ev => ev.stopPropagation()}
+                    >
+                      📄 Filing
+                    </a>
+                  )}
+                </div>
               </div>
               <div className="fc-text">
                 {(e.title || "").split(" ").map((word, wi) => {
@@ -550,7 +583,7 @@ export default function App() {
                   );
                 })}
               </div>
-              <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
+              <LiveAgo receivedAt={e.savedAt || e.receivedAt} exchangeTime={e.time} />
             </div>
           );
         })

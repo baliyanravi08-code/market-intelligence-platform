@@ -341,6 +341,11 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   border-left-color: #1a4060;
   background: #020c1a;
 }
+.feed-card[style*="pointer"]:hover {
+  filter: brightness(1.15);
+  border-left-width: 4px;
+  transition: all 0.15s ease;
+}
 
 .feed-card.fc-order  .fc-company { color: #ff7744; }
 .feed-card.fc-merger .fc-company { color: #ffbb44; }
