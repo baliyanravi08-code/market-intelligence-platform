@@ -30,32 +30,31 @@ const FEED_FILTERS = ["ALL", "ORDER", "MERGER", "CAPEX", "RESULT", "INSIDER", ">
 function formatTime(raw) {
   if (!raw) return null;
   try {
-    const d = new Date(raw);
+    // Auto-detect seconds vs ms
+    const ms = (typeof raw === "number" && raw < 2e10) ? raw * 1000 : raw;
+    const d = new Date(ms);
     if (isNaN(d.getTime())) return String(raw).replace("T", " ").substring(0, 16);
-    const now = new Date();
-    const diffMs = now - d;
-    const diffMin = Math.floor(diffMs / 60000);
-    const diffHr = Math.floor(diffMs / 3600000);
-    const diffDay = Math.floor(diffMs / 86400000);
-    if (diffMin < 1)  return "just now";
-    if (diffMin < 60) return `${diffMin}m ago`;
-    if (diffHr  < 24) return `${diffHr}h ago`;
-    if (diffDay < 2)  return "yesterday";
-    if (diffDay < 7)  return `${diffDay}d ago`;
-    return d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true });
+    return d.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit", month: "short",
+      hour: "2-digit", minute: "2-digit",
+      hour12: true
+    });
   } catch { return String(raw).substring(0, 16); }
 }
 
 function toAgo(ts) {
   if (!ts) return "just now";
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 0)    return "just now";
-  if (s < 60)   return `${s}s ago`;
+  // Auto-detect: if ts looks like seconds (< 2e10), convert to ms
+  const ms = ts < 2e10 ? ts * 1000 : ts;
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 0)   return "just now";
+  if (s < 60)  return `${s}s ago`;
   const m = Math.floor(s / 60);
-  if (m < 60)   return `${m}m ago`;
+  if (m < 60)  return `${m}m ago`;
   const h = Math.floor(m / 60);
   const rm = m % 60;
-  if (h < 24)   return rm > 0 ? `${h}h ${rm}m ago` : `${h}h ago`;
+  if (h < 24)  return rm > 0 ? `${h}h ${rm}m ago` : `${h}h ago`;
   const d = Math.floor(h / 24);
   return d === 1 ? "yesterday" : `${d}d ago`;
 }
@@ -67,15 +66,21 @@ function extractAmount(text) {
 
 // --- Components ---
 function LiveAgo({ receivedAt, exchangeTime }) {
-  const [ago, setAgo] = useState(toAgo(receivedAt));
+  const [ago, setAgo] = useState(() => toAgo(receivedAt));
+
   useEffect(() => {
-    const t = setInterval(() => setAgo(toAgo(receivedAt)), 1000);
+    const tick = () => setAgo(toAgo(receivedAt));
+    tick();
+    const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, [receivedAt]);
+
   return (
     <div className="time-row">
       <span className="ago">{ago}</span>
-      {exchangeTime && <span className="time-label">{formatTime(exchangeTime)}</span>}
+      {exchangeTime && (
+        <span className="time-label">{formatTime(exchangeTime)}</span>
+      )}
     </div>
   );
 }
@@ -545,9 +550,7 @@ export default function App() {
                   );
                 })}
               </div>
-              <div className="fc-time">
-                <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
-              </div>
+              <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
             </div>
           );
         })
