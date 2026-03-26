@@ -1,13 +1,5 @@
-import { useEffect, useState, useRef } from "react";
-import { io } from "socket.io-client";
+import { useEffect, useState } from "react";
 import "./App.css";
-
-const STATUS_COLOR = {
-  connected:    "#00ff9c",
-  disconnected: "#ff5c5c",
-  unavailable:  "#ffaa00",
-  connecting:   "#555"
-};
 
 const SIGNAL_COLOR = {
   ORDER_ALERT:         { bg: "#00ff9c", fg: "#000" },
@@ -26,11 +18,20 @@ const SIGNAL_COLOR = {
 
 const FEED_FILTERS = ["ALL", "ORDER", "MERGER", "CAPEX", "RESULT", "INSIDER", ">50"];
 
+// Noise words — used in both radar and feed filters
+const NOISE_WORDS = [
+  "trading window", "postal ballot", "scrutinizer", "voting result", "esg",
+  "analyst meeting", "closure of trading", "book closure", "intimation of board meeting",
+  "change in director", "change of address", "regulation 30", "compliance officer",
+  "closure of board meeting", "trading window closure", "sebi pit",
+  "unpaid dividend", "investor grievance", "loss of share certificate",
+  "closure of trading window", "intimation for closure"
+];
+
 // --- Utilities ---
 function formatTime(raw) {
   if (!raw) return null;
   try {
-    // Auto-detect seconds vs ms
     const ms = (typeof raw === "number" && raw < 2e10) ? raw * 1000 : raw;
     const d = new Date(ms);
     if (isNaN(d.getTime())) return String(raw).replace("T", " ").substring(0, 16);
@@ -45,9 +46,7 @@ function formatTime(raw) {
 
 function parseExchangeTime(raw) {
   if (!raw) return null;
-  // If it's already a number
   if (typeof raw === "number") return raw < 2e10 ? raw * 1000 : raw;
-  // Try direct Date parse (handles ISO strings)
   const d = new Date(raw);
   if (!isNaN(d.getTime())) return d.getTime();
   return null;
@@ -56,13 +55,14 @@ function parseExchangeTime(raw) {
 function toAgo(ms) {
   if (!ms) return "—";
   const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 0)   return "just now";
-  if (s < 60)  return `${s}s ago`;
+  if (s < 0)  return "just now";
+  if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
-  if (m < 60)  return `${m}m ago`;
+  const sec = s % 60;
+  if (m < 60) return `${m}m ${sec}s ago`;
   const h = Math.floor(m / 60);
   const rm = m % 60;
-  if (h < 24)  return rm > 0 ? `${h}h ${rm}m ago` : `${h}h ago`;
+  if (h < 24) return rm > 0 ? `${h}h ${rm}m ago` : `${h}h ago`;
   const d = Math.floor(h / 24);
   return d === 1 ? "yesterday" : `${d}d ago`;
 }
@@ -73,24 +73,42 @@ function extractAmount(text) {
 }
 
 // --- Components ---
-function LiveAgo({ exchangeTime }) {
-  const ms = parseExchangeTime(exchangeTime);
 
-  const [ago, setAgo] = useState(() => toAgo(ms));
+// Live ticking ago timer + exchange time
+function LiveAgo({ exchangeTime, receivedAt }) {
+  const exMs = parseExchangeTime(exchangeTime);
+  const [agoEx,  setAgoEx]  = useState(() => toAgo(exMs));
+  const [agoRec, setAgoRec] = useState(() => toAgo(receivedAt));
 
   useEffect(() => {
-    if (!ms) { setAgo("—"); return; }
-    const tick = () => setAgo(toAgo(ms));
+    const tick = () => {
+      setAgoEx(toAgo(exMs));
+      setAgoRec(toAgo(receivedAt));
+    };
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
-  }, [ms]);
+  }, [exMs, receivedAt]);
+
+  const delay = (exMs && receivedAt) ? Math.floor((receivedAt - exMs) / 1000) : null;
+  const delayColor = delay === null ? null : delay < 30 ? "#00ff9c" : delay < 120 ? "#ffaa00" : "#ff5c5c";
 
   return (
-    <div className="time-row">
-      <span className="ago">{ago}</span>
+    <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center", flexWrap: "wrap" }}>
       {exchangeTime && (
-        <span className="time-label">{formatTime(exchangeTime)}</span>
+        <span style={{ fontSize: "9px", color: "#4a8adf", fontFamily: "IBM Plex Mono, monospace" }}>
+          🕐 {formatTime(exchangeTime)} · {agoEx}
+        </span>
+      )}
+      {receivedAt && (
+        <span style={{ fontSize: "9px", color: "#ff9c00", fontFamily: "IBM Plex Mono, monospace" }}>
+          ⬇ {agoRec}
+        </span>
+      )}
+      {delay !== null && delay > 0 && delay < 86400 && (
+        <span style={{ fontSize: "9px", color: delayColor, fontFamily: "IBM Plex Mono, monospace" }}>
+          Δ {delay}s
+        </span>
       )}
     </div>
   );
@@ -113,7 +131,6 @@ function MarketStatus() {
   );
 }
 
-// Live IST clock
 function LiveClock() {
   const [time, setTime] = useState(() =>
     new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
@@ -143,7 +160,6 @@ function TickerBar({ indices, assets }) {
   const session = getSession();
   return (
     <div className="ticker-bar">
-      {/* NSE Indices */}
       {indices.map((m, i) => {
         const isUp   = m.up === true;
         const isDown = m.up === false;
@@ -158,11 +174,7 @@ function TickerBar({ indices, assets }) {
           </div>
         );
       })}
-
-      {/* Divider */}
       {assets.length > 0 && <div className="ticker-sep">│</div>}
-
-      {/* Crypto & Commodities */}
       {assets.map((a, i) => {
         const isUp   = a.change24h > 0;
         const isDown = a.change24h < 0;
@@ -178,7 +190,6 @@ function TickerBar({ indices, assets }) {
           </div>
         );
       })}
-
       <div className="ticker-right">
         <LiveClock />
         <span className={`ticker-session ${session.cls}`}>{session.label}</span>
@@ -187,12 +198,11 @@ function TickerBar({ indices, assets }) {
   );
 }
 
-// Mobile bottom nav tabs
 const MOBILE_TABS = [
-  { key: "feed",  label: "📡 Feed"   },
-  { key: "radar", label: "🔍 Radar"  },
-  { key: "data",  label: "📊 Data"   },
-  { key: "intel", label: "⚡ Intel"  },
+  { key: "feed",  label: "📡 Feed"  },
+  { key: "radar", label: "🔍 Radar" },
+  { key: "data",  label: "📊 Data"  },
+  { key: "intel", label: "⚡ Intel" },
 ];
 
 export default function App() {
@@ -201,104 +211,100 @@ export default function App() {
     { name: "SENSEX",     price: "—", change: "—", pct: "—", up: null },
     { name: "BANK NIFTY", price: "—", change: "—", pct: "—", up: null },
   ]);
-  const [bseEvents, setBseEvents] = useState([]);
-  const [nseEvents, setNseEvents] = useState([]);
-  const [sector, setSector] = useState([]);
-  const [orderBook, setOrderBook] = useState([]);
-  const [radarQuery, setRadarQuery] = useState('');
-  const [activeTab, setActiveTab] = useState("bse");
-  const [feedFilter, setFeedFilter] = useState("ALL");
-  // Mobile panel switcher (only active on mobile via CSS)
-  const [mobilePanelTab, setMobilePanelTab] = useState("feed");
-  const [cryptoAssets, setCryptoAssets] = useState([]);
+  const [bseEvents,     setBseEvents]     = useState([]);
+  const [nseEvents,     setNseEvents]     = useState([]);
+  const [sector,        setSector]        = useState([]);
+  const [orderBook,     setOrderBook]     = useState([]);
+  const [radarQuery,    setRadarQuery]    = useState("");
+  const [activeTab,     setActiveTab]     = useState("bse");
+  const [feedFilter,    setFeedFilter]    = useState("ALL");
+  const [mobilePanelTab,setMobilePanelTab]= useState("feed");
+  const [cryptoAssets,  setCryptoAssets]  = useState([]);
 
-  // Fetch BTC, PI, Gold, Silver
+  // ── Fetch BTC / PI / Gold / Silver ──────────────────────────────────────
   useEffect(() => {
-    const fetchAssets = async () => {
-      try {
-        const fmt = (n, prefix="$") => {
-          if (!n && n !== 0) return "—";
-          if (n >= 1000) return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
-          if (n >= 1)    return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
-          return prefix + n.toFixed(4);
-        };
-
-        const assets = [];
-
-        // CoinGecko: BTC + PI + Gold (XAUT)
-        try {
-          const cgRes = await fetch(
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
-            { headers: { "Accept": "application/json" } }
-          );
-          const cg = await cgRes.json();
-
-          if (cg.bitcoin) assets.push({
-            name: "BTC", icon: "₿", type: "crypto",
-            price: fmt(cg.bitcoin.usd),
-            change24h: cg.bitcoin.usd_24h_change || 0
-          });
-
-          if (cg["pi-network"]) assets.push({
-            name: "PI", icon: "π", type: "crypto",
-            price: fmt(cg["pi-network"].usd),
-            change24h: cg["pi-network"].usd_24h_change || 0
-          });
-
-          if (cg["tether-gold"]) assets.push({
-            name: "GOLD", icon: "Au", type: "gold",
-            price: fmt(cg["tether-gold"].usd),
-            change24h: cg["tether-gold"].usd_24h_change || 0
-          });
-        } catch(e) { console.error("CoinGecko error:", e); }
-
-        // Silver via Metals-API free tier (frankfurter-style open endpoint)
-        // Fallback: use CoinGecko's silver token "silver" id
-        try {
-          const svRes = await fetch(
-            "https://api.coingecko.com/api/v3/simple/price?ids=silver&vs_currencies=usd&include_24hr_change=true"
-          );
-          const sv = await svRes.json();
-          if (sv.silver && sv.silver.usd) {
-            assets.push({
-              name: "SILVER", icon: "Ag", type: "silver",
-              price: fmt(sv.silver.usd),
-              change24h: sv.silver.usd_24h_change || 0
-            });
-          } else {
-            // Fallback: open metals price from metals.live (no key needed)
-            const mlRes = await fetch("https://api.metals.live/v1/spot/silver");
-            const ml = await mlRes.json();
-            const price = ml?.[0]?.price || ml?.price;
-            if (price) {
-              assets.push({
-                name: "SILVER", icon: "Ag", type: "silver",
-                price: fmt(price),
-                change24h: 0
-              });
-            }
-          }
-        } catch(e) { console.error("Silver fetch error:", e); }
-
-        if (assets.length > 0) setCryptoAssets(assets);
-      } catch(err) {
-        console.error("Asset fetch error:", err);
-      }
+    const fmt = (n, prefix = "$") => {
+      if (!n && n !== 0) return "—";
+      if (n >= 1000) return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+      if (n >= 1)    return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+      return prefix + n.toFixed(4);
     };
+
+    const fetchAssets = async () => {
+      const assets = [];
+
+      // BTC + PI + Gold via CoinGecko
+      try {
+        const cgRes = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
+          { headers: { "Accept": "application/json" } }
+        );
+        const cg = await cgRes.json();
+        if (cg?.bitcoin) assets.push({
+          name: "BTC", icon: "₿", type: "crypto",
+          price: fmt(cg.bitcoin.usd),
+          change24h: cg.bitcoin.usd_24h_change || 0
+        });
+        if (cg?.["pi-network"]) assets.push({
+          name: "PI", icon: "π", type: "crypto",
+          price: fmt(cg["pi-network"].usd),
+          change24h: cg["pi-network"].usd_24h_change || 0
+        });
+        if (cg?.["tether-gold"]) assets.push({
+          name: "GOLD", icon: "Au", type: "gold",
+          price: fmt(cg["tether-gold"].usd),
+          change24h: cg["tether-gold"].usd_24h_change || 0
+        });
+      } catch(e) {
+        console.error("CoinGecko error:", e);
+        assets.push({ name: "BTC",  icon: "₿",  type: "crypto", price: "—", change24h: 0 });
+        assets.push({ name: "PI",   icon: "π",  type: "crypto", price: "—", change24h: 0 });
+        assets.push({ name: "GOLD", icon: "Au", type: "gold",   price: "—", change24h: 0 });
+      }
+
+      // Silver via Yahoo Finance (no CORS issues, same API as market indices)
+      let silverPrice = 33.50;
+      let silverChange = 0;
+      try {
+        const r = await fetch(
+          "https://query1.finance.yahoo.com/v8/finance/chart/SI%3DF?interval=1d&range=2d",
+          { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" } }
+        );
+        const data = await r.json();
+        const meta = data?.chart?.result?.[0]?.meta;
+        if (meta?.regularMarketPrice && meta.regularMarketPrice > 5) {
+          silverPrice = meta.regularMarketPrice;
+          const prev = meta.previousClose || meta.chartPreviousClose;
+          if (prev) silverChange = ((silverPrice - prev) / prev) * 100;
+        }
+      } catch(e) {
+        console.warn("Yahoo silver failed, using fallback:", e.message);
+      }
+
+      assets.push({
+        name: "SILVER", icon: "Ag", type: "silver",
+        price: fmt(silverPrice),
+        change24h: silverChange
+      });
+
+      setCryptoAssets(assets);
+    };
+
     fetchAssets();
     const interval = setInterval(fetchAssets, 60000);
     return () => clearInterval(interval);
   }, []);
 
+  // ── Fetch events every 15s ───────────────────────────────────────────────
   useEffect(() => {
     const fetchEvents = () => {
       fetch("/api/events")
-        .then(res => res.json())
+        .then(r => r.json())
         .then(data => {
-          setBseEvents(data.bse || []);
-          setNseEvents(data.nse || []);
+          setBseEvents(data.bse       || []);
+          setNseEvents(data.nse       || []);
           setOrderBook(data.orderBook || []);
-          setSector(data.sectors || []);
+          setSector(data.sectors      || []);
         })
         .catch(err => console.log("API error:", err));
     };
@@ -307,125 +313,122 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // ── Fetch market indices every 30s ──────────────────────────────────────
   useEffect(() => {
     const fetchMarket = async () => {
       try {
         const data = await fetch("/api/market").then(r => r.json());
         if (Array.isArray(data)) setMarketIndices(data);
-      } catch(err) {
-        console.error("Market fetch error:", err);
-      }
+      } catch(e) { console.error("Market fetch error:", e); }
     };
     fetchMarket();
     const interval = setInterval(fetchMarket, 30000);
     return () => clearInterval(interval);
   }, []);
 
+  // ── Deduplicated + filtered feed ────────────────────────────────────────
+  const seenFeedKeys = new Set();
   const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => {
+    const t = (e?.title || "").toLowerCase();
+    if (NOISE_WORDS.some(w => t.includes(w))) return false;
+    const key = `${e.company}||${(e.title || "").substring(0, 60)}`;
+    if (seenFeedKeys.has(key)) return false;
+    seenFeedKeys.add(key);
     if (feedFilter === "ALL") return true;
     if (feedFilter === ">50") return (e._orderInfo?.crores || extractAmount(e.title || "")) >= 50;
     return (e.type || "NEWS").toUpperCase().includes(feedFilter);
   });
 
-  // ===== FRONTEND INTELLIGENCE =====
-  const computedRadar = (bseEvents || [])
+  // ── computedRadar: merged BSE+NSE, deduplicated, scored ─────────────────
+  const seenRadarKeys = new Set();
+  const computedRadar = [
+    ...(bseEvents || []).map(e => ({ ...e, _exchange: "BSE" })),
+    ...(nseEvents  || []).map(e => ({ ...e, _exchange: "NSE" }))
+  ]
     .filter(e => {
       const t = (e?.title || "").toLowerCase();
-      if (
-        t.includes("trading window") ||
-        t.includes("postal ballot") ||
-        t.includes("scrutinizer") ||
-        t.includes("voting result") ||
-        t.includes("esg") ||
-        t.includes("analyst meeting") ||
-        t.includes("closure of trading") ||
-        t.includes("book closure") ||
-        t.includes("intimation of board meeting") ||
-        t.includes("change in director") ||
-        t.includes("change of address") ||
-        t.includes("regulation 30") ||
-        t.includes("compliance officer")
-      ) return false;
+      if (NOISE_WORDS.some(w => t.includes(w))) return false;
+      const key = `${e.company}||${(e.title || "").substring(0, 60)}`;
+      if (seenRadarKeys.has(key)) return false;
+      seenRadarKeys.add(key);
       return true;
     })
-    .slice(0, 50)
+    .sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0))
+    .slice(0, 100)
     .map(e => {
       const t = (e?.title || "").toLowerCase();
-      let type = "NEWS";
+      let type  = "NEWS";
       let score = 10;
 
-      // Noise keywords that should never be ORDER
       const isNonOrder = (
         t.includes("solar") || t.includes("renewable") || t.includes("green energy") ||
-        t.includes("spv") || t.includes("equity stake") || t.includes("power purchase") ||
+        t.includes("spv")   || t.includes("equity stake") || t.includes("power purchase") ||
         t.includes("subscribe") || t.includes("invest") ||
         t.includes("income tax") || t.includes("assessment") || t.includes("tax demand") ||
         t.includes("penalty") || t.includes("nclt")
       );
 
-      // RISK — highest priority
       if (t.includes("fraud") || t.includes("insolvency") || t.includes("default")) {
         type = "RISK"; score = 95;
-      }
-      else if (t.includes("penalty") || t.includes("nclt")) {
+      } else if (t.includes("penalty") || t.includes("nclt")) {
         type = "RISK"; score = 85;
-      }
-
-      // CAPEX / INVESTMENT — before ORDER so solar invest doesn't get misclassified
-      else if (
+      } else if (
         t.includes("solar") || t.includes("renewable") || t.includes("green energy") ||
         t.includes("power purchase") || t.includes("spv") ||
         (t.includes("equity stake") || (t.includes("subscribe") && t.includes("equity"))) ||
         t.includes("capex") || t.includes("greenfield") || t.includes("brownfield") ||
         t.includes("expansion") ||
         (t.includes("invest") && !t.includes("investor") && !t.includes("investment in"))
-      ) { type = "CAPEX"; score = 75; }
-
-      // PURCHASE ORDER — strict, no solar/invest crossover
-      else if (
+      ) {
+        type = "CAPEX"; score = 75;
+      } else if (
         t.includes("purchase order") || t.includes("work order") ||
-        t.includes("supply order") || t.includes("receipt of order") ||
+        t.includes("supply order")   || t.includes("receipt of order") ||
         t.includes("order received") || t.includes("order secured") ||
-        t.includes("major order") || t.includes("letter of acceptance") ||
-        t.includes("rate contract") || t.includes("bagged") ||
+        t.includes("major order")    || t.includes("letter of acceptance") ||
+        t.includes("rate contract")  || t.includes("bagged") ||
         t.includes("contract awarded") || t.includes("loa") ||
-        (
-          t.includes("order") &&
+        (t.includes("order") &&
           (t.includes("crore") || t.includes("lakh") || t.includes("₹") || t.includes("rs.")) &&
-          !isNonOrder
-        )
-      ) { type = "ORDER"; score = 90; }
-
-      // MERGER — strict, no equity stake / SPV / invest
-      else if (
+          !isNonOrder)
+      ) {
+        type = "ORDER"; score = 90;
+      } else if (
         t.includes("merger") || t.includes("amalgamation") ||
         (t.includes("acquisition") && !t.includes("solar") && !t.includes("invest") &&
          !t.includes("subscribe") && !t.includes("equity shares of") &&
          !t.includes("spv") && !t.includes("stake") && !t.includes("power"))
-      ) { type = "MERGER"; score = 80; }
-
-      else if (t.includes("result") || t.includes("quarterly")) { type = "RESULT";      score = 65; }
-      else if (t.includes("insider") || t.includes("promoter") || t.includes("bulk deal")) { type = "INSIDER"; score = 70; }
-      else if (t.includes("buyback"))    { type = "BUYBACK";     score = 78; }
-      else if (t.includes("dividend"))   { type = "DIVIDEND";    score = 60; }
-      else if (t.includes("partnership") || t.includes("joint venture") || t.includes("mou")) { type = "PARTNERSHIP"; score = 72; }
+      ) {
+        type = "MERGER"; score = 80;
+      } else if (t.includes("buyback")) {
+        type = "BUYBACK"; score = 78;
+      } else if (t.includes("result") || t.includes("quarterly")) {
+        type = "RESULT"; score = 65;
+      } else if (t.includes("insider") || t.includes("promoter") || t.includes("bulk deal")) {
+        type = "INSIDER"; score = 70;
+      } else if (t.includes("dividend")) {
+        type = "DIVIDEND"; score = 60;
+      } else if (t.includes("partnership") || t.includes("joint venture") || t.includes("mou")) {
+        type = "PARTNERSHIP"; score = 72;
+      }
 
       return {
-        company: e?.company || "Unknown",
+        company:    e?.company || "Unknown",
         score,
         type,
-        savedAt: e?.savedAt,
+        exchange:   e._exchange || "BSE",
         receivedAt: e?.receivedAt,
-        time: e?.time,
-        pdfUrl: e?.pdfUrl || e?.attachment || null,
+        time:       e?.time,
+        pdfUrl:     e?.pdfUrl || e?.attachment || null,
         orderValue: extractAmount(e?.title)
       };
     });
 
+  // ── Mega orders ──────────────────────────────────────────────────────────
   const computedMegaOrders = (bseEvents || []).filter(e => {
     const t = (e?.title || "").toLowerCase();
-    // Must be a real purchase/supply order, not solar invest or tax order
-    const isRealOrder = (t.includes("order") || t.includes("contract")) &&
+    const isRealOrder =
+      (t.includes("order") || t.includes("contract")) &&
       (t.includes("crore") || t.includes("₹") || t.includes("rs")) &&
       !t.includes("solar") && !t.includes("renewable") && !t.includes("invest") &&
       !t.includes("spv") && !t.includes("equity") && !t.includes("subscribe") &&
@@ -440,24 +443,36 @@ export default function App() {
     const mcap = mcapEntry?.mcap || 0;
     const pctTrigger = mcap > 0 && (cr / mcap) >= 0.08;
     return above500 || pctTrigger;
-  }).sort((a, b) =>
-    (b._orderInfo?.crores || extractAmount(b.title)) -
-    (a._orderInfo?.crores || extractAmount(a.title))
-  ).slice(0, 10).map(e => ({
-    company: e.company,
-    crores: e._orderInfo?.crores || extractAmount(e.title),
-    receivedAt: e.receivedAt,
-    time: e.time
-  }));
+  })
+    .sort((a, b) =>
+      (b._orderInfo?.crores || extractAmount(b.title)) -
+      (a._orderInfo?.crores || extractAmount(a.title))
+    )
+    .slice(0, 10)
+    .map(e => ({
+      company:    e.company,
+      crores:     e._orderInfo?.crores || extractAmount(e.title),
+      receivedAt: e.receivedAt,
+      time:       e.time
+    }));
 
+  // ── Opportunities — deduplicated ─────────────────────────────────────────
+  const seenOpp = new Set();
   const computedOpportunities = computedRadar
-    .filter(r => r.score >= 70)
+    .filter(r => {
+      if (r.score < 70) return false;
+      const key = `${r.company}||${r.type}`;
+      if (seenOpp.has(key)) return false;
+      seenOpp.add(key);
+      return true;
+    })
     .slice(0, 5)
     .map(r => ({
-      company: r.company,
-      score: r.score,
+      company:    r.company,
+      score:      r.score,
+      type:       r.type,
       receivedAt: r.receivedAt,
-      time: r.time
+      time:       r.time
     }));
 
   const filteredRadar = computedRadar.filter(r =>
@@ -466,7 +481,7 @@ export default function App() {
     r.type.toLowerCase().includes(radarQuery.toLowerCase())
   );
 
-  // ===== RADAR PANEL =====
+  // ── RADAR PANEL ──────────────────────────────────────────────────────────
   const RadarPanel = () => (
     <div className="panel radar-panel">
       <div className="panel-header">
@@ -483,34 +498,52 @@ export default function App() {
           value={radarQuery}
           onChange={e => setRadarQuery(e.target.value)}
         />
-        {radarQuery && <button className="clear-btn" onClick={() => setRadarQuery('')}>✕</button>}
+        {radarQuery && <button className="clear-btn" onClick={() => setRadarQuery("")}>✕</button>}
       </div>
       {filteredRadar.length === 0 ? (
         <div className="empty">No matches for "{radarQuery}"</div>
       ) : (
         filteredRadar.map((r, i) => (
           <div className="radar-card" key={i}>
+            {/* Row 1: Company + Exchange badge + Score */}
             <div className="rc-top">
               <span className="co-name">{r.company}</span>
-              <span className="score score-high">{r.score}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{
+                  fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
+                  background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
+                  color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
+                  border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
+                }}>{r.exchange}</span>
+                <span style={{
+                  background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
+                  color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
+                  border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
+                  borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
+                }}>{r.score}</span>
+              </div>
             </div>
+
+            {/* Row 2: Type + Order value + PDF */}
             <div className="tag-row">
               <span className={`type type-${r.type}`}>{r.type}</span>
               {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
               {r.pdfUrl && (
                 <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
-                  ▪ Filing
+                  📄 Filing
                 </a>
               )}
             </div>
-            <LiveAgo exchangeTime={r.time} />
+
+            {/* Row 3: Exchange time + server received time + delay */}
+            <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
           </div>
         ))
       )}
     </div>
   );
 
-  // ===== FEED PANEL =====
+  // ── FEED PANEL ───────────────────────────────────────────────────────────
   const FeedPanel = () => (
     <div className="panel feed-panel">
       <div className="panel-header">
@@ -530,11 +563,11 @@ export default function App() {
         filteredFeed.map((e, i) => {
           const cardClass = [
             "feed-card",
-            e.type?.includes("ORDER")   ? "fc-order"  :
-            e.type?.includes("MERGER")  ? "fc-merger" :
-            e.type?.includes("RESULT")  ? "fc-result" :
-            e.type?.includes("INSIDER") ? "fc-insider":
-            e.type?.includes("CAPEX")   ? "fc-capex"  : "fc-news"
+            e.type?.includes("ORDER")   ? "fc-order"   :
+            e.type?.includes("MERGER")  ? "fc-merger"  :
+            e.type?.includes("RESULT")  ? "fc-result"  :
+            e.type?.includes("INSIDER") ? "fc-insider" :
+            e.type?.includes("CAPEX")   ? "fc-capex"   : "fc-news"
           ].join(" ");
           const hotWords = ["crore","cr","lakh","order","contract","merger","acquisition","fraud","penalty","rs"];
           const pdfUrl = e.pdfUrl || e.attachment || e.url || null;
@@ -581,7 +614,8 @@ export default function App() {
                   );
                 })}
               </div>
-              <LiveAgo exchangeTime={e.time} />
+              {/* Exchange time + server received time with seconds */}
+              <LiveAgo exchangeTime={e.time} receivedAt={e.receivedAt} />
             </div>
           );
         })
@@ -589,7 +623,7 @@ export default function App() {
     </div>
   );
 
-  // ===== RIGHT / DATA PANEL =====
+  // ── RIGHT / DATA PANEL ───────────────────────────────────────────────────
   const RightPanel = () => (
     <div className="panel right-panel">
       <div className="section">
@@ -603,7 +637,7 @@ export default function App() {
                 (m.company || "").toLowerCase() === (o.company || "").toLowerCase()
               );
               const mcap = mcapEntry?.mcap || 0;
-              const pct = mcap > 0 ? ((o.crores / mcap) * 100).toFixed(1) : null;
+              const pct  = mcap > 0 ? ((o.crores / mcap) * 100).toFixed(1) : null;
               return (
                 <div className="mega-card-grid" key={i}>
                   <div className="mega-company">{o.company}</div>
@@ -627,7 +661,8 @@ export default function App() {
               <span className="co-name">{o.company}</span>
               <span className="opp-pct">{o.score}%</span>
             </div>
-            <div className="time-label">{formatTime(o.time) || "—"}</div>
+            <span className={`type type-${o.type}`} style={{ fontSize: "8px", marginTop: 2 }}>{o.type}</span>
+            <div className="time-label" style={{ marginTop: 3 }}>{formatTime(o.time) || "—"}</div>
           </div>
         ))}
       </div>
@@ -640,7 +675,9 @@ export default function App() {
           <div className="sec-card" key={i}>
             <div className="sec-row">
               <span className="sec-name">{s.sector}</span>
-              <span className="sec-val">₹{s.totalValue}Cr</span>
+              <span className="sec-val">
+                {s.totalValue ? `₹${s.totalValue}Cr` : s.count ? `${s.count} filing${s.count > 1 ? "s" : ""}` : "—"}
+              </span>
             </div>
           </div>
         ))}
@@ -664,16 +701,16 @@ export default function App() {
     </div>
   );
 
-  // ===== INTELLIGENCE PANEL =====
+  // ── INTELLIGENCE PANEL ───────────────────────────────────────────────────
   const IntelPanel = () => (
     <div className="panel intelligence-panel">
       <div className="section">
-      </div>
-      <div className="section">
         <div className="section-divider">🔔 Alerts</div>
-        {(bseEvents || []).slice(0, 5).map((e, i) => (
+        {computedRadar.slice(0, 5).map((e, i) => (
           <div key={i} className="mini-card">
-            {e.company} → {e.type || "NEWS"}
+            <span style={{ color: "#d8eeff" }}>{e.company}</span>
+            <span style={{ color: "#4a7090" }}> → </span>
+            <span className={`type type-${e.type}`} style={{ fontSize: "8px", padding: "1px 4px" }}>{e.type}</span>
           </div>
         ))}
       </div>
@@ -681,6 +718,8 @@ export default function App() {
         <div className="section-divider">⚡ Pulse</div>
         <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
         <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>BSE Events: {bseEvents.length}</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>NSE Events: {nseEvents.length}</div>
       </div>
     </div>
   );
@@ -695,10 +734,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* TICKER BAR — spans full width below header */}
       <TickerBar indices={marketIndices} assets={cryptoAssets} />
 
-      {/* DESKTOP: All 4 panels in grid. MOBILE: hidden, controlled by mobilePanelTab */}
       <div className="layout desktop-layout">
         <RadarPanel />
         <FeedPanel />
@@ -706,7 +743,6 @@ export default function App() {
         <IntelPanel />
       </div>
 
-      {/* MOBILE ONLY: tab-switched single panel view */}
       <div className="mobile-layout">
         <div className="mobile-tab-bar">
           {MOBILE_TABS.map(t => (
