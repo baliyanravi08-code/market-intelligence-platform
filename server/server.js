@@ -7,6 +7,7 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const path = require("path");
+const fs = require("fs");
 const axios = require("axios");
 const cors = require("cors");
 
@@ -56,6 +57,21 @@ app.get("/api/events", (req, res) => {
   }
 });
 
+// ── NEW: Expose marketCapDB.json to frontend ──
+app.get("/api/mcap", (req, res) => {
+  try {
+    const mcapPath = path.join(__dirname, "data/marketCapDB.json");
+    if (!fs.existsSync(mcapPath)) {
+      return res.json([]);
+    }
+    const data = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
+    res.json(Array.isArray(data) ? data : []);
+  } catch (e) {
+    console.log("❌ MCap load failed:", e.message);
+    res.json([]);
+  }
+});
+
 app.get("/api/company/:code", async (req, res) => {
   try {
     const code   = req.params.code;
@@ -77,6 +93,7 @@ app.get("/api/company/:code", async (req, res) => {
     res.json({ profile: null, financials: null, shareholding: null, recentFilings: [] });
   }
 });
+
 app.get("/api/market", async (req, res) => {
   const symbols = ["^NSEI", "^BSESN", "^NSEBANK"];
   const names   = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
@@ -112,6 +129,7 @@ app.get("/api/market", async (req, res) => {
     res.json(names.map(name => ({ name, price: "—", change: "—", pct: "—", up: null })));
   }
 });
+
 app.get("/api/search/:query", async (req, res) => {
   try {
     const q = req.params.query;

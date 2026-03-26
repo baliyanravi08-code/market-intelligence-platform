@@ -127,7 +127,6 @@ const ORDER_POSITIVE = [
   "letter of award", "loa from", "loa for",
   "letter of acceptance",
   "purchase order", "export order", "bulk order",
-  // ── Intimation/Receipt style (small cap power sector) ──
   "intimation of receipt of order",
   "intimation of receipt",
   "receipt of purchase order",
@@ -165,12 +164,13 @@ const ORDER_POSITIVE = [
   "long term supply", "thermal power supply",
   "power purchase agreement", "ppa signed",
   "mw thermal", "mw solar", "mw wind",
-  "mw power", "gw power", "mw capacity","receipt of order", "intimation of receipt",
-"work order from", "secures work order",
-"order from peda", "order from ntpc",
-"rooftop solar", "solar street light",
-"opgw cable", "solar pv",
-"supply order from", "supply and installation order",
+  "mw power", "gw power", "mw capacity",
+  "receipt of order", "intimation of receipt",
+  "work order from", "secures work order",
+  "order from peda", "order from ntpc",
+  "rooftop solar", "solar street light",
+  "opgw cable", "solar pv",
+  "supply order from", "supply and installation order",
 ];
 
 const ORDER_NEGATIVE = [
@@ -396,6 +396,49 @@ function scoreFromAbsoluteSize(crores) {
   else                      return 32;
 }
 
+// ── FIXED: Enhanced order value extraction ──
+// Catches Indian number formats that orderDetector misses
+function extractOrderValue(title) {
+  if (!title) return null;
+
+  // First try orderDetector
+  try {
+    const detected = orderDetector(title);
+    if (detected?.crores && detected.crores > 0) return detected;
+  } catch(e) {}
+
+  const t = title;
+  const patterns = [
+    // Rs. 123.45 Crore/Crores
+    { re: /rs\.?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|crores|cr)\b/i,  isLakh: false },
+    // ₹123 Cr
+    { re: /₹\s*([\d,]+(?:\.\d+)?)\s*(?:crore|crores|cr)\b/i,      isLakh: false },
+    // INR 123 Cr
+    { re: /inr\s*([\d,]+(?:\.\d+)?)\s*(?:crore|crores|cr)\b/i,    isLakh: false },
+    // 123 Crore (number directly before crore)
+    { re: /\b([\d,]+(?:\.\d+)?)\s*(?:crore|crores)\b/i,           isLakh: false },
+    // Rs. 123 Lakh → convert to crores
+    { re: /rs\.?\s*([\d,]+(?:\.\d+)?)\s*(?:lakh|lakhs|lac)\b/i,   isLakh: true  },
+    // ₹123 Lakh
+    { re: /₹\s*([\d,]+(?:\.\d+)?)\s*(?:lakh|lakhs|lac)\b/i,       isLakh: true  },
+    // 123 lakh
+    { re: /\b([\d,]+(?:\.\d+)?)\s*(?:lakh|lakhs|lac)\b/i,         isLakh: true  },
+  ];
+
+  for (const { re, isLakh } of patterns) {
+    const match = t.match(re);
+    if (match) {
+      const val = parseFloat(match[1].replace(/,/g, ""));
+      if (!isNaN(val) && val > 0) {
+        const crores = isLakh ? val / 100 : val;
+        return { crores, years: null, periodLabel: null, annualCrores: null, mw: null, isMWBased: false };
+      }
+    }
+  }
+
+  return null;
+}
+
 async function analyzeAnnouncement(data) {
   if (!data || !data.title) return null;
 
@@ -412,10 +455,10 @@ async function analyzeAnnouncement(data) {
 
   // ── STEP 2: ORDER ALERT ──
   if (
-  matchesAny(text, ORDER_POSITIVE) &&
-  !matchesAny(text, ORDER_NEGATIVE) &&
-  !isNegativeContext(text)
-) {
+    matchesAny(text, ORDER_POSITIVE) &&
+    !matchesAny(text, ORDER_NEGATIVE) &&
+    !isNegativeContext(text)
+  ) {
     type = "ORDER_ALERT";
 
     let keywordCrores = null;
@@ -423,11 +466,12 @@ async function analyzeAnnouncement(data) {
       if (text.includes(k.pattern)) { keywordCrores = k.crores; break; }
     }
 
-    const orderInfo = orderDetector(data.title);
-    const crores    = keywordCrores || (orderInfo?.crores) || null;
+    // ── FIXED: Use enhanced extraction that handles Indian formats ──
+    const orderInfo = extractOrderValue(data.title);
+    const crores    = keywordCrores || orderInfo?.crores || null;
 
     if (crores) {
-      // ── Fetch live MCap, fall back to static ──
+      // Fetch live MCap, fall back to static
       const mcap = (await getLiveMcap(data.code)) || getMarketCap(data.code) || null;
 
       if (mcap && mcap > 0) {
@@ -492,5 +536,5 @@ async function analyzeAnnouncement(data) {
 }
 
 module.exports = analyzeAnnouncement;
-module.exports.scoreFromMcapRatio = scoreFromMcapRatio;
+module.exports.scoreFromMcapRatio    = scoreFromMcapRatio;
 module.exports.scoreFromAbsoluteSize = scoreFromAbsoluteSize;

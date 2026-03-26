@@ -157,6 +157,7 @@ connectDB();
 module.exports = {
   connectDB,
   saveResult,
+  saveEvent: saveResult,   // ← FIXED: nseListener calls saveEvent — was undefined, NSE events never saved
   getResults,
   getEvents,
   getRetentionHours,
