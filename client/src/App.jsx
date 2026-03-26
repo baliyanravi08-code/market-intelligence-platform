@@ -49,9 +49,15 @@ function formatTime(raw) {
 function toAgo(ts) {
   if (!ts) return "just now";
   const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
+  if (s < 0)    return "just now";
+  if (s < 60)   return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60)   return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  if (h < 24)   return rm > 0 ? `${h}h ${rm}m ago` : `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? "yesterday" : `${d}d ago`;
 }
 
 function extractAmount(text) {
@@ -60,70 +66,20 @@ function extractAmount(text) {
 }
 
 // --- Components ---
-function LiveAgo({ ts, exchangeTime }) {
-  const lockedTs = useRef(ts);
-  const [ago, setAgo]   = useState("");
-  const [exact, setExact] = useState("");
-
-  function compute(t) {
-    if (!t) return { ago: "just now", exact: "" };
-    const s = Math.floor((Date.now() - t) / 1000);
-    let agoStr;
-    if (s < 60)        agoStr = `${s}s ago`;
-    else if (s < 3600) agoStr = `${Math.floor(s/60)}m ${s%60}s ago`;
-    else {
-      const h = Math.floor(s/3600);
-      const m = Math.floor((s%3600)/60);
-      agoStr = `${h}h ${m}m ago`;
-    }
-    // Format exchange filing time
-    let exactStr = "";
-    if (exchangeTime) {
-      try {
-        const d = new Date(exchangeTime);
-        if (!isNaN(d)) {
-          exactStr = d.toLocaleString("en-IN", {
-            timeZone: "Asia/Kolkata",
-            day: "2-digit", month: "short",
-            hour: "2-digit", minute: "2-digit",
-            hour12: true
-          });
-        }
-      } catch {}
-    }
-    return { ago: agoStr, exact: exactStr };
-  }
-
+function LiveAgo({ receivedAt, exchangeTime }) {
+  const [ago, setAgo] = useState(toAgo(receivedAt));
   useEffect(() => {
-    // Lock timestamp — don't reset on re-render
-    if (Math.abs((ts || 0) - (lockedTs.current || 0)) > 10000) {
-      lockedTs.current = ts;
-    }
-    const update = () => {
-      const r = compute(lockedTs.current);
-      setAgo(r.ago);
-      setExact(r.exact);
-    };
-    update();
-    const t = setInterval(update, 1000);
+    const t = setInterval(() => setAgo(toAgo(receivedAt)), 1000);
     return () => clearInterval(t);
-  }, [ts, exchangeTime]);
-
+  }, [receivedAt]);
   return (
-    <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap", marginTop: "4px" }}>
-      <span style={{
-        fontFamily: "IBM Plex Mono, monospace", fontSize: "10px",
-        fontWeight: 700, color: "#cc9900"
-      }}>{ago}</span>
-      {exact && (
-        <span style={{
-          fontFamily: "IBM Plex Mono, monospace", fontSize: "9px",
-          color: "#1a6070"
-        }}>{exact}</span>
-      )}
+    <div className="time-row">
+      <span className="ago">{ago}</span>
+      {exchangeTime && <span className="time-label">{formatTime(exchangeTime)}</span>}
     </div>
   );
 }
+
 function Tag({ type, crores }) {
   const c = SIGNAL_COLOR[type] || { bg: "#0d3060", fg: "#fff" };
   return (
@@ -323,8 +279,8 @@ export default function App() {
       fetch("/api/events")
         .then(res => res.json())
         .then(data => {
-        setBseEvents((data.bse || []).map(e => ({ ...e, receivedAt: e.savedAt || e.receivedAt || Date.now() })));
-        setNseEvents((data.nse || []).map(e => ({ ...e, receivedAt: e.savedAt || e.receivedAt || Date.now() })));
+          setBseEvents(data.bse || []);
+          setNseEvents(data.nse || []);
           setOrderBook(data.orderBook || []);
           setSector(data.sectors || []);
         })
@@ -530,7 +486,7 @@ export default function App() {
                 </a>
               )}
             </div>
-            <LiveAgo ts={r.receivedAt || r.savedAt} exchangeTime={r.time} />
+            <div className="compact-time">{formatTime(r.time)}</div>
           </div>
         ))
       )}
@@ -589,7 +545,7 @@ export default function App() {
                   );
                 })}
               </div>
-             <LiveAgo ts={e.receivedAt || e.savedAt} exchangeTime={e.time} />
+              <div className="fc-time">{formatTime(e.time) || "—"}</div>
             </div>
           );
         })
@@ -617,7 +573,7 @@ export default function App() {
                   <div className="mega-company">{o.company}</div>
                   <div className="mega-val">₹{o.crores}Cr</div>
                   {pct && <div className="mega-pct">{pct}% of MCap</div>}
-                  <LiveAgo ts={o.receivedAt} exchangeTime={o.time} />
+                  <div className="mega-time">{formatTime(o.time) || "—"}</div>
                 </div>
               );
             })}
