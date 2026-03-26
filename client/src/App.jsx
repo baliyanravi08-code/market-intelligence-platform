@@ -43,10 +43,18 @@ function formatTime(raw) {
   } catch { return String(raw).substring(0, 16); }
 }
 
-function toAgo(ts) {
-  if (!ts) return "just now";
-  // Auto-detect: if ts looks like seconds (< 2e10), convert to ms
-  const ms = ts < 2e10 ? ts * 1000 : ts;
+function parseExchangeTime(raw) {
+  if (!raw) return null;
+  // If it's already a number
+  if (typeof raw === "number") return raw < 2e10 ? raw * 1000 : raw;
+  // Try direct Date parse (handles ISO strings)
+  const d = new Date(raw);
+  if (!isNaN(d.getTime())) return d.getTime();
+  return null;
+}
+
+function toAgo(ms) {
+  if (!ms) return "—";
   const s = Math.floor((Date.now() - ms) / 1000);
   if (s < 0)   return "just now";
   if (s < 60)  return `${s}s ago`;
@@ -65,28 +73,18 @@ function extractAmount(text) {
 }
 
 // --- Components ---
-function LiveAgo({ receivedAt, exchangeTime }) {
-  // Use the best available timestamp — savedAt comes as seconds from backend
-  const getBestTs = () => {
-    const ts = receivedAt;
-    if (!ts) return null;
-    // Auto-detect seconds vs ms: seconds timestamps are < 2e10
-    return ts < 2e10 ? ts * 1000 : ts;
-  };
+function LiveAgo({ exchangeTime }) {
+  const ms = parseExchangeTime(exchangeTime);
 
-  const [ago, setAgo] = useState(() => {
-    const ms = getBestTs();
-    return ms ? toAgo(ms) : "—";
-  });
+  const [ago, setAgo] = useState(() => toAgo(ms));
 
   useEffect(() => {
-    const ms = getBestTs();
     if (!ms) { setAgo("—"); return; }
     const tick = () => setAgo(toAgo(ms));
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
-  }, [receivedAt]);
+  }, [ms]);
 
   return (
     <div className="time-row">
@@ -505,7 +503,7 @@ export default function App() {
                 </a>
               )}
             </div>
-            <LiveAgo receivedAt={r.savedAt || r.receivedAt} exchangeTime={r.time} />
+            <LiveAgo exchangeTime={r.time} />
           </div>
         ))
       )}
@@ -583,7 +581,7 @@ export default function App() {
                   );
                 })}
               </div>
-              <LiveAgo receivedAt={e.savedAt || e.receivedAt} exchangeTime={e.time} />
+              <LiveAgo exchangeTime={e.time} />
             </div>
           );
         })
