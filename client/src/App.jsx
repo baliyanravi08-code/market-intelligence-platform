@@ -486,7 +486,7 @@ export default function App() {
                 </a>
               )}
             </div>
-            <div className="compact-time">{formatTime(r.time)}</div>
+            <LiveAgo receivedAt={r.receivedAt} exchangeTime={r.time} />
           </div>
         ))
       )}
@@ -545,7 +545,9 @@ export default function App() {
                   );
                 })}
               </div>
-              <div className="fc-time">{formatTime(e.time) || "—"}</div>
+              <div className="fc-time">
+                <LiveAgo receivedAt={e.receivedAt} exchangeTime={e.time} />
+              </div>
             </div>
           );
         })
