@@ -35,13 +35,51 @@ app.use(express.urlencoded({ extended: false }));
 const clientPath = path.join(__dirname, "../client/dist");
 app.use(express.static(clientPath));
 
-// ── Upstox token store (in-memory) ──────────────────────────────────────────
-let upstoxAccessToken = null;
-let upstoxTokenExpiry = null;
-
+// ── Upstox token store — persisted to disk so restarts don't wipe it ────────
 const UPSTOX_API_KEY      = process.env.UPSTOX_API_KEY;
 const UPSTOX_API_SECRET   = process.env.UPSTOX_API_SECRET;
 const UPSTOX_REDIRECT_URI = process.env.UPSTOX_REDIRECT_URI;
+
+const TOKEN_FILE = path.join(__dirname, "data/upstox_token.json");
+
+let upstoxAccessToken = null;
+let upstoxTokenExpiry = null;
+
+function loadToken() {
+  try {
+    if (fs.existsSync(TOKEN_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8"));
+      if (saved.token && saved.expiry && Date.now() < saved.expiry) {
+        upstoxAccessToken = saved.token;
+        upstoxTokenExpiry = saved.expiry;
+        console.log("Upstox token loaded from disk, expires:", new Date(saved.expiry).toISOString());
+      } else {
+        console.log("Upstox saved token is expired — reconnect via /auth/upstox");
+      }
+    }
+  } catch (e) {
+    console.warn("Could not load Upstox token:", e.message);
+  }
+}
+
+function saveToken(token, expiry) {
+  try {
+    const dir = path.dirname(TOKEN_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token, expiry }), "utf8");
+    console.log("Upstox token saved to disk");
+  } catch (e) {
+    console.warn("Could not save Upstox token:", e.message);
+  }
+}
+
+function clearToken() {
+  upstoxAccessToken = null;
+  upstoxTokenExpiry = null;
+  try { if (fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE); } catch (e) {}
+}
+
+loadToken(); // runs once at startup — restores token if still valid
 
 const UPSTOX_INSTRUMENTS = {
   "NIFTY 50":   "NSE_INDEX|Nifty 50",
@@ -84,6 +122,7 @@ app.get("/auth/upstox/callback", async (req, res) => {
 
     upstoxAccessToken = response.data.access_token;
     upstoxTokenExpiry = Date.now() + (response.data.expires_in || 86400) * 1000;
+    saveToken(upstoxAccessToken, upstoxTokenExpiry);
     console.log("Upstox token saved, expires:", new Date(upstoxTokenExpiry).toISOString());
 
     res.send(
@@ -161,8 +200,7 @@ app.get("/api/market", async (req, res) => {
   } catch (e) {
     console.error("Upstox market fetch failed:", e.message);
     if (e.response?.status === 401) {
-      upstoxAccessToken = null;
-      upstoxTokenExpiry = null;
+      clearToken();
       console.log("Upstox token expired — visit /auth/upstox to reconnect");
       return res.json([...blank, { _source: "disconnected" }]);
     }

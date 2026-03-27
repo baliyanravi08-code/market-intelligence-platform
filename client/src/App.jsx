@@ -139,7 +139,6 @@ function MarketStatus() {
   );
 }
 
-// ── Badge: upstox=green | connecting=blue | disconnected=amber | error=red ──
 function DataSourceBadge({ source }) {
   if (source === "upstox") {
     return (
@@ -163,7 +162,6 @@ function DataSourceBadge({ source }) {
       </span>
     );
   }
-  // disconnected or error — both are clickable to open auth
   const isError = source === "error";
   return (
     <span
@@ -280,7 +278,6 @@ export default function App() {
     { name: "SENSEX",     price: "—", change: "—", pct: "—", up: null },
     { name: "BANK NIFTY", price: "—", change: "—", pct: "—", up: null },
   ]);
-  // "connecting" | "upstox" | "disconnected" | "error"
   const [tickerSource,   setTickerSource]   = useState("connecting");
   const [tickerLastOk,   setTickerLastOk]   = useState(null);
   const [tickerStale,    setTickerStale]    = useState(false);
@@ -303,8 +300,90 @@ export default function App() {
     return () => clearInterval(t);
   }, [tickerLastOk]);
 
-  // ── Fetch BTC / PI / Gold / Silver ───────────────────────────────────────
-  // Note: Silver still uses Yahoo Finance (SI=F) — Upstox doesn't carry commodities
+  // ── BTC tick-by-tick via Binance WebSocket ────────────────────────────────
+  // Uses wss://stream.binance.com — free, no API key, ~100ms updates.
+  // btc24hRef holds the 24h change % fetched once on mount and refreshed hourly.
+  // On WS close (network blip etc) it auto-reconnects after 2s.
+  // On unmount, cancelled=true stops reconnect loop.
+  const btcWsRef    = useRef(null);
+  const btcReconRef = useRef(null);
+  const btc24hRef   = useRef(0); // holds latest 24h change %, updated hourly
+
+  useEffect(() => {
+    let cancelled = false;
+
+    // Fetch 24h stats once (price open 24h ago) so we can show change %
+    const fetch24h = async () => {
+      try {
+        const r = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
+        const d = await r.json();
+        btc24hRef.current = parseFloat(d.priceChangePercent) || 0;
+      } catch (e) {
+        console.warn("BTC 24h fetch failed:", e.message);
+      }
+    };
+
+    fetch24h();
+    const hourly = setInterval(fetch24h, 3600000); // refresh 24h change every hour
+
+    const connectWS = () => {
+      if (cancelled) return;
+      if (btcWsRef.current) {
+        try { btcWsRef.current.close(); } catch (e) {}
+      }
+
+      const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@aggTrade");
+      btcWsRef.current = ws;
+
+      ws.onmessage = (evt) => {
+        if (cancelled) return;
+        try {
+          const msg   = JSON.parse(evt.data);
+          const price = parseFloat(msg.p); // aggTrade price field
+          if (!price || isNaN(price)) return;
+
+          const change24h = btc24hRef.current;
+          const formatted = "$" + price.toLocaleString("en-US", { maximumFractionDigits: 0 });
+
+          // Update only the BTC entry in cryptoAssets, leave PI/GOLD/SILVER untouched
+          setCryptoAssets(prev => {
+            const next = [...prev];
+            const idx  = next.findIndex(a => a.name === "BTC");
+            const entry = { name: "BTC", icon: "₿", type: "crypto", price: formatted, change24h };
+            if (idx >= 0) next[idx] = entry;
+            else next.unshift(entry); // first load — prepend
+            return next;
+          });
+        } catch (e) {}
+      };
+
+      ws.onerror = (e) => {
+        console.warn("BTC WebSocket error:", e.message || e);
+      };
+
+      ws.onclose = () => {
+        if (cancelled) return;
+        console.log("BTC WebSocket closed — reconnecting in 2s");
+        btcReconRef.current = setTimeout(connectWS, 2000);
+      };
+    };
+
+    connectWS();
+
+    return () => {
+      cancelled = true;
+      clearInterval(hourly);
+      if (btcReconRef.current) clearTimeout(btcReconRef.current);
+      if (btcWsRef.current) {
+        btcWsRef.current.onclose = null; // prevent reconnect loop on intentional unmount
+        try { btcWsRef.current.close(); } catch (e) {}
+      }
+    };
+  }, []);
+
+  // ── Fetch PI / GOLD / SILVER every 60s (no WS available for these) ───────
+  // BTC is intentionally excluded here — handled above via WebSocket.
+  // Silver uses Yahoo Finance (SI=F) — only public source for silver futures.
   useEffect(() => {
     const fmt = (n, prefix = "$") => {
       if (!n && n !== 0) return "—";
@@ -313,34 +392,31 @@ export default function App() {
       return prefix + n.toFixed(4);
     };
 
-    const fetchAssets = async () => {
-      const assets = [];
+    const fetchOtherAssets = async () => {
+      const updates = {};
+
+      // PI + GOLD from CoinGecko
       try {
         const cgRes = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
+          "https://api.coingecko.com/api/v3/simple/price?ids=pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
           { headers: { "Accept": "application/json" } }
         );
         const cg = await cgRes.json();
-        if (cg?.bitcoin) assets.push({
-          name: "BTC", icon: "₿", type: "crypto",
-          price: fmt(cg.bitcoin.usd), change24h: cg.bitcoin.usd_24h_change || 0
-        });
-        if (cg?.["pi-network"]) assets.push({
+        if (cg?.["pi-network"]) updates["PI"] = {
           name: "PI", icon: "π", type: "crypto",
-          price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0
-        });
-        if (cg?.["tether-gold"]) assets.push({
+          price: fmt(cg["pi-network"].usd),
+          change24h: cg["pi-network"].usd_24h_change || 0
+        };
+        if (cg?.["tether-gold"]) updates["GOLD"] = {
           name: "GOLD", icon: "Au", type: "gold",
-          price: fmt(cg["tether-gold"].usd), change24h: cg["tether-gold"].usd_24h_change || 0
-        });
+          price: fmt(cg["tether-gold"].usd),
+          change24h: cg["tether-gold"].usd_24h_change || 0
+        };
       } catch (e) {
         console.error("CoinGecko error:", e);
-        assets.push({ name: "BTC",  icon: "₿",  type: "crypto", price: "—", change24h: 0 });
-        assets.push({ name: "PI",   icon: "π",  type: "crypto", price: "—", change24h: 0 });
-        assets.push({ name: "GOLD", icon: "Au", type: "gold",   price: "—", change24h: 0 });
       }
 
-      // Silver — Yahoo Finance only source for this commodity
+      // Silver via Yahoo Finance — kept because Upstox/Binance don't carry commodities
       let silverPrice = 33.50, silverChange = 0;
       try {
         const r = await fetch(
@@ -357,12 +433,28 @@ export default function App() {
       } catch (e) {
         console.warn("Silver fetch failed, using fallback:", e.message);
       }
-      assets.push({ name: "SILVER", icon: "Ag", type: "silver", price: fmt(silverPrice), change24h: silverChange });
-      setCryptoAssets(assets);
+      updates["SILVER"] = {
+        name: "SILVER", icon: "Ag", type: "silver",
+        price: fmt(silverPrice), change24h: silverChange
+      };
+
+      // Merge updates into cryptoAssets — preserve BTC which WebSocket owns
+      setCryptoAssets(prev => {
+        // Build a map from existing assets
+        const map = {};
+        prev.forEach(a => { map[a.name] = a; });
+        // Apply only PI / GOLD / SILVER updates
+        Object.assign(map, updates);
+        // Return in stable display order: BTC, PI, GOLD, SILVER
+        const order = ["BTC", "PI", "GOLD", "SILVER"];
+        return order.map(n => map[n]).filter(Boolean);
+      });
     };
 
-    fetchAssets();
-    const interval = setInterval(fetchAssets, 60000);
+    // Seed immediately so PI/GOLD/SILVER show on first load
+    // (BTC will appear once WS sends its first message, usually <1s)
+    fetchOtherAssets();
+    const interval = setInterval(fetchOtherAssets, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -386,10 +478,6 @@ export default function App() {
   }, []);
 
   // ── Market indices — Upstox only, self-scheduling retry loop ─────────────
-  // Success (upstox)      → schedule next poll in 30s, reset backoff
-  // Disconnected / error  → retry with backoff: 3s→6s→12s→24s→30s cap
-  // Network error         → same backoff, sets source to "error"
-  // AbortController       → prevents stale responses after unmount
   const retryRef   = useRef(null);
   const retryDelay = useRef(3000);
   const abortRef   = useRef(null);
@@ -419,9 +507,8 @@ export default function App() {
             setTickerLastOk(Date.now());
             setTickerStale(false);
             retryDelay.current = 3000;
-            retryRef.current = setTimeout(doFetch, 30000); // normal 30s poll
+            retryRef.current = setTimeout(doFetch, 30000);
           } else {
-            // disconnected or error — keep retrying fast until connected
             console.log(`Upstox ${src} — retry in ${retryDelay.current / 1000}s`);
             retryRef.current = setTimeout(doFetch, retryDelay.current);
             retryDelay.current = Math.min(retryDelay.current * 2, 30000);
