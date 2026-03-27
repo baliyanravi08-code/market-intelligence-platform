@@ -25,7 +25,13 @@ const NOISE_WORDS = [
   "change in director", "change of address", "regulation 30", "compliance officer",
   "closure of board meeting", "trading window closure", "sebi pit",
   "unpaid dividend", "investor grievance", "loss of share certificate",
-  "closure of trading window", "intimation for closure"
+  "closure of trading window", "intimation for closure",
+  "reg 30", "reg. 30", "lodr", "disclosure of material",
+  "find the attached", "find attached", "enclosed herewith",
+  "take this on record", "take on record", "intimation is enclosed",
+  "please find", "kindly find", "outcome of the meeting",
+  "outcome of board meeting", "intimation under regulation",
+  "pursuant to regulation", "intimation pursuant"
 ];
 
 // --- Utilities ---
@@ -305,6 +311,7 @@ export default function App() {
           setNseEvents(data.nse       || []);
           setOrderBook(data.orderBook || []);
           setSector(data.sectors      || []);
+          window._mcapDb = data.mcapDb || [];
         })
         .catch(err => console.log("API error:", err));
     };
