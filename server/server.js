@@ -49,6 +49,8 @@ const UPSTOX_INSTRUMENTS = {
   "BANK NIFTY": "NSE_INDEX|Nifty Bank"
 };
 
+const INDEX_NAMES = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
+
 // ── Step 1: Redirect to Upstox login ────────────────────────────────────────
 app.get("/auth/upstox", (req, res) => {
   if (!UPSTOX_API_KEY || !UPSTOX_REDIRECT_URI) {
@@ -108,7 +110,7 @@ app.get("/auth/upstox/status", (req, res) => {
   });
 });
 
-// ── Fetch from Upstox ────────────────────────────────────────────────────────
+// ── Fetch live data from Upstox ──────────────────────────────────────────────
 async function fetchUpstoxMarket() {
   const keys = Object.values(UPSTOX_INSTRUMENTS).join(",");
   const res = await axios.get(
@@ -118,10 +120,10 @@ async function fetchUpstoxMarket() {
       timeout: 8000
     }
   );
-  const data  = res.data?.data || {};
-  const names = Object.keys(UPSTOX_INSTRUMENTS);
-  return names.map(name => {
+  const data = res.data?.data || {};
+  return INDEX_NAMES.map(name => {
     const key   = UPSTOX_INSTRUMENTS[name];
+    // Upstox sometimes returns key with : instead of |
     const quote = data[key] || data[key.replace("|", ":")] || null;
     if (!quote) return { name, price: "—", change: "—", pct: "—", up: null };
     const price     = quote.last_price || 0;
@@ -139,61 +141,32 @@ async function fetchUpstoxMarket() {
   });
 }
 
-// ── Fetch from Yahoo Finance ─────────────────────────────────────────────────
-async function fetchYahooMarket() {
-  const symbols = ["^NSEI", "^BSESN", "^NSEBANK"];
-  const names   = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
-  const results = await Promise.all(symbols.map(sym =>
-    axios.get("https://query1.finance.yahoo.com/v8/finance/chart/" + sym + "?interval=1d&range=1d", {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept": "application/json" },
-      timeout: 8000
-    }).then(r => r.data)
-  ));
-  return results.map((d, i) => {
-    const meta = d?.chart?.result?.[0]?.meta;
-    if (!meta) return { name: names[i], price: "—", change: "—", pct: "—", up: null };
-    const price = meta.regularMarketPrice;
-    const prev  = meta.previousClose || meta.chartPreviousClose;
-    const diff  = price - prev;
-    const pct   = (diff / prev) * 100;
-    const up    = diff >= 0;
-    return {
-      name:   names[i],
-      price:  price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
-      change: (up ? "+" : "") + diff.toFixed(2),
-      pct:    (up ? "+" : "") + pct.toFixed(2) + "%",
-      up
-    };
-  });
-}
-
-// ── /api/market — Upstox first, Yahoo fallback ───────────────────────────────
+// ── /api/market — Upstox only, no Yahoo fallback ─────────────────────────────
+// Always returns array of 3 index objects + a { _source } sentinel at the end.
+// _source values: "upstox" | "disconnected" | "error"
+// Client reads _source to show correct badge and retry behaviour.
 app.get("/api/market", async (req, res) => {
-  const names = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
+  const blank = INDEX_NAMES.map(name => ({ name, price: "—", change: "—", pct: "—", up: null }));
   const upstoxReady = upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0);
 
-  if (upstoxReady) {
-    try {
-      const data = await fetchUpstoxMarket();
-      console.log("Market: Upstox live");
-      return res.json(data);
-    } catch(e) {
-      console.warn("Upstox failed, falling back:", e.message);
-      if (e.response?.status === 401) {
-        upstoxAccessToken = null;
-        upstoxTokenExpiry = null;
-        console.log("Upstox token expired — visit /auth/upstox to reconnect");
-      }
-    }
+  if (!upstoxReady) {
+    console.log("Market: Upstox not connected — visit /auth/upstox");
+    return res.json([...blank, { _source: "disconnected" }]);
   }
 
   try {
-    const data = await fetchYahooMarket();
-    console.log("Market: Yahoo Finance fallback");
-    return res.json(data);
-  } catch(e) {
-    console.error("All market feeds failed:", e.message);
-    return res.json(names.map(name => ({ name, price: "—", change: "—", pct: "—", up: null })));
+    const data = await fetchUpstoxMarket();
+    console.log("Market: Upstox live");
+    return res.json([...data, { _source: "upstox" }]);
+  } catch (e) {
+    console.error("Upstox market fetch failed:", e.message);
+    if (e.response?.status === 401) {
+      upstoxAccessToken = null;
+      upstoxTokenExpiry = null;
+      console.log("Upstox token expired — visit /auth/upstox to reconnect");
+      return res.json([...blank, { _source: "disconnected" }]);
+    }
+    return res.json([...blank, { _source: "error" }]);
   }
 });
 
@@ -210,17 +183,34 @@ app.get("/api/events", (req, res) => {
   try {
     const { getStored } = require("./coordinator");
     const stored = getStored();
+
+    // Load mcapDb so App.jsx can compute % of MCap for mega orders
+    let mcapDb = [];
+    try {
+      const mcapPath = path.join(__dirname, "data/marketCapDB.json");
+      if (fs.existsSync(mcapPath)) {
+        mcapDb = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
+        if (!Array.isArray(mcapDb)) mcapDb = [];
+      }
+    } catch (e) {
+      console.warn("mcapDb load failed:", e.message);
+    }
+
     res.json({
-      bse:         getEvents("bse") || [],
-      nse:         getEvents("nse") || [],
-      orderBook:   stored.orderBook || [],
-      sectors:     stored.sectors   || [],
+      bse:         getEvents("bse")  || [],
+      nse:         getEvents("nse")  || [],
+      orderBook:   stored.orderBook  || [],
+      sectors:     stored.sectors    || [],
       megaOrders:  stored.megaOrders || [],
+      mcapDb,                           // ← was missing before, App.jsx needs this
       windowHours: getRetentionHours(),
       windowLabel: getWindowLabel()
     });
   } catch (e) {
-    res.json({ bse: [], nse: [], orderBook: [], sectors: [], megaOrders: [], windowHours: 24, windowLabel: "24h" });
+    res.json({
+      bse: [], nse: [], orderBook: [], sectors: [],
+      megaOrders: [], mcapDb: [], windowHours: 24, windowLabel: "24h"
+    });
   }
 });
 
@@ -269,23 +259,25 @@ app.get("/api/search/:query", async (req, res) => {
 
 async function searchBSE(q) {
   const BSE_HEADERS = {
-    "Referer": "https://www.bseindia.com", "Origin": "https://www.bseindia.com",
+    "Referer":    "https://www.bseindia.com",
+    "Origin":     "https://www.bseindia.com",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json, text/plain, */*"
+    "Accept":     "application/json, text/plain, */*"
   };
   try {
     const r = await axios.get(
-      "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&shname=" + encodeURIComponent(q) + "&industry=&segment=Equity&status=Active",
+      "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&shname=" +
+        encodeURIComponent(q) + "&industry=&segment=Equity&status=Active",
       { headers: BSE_HEADERS, timeout: 8000 }
     );
     const rows = r.data?.Table || r.data?.Table1 || r.data?.data || (Array.isArray(r.data) ? r.data : []);
     if (rows.length > 0) return rows.slice(0, 10).map(s => ({
-      code: s.SCRIP_CD || s.scripCd || s.Scrip_Cd,
-      name: s.Scrip_Name || s.LONG_NAME || s.CompanyName,
-      sector: s.SECTOR || s.sector || null,
+      code:      s.SCRIP_CD   || s.scripCd   || s.Scrip_Cd,
+      name:      s.Scrip_Name || s.LONG_NAME || s.CompanyName,
+      sector:    s.SECTOR     || s.sector    || null,
       nseSymbol: s.NSE_Symbol || s.NSESymbol || null,
     })).filter(s => s.code && s.name);
-  } catch(e) {}
+  } catch (e) {}
   try {
     const r = await axios.get(
       "https://api.bseindia.com/BseIndiaAPI/api/getScripSearchData/w?strSearch=" + encodeURIComponent(q),
@@ -293,12 +285,12 @@ async function searchBSE(q) {
     );
     const rows = r.data?.Table || r.data?.data || (Array.isArray(r.data) ? r.data : []);
     if (rows.length > 0) return rows.slice(0, 10).map(s => ({
-      code: s.SCRIP_CD || s.scripcode,
-      name: s.Scrip_Name || s.scripname || s.LONG_NAME,
-      sector: s.SECTOR || null,
-      nseSymbol: s.NSE_Symbol || s.symbol || null,
+      code:      s.SCRIP_CD   || s.scripcode,
+      name:      s.Scrip_Name || s.scripname || s.LONG_NAME,
+      sector:    s.SECTOR     || null,
+      nseSymbol: s.NSE_Symbol || s.symbol    || null,
     })).filter(s => s.code && s.name);
-  } catch(e) {}
+  } catch (e) {}
   return [];
 }
 
@@ -320,6 +312,6 @@ server.listen(PORT, () => {
   if (UPSTOX_API_KEY) {
     console.log("Upstox configured — visit /auth/upstox to connect");
   } else {
-    console.log("Upstox not configured — using Yahoo Finance fallback");
+    console.log("WARNING: UPSTOX_API_KEY not set — market ticker will show dashes until connected");
   }
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import "./App.css";
 
 const SIGNAL_COLOR = {
@@ -18,7 +18,6 @@ const SIGNAL_COLOR = {
 
 const FEED_FILTERS = ["ALL", "ORDER", "MERGER", "CAPEX", "RESULT", "INSIDER", ">50"];
 
-// Noise words — used in both radar and feed filters
 const NOISE_WORDS = [
   "trading window", "postal ballot", "scrutinizer", "voting result", "esg",
   "analyst meeting", "closure of trading", "book closure", "intimation of board meeting",
@@ -80,7 +79,6 @@ function extractAmount(text) {
 
 // --- Components ---
 
-// Live ticking ago timer + exchange time
 function LiveAgo({ exchangeTime, receivedAt }) {
   const exMs = parseExchangeTime(exchangeTime);
   const [agoEx,  setAgoEx]  = useState(() => toAgo(exMs));
@@ -131,19 +129,73 @@ function Tag({ type, crores }) {
 
 function MarketStatus() {
   return (
-    <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700, color: "#00ff9c", background: "#001a0a", border: "1px solid #00ff9c33", borderRadius: "3px", padding: "1px 6px" }}>
+    <span style={{
+      fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700,
+      color: "#00ff9c", background: "#001a0a",
+      border: "1px solid #00ff9c33", borderRadius: "3px", padding: "1px 6px"
+    }}>
       ● LIVE
+    </span>
+  );
+}
+
+// ── Badge: upstox=green | connecting=blue | disconnected=amber | error=red ──
+function DataSourceBadge({ source }) {
+  if (source === "upstox") {
+    return (
+      <span style={{
+        fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700,
+        color: "#00ff9c", background: "#001a0a",
+        border: "1px solid #00ff9c33", borderRadius: "3px", padding: "1px 6px", marginLeft: 4
+      }}>
+        ⚡ UPSTOX LIVE
+      </span>
+    );
+  }
+  if (source === "connecting" || !source) {
+    return (
+      <span style={{
+        fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700,
+        color: "#4a8adf", background: "#0a1020",
+        border: "1px solid #4a8adf33", borderRadius: "3px", padding: "1px 6px", marginLeft: 4
+      }}>
+        ◌ CONNECTING...
+      </span>
+    );
+  }
+  // disconnected or error — both are clickable to open auth
+  const isError = source === "error";
+  return (
+    <span
+      style={{
+        fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700,
+        color:      isError ? "#ff5c5c" : "#ffaa00",
+        background: isError ? "#1a0000" : "#1a1000",
+        border:     `1px solid ${isError ? "#ff5c5c33" : "#ffaa0033"}`,
+        borderRadius: "3px", padding: "1px 6px", marginLeft: 4,
+        cursor: "pointer", textDecoration: "underline"
+      }}
+      title="Click to connect Upstox"
+      onClick={() => window.open("/auth/upstox", "_blank")}
+    >
+      {isError ? "⚠ UPSTOX ERROR — reconnect" : "○ DISCONNECTED — connect Upstox"}
     </span>
   );
 }
 
 function LiveClock() {
   const [time, setTime] = useState(() =>
-    new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
+    new Date().toLocaleTimeString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false
+    })
   );
   useEffect(() => {
     const t = setInterval(() => {
-      setTime(new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }));
+      setTime(new Date().toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false
+      }));
     }, 1000);
     return () => clearInterval(t);
   }, []);
@@ -162,7 +214,7 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
-function TickerBar({ indices, assets }) {
+function TickerBar({ indices, assets, dataSource, tickerStale }) {
   const session = getSession();
   return (
     <div className="ticker-bar">
@@ -170,8 +222,9 @@ function TickerBar({ indices, assets }) {
         const isUp   = m.up === true;
         const isDown = m.up === false;
         const cls    = isUp ? "up" : isDown ? "down" : "flat";
+        const isDash = m.price === "—";
         return (
-          <div className="ticker-item" key={`idx-${i}`}>
+          <div className="ticker-item" key={`idx-${i}`} style={isDash ? { opacity: 0.4 } : {}}>
             <span className="ticker-name">{m.name}</span>
             <span className="ticker-price">{m.price}</span>
             <span className={`ticker-change ${cls}`}>
@@ -197,6 +250,16 @@ function TickerBar({ indices, assets }) {
         );
       })}
       <div className="ticker-right">
+        {tickerStale && (
+          <span style={{
+            fontSize: "9px", color: "#ff5c5c", fontFamily: "IBM Plex Mono, monospace",
+            background: "#1a0000", border: "1px solid #ff5c5c33",
+            borderRadius: "3px", padding: "1px 6px", marginRight: 4
+          }}>
+            ⚠ STALE
+          </span>
+        )}
+        <DataSourceBadge source={dataSource} />
         <LiveClock />
         <span className={`ticker-session ${session.cls}`}>{session.label}</span>
       </div>
@@ -217,17 +280,31 @@ export default function App() {
     { name: "SENSEX",     price: "—", change: "—", pct: "—", up: null },
     { name: "BANK NIFTY", price: "—", change: "—", pct: "—", up: null },
   ]);
-  const [bseEvents,     setBseEvents]     = useState([]);
-  const [nseEvents,     setNseEvents]     = useState([]);
-  const [sector,        setSector]        = useState([]);
-  const [orderBook,     setOrderBook]     = useState([]);
-  const [radarQuery,    setRadarQuery]    = useState("");
-  const [activeTab,     setActiveTab]     = useState("bse");
-  const [feedFilter,    setFeedFilter]    = useState("ALL");
-  const [mobilePanelTab,setMobilePanelTab]= useState("feed");
-  const [cryptoAssets,  setCryptoAssets]  = useState([]);
+  // "connecting" | "upstox" | "disconnected" | "error"
+  const [tickerSource,   setTickerSource]   = useState("connecting");
+  const [tickerLastOk,   setTickerLastOk]   = useState(null);
+  const [tickerStale,    setTickerStale]    = useState(false);
 
-  // ── Fetch BTC / PI / Gold / Silver ──────────────────────────────────────
+  const [bseEvents,      setBseEvents]      = useState([]);
+  const [nseEvents,      setNseEvents]      = useState([]);
+  const [sector,         setSector]         = useState([]);
+  const [orderBook,      setOrderBook]      = useState([]);
+  const [radarQuery,     setRadarQuery]     = useState("");
+  const [activeTab,      setActiveTab]      = useState("bse");
+  const [feedFilter,     setFeedFilter]     = useState("ALL");
+  const [mobilePanelTab, setMobilePanelTab] = useState("feed");
+  const [cryptoAssets,   setCryptoAssets]   = useState([]);
+
+  // ── Stale watchdog ────────────────────────────────────────────────────────
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (tickerLastOk && Date.now() - tickerLastOk > 90000) setTickerStale(true);
+    }, 10000);
+    return () => clearInterval(t);
+  }, [tickerLastOk]);
+
+  // ── Fetch BTC / PI / Gold / Silver ───────────────────────────────────────
+  // Note: Silver still uses Yahoo Finance (SI=F) — Upstox doesn't carry commodities
   useEffect(() => {
     const fmt = (n, prefix = "$") => {
       if (!n && n !== 0) return "—";
@@ -238,8 +315,6 @@ export default function App() {
 
     const fetchAssets = async () => {
       const assets = [];
-
-      // BTC + PI + Gold via CoinGecko
       try {
         const cgRes = await fetch(
           "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
@@ -248,29 +323,25 @@ export default function App() {
         const cg = await cgRes.json();
         if (cg?.bitcoin) assets.push({
           name: "BTC", icon: "₿", type: "crypto",
-          price: fmt(cg.bitcoin.usd),
-          change24h: cg.bitcoin.usd_24h_change || 0
+          price: fmt(cg.bitcoin.usd), change24h: cg.bitcoin.usd_24h_change || 0
         });
         if (cg?.["pi-network"]) assets.push({
           name: "PI", icon: "π", type: "crypto",
-          price: fmt(cg["pi-network"].usd),
-          change24h: cg["pi-network"].usd_24h_change || 0
+          price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0
         });
         if (cg?.["tether-gold"]) assets.push({
           name: "GOLD", icon: "Au", type: "gold",
-          price: fmt(cg["tether-gold"].usd),
-          change24h: cg["tether-gold"].usd_24h_change || 0
+          price: fmt(cg["tether-gold"].usd), change24h: cg["tether-gold"].usd_24h_change || 0
         });
-      } catch(e) {
+      } catch (e) {
         console.error("CoinGecko error:", e);
         assets.push({ name: "BTC",  icon: "₿",  type: "crypto", price: "—", change24h: 0 });
         assets.push({ name: "PI",   icon: "π",  type: "crypto", price: "—", change24h: 0 });
         assets.push({ name: "GOLD", icon: "Au", type: "gold",   price: "—", change24h: 0 });
       }
 
-      // Silver via Yahoo Finance (no CORS issues, same API as market indices)
-      let silverPrice = 33.50;
-      let silverChange = 0;
+      // Silver — Yahoo Finance only source for this commodity
+      let silverPrice = 33.50, silverChange = 0;
       try {
         const r = await fetch(
           "https://query1.finance.yahoo.com/v8/finance/chart/SI%3DF?interval=1d&range=2d",
@@ -283,16 +354,10 @@ export default function App() {
           const prev = meta.previousClose || meta.chartPreviousClose;
           if (prev) silverChange = ((silverPrice - prev) / prev) * 100;
         }
-      } catch(e) {
-        console.warn("Yahoo silver failed, using fallback:", e.message);
+      } catch (e) {
+        console.warn("Silver fetch failed, using fallback:", e.message);
       }
-
-      assets.push({
-        name: "SILVER", icon: "Ag", type: "silver",
-        price: fmt(silverPrice),
-        change24h: silverChange
-      });
-
+      assets.push({ name: "SILVER", icon: "Ag", type: "silver", price: fmt(silverPrice), change24h: silverChange });
       setCryptoAssets(assets);
     };
 
@@ -301,7 +366,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // ── Fetch events every 15s ───────────────────────────────────────────────
+  // ── Fetch events every 15s ────────────────────────────────────────────────
   useEffect(() => {
     const fetchEvents = () => {
       fetch("/api/events")
@@ -313,27 +378,74 @@ export default function App() {
           setSector(data.sectors      || []);
           window._mcapDb = data.mcapDb || [];
         })
-        .catch(err => console.log("API error:", err));
+        .catch(err => console.log("Events fetch error:", err));
     };
     fetchEvents();
     const interval = setInterval(fetchEvents, 15000);
     return () => clearInterval(interval);
   }, []);
 
-  // ── Fetch market indices every 30s ──────────────────────────────────────
+  // ── Market indices — Upstox only, self-scheduling retry loop ─────────────
+  // Success (upstox)      → schedule next poll in 30s, reset backoff
+  // Disconnected / error  → retry with backoff: 3s→6s→12s→24s→30s cap
+  // Network error         → same backoff, sets source to "error"
+  // AbortController       → prevents stale responses after unmount
+  const retryRef   = useRef(null);
+  const retryDelay = useRef(3000);
+  const abortRef   = useRef(null);
+
   useEffect(() => {
-    const fetchMarket = async () => {
+    let cancelled = false;
+
+    const doFetch = async () => {
+      if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
+      if (abortRef.current) abortRef.current.abort();
+      abortRef.current = new AbortController();
+
       try {
-        const data = await fetch("/api/market").then(r => r.json());
-        if (Array.isArray(data)) setMarketIndices(data);
-      } catch(e) { console.error("Market fetch error:", e); }
+        const res  = await fetch("/api/market", { signal: abortRef.current.signal });
+        const data = await res.json();
+        if (cancelled) return;
+
+        if (Array.isArray(data)) {
+          const indices    = data.filter(d => d.name && !d._source);
+          const sourceMeta = data.find(d => d._source);
+          const src        = sourceMeta?._source || "disconnected";
+
+          setTickerSource(src);
+
+          if (src === "upstox") {
+            if (indices.length) setMarketIndices(indices);
+            setTickerLastOk(Date.now());
+            setTickerStale(false);
+            retryDelay.current = 3000;
+            retryRef.current = setTimeout(doFetch, 30000); // normal 30s poll
+          } else {
+            // disconnected or error — keep retrying fast until connected
+            console.log(`Upstox ${src} — retry in ${retryDelay.current / 1000}s`);
+            retryRef.current = setTimeout(doFetch, retryDelay.current);
+            retryDelay.current = Math.min(retryDelay.current * 2, 30000);
+          }
+        }
+      } catch (e) {
+        if (cancelled || e.name === "AbortError") return;
+        console.warn(`Market fetch network error, retry in ${retryDelay.current / 1000}s:`, e.message);
+        setTickerSource("error");
+        retryRef.current = setTimeout(doFetch, retryDelay.current);
+        retryDelay.current = Math.min(retryDelay.current * 2, 30000);
+      }
     };
-    fetchMarket();
-    const interval = setInterval(fetchMarket, 30000);
-    return () => clearInterval(interval);
+
+    doFetch();
+
+    return () => {
+      cancelled = true;
+      if (retryRef.current) clearTimeout(retryRef.current);
+      if (abortRef.current) abortRef.current.abort();
+    };
   }, []);
 
-  // ── Deduplicated + filtered feed ────────────────────────────────────────
+  // ── Deduplicated + filtered feed ─────────────────────────────────────────
   const seenFeedKeys = new Set();
   const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => {
     const t = (e?.title || "").toLowerCase();
@@ -346,7 +458,7 @@ export default function App() {
     return (e.type || "NEWS").toUpperCase().includes(feedFilter);
   });
 
-  // ── computedRadar: merged BSE+NSE, deduplicated, scored ─────────────────
+  // ── computedRadar ─────────────────────────────────────────────────────────
   const seenRadarKeys = new Set();
   const computedRadar = [
     ...(bseEvents || []).map(e => ({ ...e, _exchange: "BSE" })),
@@ -364,9 +476,7 @@ export default function App() {
     .slice(0, 100)
     .map(e => {
       const t = (e?.title || "").toLowerCase();
-      let type  = "NEWS";
-      let score = 10;
-
+      let type = "NEWS", score = 10;
       const isNonOrder = (
         t.includes("solar") || t.includes("renewable") || t.includes("green energy") ||
         t.includes("spv")   || t.includes("equity stake") || t.includes("power purchase") ||
@@ -374,7 +484,6 @@ export default function App() {
         t.includes("income tax") || t.includes("assessment") || t.includes("tax demand") ||
         t.includes("penalty") || t.includes("nclt")
       );
-
       if (t.includes("fraud") || t.includes("insolvency") || t.includes("default")) {
         type = "RISK"; score = 95;
       } else if (t.includes("penalty") || t.includes("nclt")) {
@@ -418,11 +527,9 @@ export default function App() {
       } else if (t.includes("partnership") || t.includes("joint venture") || t.includes("mou")) {
         type = "PARTNERSHIP"; score = 72;
       }
-
       return {
         company:    e?.company || "Unknown",
-        score,
-        type,
+        score, type,
         exchange:   e._exchange || "BSE",
         receivedAt: e?.receivedAt,
         time:       e?.time,
@@ -431,7 +538,7 @@ export default function App() {
       };
     });
 
-  // ── Mega orders ──────────────────────────────────────────────────────────
+  // ── Mega orders ───────────────────────────────────────────────────────────
   const computedMegaOrders = (bseEvents || []).filter(e => {
     const t = (e?.title || "").toLowerCase();
     const isRealOrder =
@@ -443,13 +550,11 @@ export default function App() {
     if (!isRealOrder) return false;
     const cr = e._orderInfo?.crores || extractAmount(e.title);
     if (!cr) return false;
-    const above500 = cr >= 500;
     const mcapEntry = window._mcapDb?.find?.(m =>
       (m.company || "").toLowerCase() === (e.company || "").toLowerCase()
     );
     const mcap = mcapEntry?.mcap || 0;
-    const pctTrigger = mcap > 0 && (cr / mcap) >= 0.08;
-    return above500 || pctTrigger;
+    return cr >= 500 || (mcap > 0 && (cr / mcap) >= 0.08);
   })
     .sort((a, b) =>
       (b._orderInfo?.crores || extractAmount(b.title)) -
@@ -457,13 +562,13 @@ export default function App() {
     )
     .slice(0, 10)
     .map(e => ({
-      company:    e.company,
-      crores:     e._orderInfo?.crores || extractAmount(e.title),
+      company: e.company,
+      crores:  e._orderInfo?.crores || extractAmount(e.title),
       receivedAt: e.receivedAt,
-      time:       e.time
+      time:    e.time
     }));
 
-  // ── Opportunities — deduplicated ─────────────────────────────────────────
+  // ── Opportunities ─────────────────────────────────────────────────────────
   const seenOpp = new Set();
   const computedOpportunities = computedRadar
     .filter(r => {
@@ -474,13 +579,7 @@ export default function App() {
       return true;
     })
     .slice(0, 5)
-    .map(r => ({
-      company:    r.company,
-      score:      r.score,
-      type:       r.type,
-      receivedAt: r.receivedAt,
-      time:       r.time
-    }));
+    .map(r => ({ company: r.company, score: r.score, type: r.type, receivedAt: r.receivedAt, time: r.time }));
 
   const filteredRadar = computedRadar.filter(r =>
     !radarQuery ||
@@ -488,19 +587,16 @@ export default function App() {
     r.type.toLowerCase().includes(radarQuery.toLowerCase())
   );
 
-  // ── RADAR PANEL ──────────────────────────────────────────────────────────
+  // ── RADAR PANEL ───────────────────────────────────────────────────────────
   const RadarPanel = () => (
     <div className="panel radar-panel">
       <div className="panel-header">
-        <span className="panel-title">
-          📡 Radar <span className="count">{filteredRadar.length}</span>
-        </span>
+        <span className="panel-title">📡 Radar <span className="count">{filteredRadar.length}</span></span>
       </div>
       <div className="search-wrap">
         <span className="search-icon">⌕</span>
         <input
-          type="text"
-          className="radar-search"
+          type="text" className="radar-search"
           placeholder="Search company, type..."
           value={radarQuery}
           onChange={e => setRadarQuery(e.target.value)}
@@ -509,48 +605,37 @@ export default function App() {
       </div>
       {filteredRadar.length === 0 ? (
         <div className="empty">No matches for "{radarQuery}"</div>
-      ) : (
-        filteredRadar.map((r, i) => (
-          <div className="radar-card" key={i}>
-            {/* Row 1: Company + Exchange badge + Score */}
-            <div className="rc-top">
-              <span className="co-name">{r.company}</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span style={{
-                  fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
-                  background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
-                  color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
-                  border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
-                }}>{r.exchange}</span>
-                <span style={{
-                  background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
-                  color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
-                  border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
-                  borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
-                }}>{r.score}</span>
-              </div>
+      ) : filteredRadar.map((r, i) => (
+        <div className="radar-card" key={i}>
+          <div className="rc-top">
+            <span className="co-name">{r.company}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{
+                fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
+                background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
+                color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
+                border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
+              }}>{r.exchange}</span>
+              <span style={{
+                background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
+                color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
+                border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
+                borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
+              }}>{r.score}</span>
             </div>
-
-            {/* Row 2: Type + Order value + PDF */}
-            <div className="tag-row">
-              <span className={`type type-${r.type}`}>{r.type}</span>
-              {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
-              {r.pdfUrl && (
-                <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
-                  📄 Filing
-                </a>
-              )}
-            </div>
-
-            {/* Row 3: Exchange time + server received time + delay */}
-            <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
           </div>
-        ))
-      )}
+          <div className="tag-row">
+            <span className={`type type-${r.type}`}>{r.type}</span>
+            {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
+            {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">📄 Filing</a>}
+          </div>
+          <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
+        </div>
+      ))}
     </div>
   );
 
-  // ── FEED PANEL ───────────────────────────────────────────────────────────
+  // ── FEED PANEL ────────────────────────────────────────────────────────────
   const FeedPanel = () => (
     <div className="panel feed-panel">
       <div className="panel-header">
@@ -566,78 +651,54 @@ export default function App() {
       </div>
       {filteredFeed.length === 0 ? (
         <div className="empty">No signals match filter</div>
-      ) : (
-        filteredFeed.map((e, i) => {
-          const cardClass = [
-            "feed-card",
-            e.type?.includes("ORDER")   ? "fc-order"   :
-            e.type?.includes("MERGER")  ? "fc-merger"  :
-            e.type?.includes("RESULT")  ? "fc-result"  :
-            e.type?.includes("INSIDER") ? "fc-insider" :
-            e.type?.includes("CAPEX")   ? "fc-capex"   : "fc-news"
-          ].join(" ");
-          const hotWords = ["crore","cr","lakh","order","contract","merger","acquisition","fraud","penalty","rs"];
-          const pdfUrl = e.pdfUrl || e.attachment || e.url || null;
-          return (
-            <div
-              className={cardClass}
-              key={i}
-              onClick={() => pdfUrl && window.open(pdfUrl, "_blank", "noopener")}
-              style={{ cursor: pdfUrl ? "pointer" : "default" }}
-            >
-              <div className="fc-head">
-                <span className="fc-company">
-                  {e.company}
-                  {e.type === "NEWS" && <span className="fc-tag-news">NEWS</span>}
-                </span>
-                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  {e.type !== "NEWS" && (
-                    <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />
-                  )}
-                  {pdfUrl && (
-                    <a
-                      href={pdfUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="filing-link"
-                      onClick={ev => ev.stopPropagation()}
-                    >
-                      📄 Filing
-                    </a>
-                  )}
-                </div>
+      ) : filteredFeed.map((e, i) => {
+        const cardClass = ["feed-card",
+          e.type?.includes("ORDER")   ? "fc-order"   :
+          e.type?.includes("MERGER")  ? "fc-merger"  :
+          e.type?.includes("RESULT")  ? "fc-result"  :
+          e.type?.includes("INSIDER") ? "fc-insider" :
+          e.type?.includes("CAPEX")   ? "fc-capex"   : "fc-news"
+        ].join(" ");
+        const hotWords = ["crore","cr","lakh","order","contract","merger","acquisition","fraud","penalty","rs"];
+        const pdfUrl = e.pdfUrl || e.attachment || e.url || null;
+        return (
+          <div className={cardClass} key={i}
+            onClick={() => pdfUrl && window.open(pdfUrl, "_blank", "noopener")}
+            style={{ cursor: pdfUrl ? "pointer" : "default" }}
+          >
+            <div className="fc-head">
+              <span className="fc-company">
+                {e.company}
+                {e.type === "NEWS" && <span className="fc-tag-news">NEWS</span>}
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                {e.type !== "NEWS" && <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />}
+                {pdfUrl && (
+                  <a href={pdfUrl} target="_blank" rel="noreferrer" className="filing-link"
+                    onClick={ev => ev.stopPropagation()}>📄 Filing</a>
+                )}
               </div>
-              <div className="fc-text">
-                {(e.title || "").split(" ").map((word, wi) => {
-                  const w = word.toLowerCase().replace(/[^a-z0-9]/g, "");
-                  const isHot =
-                    hotWords.indexOf(w) !== -1 ||
-                    /[0-9]{2,}/.test(word) ||
-                    word.indexOf("₹") !== -1;
-                  return (
-                    <span key={wi} className={isHot ? "fc-word-hot" : "fc-word"}>
-                      {word}{" "}
-                    </span>
-                  );
-                })}
-              </div>
-              {/* Exchange time + server received time with seconds */}
-              <LiveAgo exchangeTime={e.time} receivedAt={e.receivedAt} />
             </div>
-          );
-        })
-      )}
+            <div className="fc-text">
+              {(e.title || "").split(" ").map((word, wi) => {
+                const w = word.toLowerCase().replace(/[^a-z0-9]/g, "");
+                const isHot = hotWords.indexOf(w) !== -1 || /[0-9]{2,}/.test(word) || word.indexOf("₹") !== -1;
+                return <span key={wi} className={isHot ? "fc-word-hot" : "fc-word"}>{word}{" "}</span>;
+              })}
+            </div>
+            <LiveAgo exchangeTime={e.time} receivedAt={e.receivedAt} />
+          </div>
+        );
+      })}
     </div>
   );
 
-  // ── RIGHT / DATA PANEL ───────────────────────────────────────────────────
+  // ── RIGHT / DATA PANEL ────────────────────────────────────────────────────
   const RightPanel = () => (
     <div className="panel right-panel">
       <div className="section">
         <div className="section-divider">🔥 Mega Orders <span className="count">{computedMegaOrders.length}</span></div>
-        {computedMegaOrders.length === 0 ? (
-          <div className="empty">No mega orders yet</div>
-        ) : (
+        {computedMegaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : (
           <div className="mega-grid">
             {computedMegaOrders.slice(0, 10).map((o, i) => {
               const mcapEntry = window._mcapDb?.find?.(m =>
@@ -660,9 +721,8 @@ export default function App() {
 
       <div className="section">
         <div className="section-divider">💡 Opportunities <span className="count">{computedOpportunities.length}</span></div>
-        {computedOpportunities.length === 0 ? (
-          <div className="empty">No opportunities yet</div>
-        ) : computedOpportunities.map((o, i) => (
+        {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div>
+          : computedOpportunities.map((o, i) => (
           <div className="opp-card" key={i}>
             <div className="opp-row" style={{ display: "flex", justifyContent: "space-between" }}>
               <span className="co-name">{o.company}</span>
@@ -676,9 +736,8 @@ export default function App() {
 
       <div className="section">
         <div className="section-divider">🏭 Sectors <span className="count">{sector.length}</span></div>
-        {sector.length === 0 ? (
-          <div className="empty">No sector activity yet</div>
-        ) : sector.map((s, i) => (
+        {sector.length === 0 ? <div className="empty">No sector activity yet</div>
+          : sector.map((s, i) => (
           <div className="sec-card" key={i}>
             <div className="sec-row">
               <span className="sec-name">{s.sector}</span>
@@ -692,9 +751,8 @@ export default function App() {
 
       <div className="section">
         <div className="section-divider">📦 Order Book <span className="count">{orderBook.length}</span></div>
-        {orderBook.length === 0 ? (
-          <div className="empty">No orders tracked yet</div>
-        ) : orderBook.map((o, i) => (
+        {orderBook.length === 0 ? <div className="empty">No orders tracked yet</div>
+          : orderBook.map((o, i) => (
           <div className="ord-card" key={i}>
             <div className="ord-top">
               <span className="co-name">{o.company}</span>
@@ -708,28 +766,41 @@ export default function App() {
     </div>
   );
 
-  // ── INTELLIGENCE PANEL ───────────────────────────────────────────────────
-  const IntelPanel = () => (
-    <div className="panel intelligence-panel">
-      <div className="section">
-        <div className="section-divider">🔔 Alerts</div>
-        {computedRadar.slice(0, 5).map((e, i) => (
-          <div key={i} className="mini-card">
-            <span style={{ color: "#d8eeff" }}>{e.company}</span>
-            <span style={{ color: "#4a7090" }}> → </span>
-            <span className={`type type-${e.type}`} style={{ fontSize: "8px", padding: "1px 4px" }}>{e.type}</span>
-          </div>
-        ))}
+  // ── INTELLIGENCE PANEL ────────────────────────────────────────────────────
+  const IntelPanel = () => {
+    const srcLabel =
+      tickerSource === "upstox"       ? "⚡ Upstox Live"  :
+      tickerSource === "disconnected" ? "○ Disconnected"  :
+      tickerSource === "error"        ? "⚠ Error"         :
+                                        "◌ Connecting...";
+    const srcColor =
+      tickerSource === "upstox" ? "#00ff9c" :
+      tickerSource === "error"  ? "#ff5c5c" : "#ffaa00";
+    return (
+      <div className="panel intelligence-panel">
+        <div className="section">
+          <div className="section-divider">🔔 Alerts</div>
+          {computedRadar.slice(0, 5).map((e, i) => (
+            <div key={i} className="mini-card">
+              <span style={{ color: "#d8eeff" }}>{e.company}</span>
+              <span style={{ color: "#4a7090" }}> → </span>
+              <span className={`type type-${e.type}`} style={{ fontSize: "8px", padding: "1px 4px" }}>{e.type}</span>
+            </div>
+          ))}
+        </div>
+        <div className="section">
+          <div className="section-divider">⚡ Pulse</div>
+          <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
+          <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
+          <div className="mini-card" style={{ color: "#4a8adf" }}>BSE Events: {bseEvents.length}</div>
+          <div className="mini-card" style={{ color: "#4a8adf" }}>NSE Events: {nseEvents.length}</div>
+          <div className="mini-card" style={{ color: srcColor }}>Index Feed: {srcLabel}</div>
+        </div>
       </div>
-      <div className="section">
-        <div className="section-divider">⚡ Pulse</div>
-        <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
-        <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
-        <div className="mini-card" style={{ color: "#4a8adf" }}>BSE Events: {bseEvents.length}</div>
-        <div className="mini-card" style={{ color: "#4a8adf" }}>NSE Events: {nseEvents.length}</div>
-      </div>
-    </div>
-  );
+    );
+  };
+
+  const needsConnect = tickerSource === "disconnected" || tickerSource === "error";
 
   return (
     <div className="terminal">
@@ -738,10 +809,28 @@ export default function App() {
           <span className="star">★</span>
           <span className="title">Market Intelligence</span>
           <MarketStatus />
+          {needsConnect && (
+            <span
+              style={{
+                fontSize: "9px", fontFamily: "IBM Plex Mono, monospace",
+                color: "#ffaa00", cursor: "pointer", marginLeft: 6,
+                textDecoration: "underline"
+              }}
+              onClick={() => window.open("/auth/upstox", "_blank")}
+              title="Click to connect Upstox for real-time NIFTY / SENSEX data"
+            >
+              Connect Upstox →
+            </span>
+          )}
         </div>
       </div>
 
-      <TickerBar indices={marketIndices} assets={cryptoAssets} />
+      <TickerBar
+        indices={marketIndices}
+        assets={cryptoAssets}
+        dataSource={tickerSource}
+        tickerStale={tickerStale}
+      />
 
       <div className="layout desktop-layout">
         <RadarPanel />
