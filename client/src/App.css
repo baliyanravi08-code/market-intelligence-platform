@@ -622,7 +622,9 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
     flex-direction: column;
     flex: 1;
     overflow: hidden;
-    height: calc(100vh - 40px); /* full height minus header */
+    /* account for header (40px) + ticker bar (32px) + mobile tab bar (~36px) */
+    height: calc(100vh - 40px - 32px);
+    min-height: 0;
   }
 
   /* Top tab switcher bar */
@@ -633,7 +635,10 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
     flex-shrink: 0;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
+  .mobile-tab-bar::-webkit-scrollbar { display: none; }
+
   .mobile-tab-btn {
     flex: 1;
     padding: 8px 4px;
@@ -658,17 +663,257 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
     background: #020c1a;
   }
 
-  /* Panel content area — scrollable */
+  /* Panel content area — scrollable, must fill remaining height */
   .mobile-panel-wrap {
     flex: 1;
-    overflow-y: auto;
+    overflow-y: scroll; /* scroll not auto — prevents snap-back on iOS */
+    overflow-x: hidden;
     padding: 6px;
     -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain; /* stops scroll from bubbling to body */
+    min-height: 0;
   }
+
   /* Panels inside mobile wrap fill naturally */
   .mobile-panel-wrap .panel {
     height: auto;
     overflow-y: visible;
     min-height: auto;
   }
+}
+
+/* ===== AI FILING SUMMARIZER MODAL ===== */
+.ai-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.ai-modal {
+  background: #030e1e;
+  border: 1px solid #0d3560;
+  border-radius: 10px;
+  width: 100%;
+  max-width: 560px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 60px rgba(0, 150, 255, 0.15);
+  overflow: hidden;
+}
+
+.ai-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #0a2540;
+  flex-shrink: 0;
+  background: linear-gradient(90deg, #020d1f, #041828);
+}
+.ai-modal-company {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: #00cfff;
+}
+.ai-modal-title {
+  font-size: 10px;
+  color: #3a6888;
+  margin-top: 3px;
+  max-width: 440px;
+  line-height: 1.4;
+}
+.ai-modal-close {
+  background: none;
+  border: none;
+  color: #2a5070;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 0 0 12px;
+  flex-shrink: 0;
+}
+.ai-modal-close:hover { color: #ff5c5c; }
+
+.ai-modal-body {
+  padding: 14px 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.ai-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #2a6888;
+  font-size: 11px;
+  font-family: 'IBM Plex Mono', monospace;
+  padding: 20px 0;
+}
+.ai-spinner {
+  width: 16px; height: 16px;
+  border: 2px solid #0a2540;
+  border-top-color: #00cfff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.ai-error {
+  color: #ff5c5c;
+  font-size: 11px;
+  padding: 12px 0;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.ai-headline {
+  font-size: 13px;
+  font-weight: 700;
+  color: #d8eeff;
+  line-height: 1.4;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #0a2540;
+}
+
+.ai-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.ai-badge {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid;
+  letter-spacing: 0.5px;
+}
+.ai-signal-strength {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: #2a6888;
+  margin-left: auto;
+}
+.ai-signal-bar {
+  display: flex;
+  gap: 2px;
+}
+.ai-signal-pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  display: inline-block;
+}
+
+.ai-section-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 8px;
+  font-weight: 700;
+  color: #1a5070;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  margin-top: 12px;
+}
+
+.ai-points { display: flex; flex-direction: column; gap: 6px; }
+.ai-point {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 11px;
+  color: #8ab8d4;
+  line-height: 1.5;
+}
+.ai-point-num {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  color: #00cfff;
+  background: #041828;
+  border: 1px solid #0a2540;
+  border-radius: 3px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.ai-analyst-note {
+  font-size: 11px;
+  color: #4a7a9a;
+  font-style: italic;
+  line-height: 1.5;
+  padding: 8px 10px;
+  background: #020c1a;
+  border-left: 3px solid #0a3060;
+  border-radius: 0 4px 4px 0;
+}
+
+.ai-numbers {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ai-number-item {
+  background: #020c1a;
+  border: 1px solid #0a2540;
+  border-radius: 5px;
+  padding: 8px 12px;
+  min-width: 80px;
+  text-align: center;
+}
+.ai-number-val {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: #00ff9c;
+}
+.ai-number-label {
+  font-size: 9px;
+  color: #2a6888;
+  margin-top: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ai-modal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  border-top: 1px solid #0a2540;
+  flex-shrink: 0;
+  background: #020b18;
+}
+.ai-powered {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: #1a4060;
+}
+.ai-pdf-link {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: #00cfff;
+  text-decoration: none;
+  opacity: 0.8;
+}
+.ai-pdf-link:hover { opacity: 1; text-decoration: underline; }
+
+@media (max-width: 768px) {
+  .ai-modal { max-height: 90vh; }
+  .ai-modal-title { max-width: 260px; }
 }

@@ -888,7 +888,15 @@ export default function App() {
   };
 
   const needsConnect = tickerSource === "disconnected" || tickerSource === "error";
-
+const panelScrollRef = useRef({});
+const handlePanelScroll = (e) => {
+  panelScrollRef.current[mobilePanelTab] = e.currentTarget.scrollTop;
+};
+const setPanelScrollRef = (el) => {
+  if (el && panelScrollRef.current[mobilePanelTab] !== undefined) {
+    el.scrollTop = panelScrollRef.current[mobilePanelTab];
+  }
+};
   return (
     <div className="terminal">
       <div className="header">
@@ -938,7 +946,7 @@ export default function App() {
             </button>
           ))}
         </div>
-        <div className="mobile-panel-wrap">
+        <div className="mobile-panel-wrap" ref={setPanelScrollRef} onScroll={handlePanelScroll}>
           {mobilePanelTab === "radar" && <RadarPanel />}
           {mobilePanelTab === "feed"  && <FeedPanel />}
           {mobilePanelTab === "data"  && <RightPanel />}
