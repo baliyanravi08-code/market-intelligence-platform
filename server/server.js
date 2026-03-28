@@ -266,6 +266,59 @@ app.get("/api/mcap", (req, res) => {
 });
 
 // ── /api/company/:code ───────────────────────────────────────────────────────
+// ── Full order book tracker for all BSE companies ─────────────────────────
+app.get("/api/orderbook", (req, res) => {
+  try {
+    const { getCompaniesByMcap, getEstimatedOrderBook } = require("./data/marketCap");
+    const companies = getCompaniesByMcap(0);
+    const result = [];
+
+    for (const [code, data] of Object.entries(companies)) {
+      const ob = getEstimatedOrderBook(code);
+      if (!ob || !ob.confirmed) continue;
+      result.push({
+        code,
+        company:          data.name || code,
+        mcap:             data.mcap || 0,
+        confirmed:        ob.confirmed,
+        confirmedQuarter: ob.confirmedQuarter,
+        newOrders:        ob.newOrders || 0,
+        estimated:        ob.estimated,
+        currentOrderBook: ob.currentOrderBook,
+        obToRevRatio:     ob.obToRevRatio,
+        bookToBill:       ob.bookToBill,
+        quarterHistory:   ob.quarterHistory || [],
+        lastUpdated:      data.lastResultUpdate || null
+      });
+    }
+
+    // Sort by current order book size desc
+    result.sort((a, b) => (b.currentOrderBook || 0) - (a.currentOrderBook || 0));
+    res.json({ orderBook: result, count: result.length });
+  } catch(e) {
+    console.error("❌ Order book API error:", e.message);
+    res.json({ orderBook: [], count: 0 });
+  }
+});
+
+// ── Quarter helper ────────────────────────────────────────────────────────
+app.get("/api/orderbook/:code", (req, res) => {
+  try {
+    const { getEstimatedOrderBook, getCompanyData } = require("./data/marketCap");
+    const code = req.params.code;
+    const ob   = getEstimatedOrderBook(code);
+    const data = getCompanyData(code);
+    if (!ob) return res.json({ error: "No order book data for this company" });
+    res.json({
+      code,
+      company:        data.name || code,
+      mcap:           data.mcap || 0,
+      ...ob
+    });
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
 app.get("/api/company/:code", async (req, res) => {
   try {
     const code   = req.params.code;

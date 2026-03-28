@@ -223,6 +223,13 @@ async function processItem(item) {
     const enrichedSignal = { ...signalWithTs, _orderInfo: signal._orderInfo };
 
     const orderData = orderBookEngine(enrichedSignal);
+    // ── Add to per-company order book tracker ──
+    const { addNewOrder } = require("../data/marketCap");
+    const _crores = signal._orderInfo?.crores || 0;
+    if (_crores > 0 && signalWithTs.code) {
+      addNewOrder(String(signalWithTs.code), _crores, id);
+      console.log(`📦 OB+ ${signalWithTs.company} ₹${_crores}Cr`);
+    }
     if (orderData) {
       persistOrderBook(orderData);
       if (ioRef) ioRef.emit("order_book_update", orderData);

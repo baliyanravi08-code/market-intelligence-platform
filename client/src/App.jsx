@@ -526,7 +526,7 @@ function FeedPanel({ filteredFeed, activeTab, setActiveTab, feedFilter, setFeedF
   );
 }
 
-function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBook, intelStats }) {
+function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBook, intelStats, liveOrderBook, obExpanded, setObExpanded }) {
   return (
     <div className="panel right-panel">
       <div className="section">
@@ -594,18 +594,67 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
       </div>
 
       <div className="section">
-        <div className="section-divider">📦 Order Book <span className="count">{orderBook.length}</span></div>
-        {orderBook.length === 0 ? <div className="empty">No orders tracked yet</div>
-          : orderBook.map((o, i) => (
-          <div className="ord-card" key={i}>
-            <div className="ord-top">
-              <span className="co-name">{o.company}</span>
-              <span className="str-lbl building">BUILDING</span>
+        <div className="section-divider">
+          📦 Order Book Tracker
+          <span className="count" style={{ marginLeft: 6 }}>{liveOrderBook.length}</span>
+          <span style={{ fontSize: "8px", color: "#1a5070", marginLeft: 6 }}>
+            {getCurrentQuarter().label} {getCurrentQuarter().range}
+          </span>
+        </div>
+        {liveOrderBook.length === 0 ? (
+          <div className="empty">No order book data yet</div>
+        ) : liveOrderBook.map((o, i) => {
+          const isOpen   = obExpanded === o.code;
+          const obToRev  = o.obToRevRatio ? parseFloat(o.obToRevRatio) : null;
+          const obColor  = obToRev === null ? "#4a9abb"
+            : obToRev >= 3 ? "#00ff9c" : obToRev >= 1.5 ? "#ffaa00" : "#ff5c5c";
+          return (
+            <div key={i} className="ord-card"
+              style={{ cursor: "pointer", borderLeft: `3px solid ${obColor}` }}
+              onClick={() => setObExpanded(isOpen ? null : o.code)}
+            >
+              <div className="ord-top">
+                <span className="co-name">{o.company}</span>
+                <span className="ord-val">₹{(o.currentOrderBook || 0).toLocaleString("en-IN")}Cr</span>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 3, flexWrap: "wrap" }}>
+                <span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono, monospace" }}>
+                  Base: ₹{(o.confirmed || 0).toLocaleString("en-IN")}Cr ({o.confirmedQuarter || "—"})
+                </span>
+                {o.newOrders > 0 && (
+                  <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono, monospace" }}>
+                    +₹{o.newOrders.toLocaleString("en-IN")}Cr new
+                  </span>
+                )}
+                {obToRev && (
+                  <span style={{ fontSize: "9px", color: obColor, fontFamily: "IBM Plex Mono, monospace" }}>
+                    {o.obToRevRatio}x rev
+                  </span>
+                )}
+              </div>
+              {isOpen && o.quarterHistory && o.quarterHistory.length > 0 && (
+                <div style={{ marginTop: 8, borderTop: "1px solid #0c2240", paddingTop: 6 }}>
+                  <div style={{ fontSize: "9px", color: "#00cfff", marginBottom: 4, fontWeight: 700 }}>
+                    QUARTER HISTORY
+                  </div>
+                  {[...o.quarterHistory].reverse().map((q, qi) => (
+                    <div key={qi} style={{
+                      display: "flex", justifyContent: "space-between",
+                      fontSize: "9px", fontFamily: "IBM Plex Mono, monospace",
+                      padding: "3px 0", borderBottom: "1px solid #0a1828"
+                    }}>
+                      <span style={{ color: "#7ab0d0" }}>{q.quarter}</span>
+                      <span style={{ color: "#d8eeff" }}>₹{(q.confirmedOrderBook || 0).toLocaleString("en-IN")}Cr</span>
+                      {q.addedOrders > 0 && (
+                        <span style={{ color: "#00ff9c" }}>+₹{q.addedOrders.toLocaleString("en-IN")}Cr</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="ord-stats"><span className="ord-val">₹{o.orderValue}Cr</span></div>
-            <div className="time-label">{o.time || "—"}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -703,7 +752,9 @@ export default function App() {
   const [activeTab,      setActiveTab]      = useState("bse");
   const [feedFilter,     setFeedFilter]     = useState("ALL");
   const [mobilePanelTab, setMobilePanelTab] = useState("feed");
-  const [cryptoAssets,   setCryptoAssets]   = useState([]);
+  const [cryptoAssets,   setCryptoAssets]  = useState([]);
+  const [liveOrderBook,  setLiveOrderBook] = useState([]);
+  const [obExpanded,     setObExpanded]    = useState(null);
 
   // ── Stale watchdog ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -845,7 +896,29 @@ export default function App() {
     const interval = setInterval(fetchOtherAssets, 60000);
     return () => clearInterval(interval);
   }, []);
+// ── Quarter helper ────────────────────────────────────────────────────────
+  function getCurrentQuarter() {
+    const now   = new Date();
+    const month = now.getMonth() + 1;
+    const year  = now.getFullYear();
+    if (month >= 4  && month <= 6)  return { label: "Q1", range: "Apr–Jun", fyYear: year + 1 };
+    if (month >= 7  && month <= 9)  return { label: "Q2", range: "Jul–Sep", fyYear: year + 1 };
+    if (month >= 10 && month <= 12) return { label: "Q3", range: "Oct–Dec", fyYear: year + 1 };
+    return { label: "Q4", range: "Jan–Mar", fyYear: year };
+  }
 
+  // ── Fetch full order book every 60s ──────────────────────────────────────
+  useEffect(() => {
+    const fetchOB = () => {
+      fetch("/api/orderbook")
+        .then(r => r.json())
+        .then(data => setLiveOrderBook(data.orderBook || []))
+        .catch(e => console.log("OB fetch error:", e));
+    };
+    fetchOB();
+    const iv = setInterval(fetchOB, 60000);
+    return () => clearInterval(iv);
+  }, []);
   // ── Events every 15s ─────────────────────────────────────────────────────
   useEffect(() => {
     const fetchEvents = () => {
@@ -1108,7 +1181,7 @@ export default function App() {
       <div className="layout desktop-layout">
         <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
         <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
-        <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} />
+       <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} />
         <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
       </div>
 
@@ -1127,7 +1200,7 @@ export default function App() {
         <div className="mobile-panel-wrap">
           {mobilePanelTab === "radar" && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />}
           {mobilePanelTab === "feed"  && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
-          {mobilePanelTab === "data"  && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} />}
+          {mobilePanelTab === "data"  && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} />}
           {mobilePanelTab === "intel" && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />}
         </div>
       </div>
