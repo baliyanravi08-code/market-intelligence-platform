@@ -136,7 +136,7 @@ async function enrichResultWithPDF(signal) {
 
       // FIX 1: was require("./orderBookDB") — wrong path from listeners/ dir
       try {
-        const orderBookDB = require("../data/orderBookDB");
+        const orderBookDB = require("../../data/orderBookDB");
         await orderBookDB.updateFromResultFiling(
           String(signal.code),
           signal.company,
@@ -230,7 +230,7 @@ async function processItem(item) {
     if (_crores > 0 && signalWithTs.code) {
       try {
         // FIX 2: path was already correct here — keeping as-is
-        const orderBookDB = require("../data/orderBookDB");
+        const orderBookDB = require("../../data/orderBookDB");
         await orderBookDB.addOrderToBook(
           String(signalWithTs.code),
           signalWithTs.company,

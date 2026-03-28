@@ -420,6 +420,251 @@ function IntelSummaryBar({ blocked, clean, cautioned }) {
   );
 }
 
+// ─── GLOBAL SEARCH ────────────────────────────────────────────────────────────
+
+function GlobalSearch({ onSelectCompany }) {
+  const [query,   setQuery]   = useState("");
+  const [results, setResults] = useState([]);
+  const [open,    setOpen]    = useState(false);
+  const [loading, setLoading] = useState(false);
+  const debounceRef = useRef(null);
+  const wrapRef     = useRef(null);
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const handleChange = (e) => {
+    const q = e.target.value;
+    setQuery(q);
+    clearTimeout(debounceRef.current);
+    if (q.length < 2) { setResults([]); setOpen(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/search/${encodeURIComponent(q)}`);
+        const data = await res.json();
+        setResults(data.results || []);
+        setOpen(true);
+      } catch (_) {}
+      setLoading(false);
+    }, 280);
+  };
+
+  const handleSelect = (company) => {
+    setQuery("");
+    setResults([]);
+    setOpen(false);
+    onSelectCompany(company);
+  };
+
+  return (
+    <div className="gs-wrap" ref={wrapRef}>
+      <span className="gs-icon">⌕</span>
+      <input
+        className="gs-input"
+        type="text"
+        placeholder="Search company..."
+        value={query}
+        onChange={handleChange}
+        onFocus={() => results.length > 0 && setOpen(true)}
+      />
+      {loading && <span className="gs-spinner" />}
+      {query && <button className="gs-clear" onClick={() => { setQuery(""); setResults([]); setOpen(false); }}>✕</button>}
+      {open && results.length > 0 && (
+        <div className="gs-dropdown">
+          {results.map((r, i) => (
+            <div key={i} className="gs-result" onClick={() => handleSelect(r)}>
+              <span className="gs-name">{r.name}</span>
+              <span className="gs-meta">{r.code}{r.sector ? ` · ${r.sector}` : ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {open && results.length === 0 && !loading && query.length >= 2 && (
+        <div className="gs-dropdown">
+          <div className="gs-empty">No results for "{query}"</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── COMPANY PANEL ────────────────────────────────────────────────────────────
+
+function OBBarChart({ history }) {
+  if (!history || history.length === 0) return null;
+  const max = Math.max(...history.map(q => q.confirmedOrderBook || 0), 1);
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 48, marginTop: 8 }}>
+      {[...history].slice(-6).map((q, i) => {
+        const pct = Math.max(((q.confirmedOrderBook || 0) / max) * 100, 2);
+        return (
+          <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+            <div style={{
+              width: "100%", height: `${pct}%`,
+              background: "linear-gradient(180deg, #00cfff, #004a6a)",
+              borderRadius: "2px 2px 0 0", minHeight: 2
+            }} />
+            <span style={{ fontSize: "7px", color: "#2a5070", fontFamily: "IBM Plex Mono", whiteSpace: "nowrap" }}>
+              {q.quarter?.replace("FY", "")?.slice(-4) || ""}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CompanyPanel({ company, onClose }) {
+  const [profile, setProfile] = useState(null);
+  const [ob,      setOb]      = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!company) return;
+    setProfile(null); setOb(null); setLoading(true);
+    const code = company.code;
+    const nse  = company.nseSymbol || "";
+    Promise.all([
+      fetch(`/api/company/${code}${nse ? `?nse=${nse}` : ""}`).then(r => r.json()).catch(() => null),
+      fetch(`/api/orderbook/${code}`).then(r => r.json()).catch(() => null),
+    ]).then(([prof, obData]) => {
+      setProfile(prof);
+      setOb(obData);
+      setLoading(false);
+    });
+  }, [company]);
+
+  if (!company) return null;
+
+  const p  = profile?.profile || {};
+  const f  = profile?.financials || {};
+  const ob_ = ob?.orderBook || null;
+  const filings = profile?.recentFilings || [];
+
+  return (
+    <>
+      <div className="cp-overlay" onClick={onClose} />
+      <div className="cp-panel">
+        {/* Header */}
+        <div className="cp-header">
+          <div>
+            <div className="cp-company">{company.name}</div>
+            <div className="cp-meta">
+              BSE: {company.code}
+              {company.nseSymbol ? ` · NSE: ${company.nseSymbol}` : ""}
+              {company.sector   ? ` · ${company.sector}` : ""}
+            </div>
+          </div>
+          <button className="cp-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="cp-body">
+          {loading && (
+            <div className="cp-loading">
+              <div className="ai-spinner" />
+              <span>Loading company data...</span>
+            </div>
+          )}
+
+          {!loading && (
+            <>
+              {/* Live price + key stats */}
+              <div className="cp-stats-grid">
+                {p.price && (
+                  <div className="cp-stat">
+                    <div className="cp-stat-val" style={{ color: "#00ff9c" }}>₹{p.price}</div>
+                    <div className="cp-stat-label">Price</div>
+                  </div>
+                )}
+                {p.marketCap && (
+                  <div className="cp-stat">
+                    <div className="cp-stat-val">₹{p.marketCap}Cr</div>
+                    <div className="cp-stat-label">Market Cap</div>
+                  </div>
+                )}
+                {p.high52 && (
+                  <div className="cp-stat">
+                    <div className="cp-stat-val" style={{ fontSize: "10px" }}>₹{p.high52} / ₹{p.low52}</div>
+                    <div className="cp-stat-label">52W High / Low</div>
+                  </div>
+                )}
+                {f.pe && (
+                  <div className="cp-stat">
+                    <div className="cp-stat-val">{f.pe}</div>
+                    <div className="cp-stat-label">P/E</div>
+                  </div>
+                )}
+                {f.bookValue && (
+                  <div className="cp-stat">
+                    <div className="cp-stat-val">₹{f.bookValue}</div>
+                    <div className="cp-stat-label">Book Value</div>
+                  </div>
+                )}
+                {f.roe && (
+                  <div className="cp-stat">
+                    <div className="cp-stat-val">{f.roe}%</div>
+                    <div className="cp-stat-label">ROE</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Order Book */}
+              <div className="cp-section-label">ORDER BOOK</div>
+              {ob_ ? (
+                <div className="cp-ob-card">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ color: "#d8eeff", fontWeight: 700 }}>₹{(ob_.currentOrderBook || 0).toLocaleString("en-IN")}Cr</span>
+                    {ob_.obToRevRatio && (
+                      <span style={{ fontSize: "10px", color: "#00cfff", fontFamily: "IBM Plex Mono" }}>{ob_.obToRevRatio}x OB/Rev</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: "9px", color: "#4a9abb", marginTop: 4 }}>
+                    Confirmed: ₹{(ob_.confirmed || 0).toLocaleString("en-IN")}Cr ({ob_.confirmedQuarter || "—"})
+                    {ob_.newOrders > 0 && ` · +₹${ob_.newOrders.toLocaleString("en-IN")}Cr new`}
+                  </div>
+                  {ob_.quarterHistory && <OBBarChart history={ob_.quarterHistory} />}
+                  {ob_.lastOrderTitle && (
+                    <div style={{ fontSize: "9px", color: "#2a5070", marginTop: 6, fontStyle: "italic" }}>
+                      Latest: {ob_.lastOrderTitle}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="cp-empty">Populates on ORDER_ALERT filings</div>
+              )}
+
+              {/* Recent filings */}
+              {filings.length > 0 && (
+                <>
+                  <div className="cp-section-label">RECENT FILINGS</div>
+                  {filings.slice(0, 8).map((f_, i) => {
+                    const url = f_.pdfUrl || f_.attachment || f_.url || null;
+                    return (
+                      <div key={i} className="cp-filing"
+                        onClick={() => url && window.open(url, "_blank", "noopener")}
+                        style={{ cursor: url ? "pointer" : "default" }}
+                      >
+                        <span className="cp-filing-title">{f_.title || "Filing"}</span>
+                        <span className="cp-filing-time">{formatTime(f_.time) || "—"}</span>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── PANELS — defined outside App() so they never remount on state change ─────
 
 function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
@@ -754,6 +999,7 @@ export default function App() {
   const [cryptoAssets,   setCryptoAssets]   = useState([]);
   const [liveOrderBook,  setLiveOrderBook]  = useState([]);
   const [obExpanded,     setObExpanded]     = useState(null);
+  const [selectedCompany, setSelectedCompany] = useState(null); // for CompanyPanel
 
   // ── Stale watchdog ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -770,7 +1016,6 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-
     const fetch24h = async () => {
       try {
         const r = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
@@ -778,10 +1023,8 @@ export default function App() {
         btc24hRef.current = parseFloat(d.priceChangePercent) || 0;
       } catch (e) { console.warn("BTC 24h fetch failed:", e.message); }
     };
-
     fetch24h();
     const hourly = setInterval(fetch24h, 3600000);
-
     const connectWS = () => {
       if (cancelled) return;
       if (btcWsRef.current) { try { btcWsRef.current.close(); } catch (e) {} }
@@ -811,9 +1054,7 @@ export default function App() {
         btcReconRef.current = setTimeout(connectWS, 2000);
       };
     };
-
     connectWS();
-
     return () => {
       cancelled = true;
       clearInterval(hourly);
@@ -833,7 +1074,6 @@ export default function App() {
       if (n >= 1)    return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
       return prefix + n.toFixed(4);
     };
-
     const fetchOtherAssets = async () => {
       const updates = {};
       try {
@@ -842,24 +1082,12 @@ export default function App() {
           { headers: { "Accept": "application/json" } }
         );
         const cg = await cgRes.json();
-        if (cg?.["pi-network"]) updates["PI"] = {
-          name: "PI", icon: "π", type: "crypto",
-          price: fmt(cg["pi-network"].usd),
-          change24h: cg["pi-network"].usd_24h_change || 0
-        };
-        if (cg?.["tether-gold"]) updates["GOLD"] = {
-          name: "GOLD", icon: "Au", type: "gold",
-          price: fmt(cg["tether-gold"].usd),
-          change24h: cg["tether-gold"].usd_24h_change || 0
-        };
+        if (cg?.["pi-network"]) updates["PI"] = { name: "PI", icon: "π", type: "crypto", price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0 };
+        if (cg?.["tether-gold"]) updates["GOLD"] = { name: "GOLD", icon: "Au", type: "gold", price: fmt(cg["tether-gold"].usd), change24h: cg["tether-gold"].usd_24h_change || 0 };
       } catch (e) { console.error("CoinGecko error:", e); }
-
       let silverPrice = 33.50, silverChange = 0;
       try {
-        const r = await fetch(
-          "https://query1.finance.yahoo.com/v8/finance/chart/SI%3DF?interval=1d&range=2d",
-          { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" } }
-        );
+        const r = await fetch("https://query1.finance.yahoo.com/v8/finance/chart/SI%3DF?interval=1d&range=2d", { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" } });
         const data = await r.json();
         const meta = data?.chart?.result?.[0]?.meta;
         if (meta?.regularMarketPrice && meta.regularMarketPrice > 5) {
@@ -868,21 +1096,14 @@ export default function App() {
           if (prev) silverChange = ((silverPrice - prev) / prev) * 100;
         }
       } catch (e) { console.warn("Silver fetch failed:", e.message); }
-
-      updates["SILVER"] = {
-        name: "SILVER", icon: "Ag", type: "silver",
-        price: fmt(silverPrice), change24h: silverChange
-      };
-
+      updates["SILVER"] = { name: "SILVER", icon: "Ag", type: "silver", price: fmt(silverPrice), change24h: silverChange };
       setCryptoAssets(prev => {
         const map = {};
         prev.forEach(a => { map[a.name] = a; });
         Object.assign(map, updates);
-        const order = ["BTC", "PI", "GOLD", "SILVER"];
-        return order.map(n => map[n]).filter(Boolean);
+        return ["BTC", "PI", "GOLD", "SILVER"].map(n => map[n]).filter(Boolean);
       });
     };
-
     fetchOtherAssets();
     const interval = setInterval(fetchOtherAssets, 60000);
     return () => clearInterval(interval);
@@ -934,28 +1155,21 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-
     const doFetch = async () => {
       if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
       if (abortRef.current) abortRef.current.abort();
       abortRef.current = new AbortController();
-
       try {
         const res  = await fetch("/api/market", { signal: abortRef.current.signal });
         const data = await res.json();
         if (cancelled) return;
-
         if (Array.isArray(data)) {
           const indices    = data.filter(d => d.name && !d._source);
           const sourceMeta = data.find(d => d._source);
           const src        = sourceMeta?._source || "disconnected";
           setTickerSource(src);
           if (indices.length) setMarketIndices(indices);
-          if (src === "upstox") {
-            setTickerLastOk(Date.now());
-            setTickerStale(false);
-            retryDelay.current = 3000;
-          }
+          if (src === "upstox") { setTickerLastOk(Date.now()); setTickerStale(false); retryDelay.current = 3000; }
           retryRef.current = setTimeout(doFetch, src === "upstox" ? 30000 : Math.min(retryDelay.current * 2, 30000));
           if (src !== "upstox") retryDelay.current = Math.min(retryDelay.current * 2, 30000);
         }
@@ -966,9 +1180,7 @@ export default function App() {
         retryDelay.current = Math.min(retryDelay.current * 2, 30000);
       }
     };
-
     doFetch();
-
     return () => {
       cancelled = true;
       if (retryRef.current) clearTimeout(retryRef.current);
@@ -1014,111 +1226,48 @@ export default function App() {
         t.includes("income tax") || t.includes("assessment") || t.includes("tax demand") ||
         t.includes("penalty") || t.includes("nclt")
       );
-      if (t.includes("fraud") || t.includes("insolvency") || t.includes("default")) {
-        type = "RISK"; score = 95;
-      } else if (t.includes("penalty") || t.includes("nclt")) {
-        type = "RISK"; score = 85;
-      } else if (
-        t.includes("solar") || t.includes("renewable") || t.includes("green energy") ||
-        t.includes("power purchase") || t.includes("spv") ||
-        (t.includes("equity stake") || (t.includes("subscribe") && t.includes("equity"))) ||
-        t.includes("capex") || t.includes("greenfield") || t.includes("brownfield") ||
-        t.includes("expansion") ||
-        (t.includes("invest") && !t.includes("investor") && !t.includes("investment in"))
-      ) {
-        type = "CAPEX"; score = 75;
-      } else if (
-        t.includes("purchase order") || t.includes("work order") ||
-        t.includes("supply order")   || t.includes("receipt of order") ||
-        t.includes("order received") || t.includes("order secured") ||
-        t.includes("major order")    || t.includes("letter of acceptance") ||
-        t.includes("rate contract")  || t.includes("bagged") ||
-        t.includes("contract awarded") || t.includes("loa") ||
-        (t.includes("order") &&
-          (t.includes("crore") || t.includes("lakh") || t.includes("₹") || t.includes("rs.")) &&
-          !isNonOrder)
-      ) {
-        type = "ORDER"; score = 90;
-      } else if (
-        t.includes("merger") || t.includes("amalgamation") ||
-        (t.includes("acquisition") && !t.includes("solar") && !t.includes("invest") &&
-         !t.includes("subscribe") && !t.includes("equity shares of") &&
-         !t.includes("spv") && !t.includes("stake") && !t.includes("power"))
-      ) {
-        type = "MERGER"; score = 80;
-      } else if (t.includes("buyback")) {
-        type = "BUYBACK"; score = 78;
-      } else if (t.includes("result") || t.includes("quarterly")) {
-        type = "RESULT"; score = 65;
-      } else if (t.includes("insider") || t.includes("promoter") || t.includes("bulk deal")) {
-        type = "INSIDER"; score = 70;
-      } else if (t.includes("dividend")) {
-        type = "DIVIDEND"; score = 60;
-      } else if (t.includes("partnership") || t.includes("joint venture") || t.includes("mou")) {
-        type = "PARTNERSHIP"; score = 72;
-      }
+      if (t.includes("fraud") || t.includes("insolvency") || t.includes("default"))   { type = "RISK";   score = 95; }
+      else if (t.includes("penalty") || t.includes("nclt"))                            { type = "RISK";   score = 85; }
+      else if (t.includes("solar") || t.includes("renewable") || t.includes("capex") || t.includes("greenfield") || t.includes("brownfield") || t.includes("expansion") || t.includes("power purchase") || t.includes("spv") || (t.includes("equity stake") || (t.includes("subscribe") && t.includes("equity"))) || (t.includes("invest") && !t.includes("investor") && !t.includes("investment in"))) { type = "CAPEX"; score = 75; }
+      else if (t.includes("purchase order") || t.includes("work order") || t.includes("supply order") || t.includes("receipt of order") || t.includes("order received") || t.includes("order secured") || t.includes("major order") || t.includes("letter of acceptance") || t.includes("rate contract") || t.includes("bagged") || t.includes("contract awarded") || t.includes("loa") || (t.includes("order") && (t.includes("crore") || t.includes("lakh") || t.includes("₹") || t.includes("rs.")) && !isNonOrder)) { type = "ORDER"; score = 90; }
+      else if (t.includes("merger") || t.includes("amalgamation") || (t.includes("acquisition") && !t.includes("solar") && !t.includes("invest") && !t.includes("subscribe") && !t.includes("equity shares of") && !t.includes("spv") && !t.includes("stake") && !t.includes("power"))) { type = "MERGER"; score = 80; }
+      else if (t.includes("buyback"))   { type = "BUYBACK";     score = 78; }
+      else if (t.includes("result") || t.includes("quarterly")) { type = "RESULT"; score = 65; }
+      else if (t.includes("insider") || t.includes("promoter") || t.includes("bulk deal")) { type = "INSIDER"; score = 70; }
+      else if (t.includes("dividend")) { type = "DIVIDEND"; score = 60; }
+      else if (t.includes("partnership") || t.includes("joint venture") || t.includes("mou")) { type = "PARTNERSHIP"; score = 72; }
       return {
-        company:     e?.company || "Unknown",
-        score, type,
+        company:     e?.company || "Unknown", score, type,
         exchange:    e._exchange || "BSE",
-        receivedAt:  e?.receivedAt,
-        time:        e?.time,
+        receivedAt:  e?.receivedAt, time: e?.time,
         pdfUrl:      e?.pdfUrl || e?.attachment || null,
         orderValue:  extractAmount(e?.title),
         conflict:    getContradict(e?.company || "", e?.title || ""),
-        caution:     !getContradict(e?.company || "", e?.title || "")
-                       ? getSoftRisk(e?.company || "", e?.title || "")
-                       : null,
+        caution:     !getContradict(e?.company || "", e?.title || "") ? getSoftRisk(e?.company || "", e?.title || "") : null,
         priceImpact: estimatePriceImpact(type, extractAmount(e?.title || ""), e?.title || ""),
       };
     });
 
   const computedMegaOrders = (bseEvents || []).filter(e => {
     const t = (e?.title || "").toLowerCase();
-    const isRealOrder =
-      (t.includes("order") || t.includes("contract")) &&
-      (t.includes("crore") || t.includes("₹") || t.includes("rs")) &&
-      !t.includes("solar") && !t.includes("renewable") && !t.includes("invest") &&
-      !t.includes("spv") && !t.includes("equity") && !t.includes("subscribe") &&
-      !t.includes("income tax") && !t.includes("penalty") && !t.includes("nclt");
+    const isRealOrder = (t.includes("order") || t.includes("contract")) && (t.includes("crore") || t.includes("₹") || t.includes("rs")) && !t.includes("solar") && !t.includes("renewable") && !t.includes("invest") && !t.includes("spv") && !t.includes("equity") && !t.includes("subscribe") && !t.includes("income tax") && !t.includes("penalty") && !t.includes("nclt");
     if (!isRealOrder) return false;
     const cr = e._orderInfo?.crores || extractAmount(e.title);
     if (!cr) return false;
-    const mcapEntry = window._mcapDb?.find?.(m =>
-      (m.company || "").toLowerCase() === (e.company || "").toLowerCase()
-    );
+    const mcapEntry = window._mcapDb?.find?.(m => (m.company || "").toLowerCase() === (e.company || "").toLowerCase());
     const mcap = mcapEntry?.mcap || 0;
     return cr >= 500 || (mcap > 0 && (cr / mcap) >= 0.08);
-  })
-    .sort((a, b) =>
-      (b._orderInfo?.crores || extractAmount(b.title)) -
-      (a._orderInfo?.crores || extractAmount(a.title))
-    )
-    .slice(0, 10)
-    .map(e => ({
-      company:    e.company,
-      crores:     e._orderInfo?.crores || extractAmount(e.title),
-      receivedAt: e.receivedAt,
-      time:       e.time
-    }));
+  }).sort((a, b) => (b._orderInfo?.crores || extractAmount(b.title)) - (a._orderInfo?.crores || extractAmount(a.title))).slice(0, 10).map(e => ({ company: e.company, crores: e._orderInfo?.crores || extractAmount(e.title), receivedAt: e.receivedAt, time: e.time }));
 
   const seenOpp = new Set();
-  const computedOpportunities = computedRadar
-    .filter(r => {
-      if (r.conflict) return false;
-      if (r.score < 70) return false;
-      const key = `${r.company}||${r.type}`;
-      if (seenOpp.has(key)) return false;
-      seenOpp.add(key);
-      return true;
-    })
-    .slice(0, 5)
-    .map(r => ({
-      company:     r.company, score: r.score, type: r.type,
-      receivedAt:  r.receivedAt, time: r.time,
-      caution:     r.caution,
-      priceImpact: r.priceImpact,
-    }));
+  const computedOpportunities = computedRadar.filter(r => {
+    if (r.conflict) return false;
+    if (r.score < 70) return false;
+    const key = `${r.company}||${r.type}`;
+    if (seenOpp.has(key)) return false;
+    seenOpp.add(key);
+    return true;
+  }).slice(0, 5).map(r => ({ company: r.company, score: r.score, type: r.type, receivedAt: r.receivedAt, time: r.time, caution: r.caution, priceImpact: r.priceImpact }));
 
   const intelStats = {
     blocked:   computedRadar.filter(r => !!r.conflict).length,
@@ -1143,26 +1292,17 @@ export default function App() {
           <MarketStatus />
           {needsConnect && (
             <span
-              style={{
-                fontSize: "9px", fontFamily: "IBM Plex Mono, monospace",
-                color: "#ffaa00", cursor: "pointer", marginLeft: 6,
-                textDecoration: "underline"
-              }}
+              style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }}
               onClick={() => window.open("/auth/upstox", "_blank")}
-              title="Click to connect Upstox for real-time NIFTY / SENSEX data"
             >
               Connect Upstox →
             </span>
           )}
         </div>
+        <GlobalSearch onSelectCompany={setSelectedCompany} />
       </div>
 
-      <TickerBar
-        indices={marketIndices}
-        assets={cryptoAssets}
-        dataSource={tickerSource}
-        tickerStale={tickerStale}
-      />
+      <TickerBar indices={marketIndices} assets={cryptoAssets} dataSource={tickerSource} tickerStale={tickerStale} />
 
       <div className="layout desktop-layout">
         <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
@@ -1174,11 +1314,7 @@ export default function App() {
       <div className="mobile-layout">
         <div className="mobile-tab-bar">
           {MOBILE_TABS.map(t => (
-            <button
-              key={t.key}
-              className={`mobile-tab-btn ${mobilePanelTab === t.key ? "active" : ""}`}
-              onClick={() => setMobilePanelTab(t.key)}
-            >
+            <button key={t.key} className={`mobile-tab-btn ${mobilePanelTab === t.key ? "active" : ""}`} onClick={() => setMobilePanelTab(t.key)}>
               {t.label}
             </button>
           ))}
@@ -1190,6 +1326,9 @@ export default function App() {
           {mobilePanelTab === "intel" && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />}
         </div>
       </div>
+
+      {/* Company slide-in panel */}
+      <CompanyPanel company={selectedCompany} onClose={() => setSelectedCompany(null)} />
     </div>
   );
 }

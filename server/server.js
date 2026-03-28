@@ -265,66 +265,25 @@ app.get("/api/mcap", (req, res) => {
   }
 });
 
-// ── /api/orderbook — MongoDB primary, static marketCap fallback ──────────────
+// ── /api/orderbook — MongoDB order book tracker ──────────────────────────────
 app.get("/api/orderbook", async (req, res) => {
-  // Try MongoDB first (live data written by bseListener on every ORDER_ALERT)
   try {
-    const orderBookDB = require("./services/data/orderBookDB");
-    const mongoResult = await orderBookDB.getAllOrderBooks();
-    if (mongoResult && mongoResult.length > 0) {
-      return res.json({ orderBook: mongoResult, count: mongoResult.length, source: "mongo" });
-    }
-  } catch(e) {
-    console.log("⚠️ OrderBook MongoDB read failed, falling back:", e.message);
-  }
-
-  // Fallback: static marketCap data file
-  try {
-    const { getCompaniesByMcap, getEstimatedOrderBook } = require("./data/marketCap");
-    const companies = getCompaniesByMcap(0);
-    const result = [];
-
-    for (const [code, data] of Object.entries(companies)) {
-      const ob = getEstimatedOrderBook(code);
-      if (!ob || !ob.confirmed) continue;
-      result.push({
-        code,
-        company:          data.name || code,
-        mcap:             data.mcap || 0,
-        confirmed:        ob.confirmed,
-        confirmedQuarter: ob.confirmedQuarter,
-        newOrders:        ob.newOrders || 0,
-        estimated:        ob.estimated,
-        currentOrderBook: ob.currentOrderBook,
-        obToRevRatio:     ob.obToRevRatio,
-        bookToBill:       ob.bookToBill,
-        quarterHistory:   ob.quarterHistory || [],
-        lastUpdated:      data.lastResultUpdate || null
-      });
-    }
-
-    result.sort((a, b) => (b.currentOrderBook || 0) - (a.currentOrderBook || 0));
-    return res.json({ orderBook: result, count: result.length, source: "static" });
+    const orderBookDB = require("./data/orderBookDB");
+    const result = await orderBookDB.getAllOrderBooks();
+    res.json({ orderBook: result || [], count: (result || []).length });
   } catch(e) {
     console.error("❌ Order book API error:", e.message);
-    return res.json({ orderBook: [], count: 0 });
+    res.json({ orderBook: [], count: 0 });
   }
 });
 
-// ── Quarter helper ────────────────────────────────────────────────────────
-app.get("/api/orderbook/:code", (req, res) => {
+// ── /api/orderbook/:code — single company ────────────────────────────────────
+app.get("/api/orderbook/:code", async (req, res) => {
   try {
-    const { getEstimatedOrderBook, getCompanyData } = require("./data/marketCap");
-    const code = req.params.code;
-    const ob   = getEstimatedOrderBook(code);
-    const data = getCompanyData(code);
+    const orderBookDB = require("./data/orderBookDB");
+    const ob = await orderBookDB.getOrderBook(req.params.code);
     if (!ob) return res.json({ error: "No order book data for this company" });
-    res.json({
-      code,
-      company:        data.name || code,
-      mcap:           data.mcap || 0,
-      ...ob
-    });
+    res.json(ob);
   } catch(e) {
     res.json({ error: e.message });
   }

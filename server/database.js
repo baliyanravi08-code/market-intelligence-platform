@@ -52,9 +52,9 @@ async function connectDB() {
     mongoConnected = true;
     console.log("✅ MongoDB Connected");
 
-    // ── ADDED: Init OrderBook model after connection ──
+    // FIX: was ./services/data/orderBookDB — file is at server/data/orderBookDB.js
     try {
-      const orderBookDB = require("./services/data/orderBookDB");
+      const orderBookDB = require("./data/orderBookDB");
       orderBookDB.init();
     } catch(e) {
       console.log("⚠️ OrderBook DB init failed:", e.message);
