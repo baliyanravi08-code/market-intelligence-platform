@@ -919,3 +919,59 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   .ai-modal { max-height: 90vh; }
   .ai-modal-title { max-width: 260px; }
 }
+/* ===== INTELLIGENCE ENGINE ADDITIONS ===== */
+
+/* Contradiction-blocked radar card */
+.radar-card.rc-blocked {
+  border-left: 3px solid #ff5c5c !important;
+  background: linear-gradient(145deg, #0d0208, #020c1a) !important;
+  opacity: 0.85;
+}
+
+/* Caution radar card */
+.radar-card.rc-caution {
+  border-left: 3px solid #ffaa00 !important;
+  background: linear-gradient(145deg, #0d0a02, #020c1a) !important;
+}
+
+/* Intel summary bar inside Opportunities */
+.intel-summary-bar {
+  display: flex;
+  gap: 6px;
+  padding: 5px 8px;
+  background: #010a18;
+  border: 1px solid #0c2240;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Opportunity card with caution */
+.opp-card.opp-caution {
+  border-left: 3px solid #ffaa00;
+}
+
+/* Price impact pill */
+.price-impact {
+  font-size: 9px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.price-impact.pos { color: #00ff9c; background: #002210; border: 1px solid #00ff9c33; }
+.price-impact.neg { color: #ff5c5c; background: #1a0008; border: 1px solid #ff5c5c33; }
+
+/* Intelligence Engine stats section */
+.intel-stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* type badge for RISK */
+.type-RISK       { background: #ff2d55; color: #fff; }
+.type-BUYBACK    { background: #00ff9c; color: #000; }
+.type-DIVIDEND   { background: #0088dd; color: #fff; }
+.type-PARTNERSHIP{ background: #ffe14d; color: #000; }

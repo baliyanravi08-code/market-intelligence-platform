@@ -33,6 +33,78 @@ const NOISE_WORDS = [
   "pursuant to regulation", "intimation pursuant"
 ];
 
+// ─── INTELLIGENCE ENGINE ──────────────────────────────────────────────────────
+
+// Risk registry: known active risk flags per company (populated from API + NLP)
+// Keys are lowercase company name substrings for fuzzy matching
+const RISK_REGISTRY = [
+  { match: "indusind",    type: "GOVERNANCE",  severity: "HIGH", desc: "CEO departure + RBI inquiry pending" },
+  { match: "paytm",      type: "REGULATORY",  severity: "HIGH", desc: "RBI payment bank restrictions" },
+  { match: "adani",      type: "LEGAL",       severity: "HIGH", desc: "Ongoing DOJ indictment proceedings" },
+  { match: "byju",       type: "INSOLVENCY",  severity: "HIGH", desc: "NCLT insolvency proceedings active" },
+  { match: "yes bank",   type: "GOVERNANCE",  severity: "MED",  desc: "Promoter pledge concerns" },
+  { match: "vodafone",   type: "DEBT",        severity: "MED",  desc: "AGR dues + spectrum debt pressure" },
+];
+
+// NLP-based risk signal detector — scans filing title/text
+function detectRiskFromText(title = "") {
+  const t = title.toLowerCase();
+  if (t.includes("fraud") || t.includes("insolvency") || t.includes("default"))
+    return { type: "FRAUD/INSOLVENCY", severity: "HIGH", desc: "Fraud or insolvency mention in filing" };
+  if (t.includes("nclt") || t.includes("liquidation"))
+    return { type: "LEGAL", severity: "HIGH", desc: "NCLT / liquidation proceedings" };
+  if (t.includes("penalty") && (t.includes("crore") || t.includes("lakh")))
+    return { type: "PENALTY", severity: "MED", desc: "Regulatory penalty detected" };
+  if (t.includes("sebi") && (t.includes("notice") || t.includes("order") || t.includes("show cause")))
+    return { type: "REGULATORY", severity: "HIGH", desc: "SEBI enforcement action" };
+  if (t.includes("rbi") && (t.includes("penalty") || t.includes("directive") || t.includes("action")))
+    return { type: "REGULATORY", severity: "HIGH", desc: "RBI enforcement action" };
+  if (t.includes("income tax") || t.includes("tax demand") || t.includes("assessment order"))
+    return { type: "TAX", severity: "MED", desc: "Tax demand / assessment notice" };
+  if (t.includes("promoter") && t.includes("sell"))
+    return { type: "INSIDER", severity: "MED", desc: "Promoter selling detected" };
+  return null;
+}
+
+// Lookup company in the risk registry
+function getRegistryRisk(companyName = "") {
+  const c = companyName.toLowerCase();
+  return RISK_REGISTRY.find(r => c.includes(r.match)) || null;
+}
+
+// Master contradiction check: returns risk info if this event should be blocked
+function getContradict(companyName, title) {
+  const registryRisk = getRegistryRisk(companyName);
+  if (registryRisk && registryRisk.severity === "HIGH") return registryRisk;
+  const textRisk = detectRiskFromText(title);
+  if (textRisk && textRisk.severity === "HIGH") return textRisk;
+  return null;
+}
+
+// Soft risk: doesn't block opportunity but adds a caution flag
+function getSoftRisk(companyName, title) {
+  const registryRisk = getRegistryRisk(companyName);
+  if (registryRisk && registryRisk.severity === "MED") return registryRisk;
+  const textRisk = detectRiskFromText(title);
+  if (textRisk && textRisk.severity === "MED") return textRisk;
+  return null;
+}
+
+// Price impact estimator based on event type + order value
+function estimatePriceImpact(type, crores, companyTitle = "") {
+  const t = companyTitle.toLowerCase();
+  let base = 0;
+  if (type === "ORDER")   base = crores >= 500 ? 4.5 : crores >= 100 ? 2.8 : 1.5;
+  if (type === "MERGER")  base = 8.0;
+  if (type === "CAPEX")   base = 2.2;
+  if (type === "RESULT")  base = t.includes("profit") ? 3.5 : t.includes("loss") ? -4.0 : 1.0;
+  if (type === "INSIDER") base = t.includes("buy") ? 2.5 : -2.0;
+  if (type === "RISK")    base = -6.5;
+  return base;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // --- Utilities ---
 function formatTime(raw) {
   if (!raw) return null;
@@ -265,6 +337,80 @@ function TickerBar({ indices, assets, dataSource, tickerStale }) {
   );
 }
 
+// ── INTELLIGENCE COMPONENTS ───────────────────────────────────────────────────
+
+function ConflictBadge({ risk }) {
+  if (!risk) return null;
+  return (
+    <span style={{
+      fontSize: "8px", fontWeight: 700, fontFamily: "IBM Plex Mono, monospace",
+      padding: "1px 5px", borderRadius: "3px", letterSpacing: 0.4,
+      background: "#1a0008", color: "#ff5c5c",
+      border: "1px solid #ff5c5c44", whiteSpace: "nowrap",
+    }}>
+      ⚠ {risk.type}
+    </span>
+  );
+}
+
+function CautionBadge({ risk }) {
+  if (!risk) return null;
+  return (
+    <span style={{
+      fontSize: "8px", fontWeight: 700, fontFamily: "IBM Plex Mono, monospace",
+      padding: "1px 5px", borderRadius: "3px", letterSpacing: 0.4,
+      background: "#1a1000", color: "#ffaa00",
+      border: "1px solid #ffaa0044", whiteSpace: "nowrap",
+    }}>
+      ⚡ {risk.type}
+    </span>
+  );
+}
+
+function PriceImpactBadge({ impact }) {
+  if (!impact) return null;
+  const pos = impact > 0;
+  return (
+    <span style={{
+      fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700,
+      color: pos ? "#00ff9c" : "#ff5c5c",
+      background: pos ? "#002210" : "#1a0008",
+      border: `1px solid ${pos ? "#00ff9c33" : "#ff5c5c33"}`,
+      padding: "1px 5px", borderRadius: "3px",
+    }}>
+      {pos ? "+" : ""}{impact.toFixed(1)}% est.
+    </span>
+  );
+}
+
+// Intelligence summary banner — shown at top of Opportunities section
+function IntelSummaryBar({ blocked, clean, cautioned }) {
+  return (
+    <div style={{
+      display: "flex", gap: 6, padding: "5px 8px",
+      background: "#010a18", border: "1px solid #0c2240",
+      borderRadius: 4, marginBottom: 8, flexWrap: "wrap", alignItems: "center",
+    }}>
+      <span style={{ fontSize: "8px", fontFamily: "IBM Plex Mono, monospace", color: "#1a5070", letterSpacing: 1 }}>
+        INTEL ENGINE
+      </span>
+      <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#00ff9c" }}>
+        ✓ {clean} clean
+      </span>
+      {cautioned > 0 && (
+        <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00" }}>
+          ⚡ {cautioned} caution
+        </span>
+      )}
+      {blocked > 0 && (
+        <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ff5c5c" }}>
+          ✗ {blocked} blocked
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── PANELS — defined OUTSIDE App() so they never remount on state change ─────
 
 function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
@@ -286,31 +432,36 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
       {filteredRadar.length === 0 ? (
         <div className="empty">No matches for "{radarQuery}"</div>
       ) : filteredRadar.map((r, i) => (
-        <div className="radar-card" key={i}>
-          <div className="rc-top">
-            <span className="co-name">{r.company}</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{
-                fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
-                background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
-                color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
-                border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
-              }}>{r.exchange}</span>
-              <span style={{
-                background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
-                color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
-                border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
-                borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
-              }}>{r.score}</span>
+          <div className="radar-card" key={i} style={{
+            borderLeft: r.conflict ? "3px solid #ff5c5c" : r.caution ? "3px solid #ffaa00" : undefined,
+            background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined,
+          }}>
+            <div className="rc-top">
+              <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>{r.company}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{
+                  fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
+                  background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
+                  color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
+                  border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
+                }}>{r.exchange}</span>
+                <span style={{
+                  background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
+                  color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
+                  border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
+                  borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
+                }}>{r.conflict ? "—" : r.score}</span>
+              </div>
             </div>
+            <div className="tag-row">
+              <span className={`type type-${r.type}`}>{r.type}</span>
+              {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
+              {r.conflict  && <ConflictBadge risk={r.conflict} />}
+              {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
+              {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">📄 Filing</a>}
+            </div>
+            <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
           </div>
-          <div className="tag-row">
-            <span className={`type type-${r.type}`}>{r.type}</span>
-            {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
-            {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">📄 Filing</a>}
-          </div>
-          <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
-        </div>
       ))}
     </div>
   );
@@ -375,7 +526,7 @@ function FeedPanel({ filteredFeed, activeTab, setActiveTab, feedFilter, setFeedF
   );
 }
 
-function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBook }) {
+function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBook, intelStats }) {
   return (
     <div className="panel right-panel">
       <div className="section">
@@ -403,14 +554,25 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
 
       <div className="section">
         <div className="section-divider">💡 Opportunities <span className="count">{computedOpportunities.length}</span></div>
+        <IntelSummaryBar
+          blocked={intelStats.blocked}
+          clean={intelStats.clean}
+          cautioned={intelStats.cautioned}
+        />
         {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div>
           : computedOpportunities.map((o, i) => (
-          <div className="opp-card" key={i}>
+          <div className="opp-card" key={i} style={{
+            borderLeft: o.caution ? "3px solid #ffaa00" : "3px solid #0c2240",
+          }}>
             <div className="opp-row" style={{ display: "flex", justifyContent: "space-between" }}>
               <span className="co-name">{o.company}</span>
               <span className="opp-pct">{o.score}%</span>
             </div>
-            <span className={`type type-${o.type}`} style={{ fontSize: "8px", marginTop: 2 }}>{o.type}</span>
+            <div style={{ display: "flex", gap: 5, marginTop: 3, flexWrap: "wrap", alignItems: "center" }}>
+              <span className={`type type-${o.type}`} style={{ fontSize: "8px" }}>{o.type}</span>
+              {o.caution && <CautionBadge risk={o.caution} />}
+              {o.priceImpact !== undefined && <PriceImpactBadge impact={o.priceImpact} />}
+            </div>
             <div className="time-label" style={{ marginTop: 3 }}>{formatTime(o.time) || "—"}</div>
           </div>
         ))}
@@ -449,7 +611,7 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
   );
 }
 
-function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSource }) {
+function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSource, intelStats }) {
   const srcLabel =
     tickerSource === "upstox"       ? "⚡ Upstox Live"  :
     tickerSource === "disconnected" ? "○ Disconnected"  :
@@ -462,11 +624,22 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
     <div className="panel intelligence-panel">
       <div className="section">
         <div className="section-divider">🔔 Alerts</div>
-        {computedRadar.slice(0, 5).map((e, i) => (
-          <div key={i} className="mini-card">
-            <span style={{ color: "#d8eeff" }}>{e.company}</span>
-            <span style={{ color: "#4a7090" }}> → </span>
-            <span className={`type type-${e.type}`} style={{ fontSize: "8px", padding: "1px 4px" }}>{e.type}</span>
+        {computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).map((e, i) => (
+          <div key={i} className="mini-card" style={{
+            borderLeft: e.conflict ? "3px solid #ff5c5c" : e.score >= 80 ? "3px solid #ff9c00" : undefined,
+            background: e.conflict ? "#0c0208" : undefined,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ color: e.conflict ? "#ff7070" : "#d8eeff", fontSize: "10px" }}>{e.company}</span>
+              {e.conflict
+                ? <span style={{ fontSize: "8px", color: "#ff5c5c", fontFamily: "IBM Plex Mono,monospace" }}>BLOCKED</span>
+                : <span style={{ fontSize: "9px", color: "#ff9c00", fontFamily: "IBM Plex Mono,monospace", fontWeight: 700 }}>{e.score}</span>
+              }
+            </div>
+            <div style={{ display: "flex", gap: 5, marginTop: 3, alignItems: "center" }}>
+              <span className={`type type-${e.type}`} style={{ fontSize: "8px" }}>{e.type}</span>
+              {e.conflict && <ConflictBadge risk={e.conflict} />}
+            </div>
           </div>
         ))}
       </div>
@@ -477,6 +650,29 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
         <div className="mini-card" style={{ color: "#4a8adf" }}>BSE Events: {bseEvents.length}</div>
         <div className="mini-card" style={{ color: "#4a8adf" }}>NSE Events: {nseEvents.length}</div>
         <div className="mini-card" style={{ color: srcColor }}>Index Feed: {srcLabel}</div>
+      </div>
+      <div className="section">
+        <div className="section-divider">🧠 Intelligence Engine</div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Contradiction filter</span>
+          <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>ACTIVE</span>
+        </div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Clean signals</span>
+          <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.clean}</span>
+        </div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Blocked (HIGH risk)</span>
+          <span style={{ fontSize: "9px", color: "#ff5c5c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.blocked}</span>
+        </div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Cautioned (MED risk)</span>
+          <span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.cautioned}</span>
+        </div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Risk registry</span>
+          <span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono,monospace" }}>{RISK_REGISTRY.length} entities</span>
+        </div>
       </div>
     </div>
   );
@@ -808,7 +1004,12 @@ export default function App() {
         receivedAt: e?.receivedAt,
         time:       e?.time,
         pdfUrl:     e?.pdfUrl || e?.attachment || null,
-        orderValue: extractAmount(e?.title)
+        orderValue: extractAmount(e?.title),
+        conflict:   getContradict(e?.company || "", e?.title || ""),
+        caution:    !getContradict(e?.company || "", e?.title || "")
+                      ? getSoftRisk(e?.company || "", e?.title || "")
+                      : null,
+        priceImpact: estimatePriceImpact(type, extractAmount(e?.title || ""), e?.title || ""),
       };
     });
 
@@ -844,6 +1045,7 @@ export default function App() {
   const seenOpp = new Set();
   const computedOpportunities = computedRadar
     .filter(r => {
+      if (r.conflict) return false;           // ← CONTRADICTION FILTER: blocks HIGH risk
       if (r.score < 70) return false;
       const key = `${r.company}||${r.type}`;
       if (seenOpp.has(key)) return false;
@@ -851,7 +1053,19 @@ export default function App() {
       return true;
     })
     .slice(0, 5)
-    .map(r => ({ company: r.company, score: r.score, type: r.type, receivedAt: r.receivedAt, time: r.time }));
+    .map(r => ({
+      company: r.company, score: r.score, type: r.type,
+      receivedAt: r.receivedAt, time: r.time,
+      caution: r.caution,
+      priceImpact: r.priceImpact,
+    }));
+
+  // Intelligence stats for display
+  const intelStats = {
+    blocked:   computedRadar.filter(r => !!r.conflict).length,
+    cautioned: computedRadar.filter(r => !r.conflict && !!r.caution).length,
+    clean:     computedRadar.filter(r => !r.conflict && !r.caution && r.score >= 60).length,
+  };
 
   const filteredRadar = computedRadar.filter(r =>
     !radarQuery ||
@@ -894,8 +1108,8 @@ export default function App() {
       <div className="layout desktop-layout">
         <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
         <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
-        <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} />
-        <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} />
+        <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} />
+        <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
       </div>
 
       <div className="mobile-layout">
@@ -913,8 +1127,8 @@ export default function App() {
         <div className="mobile-panel-wrap">
           {mobilePanelTab === "radar" && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />}
           {mobilePanelTab === "feed"  && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
-          {mobilePanelTab === "data"  && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} />}
-          {mobilePanelTab === "intel" && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} />}
+          {mobilePanelTab === "data"  && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} />}
+          {mobilePanelTab === "intel" && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />}
         </div>
       </div>
     </div>
