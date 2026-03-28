@@ -24,8 +24,6 @@ const seen    = new Set();
 const BSE_HOME = "https://www.bseindia.com/corporates/ann.html";
 const BSE_API  = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C&subcategory=-1";
 
-// Companies we track order book for — EPC, Infra, Defense, Railway, Solar, Water
-// Loaded from marketCapDB + static list — any company that has ever had ORDER_ALERT
 const ORDER_BOOK_SECTORS = [
   "infra", "epc", "engineer", "construct", "railway", "defense", "defence",
   "solar", "renewable", "power", "water", "wabag", "rites", "rvnl", "irfc",
@@ -114,15 +112,11 @@ function extractList(data) {
   return [];
 }
 
-// ── Extract order book from result PDF ──
 async function enrichResultWithPDF(signal) {
   if (!signal.pdfUrl) return signal;
-
-  // Only fetch PDF for EPC/infra/order-book companies
   const { getMarketCap } = require("../data/marketCap");
-  const hasExistingOB    = getMarketCap(signal.code); // proxy — if we know the company
+  const hasExistingOB    = getMarketCap(signal.code);
   const isTrackedCompany = isOrderBookCompany(signal.company) || hasExistingOB;
-
   if (!isTrackedCompany) return signal;
 
   try {
@@ -133,20 +127,28 @@ async function enrichResultWithPDF(signal) {
     const pdfText = await extractOrderValueFromPDF(signal.pdfUrl);
 
     if (pdfText && pdfText > 0) {
-      // pdfText is a crore value from pdfReader
-      // But for results we need to look for "order book" specifically
-      // pdfReader already returns the largest crore value — which in results is usually order book
       const quarter = getCurrentFYQuarter();
-
       updateFromResult(String(signal.code), {
         confirmedOrderBook:    pdfText,
         confirmedQuarter:      quarter,
         newOrdersSinceConfirm: 0
       });
 
-      console.log(`📦 Result PDF order book: ${signal.company} ₹${pdfText}Cr (${quarter})`);
+      // ── ADDED: Also persist to MongoDB OrderBook ──
+      try {
+        const orderBookDB = require("./orderBookDB");
+        await orderBookDB.updateFromResultFiling(
+          String(signal.code),
+          signal.company,
+          pdfText,
+          quarter,
+          null // ttmRevenue — not available here
+        );
+      } catch(e) {
+        console.log("⚠️ OrderBook result update failed:", e.message);
+      }
 
-      // Add to signal for display
+      console.log(`📦 Result PDF order book: ${signal.company} ₹${pdfText}Cr (${quarter})`);
       if (!signal.resultSignals) signal.resultSignals = [];
       signal.resultSignals.push(`OB ₹${pdfText >= 1000 ? (pdfText/1000).toFixed(1)+"K" : pdfText}Cr (PDF)`);
     }
@@ -176,7 +178,7 @@ async function processItem(item) {
 
   if (!signal) return;
 
-  // ── PDF enrichment for ORDER_ALERT with no crore value ──
+  // PDF enrichment for ORDER_ALERT with no crore value
   if (signal.type === "ORDER_ALERT" && !signal._orderInfo?.crores && signal.pdfUrl) {
     try {
       const { extractOrderValueFromPDF } = require("../data/pdfReader");
@@ -199,8 +201,7 @@ async function processItem(item) {
     }
   }
 
-  // ── PDF enrichment for RESULT — extract order book ──
-  // Only for EPC/infra companies, runs async without blocking
+  // PDF enrichment for RESULT
   if ((signal.type === "RESULT" || signal.type === "BANK_RESULT") && signal.pdfUrl) {
     enrichResultWithPDF(signal).catch(() => {});
   }
@@ -208,7 +209,8 @@ async function processItem(item) {
   const exchangeTs   = parseExchangeTs(signal.time);
   const signalWithTs = {
     ...signal,
-    savedAt: (exchangeTs && !isNaN(exchangeTs)) ? exchangeTs : Date.now()
+    savedAt:    (exchangeTs && !isNaN(exchangeTs)) ? exchangeTs : Date.now(),
+    receivedAt: Date.now()
   };
 
   saveResult(signalWithTs);
@@ -223,13 +225,32 @@ async function processItem(item) {
     const enrichedSignal = { ...signalWithTs, _orderInfo: signal._orderInfo };
 
     const orderData = orderBookEngine(enrichedSignal);
-    // ── Add to per-company order book tracker ──
-    const { addNewOrder } = require("../data/marketCap");
-    const _crores = signal._orderInfo?.crores || 0;
+    const _crores   = signal._orderInfo?.crores || 0;
+
+    // ── ADDED: Persist to MongoDB OrderBook on every new order ──
     if (_crores > 0 && signalWithTs.code) {
-      addNewOrder(String(signalWithTs.code), _crores, id);
+      try {
+        const orderBookDB = require("../data/orderBookDB");
+        await orderBookDB.addOrderToBook(
+          String(signalWithTs.code),
+          signalWithTs.company,
+          _crores,
+          signalWithTs.title,
+          signalWithTs.pdfUrl
+        );
+      } catch(e) {
+        console.log("⚠️ OrderBook addOrder failed:", e.message);
+      }
+
+      // Also update legacy marketCap tracker
+      try {
+        const { addNewOrder } = require("../data/marketCap");
+        addNewOrder(String(signalWithTs.code), _crores, id);
+      } catch(e) {}
+
       console.log(`📦 OB+ ${signalWithTs.company} ₹${_crores}Cr`);
     }
+
     if (orderData) {
       persistOrderBook(orderData);
       if (ioRef) ioRef.emit("order_book_update", orderData);
