@@ -265,9 +265,20 @@ app.get("/api/mcap", (req, res) => {
   }
 });
 
-// ── /api/company/:code ───────────────────────────────────────────────────────
-// ── Full order book tracker for all BSE companies ─────────────────────────
-app.get("/api/orderbook", (req, res) => {
+// ── /api/orderbook — MongoDB primary, static marketCap fallback ──────────────
+app.get("/api/orderbook", async (req, res) => {
+  // Try MongoDB first (live data written by bseListener on every ORDER_ALERT)
+  try {
+    const orderBookDB = require("./services/data/orderBookDB");
+    const mongoResult = await orderBookDB.getAllOrderBooks();
+    if (mongoResult && mongoResult.length > 0) {
+      return res.json({ orderBook: mongoResult, count: mongoResult.length, source: "mongo" });
+    }
+  } catch(e) {
+    console.log("⚠️ OrderBook MongoDB read failed, falling back:", e.message);
+  }
+
+  // Fallback: static marketCap data file
   try {
     const { getCompaniesByMcap, getEstimatedOrderBook } = require("./data/marketCap");
     const companies = getCompaniesByMcap(0);
@@ -292,12 +303,11 @@ app.get("/api/orderbook", (req, res) => {
       });
     }
 
-    // Sort by current order book size desc
     result.sort((a, b) => (b.currentOrderBook || 0) - (a.currentOrderBook || 0));
-    res.json({ orderBook: result, count: result.length });
+    return res.json({ orderBook: result, count: result.length, source: "static" });
   } catch(e) {
     console.error("❌ Order book API error:", e.message);
-    res.json({ orderBook: [], count: 0 });
+    return res.json({ orderBook: [], count: 0 });
   }
 });
 
