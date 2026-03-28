@@ -141,13 +141,15 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   background: #030e1e;
   border: 1px solid #0c2a4a;
   border-radius: 6px;
-  overflow-y: auto;
+  overflow-y: scroll; /* scroll not auto — auto causes snap-back on re-render */
+  overflow-x: hidden;
   padding: 8px;
   display: flex;
   flex-direction: column;
   box-shadow: inset 0 0 30px rgba(0, 80, 160, 0.1);
-  min-height: 0; /* critical for grid overflow to work */
+  min-height: 0;
   height: 100%;
+  overscroll-behavior: contain;
 }
 
 /* Column ordering — explicit for all breakpoints */

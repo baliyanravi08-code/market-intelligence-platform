@@ -265,6 +265,223 @@ function TickerBar({ indices, assets, dataSource, tickerStale }) {
   );
 }
 
+// ── PANELS — defined OUTSIDE App() so they never remount on state change ─────
+
+function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
+  return (
+    <div className="panel radar-panel">
+      <div className="panel-header">
+        <span className="panel-title">📡 Radar <span className="count">{filteredRadar.length}</span></span>
+      </div>
+      <div className="search-wrap">
+        <span className="search-icon">⌕</span>
+        <input
+          type="text" className="radar-search"
+          placeholder="Search company, type..."
+          value={radarQuery}
+          onChange={e => setRadarQuery(e.target.value)}
+        />
+        {radarQuery && <button className="clear-btn" onClick={() => setRadarQuery("")}>✕</button>}
+      </div>
+      {filteredRadar.length === 0 ? (
+        <div className="empty">No matches for "{radarQuery}"</div>
+      ) : filteredRadar.map((r, i) => (
+        <div className="radar-card" key={i}>
+          <div className="rc-top">
+            <span className="co-name">{r.company}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{
+                fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
+                background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
+                color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
+                border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
+              }}>{r.exchange}</span>
+              <span style={{
+                background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
+                color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
+                border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
+                borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
+              }}>{r.score}</span>
+            </div>
+          </div>
+          <div className="tag-row">
+            <span className={`type type-${r.type}`}>{r.type}</span>
+            {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
+            {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">📄 Filing</a>}
+          </div>
+          <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FeedPanel({ filteredFeed, activeTab, setActiveTab, feedFilter, setFeedFilter }) {
+  return (
+    <div className="panel feed-panel">
+      <div className="panel-header">
+        <div style={{ display: "flex", gap: 4 }}>
+          <button className={`tbtn ${activeTab === "bse" ? "active" : ""}`} onClick={() => setActiveTab("bse")}>BSE</button>
+          <button className={`tbtn ${activeTab === "nse" ? "active" : ""}`} onClick={() => setActiveTab("nse")}>NSE</button>
+        </div>
+      </div>
+      <div className="filter-bar">
+        {FEED_FILTERS.map(f => (
+          <button key={f} className={`fbtn ${feedFilter === f ? "active" : ""}`} onClick={() => setFeedFilter(f)}>{f}</button>
+        ))}
+      </div>
+      {filteredFeed.length === 0 ? (
+        <div className="empty">No signals match filter</div>
+      ) : filteredFeed.map((e, i) => {
+        const cardClass = ["feed-card",
+          e.type?.includes("ORDER")   ? "fc-order"   :
+          e.type?.includes("MERGER")  ? "fc-merger"  :
+          e.type?.includes("RESULT")  ? "fc-result"  :
+          e.type?.includes("INSIDER") ? "fc-insider" :
+          e.type?.includes("CAPEX")   ? "fc-capex"   : "fc-news"
+        ].join(" ");
+        const hotWords = ["crore","cr","lakh","order","contract","merger","acquisition","fraud","penalty","rs"];
+        const pdfUrl = e.pdfUrl || e.attachment || e.url || null;
+        return (
+          <div className={cardClass} key={i}
+            onClick={() => pdfUrl && window.open(pdfUrl, "_blank", "noopener")}
+            style={{ cursor: pdfUrl ? "pointer" : "default" }}
+          >
+            <div className="fc-head">
+              <span className="fc-company">
+                {e.company}
+                {e.type === "NEWS" && <span className="fc-tag-news">NEWS</span>}
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                {e.type !== "NEWS" && <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />}
+                {pdfUrl && (
+                  <a href={pdfUrl} target="_blank" rel="noreferrer" className="filing-link"
+                    onClick={ev => ev.stopPropagation()}>📄 Filing</a>
+                )}
+              </div>
+            </div>
+            <div className="fc-text">
+              {(e.title || "").split(" ").map((word, wi) => {
+                const w = word.toLowerCase().replace(/[^a-z0-9]/g, "");
+                const isHot = hotWords.indexOf(w) !== -1 || /[0-9]{2,}/.test(word) || word.indexOf("₹") !== -1;
+                return <span key={wi} className={isHot ? "fc-word-hot" : "fc-word"}>{word}{" "}</span>;
+              })}
+            </div>
+            <LiveAgo exchangeTime={e.time} receivedAt={e.receivedAt} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBook }) {
+  return (
+    <div className="panel right-panel">
+      <div className="section">
+        <div className="section-divider">🔥 Mega Orders <span className="count">{computedMegaOrders.length}</span></div>
+        {computedMegaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : (
+          <div className="mega-grid">
+            {computedMegaOrders.slice(0, 10).map((o, i) => {
+              const mcapEntry = window._mcapDb?.find?.(m =>
+                (m.company || "").toLowerCase() === (o.company || "").toLowerCase()
+              );
+              const mcap = mcapEntry?.mcap || 0;
+              const pct  = mcap > 0 ? ((o.crores / mcap) * 100).toFixed(1) : null;
+              return (
+                <div className="mega-card-grid" key={i}>
+                  <div className="mega-company">{o.company}</div>
+                  <div className="mega-val">₹{o.crores}Cr</div>
+                  {pct && <div className="mega-pct">{pct}% of MCap</div>}
+                  <div className="mega-time">{formatTime(o.time) || "—"}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="section">
+        <div className="section-divider">💡 Opportunities <span className="count">{computedOpportunities.length}</span></div>
+        {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div>
+          : computedOpportunities.map((o, i) => (
+          <div className="opp-card" key={i}>
+            <div className="opp-row" style={{ display: "flex", justifyContent: "space-between" }}>
+              <span className="co-name">{o.company}</span>
+              <span className="opp-pct">{o.score}%</span>
+            </div>
+            <span className={`type type-${o.type}`} style={{ fontSize: "8px", marginTop: 2 }}>{o.type}</span>
+            <div className="time-label" style={{ marginTop: 3 }}>{formatTime(o.time) || "—"}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="section">
+        <div className="section-divider">🏭 Sectors <span className="count">{sector.length}</span></div>
+        {sector.length === 0 ? <div className="empty">No sector activity yet</div>
+          : sector.map((s, i) => (
+          <div className="sec-card" key={i}>
+            <div className="sec-row">
+              <span className="sec-name">{s.sector}</span>
+              <span className="sec-val">
+                {s.totalValue ? `₹${s.totalValue}Cr` : s.count ? `${s.count} filing${s.count > 1 ? "s" : ""}` : "—"}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="section">
+        <div className="section-divider">📦 Order Book <span className="count">{orderBook.length}</span></div>
+        {orderBook.length === 0 ? <div className="empty">No orders tracked yet</div>
+          : orderBook.map((o, i) => (
+          <div className="ord-card" key={i}>
+            <div className="ord-top">
+              <span className="co-name">{o.company}</span>
+              <span className="str-lbl building">BUILDING</span>
+            </div>
+            <div className="ord-stats"><span className="ord-val">₹{o.orderValue}Cr</span></div>
+            <div className="time-label">{o.time || "—"}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSource }) {
+  const srcLabel =
+    tickerSource === "upstox"       ? "⚡ Upstox Live"  :
+    tickerSource === "disconnected" ? "○ Disconnected"  :
+    tickerSource === "error"        ? "⚠ Error"         :
+                                      "◌ Connecting...";
+  const srcColor =
+    tickerSource === "upstox" ? "#00ff9c" :
+    tickerSource === "error"  ? "#ff5c5c" : "#ffaa00";
+  return (
+    <div className="panel intelligence-panel">
+      <div className="section">
+        <div className="section-divider">🔔 Alerts</div>
+        {computedRadar.slice(0, 5).map((e, i) => (
+          <div key={i} className="mini-card">
+            <span style={{ color: "#d8eeff" }}>{e.company}</span>
+            <span style={{ color: "#4a7090" }}> → </span>
+            <span className={`type type-${e.type}`} style={{ fontSize: "8px", padding: "1px 4px" }}>{e.type}</span>
+          </div>
+        ))}
+      </div>
+      <div className="section">
+        <div className="section-divider">⚡ Pulse</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>BSE Events: {bseEvents.length}</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>NSE Events: {nseEvents.length}</div>
+        <div className="mini-card" style={{ color: srcColor }}>Index Feed: {srcLabel}</div>
+      </div>
+    </div>
+  );
+}
+
 const MOBILE_TABS = [
   { key: "feed",  label: "📡 Feed"  },
   { key: "radar", label: "🔍 Radar" },
@@ -300,19 +517,14 @@ export default function App() {
     return () => clearInterval(t);
   }, [tickerLastOk]);
 
-  // ── BTC tick-by-tick via Binance WebSocket ────────────────────────────────
-  // Uses wss://stream.binance.com — free, no API key, ~100ms updates.
-  // btc24hRef holds the 24h change % fetched once on mount and refreshed hourly.
-  // On WS close (network blip etc) it auto-reconnects after 2s.
-  // On unmount, cancelled=true stops reconnect loop.
+  // ── BTC WebSocket ─────────────────────────────────────────────────────────
   const btcWsRef    = useRef(null);
   const btcReconRef = useRef(null);
-  const btc24hRef   = useRef(0); // holds latest 24h change %, updated hourly
+  const btc24hRef   = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
 
-    // Fetch 24h stats once (price open 24h ago) so we can show change %
     const fetch24h = async () => {
       try {
         const r = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
@@ -324,7 +536,7 @@ export default function App() {
     };
 
     fetch24h();
-    const hourly = setInterval(fetch24h, 3600000); // refresh 24h change every hour
+    const hourly = setInterval(fetch24h, 3600000);
 
     const connectWS = () => {
       if (cancelled) return;
@@ -339,31 +551,25 @@ export default function App() {
         if (cancelled) return;
         try {
           const msg   = JSON.parse(evt.data);
-          const price = parseFloat(msg.p); // aggTrade price field
+          const price = parseFloat(msg.p);
           if (!price || isNaN(price)) return;
-
           const change24h = btc24hRef.current;
           const formatted = "$" + price.toLocaleString("en-US", { maximumFractionDigits: 0 });
-
-          // Update only the BTC entry in cryptoAssets, leave PI/GOLD/SILVER untouched
           setCryptoAssets(prev => {
             const next = [...prev];
             const idx  = next.findIndex(a => a.name === "BTC");
             const entry = { name: "BTC", icon: "₿", type: "crypto", price: formatted, change24h };
             if (idx >= 0) next[idx] = entry;
-            else next.unshift(entry); // first load — prepend
+            else next.unshift(entry);
             return next;
           });
         } catch (e) {}
       };
 
-      ws.onerror = (e) => {
-        console.warn("BTC WebSocket error:", e.message || e);
-      };
+      ws.onerror = (e) => { console.warn("BTC WebSocket error:", e.message || e); };
 
       ws.onclose = () => {
         if (cancelled) return;
-        console.log("BTC WebSocket closed — reconnecting in 2s");
         btcReconRef.current = setTimeout(connectWS, 2000);
       };
     };
@@ -375,15 +581,13 @@ export default function App() {
       clearInterval(hourly);
       if (btcReconRef.current) clearTimeout(btcReconRef.current);
       if (btcWsRef.current) {
-        btcWsRef.current.onclose = null; // prevent reconnect loop on intentional unmount
+        btcWsRef.current.onclose = null;
         try { btcWsRef.current.close(); } catch (e) {}
       }
     };
   }, []);
 
-  // ── Fetch PI / GOLD / SILVER every 60s (no WS available for these) ───────
-  // BTC is intentionally excluded here — handled above via WebSocket.
-  // Silver uses Yahoo Finance (SI=F) — only public source for silver futures.
+  // ── PI / GOLD / SILVER every 60s ─────────────────────────────────────────
   useEffect(() => {
     const fmt = (n, prefix = "$") => {
       if (!n && n !== 0) return "—";
@@ -394,8 +598,6 @@ export default function App() {
 
     const fetchOtherAssets = async () => {
       const updates = {};
-
-      // PI + GOLD from CoinGecko
       try {
         const cgRes = await fetch(
           "https://api.coingecko.com/api/v3/simple/price?ids=pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
@@ -412,11 +614,8 @@ export default function App() {
           price: fmt(cg["tether-gold"].usd),
           change24h: cg["tether-gold"].usd_24h_change || 0
         };
-      } catch (e) {
-        console.error("CoinGecko error:", e);
-      }
+      } catch (e) { console.error("CoinGecko error:", e); }
 
-      // Silver via Yahoo Finance — kept because Upstox/Binance don't carry commodities
       let silverPrice = 33.50, silverChange = 0;
       try {
         const r = await fetch(
@@ -430,35 +629,28 @@ export default function App() {
           const prev = meta.previousClose || meta.chartPreviousClose;
           if (prev) silverChange = ((silverPrice - prev) / prev) * 100;
         }
-      } catch (e) {
-        console.warn("Silver fetch failed, using fallback:", e.message);
-      }
+      } catch (e) { console.warn("Silver fetch failed:", e.message); }
+
       updates["SILVER"] = {
         name: "SILVER", icon: "Ag", type: "silver",
         price: fmt(silverPrice), change24h: silverChange
       };
 
-      // Merge updates into cryptoAssets — preserve BTC which WebSocket owns
       setCryptoAssets(prev => {
-        // Build a map from existing assets
         const map = {};
         prev.forEach(a => { map[a.name] = a; });
-        // Apply only PI / GOLD / SILVER updates
         Object.assign(map, updates);
-        // Return in stable display order: BTC, PI, GOLD, SILVER
         const order = ["BTC", "PI", "GOLD", "SILVER"];
         return order.map(n => map[n]).filter(Boolean);
       });
     };
 
-    // Seed immediately so PI/GOLD/SILVER show on first load
-    // (BTC will appear once WS sends its first message, usually <1s)
     fetchOtherAssets();
     const interval = setInterval(fetchOtherAssets, 60000);
     return () => clearInterval(interval);
   }, []);
 
-  // ── Fetch events every 15s ────────────────────────────────────────────────
+  // ── Events every 15s ─────────────────────────────────────────────────────
   useEffect(() => {
     const fetchEvents = () => {
       fetch("/api/events")
@@ -477,7 +669,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // ── Market indices — Upstox only, self-scheduling retry loop ─────────────
+  // ── Market indices (Upstox) ───────────────────────────────────────────────
   const retryRef   = useRef(null);
   const retryDelay = useRef(3000);
   const abortRef   = useRef(null);
@@ -499,9 +691,7 @@ export default function App() {
           const indices    = data.filter(d => d.name && !d._source);
           const sourceMeta = data.find(d => d._source);
           const src        = sourceMeta?._source || "disconnected";
-
           setTickerSource(src);
-
           if (src === "upstox") {
             if (indices.length) setMarketIndices(indices);
             setTickerLastOk(Date.now());
@@ -509,14 +699,12 @@ export default function App() {
             retryDelay.current = 3000;
             retryRef.current = setTimeout(doFetch, 30000);
           } else {
-            console.log(`Upstox ${src} — retry in ${retryDelay.current / 1000}s`);
             retryRef.current = setTimeout(doFetch, retryDelay.current);
             retryDelay.current = Math.min(retryDelay.current * 2, 30000);
           }
         }
       } catch (e) {
         if (cancelled || e.name === "AbortError") return;
-        console.warn(`Market fetch network error, retry in ${retryDelay.current / 1000}s:`, e.message);
         setTickerSource("error");
         retryRef.current = setTimeout(doFetch, retryDelay.current);
         retryDelay.current = Math.min(retryDelay.current * 2, 30000);
@@ -532,7 +720,7 @@ export default function App() {
     };
   }, []);
 
-  // ── Deduplicated + filtered feed ─────────────────────────────────────────
+  // ── Computed data ─────────────────────────────────────────────────────────
   const seenFeedKeys = new Set();
   const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => {
     const t = (e?.title || "").toLowerCase();
@@ -545,7 +733,6 @@ export default function App() {
     return (e.type || "NEWS").toUpperCase().includes(feedFilter);
   });
 
-  // ── computedRadar ─────────────────────────────────────────────────────────
   const seenRadarKeys = new Set();
   const computedRadar = [
     ...(bseEvents || []).map(e => ({ ...e, _exchange: "BSE" })),
@@ -625,7 +812,6 @@ export default function App() {
       };
     });
 
-  // ── Mega orders ───────────────────────────────────────────────────────────
   const computedMegaOrders = (bseEvents || []).filter(e => {
     const t = (e?.title || "").toLowerCase();
     const isRealOrder =
@@ -655,7 +841,6 @@ export default function App() {
       time:    e.time
     }));
 
-  // ── Opportunities ─────────────────────────────────────────────────────────
   const seenOpp = new Set();
   const computedOpportunities = computedRadar
     .filter(r => {
@@ -674,229 +859,8 @@ export default function App() {
     r.type.toLowerCase().includes(radarQuery.toLowerCase())
   );
 
-  // ── RADAR PANEL ───────────────────────────────────────────────────────────
-  const RadarPanel = () => (
-    <div className="panel radar-panel">
-      <div className="panel-header">
-        <span className="panel-title">📡 Radar <span className="count">{filteredRadar.length}</span></span>
-      </div>
-      <div className="search-wrap">
-        <span className="search-icon">⌕</span>
-        <input
-          type="text" className="radar-search"
-          placeholder="Search company, type..."
-          value={radarQuery}
-          onChange={e => setRadarQuery(e.target.value)}
-        />
-        {radarQuery && <button className="clear-btn" onClick={() => setRadarQuery("")}>✕</button>}
-      </div>
-      {filteredRadar.length === 0 ? (
-        <div className="empty">No matches for "{radarQuery}"</div>
-      ) : filteredRadar.map((r, i) => (
-        <div className="radar-card" key={i}>
-          <div className="rc-top">
-            <span className="co-name">{r.company}</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{
-                fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
-                background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
-                color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
-                border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
-              }}>{r.exchange}</span>
-              <span style={{
-                background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
-                color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
-                border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
-                borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
-              }}>{r.score}</span>
-            </div>
-          </div>
-          <div className="tag-row">
-            <span className={`type type-${r.type}`}>{r.type}</span>
-            {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
-            {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">📄 Filing</a>}
-          </div>
-          <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
-        </div>
-      ))}
-    </div>
-  );
-
-  // ── FEED PANEL ────────────────────────────────────────────────────────────
-  const FeedPanel = () => (
-    <div className="panel feed-panel">
-      <div className="panel-header">
-        <div style={{ display: "flex", gap: 4 }}>
-          <button className={`tbtn ${activeTab === "bse" ? "active" : ""}`} onClick={() => setActiveTab("bse")}>BSE</button>
-          <button className={`tbtn ${activeTab === "nse" ? "active" : ""}`} onClick={() => setActiveTab("nse")}>NSE</button>
-        </div>
-      </div>
-      <div className="filter-bar">
-        {FEED_FILTERS.map(f => (
-          <button key={f} className={`fbtn ${feedFilter === f ? "active" : ""}`} onClick={() => setFeedFilter(f)}>{f}</button>
-        ))}
-      </div>
-      {filteredFeed.length === 0 ? (
-        <div className="empty">No signals match filter</div>
-      ) : filteredFeed.map((e, i) => {
-        const cardClass = ["feed-card",
-          e.type?.includes("ORDER")   ? "fc-order"   :
-          e.type?.includes("MERGER")  ? "fc-merger"  :
-          e.type?.includes("RESULT")  ? "fc-result"  :
-          e.type?.includes("INSIDER") ? "fc-insider" :
-          e.type?.includes("CAPEX")   ? "fc-capex"   : "fc-news"
-        ].join(" ");
-        const hotWords = ["crore","cr","lakh","order","contract","merger","acquisition","fraud","penalty","rs"];
-        const pdfUrl = e.pdfUrl || e.attachment || e.url || null;
-        return (
-          <div className={cardClass} key={i}
-            onClick={() => pdfUrl && window.open(pdfUrl, "_blank", "noopener")}
-            style={{ cursor: pdfUrl ? "pointer" : "default" }}
-          >
-            <div className="fc-head">
-              <span className="fc-company">
-                {e.company}
-                {e.type === "NEWS" && <span className="fc-tag-news">NEWS</span>}
-              </span>
-              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                {e.type !== "NEWS" && <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />}
-                {pdfUrl && (
-                  <a href={pdfUrl} target="_blank" rel="noreferrer" className="filing-link"
-                    onClick={ev => ev.stopPropagation()}>📄 Filing</a>
-                )}
-              </div>
-            </div>
-            <div className="fc-text">
-              {(e.title || "").split(" ").map((word, wi) => {
-                const w = word.toLowerCase().replace(/[^a-z0-9]/g, "");
-                const isHot = hotWords.indexOf(w) !== -1 || /[0-9]{2,}/.test(word) || word.indexOf("₹") !== -1;
-                return <span key={wi} className={isHot ? "fc-word-hot" : "fc-word"}>{word}{" "}</span>;
-              })}
-            </div>
-            <LiveAgo exchangeTime={e.time} receivedAt={e.receivedAt} />
-          </div>
-        );
-      })}
-    </div>
-  );
-
-  // ── RIGHT / DATA PANEL ────────────────────────────────────────────────────
-  const RightPanel = () => (
-    <div className="panel right-panel">
-      <div className="section">
-        <div className="section-divider">🔥 Mega Orders <span className="count">{computedMegaOrders.length}</span></div>
-        {computedMegaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : (
-          <div className="mega-grid">
-            {computedMegaOrders.slice(0, 10).map((o, i) => {
-              const mcapEntry = window._mcapDb?.find?.(m =>
-                (m.company || "").toLowerCase() === (o.company || "").toLowerCase()
-              );
-              const mcap = mcapEntry?.mcap || 0;
-              const pct  = mcap > 0 ? ((o.crores / mcap) * 100).toFixed(1) : null;
-              return (
-                <div className="mega-card-grid" key={i}>
-                  <div className="mega-company">{o.company}</div>
-                  <div className="mega-val">₹{o.crores}Cr</div>
-                  {pct && <div className="mega-pct">{pct}% of MCap</div>}
-                  <div className="mega-time">{formatTime(o.time) || "—"}</div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="section">
-        <div className="section-divider">💡 Opportunities <span className="count">{computedOpportunities.length}</span></div>
-        {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div>
-          : computedOpportunities.map((o, i) => (
-          <div className="opp-card" key={i}>
-            <div className="opp-row" style={{ display: "flex", justifyContent: "space-between" }}>
-              <span className="co-name">{o.company}</span>
-              <span className="opp-pct">{o.score}%</span>
-            </div>
-            <span className={`type type-${o.type}`} style={{ fontSize: "8px", marginTop: 2 }}>{o.type}</span>
-            <div className="time-label" style={{ marginTop: 3 }}>{formatTime(o.time) || "—"}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="section">
-        <div className="section-divider">🏭 Sectors <span className="count">{sector.length}</span></div>
-        {sector.length === 0 ? <div className="empty">No sector activity yet</div>
-          : sector.map((s, i) => (
-          <div className="sec-card" key={i}>
-            <div className="sec-row">
-              <span className="sec-name">{s.sector}</span>
-              <span className="sec-val">
-                {s.totalValue ? `₹${s.totalValue}Cr` : s.count ? `${s.count} filing${s.count > 1 ? "s" : ""}` : "—"}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="section">
-        <div className="section-divider">📦 Order Book <span className="count">{orderBook.length}</span></div>
-        {orderBook.length === 0 ? <div className="empty">No orders tracked yet</div>
-          : orderBook.map((o, i) => (
-          <div className="ord-card" key={i}>
-            <div className="ord-top">
-              <span className="co-name">{o.company}</span>
-              <span className="str-lbl building">BUILDING</span>
-            </div>
-            <div className="ord-stats"><span className="ord-val">₹{o.orderValue}Cr</span></div>
-            <div className="time-label">{o.time || "—"}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
-  // ── INTELLIGENCE PANEL ────────────────────────────────────────────────────
-  const IntelPanel = () => {
-    const srcLabel =
-      tickerSource === "upstox"       ? "⚡ Upstox Live"  :
-      tickerSource === "disconnected" ? "○ Disconnected"  :
-      tickerSource === "error"        ? "⚠ Error"         :
-                                        "◌ Connecting...";
-    const srcColor =
-      tickerSource === "upstox" ? "#00ff9c" :
-      tickerSource === "error"  ? "#ff5c5c" : "#ffaa00";
-    return (
-      <div className="panel intelligence-panel">
-        <div className="section">
-          <div className="section-divider">🔔 Alerts</div>
-          {computedRadar.slice(0, 5).map((e, i) => (
-            <div key={i} className="mini-card">
-              <span style={{ color: "#d8eeff" }}>{e.company}</span>
-              <span style={{ color: "#4a7090" }}> → </span>
-              <span className={`type type-${e.type}`} style={{ fontSize: "8px", padding: "1px 4px" }}>{e.type}</span>
-            </div>
-          ))}
-        </div>
-        <div className="section">
-          <div className="section-divider">⚡ Pulse</div>
-          <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
-          <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
-          <div className="mini-card" style={{ color: "#4a8adf" }}>BSE Events: {bseEvents.length}</div>
-          <div className="mini-card" style={{ color: "#4a8adf" }}>NSE Events: {nseEvents.length}</div>
-          <div className="mini-card" style={{ color: srcColor }}>Index Feed: {srcLabel}</div>
-        </div>
-      </div>
-    );
-  };
-
   const needsConnect = tickerSource === "disconnected" || tickerSource === "error";
-const panelScrollRef = useRef({});
-const handlePanelScroll = (e) => {
-  panelScrollRef.current[mobilePanelTab] = e.currentTarget.scrollTop;
-};
-const setPanelScrollRef = (el) => {
-  if (el && panelScrollRef.current[mobilePanelTab] !== undefined) {
-    el.scrollTop = panelScrollRef.current[mobilePanelTab];
-  }
-};
+
   return (
     <div className="terminal">
       <div className="header">
@@ -928,10 +892,10 @@ const setPanelScrollRef = (el) => {
       />
 
       <div className="layout desktop-layout">
-        <RadarPanel />
-        <FeedPanel />
-        <RightPanel />
-        <IntelPanel />
+        <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
+        <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
+        <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} />
+        <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} />
       </div>
 
       <div className="mobile-layout">
@@ -946,11 +910,11 @@ const setPanelScrollRef = (el) => {
             </button>
           ))}
         </div>
-        <div className="mobile-panel-wrap" ref={setPanelScrollRef} onScroll={handlePanelScroll}>
-          {mobilePanelTab === "radar" && <RadarPanel />}
-          {mobilePanelTab === "feed"  && <FeedPanel />}
-          {mobilePanelTab === "data"  && <RightPanel />}
-          {mobilePanelTab === "intel" && <IntelPanel />}
+        <div className="mobile-panel-wrap">
+          {mobilePanelTab === "radar" && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />}
+          {mobilePanelTab === "feed"  && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
+          {mobilePanelTab === "data"  && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} />}
+          {mobilePanelTab === "intel" && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} />}
         </div>
       </div>
     </div>
