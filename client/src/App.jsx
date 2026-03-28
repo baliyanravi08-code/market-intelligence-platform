@@ -18,6 +18,24 @@ const SIGNAL_COLOR = {
 
 const FEED_FILTERS = ["ALL", "ORDER", "MERGER", "CAPEX", "RESULT", "INSIDER", ">50"];
 
+// ── defined ONCE at module level ──────────────────────────────────────────────
+const MOBILE_TABS = [
+  { key: "feed",  label: "📡 Feed"  },
+  { key: "radar", label: "🔍 Radar" },
+  { key: "data",  label: "📊 Data"  },
+  { key: "intel", label: "⚡ Intel" },
+];
+
+function getCurrentQuarter() {
+  const now   = new Date();
+  const month = now.getMonth() + 1;
+  const year  = now.getFullYear();
+  if (month >= 4  && month <= 6)  return { label: "Q1", range: "Apr–Jun", fyYear: year + 1 };
+  if (month >= 7  && month <= 9)  return { label: "Q2", range: "Jul–Sep", fyYear: year + 1 };
+  if (month >= 10 && month <= 12) return { label: "Q3", range: "Oct–Dec", fyYear: year + 1 };
+  return { label: "Q4", range: "Jan–Mar", fyYear: year };
+}
+
 const NOISE_WORDS = [
   "trading window", "postal ballot", "scrutinizer", "voting result", "esg",
   "analyst meeting", "closure of trading", "book closure", "intimation of board meeting",
@@ -35,18 +53,15 @@ const NOISE_WORDS = [
 
 // ─── INTELLIGENCE ENGINE ──────────────────────────────────────────────────────
 
-// Risk registry: known active risk flags per company (populated from API + NLP)
-// Keys are lowercase company name substrings for fuzzy matching
 const RISK_REGISTRY = [
-  { match: "indusind",    type: "GOVERNANCE",  severity: "HIGH", desc: "CEO departure + RBI inquiry pending" },
-  { match: "paytm",      type: "REGULATORY",  severity: "HIGH", desc: "RBI payment bank restrictions" },
-  { match: "adani",      type: "LEGAL",       severity: "HIGH", desc: "Ongoing DOJ indictment proceedings" },
-  { match: "byju",       type: "INSOLVENCY",  severity: "HIGH", desc: "NCLT insolvency proceedings active" },
-  { match: "yes bank",   type: "GOVERNANCE",  severity: "MED",  desc: "Promoter pledge concerns" },
-  { match: "vodafone",   type: "DEBT",        severity: "MED",  desc: "AGR dues + spectrum debt pressure" },
+  { match: "indusind",  type: "GOVERNANCE", severity: "HIGH", desc: "CEO departure + RBI inquiry pending" },
+  { match: "paytm",    type: "REGULATORY", severity: "HIGH", desc: "RBI payment bank restrictions" },
+  { match: "adani",    type: "LEGAL",      severity: "HIGH", desc: "Ongoing DOJ indictment proceedings" },
+  { match: "byju",     type: "INSOLVENCY", severity: "HIGH", desc: "NCLT insolvency proceedings active" },
+  { match: "yes bank", type: "GOVERNANCE", severity: "MED",  desc: "Promoter pledge concerns" },
+  { match: "vodafone", type: "DEBT",       severity: "MED",  desc: "AGR dues + spectrum debt pressure" },
 ];
 
-// NLP-based risk signal detector — scans filing title/text
 function detectRiskFromText(title = "") {
   const t = title.toLowerCase();
   if (t.includes("fraud") || t.includes("insolvency") || t.includes("default"))
@@ -66,13 +81,11 @@ function detectRiskFromText(title = "") {
   return null;
 }
 
-// Lookup company in the risk registry
 function getRegistryRisk(companyName = "") {
   const c = companyName.toLowerCase();
   return RISK_REGISTRY.find(r => c.includes(r.match)) || null;
 }
 
-// Master contradiction check: returns risk info if this event should be blocked
 function getContradict(companyName, title) {
   const registryRisk = getRegistryRisk(companyName);
   if (registryRisk && registryRisk.severity === "HIGH") return registryRisk;
@@ -81,7 +94,6 @@ function getContradict(companyName, title) {
   return null;
 }
 
-// Soft risk: doesn't block opportunity but adds a caution flag
 function getSoftRisk(companyName, title) {
   const registryRisk = getRegistryRisk(companyName);
   if (registryRisk && registryRisk.severity === "MED") return registryRisk;
@@ -90,7 +102,6 @@ function getSoftRisk(companyName, title) {
   return null;
 }
 
-// Price impact estimator based on event type + order value
 function estimatePriceImpact(type, crores, companyTitle = "") {
   const t = companyTitle.toLowerCase();
   let base = 0;
@@ -103,9 +114,8 @@ function estimatePriceImpact(type, crores, companyTitle = "") {
   return base;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── UTILITIES ────────────────────────────────────────────────────────────────
 
-// --- Utilities ---
 function formatTime(raw) {
   if (!raw) return null;
   try {
@@ -149,7 +159,7 @@ function extractAmount(text) {
   return match ? parseFloat(match[1]) : 0;
 }
 
-// --- Components ---
+// ─── COMPONENTS ───────────────────────────────────────────────────────────────
 
 function LiveAgo({ exchangeTime, receivedAt }) {
   const exMs = parseExchangeTime(exchangeTime);
@@ -337,7 +347,7 @@ function TickerBar({ indices, assets, dataSource, tickerStale }) {
   );
 }
 
-// ── INTELLIGENCE COMPONENTS ───────────────────────────────────────────────────
+// ─── INTELLIGENCE BADGE COMPONENTS ───────────────────────────────────────────
 
 function ConflictBadge({ risk }) {
   if (!risk) return null;
@@ -383,7 +393,6 @@ function PriceImpactBadge({ impact }) {
   );
 }
 
-// Intelligence summary banner — shown at top of Opportunities section
 function IntelSummaryBar({ blocked, clean, cautioned }) {
   return (
     <div style={{
@@ -411,7 +420,7 @@ function IntelSummaryBar({ blocked, clean, cautioned }) {
   );
 }
 
-// ── PANELS — defined OUTSIDE App() so they never remount on state change ─────
+// ─── PANELS — defined outside App() so they never remount on state change ─────
 
 function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
   return (
@@ -432,36 +441,36 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
       {filteredRadar.length === 0 ? (
         <div className="empty">No matches for "{radarQuery}"</div>
       ) : filteredRadar.map((r, i) => (
-          <div className="radar-card" key={i} style={{
-            borderLeft: r.conflict ? "3px solid #ff5c5c" : r.caution ? "3px solid #ffaa00" : undefined,
-            background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined,
-          }}>
-            <div className="rc-top">
-              <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>{r.company}</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span style={{
-                  fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
-                  background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
-                  color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
-                  border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
-                }}>{r.exchange}</span>
-                <span style={{
-                  background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
-                  color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
-                  border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
-                  borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
-                }}>{r.conflict ? "—" : r.score}</span>
-              </div>
+        <div className="radar-card" key={i} style={{
+          borderLeft: r.conflict ? "3px solid #ff5c5c" : r.caution ? "3px solid #ffaa00" : undefined,
+          background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined,
+        }}>
+          <div className="rc-top">
+            <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>{r.company}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{
+                fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
+                background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
+                color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
+                border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
+              }}>{r.exchange}</span>
+              <span style={{
+                background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
+                color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
+                border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
+                borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
+              }}>{r.conflict ? "—" : r.score}</span>
             </div>
-            <div className="tag-row">
-              <span className={`type type-${r.type}`}>{r.type}</span>
-              {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
-              {r.conflict  && <ConflictBadge risk={r.conflict} />}
-              {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
-              {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">📄 Filing</a>}
-            </div>
-            <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
           </div>
+          <div className="tag-row">
+            <span className={`type type-${r.type}`}>{r.type}</span>
+            {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
+            {r.conflict  && <ConflictBadge risk={r.conflict} />}
+            {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
+            {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">📄 Filing</a>}
+          </div>
+          <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
+        </div>
       ))}
     </div>
   );
@@ -554,11 +563,7 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
 
       <div className="section">
         <div className="section-divider">💡 Opportunities <span className="count">{computedOpportunities.length}</span></div>
-        <IntelSummaryBar
-          blocked={intelStats.blocked}
-          clean={intelStats.clean}
-          cautioned={intelStats.cautioned}
-        />
+        <IntelSummaryBar blocked={intelStats.blocked} clean={intelStats.clean} cautioned={intelStats.cautioned} />
         {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div>
           : computedOpportunities.map((o, i) => (
           <div className="opp-card" key={i} style={{
@@ -604,9 +609,9 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
         {liveOrderBook.length === 0 ? (
           <div className="empty">No order book data yet</div>
         ) : liveOrderBook.map((o, i) => {
-          const isOpen   = obExpanded === o.code;
-          const obToRev  = o.obToRevRatio ? parseFloat(o.obToRevRatio) : null;
-          const obColor  = obToRev === null ? "#4a9abb"
+          const isOpen  = obExpanded === o.code;
+          const obToRev = o.obToRevRatio ? parseFloat(o.obToRevRatio) : null;
+          const obColor = obToRev === null ? "#4a9abb"
             : obToRev >= 3 ? "#00ff9c" : obToRev >= 1.5 ? "#ffaa00" : "#ff5c5c";
           return (
             <div key={i} className="ord-card"
@@ -727,15 +732,10 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
   );
 }
 
-const MOBILE_TABS = [
-  { key: "feed",  label: "📡 Feed"  },
-  { key: "radar", label: "🔍 Radar" },
-  { key: "data",  label: "📊 Data"  },
-  { key: "intel", label: "⚡ Intel" },
-];
+// ─── APP ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [marketIndices, setMarketIndices] = useState([
+  const [marketIndices,  setMarketIndices]  = useState([
     { name: "NIFTY 50",   price: "—", change: "—", pct: "—", up: null },
     { name: "SENSEX",     price: "—", change: "—", pct: "—", up: null },
     { name: "BANK NIFTY", price: "—", change: "—", pct: "—", up: null },
@@ -743,7 +743,6 @@ export default function App() {
   const [tickerSource,   setTickerSource]   = useState("connecting");
   const [tickerLastOk,   setTickerLastOk]   = useState(null);
   const [tickerStale,    setTickerStale]    = useState(false);
-
   const [bseEvents,      setBseEvents]      = useState([]);
   const [nseEvents,      setNseEvents]      = useState([]);
   const [sector,         setSector]         = useState([]);
@@ -752,9 +751,9 @@ export default function App() {
   const [activeTab,      setActiveTab]      = useState("bse");
   const [feedFilter,     setFeedFilter]     = useState("ALL");
   const [mobilePanelTab, setMobilePanelTab] = useState("feed");
-  const [cryptoAssets,   setCryptoAssets]  = useState([]);
-  const [liveOrderBook,  setLiveOrderBook] = useState([]);
-  const [obExpanded,     setObExpanded]    = useState(null);
+  const [cryptoAssets,   setCryptoAssets]   = useState([]);
+  const [liveOrderBook,  setLiveOrderBook]  = useState([]);
+  const [obExpanded,     setObExpanded]     = useState(null);
 
   // ── Stale watchdog ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -764,7 +763,7 @@ export default function App() {
     return () => clearInterval(t);
   }, [tickerLastOk]);
 
-  // ── BTC WebSocket ─────────────────────────────────────────────────────────
+  // ── BTC WebSocket (Binance) ───────────────────────────────────────────────
   const btcWsRef    = useRef(null);
   const btcReconRef = useRef(null);
   const btc24hRef   = useRef(0);
@@ -777,9 +776,7 @@ export default function App() {
         const r = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
         const d = await r.json();
         btc24hRef.current = parseFloat(d.priceChangePercent) || 0;
-      } catch (e) {
-        console.warn("BTC 24h fetch failed:", e.message);
-      }
+      } catch (e) { console.warn("BTC 24h fetch failed:", e.message); }
     };
 
     fetch24h();
@@ -787,13 +784,9 @@ export default function App() {
 
     const connectWS = () => {
       if (cancelled) return;
-      if (btcWsRef.current) {
-        try { btcWsRef.current.close(); } catch (e) {}
-      }
-
+      if (btcWsRef.current) { try { btcWsRef.current.close(); } catch (e) {} }
       const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@aggTrade");
       btcWsRef.current = ws;
-
       ws.onmessage = (evt) => {
         if (cancelled) return;
         try {
@@ -812,10 +805,8 @@ export default function App() {
           });
         } catch (e) {}
       };
-
-      ws.onerror = (e) => { console.warn("BTC WebSocket error:", e.message || e); };
-
-      ws.onclose = () => {
+      ws.onerror  = (e) => { console.warn("BTC WebSocket error:", e.message || e); };
+      ws.onclose  = () => {
         if (cancelled) return;
         btcReconRef.current = setTimeout(connectWS, 2000);
       };
@@ -896,18 +887,8 @@ export default function App() {
     const interval = setInterval(fetchOtherAssets, 60000);
     return () => clearInterval(interval);
   }, []);
-// ── Quarter helper ────────────────────────────────────────────────────────
-  function getCurrentQuarter() {
-    const now   = new Date();
-    const month = now.getMonth() + 1;
-    const year  = now.getFullYear();
-    if (month >= 4  && month <= 6)  return { label: "Q1", range: "Apr–Jun", fyYear: year + 1 };
-    if (month >= 7  && month <= 9)  return { label: "Q2", range: "Jul–Sep", fyYear: year + 1 };
-    if (month >= 10 && month <= 12) return { label: "Q3", range: "Oct–Dec", fyYear: year + 1 };
-    return { label: "Q4", range: "Jan–Mar", fyYear: year };
-  }
 
-  // ── Fetch full order book every 60s ──────────────────────────────────────
+  // ── Order book every 60s ─────────────────────────────────────────────────
   useEffect(() => {
     const fetchOB = () => {
       fetch("/api/orderbook")
@@ -919,6 +900,7 @@ export default function App() {
     const iv = setInterval(fetchOB, 60000);
     return () => clearInterval(iv);
   }, []);
+
   // ── Events every 15s ─────────────────────────────────────────────────────
   useEffect(() => {
     const fetchEvents = () => {
@@ -929,7 +911,6 @@ export default function App() {
           setNseEvents(data.nse       || []);
           setOrderBook(data.orderBook || []);
           setSector(data.sectors      || []);
-          window._mcapDb = data.mcapDb || [];
         })
         .catch(err => console.log("Events fetch error:", err));
     };
@@ -938,7 +919,15 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // ── Market indices (Upstox) ───────────────────────────────────────────────
+  // ── MCap DB once on startup ──────────────────────────────────────────────
+  useEffect(() => {
+    fetch("/api/mcap")
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data) && data.length > 0) window._mcapDb = data; })
+      .catch(() => {});
+  }, []);
+
+  // ── Market indices — Upstox with exponential backoff ────────────────────
   const retryRef   = useRef(null);
   const retryDelay = useRef(3000);
   const abortRef   = useRef(null);
@@ -961,16 +950,14 @@ export default function App() {
           const sourceMeta = data.find(d => d._source);
           const src        = sourceMeta?._source || "disconnected";
           setTickerSource(src);
+          if (indices.length) setMarketIndices(indices);
           if (src === "upstox") {
-            if (indices.length) setMarketIndices(indices);
             setTickerLastOk(Date.now());
             setTickerStale(false);
             retryDelay.current = 3000;
-            retryRef.current = setTimeout(doFetch, 30000);
-          } else {
-            retryRef.current = setTimeout(doFetch, retryDelay.current);
-            retryDelay.current = Math.min(retryDelay.current * 2, 30000);
           }
+          retryRef.current = setTimeout(doFetch, src === "upstox" ? 30000 : Math.min(retryDelay.current * 2, 30000));
+          if (src !== "upstox") retryDelay.current = Math.min(retryDelay.current * 2, 30000);
         }
       } catch (e) {
         if (cancelled || e.name === "AbortError") return;
@@ -1071,17 +1058,17 @@ export default function App() {
         type = "PARTNERSHIP"; score = 72;
       }
       return {
-        company:    e?.company || "Unknown",
+        company:     e?.company || "Unknown",
         score, type,
-        exchange:   e._exchange || "BSE",
-        receivedAt: e?.receivedAt,
-        time:       e?.time,
-        pdfUrl:     e?.pdfUrl || e?.attachment || null,
-        orderValue: extractAmount(e?.title),
-        conflict:   getContradict(e?.company || "", e?.title || ""),
-        caution:    !getContradict(e?.company || "", e?.title || "")
-                      ? getSoftRisk(e?.company || "", e?.title || "")
-                      : null,
+        exchange:    e._exchange || "BSE",
+        receivedAt:  e?.receivedAt,
+        time:        e?.time,
+        pdfUrl:      e?.pdfUrl || e?.attachment || null,
+        orderValue:  extractAmount(e?.title),
+        conflict:    getContradict(e?.company || "", e?.title || ""),
+        caution:     !getContradict(e?.company || "", e?.title || "")
+                       ? getSoftRisk(e?.company || "", e?.title || "")
+                       : null,
         priceImpact: estimatePriceImpact(type, extractAmount(e?.title || ""), e?.title || ""),
       };
     });
@@ -1109,16 +1096,16 @@ export default function App() {
     )
     .slice(0, 10)
     .map(e => ({
-      company: e.company,
-      crores:  e._orderInfo?.crores || extractAmount(e.title),
+      company:    e.company,
+      crores:     e._orderInfo?.crores || extractAmount(e.title),
       receivedAt: e.receivedAt,
-      time:    e.time
+      time:       e.time
     }));
 
   const seenOpp = new Set();
   const computedOpportunities = computedRadar
     .filter(r => {
-      if (r.conflict) return false;           // ← CONTRADICTION FILTER: blocks HIGH risk
+      if (r.conflict) return false;
       if (r.score < 70) return false;
       const key = `${r.company}||${r.type}`;
       if (seenOpp.has(key)) return false;
@@ -1127,13 +1114,12 @@ export default function App() {
     })
     .slice(0, 5)
     .map(r => ({
-      company: r.company, score: r.score, type: r.type,
-      receivedAt: r.receivedAt, time: r.time,
-      caution: r.caution,
+      company:     r.company, score: r.score, type: r.type,
+      receivedAt:  r.receivedAt, time: r.time,
+      caution:     r.caution,
       priceImpact: r.priceImpact,
     }));
 
-  // Intelligence stats for display
   const intelStats = {
     blocked:   computedRadar.filter(r => !!r.conflict).length,
     cautioned: computedRadar.filter(r => !r.conflict && !!r.caution).length,
@@ -1181,7 +1167,7 @@ export default function App() {
       <div className="layout desktop-layout">
         <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
         <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
-       <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} />
+        <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} />
         <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
       </div>
 
