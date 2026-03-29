@@ -635,9 +635,6 @@ startNSEDealsListener(io);
 startCoordinator(io);
 
 // ── BSE Data System — daily company list + mcap sync ─────────────────────────
-const bseDataSystem = require("./services/data/bseDataSystem");
-bseDataSystem.init().catch(e => console.warn("BSE Data System init failed:", e.message));
-
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log("Server running on port", PORT);
