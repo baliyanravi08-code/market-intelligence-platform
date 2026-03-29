@@ -544,7 +544,7 @@ function CompanyPanel({ company, onClose }) {
 
   const p  = profile?.profile || {};
   const f  = profile?.financials || {};
-  const ob_ = ob?.orderBook || null;
+  const ob_  = ob?.orderBook || ob || null;
   const filings = profile?.recentFilings || [];
 
   return (

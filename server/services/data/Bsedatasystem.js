@@ -104,122 +104,122 @@ const BSE_CSV_URLS = [
 ];
 
 async function downloadBSECompanyList() {
-  console.log("📥 Downloading BSE company list...");
+  console.log("📥 Downloading company list...");
 
-  // Method 1: Try the BSE scrips API (returns JSON, most reliable)
+  // Method 1: NSE equity CSV — most reliable, always public, no auth
   try {
-    const url = "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&industry=&segment=Equity&status=Active";
-    const res = await axios.get(url, {
-      headers: { ...BSE_API_HEADERS },
-      timeout: 30000,
-    });
-
-    const data = res.data;
-    // BSE returns array or { Table: [...] }
-    const rows = Array.isArray(data) ? data
-               : data?.Table || data?.Table1 || data?.data || [];
-
-    if (rows.length > 100) {
-      console.log(`✅ BSE API: ${rows.length} companies`);
-      return { source: "api", rows };
-    }
-  } catch (e) {
-    console.log(`   BSE scrips API failed: ${e.message}`);
-  }
-
-  // Method 2: BhavCopy CSV (today and yesterday)
-  for (let daysAgo = 0; daysAgo <= 5; daysAgo++) {
-    const d = new Date();
-    d.setDate(d.getDate() - daysAgo);
-    // Skip weekends
-    if (d.getDay() === 0 || d.getDay() === 6) continue;
-
-    const dateStr = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
-    const url = `https://www.bseindia.com/download/BhavCopy/Equity/EQ_ISINCODE_${dateStr}.CSV`;
-
-    try {
-      const res = await axios.get(url, {
-        headers: BSE_HEADERS,
+    const res = await axios.get(
+      "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Referer":    "https://www.nseindia.com",
+          "Accept":     "text/html,*/*",
+        },
         responseType: "text",
         timeout: 30000,
-      });
-      if (res.data && res.data.length > 1000) {
-        console.log(`✅ BhavCopy CSV: ${dateStr} (${Math.round(res.data.length/1024)}KB)`);
-        fs.writeFileSync(CSV_CACHE, res.data, "utf8");
-        return { source: "bhav_csv", raw: res.data, date: dateStr };
       }
-    } catch (e) {
-      console.log(`   BhavCopy ${dateStr}: ${e.message}`);
+    );
+    if (res.data && res.data.length > 5000) {
+      console.log(`✅ NSE equity CSV: ${Math.round(res.data.length/1024)}KB`);
+      fs.writeFileSync(CSV_CACHE, res.data, "utf8");
+      return { source: "nse_csv", raw: res.data };
     }
-    await sleep(1000);
-  }
+  } catch (e) { console.log(`   NSE CSV: ${e.message}`); }
 
-  // Method 3: Use cached CSV if download fails
+  await sleep(1500);
+
+  // Method 2: BSE scrips API (JSON)
+  try {
+    const res = await axios.get(
+      "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&industry=&segment=Equity&status=Active",
+      { headers: BSE_API_HEADERS, timeout: 30000 }
+    );
+    const rows = Array.isArray(res.data) ? res.data
+               : res.data?.Table || res.data?.Table1 || res.data?.data || [];
+    if (rows.length > 100) {
+      console.log(`✅ BSE scrips API: ${rows.length} companies`);
+      return { source: "api", rows };
+    }
+  } catch (e) { console.log(`   BSE scrips API: ${e.message}`); }
+
+  await sleep(1500);
+
+  // Method 3: BSE direct CSV
+  try {
+    const res = await axios.get(
+      "https://www.bseindia.com/downloads1/ListofScrips.zip",
+      { headers: BSE_HEADERS, responseType: "text", timeout: 30000 }
+    );
+    if (res.data?.length > 1000) {
+      fs.writeFileSync(CSV_CACHE, res.data, "utf8");
+      return { source: "bhav_csv", raw: res.data };
+    }
+  } catch (e) { console.log(`   BSE direct CSV: ${e.message}`); }
+
+  // Method 4: Use cached file from last successful run
   if (fs.existsSync(CSV_CACHE)) {
     console.log("⚠️  Using cached CSV from previous run");
     return { source: "cache", raw: fs.readFileSync(CSV_CACHE, "utf8") };
   }
 
-  throw new Error("All BSE company list sources failed");
+  throw new Error("All sources failed — no cache available either");
 }
 
 // ─── STEP 2: Parse company list into standard format ─────────────────────────
 function parseCompanyList(result) {
-  const companies = []; // [{ code, name, isin, sector, industry, status }]
+  const companies = [];
 
   if (result.source === "api" && result.rows) {
     for (const row of result.rows) {
-      // BSE API field names vary — handle all known variants
-      const code = String(
-        row.SCRIP_CD || row.scripCode || row.Scrip_Code || row.scrip_cd || ""
-      ).trim();
-      const name = (
-        row.SCRIP_NAME || row.scripName || row.Scrip_Name || row.LONG_NAME || ""
-      ).trim();
+      const code = String(row.SCRIP_CD || row.scripCode || row.Scrip_Code || "").trim();
+      const name = (row.SCRIP_NAME || row.Scrip_Name || row.LONG_NAME || "").trim();
       const isin = (row.ISIN_NUMBER || row.isin || row.ISIN || "").trim();
-      const sector = (row.SECTOR_NAME || row.sector || row.Sector || "").trim();
-      const industry = (row.INDUSTRY || row.industry || "").trim();
-      const status = (row.STATUS || row.status || "Active").trim();
-
       if (!code || !name) continue;
-      companies.push({ code, name, isin, sector, industry, status });
+      companies.push({ code, name, isin,
+        sector:   (row.SECTOR_NAME || row.sector || "").trim(),
+        industry: (row.INDUSTRY    || row.industry || "").trim(),
+        status:   (row.STATUS      || "Active").trim(),
+      });
     }
+
   } else if (result.raw) {
-    // Parse CSV — handle BhavCopy format
-    // BhavCopy columns: CODE,NAME,ISIN,PREVCLOSE,OPEN,HIGH,LOW,CLOSE,TOTTRDQTY,TOTTRDVAL,...
     try {
       const records = csv.parse(result.raw, {
-        columns: true,
-        skip_empty_lines: true,
-        trim: true,
-        relax_column_count: true,
+        columns: true, skip_empty_lines: true, trim: true, relax_column_count: true,
       });
 
-      for (const row of records) {
-        const code = String(
-          row.CODE || row.SC_CODE || row.Scrip_Code || row["SCRIP CODE"] || ""
-        ).trim();
-        const name = (
-          row.NAME || row.SC_NAME || row.Scrip_Name || row["SCRIP NAME"] || ""
-        ).trim();
-        const isin = (row.ISIN || row.ISIN_CODE || row["ISIN CODE"] || "").trim();
-
-        if (!code || !name || !/^\d{6}$/.test(code)) continue;
-        companies.push({
-          code,
-          name,
-          isin,
-          sector:   row.SECTOR   || row.Sector   || "",
-          industry: row.INDUSTRY || row.Industry || "",
-          status:   row.STATUS   || "Active",
-        });
+      if (result.source === "nse_csv") {
+        // NSE CSV: SYMBOL, NAME OF COMPANY, SERIES, DATE OF LISTING, ISIN NUMBER
+        // No BSE code here — we match by ISIN to existing marketCapDB entries
+        const db = loadMcapDB();
+        const isinToCode = {};
+        for (const [code, d] of Object.entries(db)) {
+          if (d.isin) isinToCode[d.isin] = code;
+        }
+        for (const row of records) {
+          const name   = (row["NAME OF COMPANY"] || row.NAME || "").trim();
+          const isin   = (row["ISIN NUMBER"] || row.ISIN || "").trim();
+          const symbol = (row.SYMBOL || "").trim();
+          if (!name || !isin) continue;
+          const code = isinToCode[isin] || "";
+          companies.push({ code, name, isin, sector: "", industry: "", status: "Active", nseSymbol: symbol });
+        }
+        console.log(`📋 NSE CSV: ${companies.length} rows, ${companies.filter(c=>c.code).length} matched to BSE codes`);
+      } else {
+        // BSE BhavCopy CSV: SC_CODE, SC_NAME, ...
+        for (const row of records) {
+          const code = String(row.SC_CODE || row.CODE || row.Scrip_Code || "").trim();
+          const name = (row.SC_NAME || row.NAME || row.Scrip_Name || "").trim();
+          const isin = (row.ISIN || row.ISIN_CODE || "").trim();
+          if (!code || !name || !/^\d{4,6}$/.test(code)) continue;
+          companies.push({ code, name, isin, sector: "", industry: "", status: "Active" });
+        }
       }
-    } catch (e) {
-      console.log(`   CSV parse error: ${e.message}`);
-    }
+    } catch (e) { console.log(`   CSV parse error: ${e.message}`); }
   }
 
-  console.log(`📋 Parsed ${companies.length} companies from BSE`);
+  console.log(`📋 Total parsed: ${companies.length} companies`);
   return companies;
 }
 

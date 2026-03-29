@@ -36,24 +36,25 @@ let mcapDB = {};
 function loadMcapDB() {
   try {
     if (fs.existsSync(MCAP_FILE)) {
-      mcapDB = JSON.parse(fs.readFileSync(MCAP_FILE, "utf8"));
+      const raw = fs.readFileSync(MCAP_FILE, "utf8").trim();  // ← add .trim()
+      if (!raw) return;                                         // ← add this guard
+      mcapDB = JSON.parse(raw);
       console.log(`📊 MCap DB loaded: ${Object.keys(mcapDB).length} companies`);
-    } else {
-      console.log("⚠️ marketCapDB.json not found — run fetchAllMcap.js to build it");
     }
   } catch(e) {
     console.log("⚠️ MCap DB load failed:", e.message);
     mcapDB = {};
   }
 }
-
 // ── Order book history (persisted) ──
 let runtimeUpdates = {};
 
 function loadFromDisk() {
   try {
     if (fs.existsSync(OB_FILE)) {
-      runtimeUpdates = JSON.parse(fs.readFileSync(OB_FILE, "utf8"));
+      const raw = fs.readFileSync(OB_FILE, "utf8").trim();  // ← add .trim()
+      if (!raw) return;                                       // ← add this guard
+      runtimeUpdates = JSON.parse(raw);
       console.log(`📦 OrderBook history loaded: ${Object.keys(runtimeUpdates).length} companies`);
     }
   } catch(e) {
