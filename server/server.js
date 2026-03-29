@@ -223,12 +223,21 @@ app.get("/api/events", (req, res) => {
     const stored = getStored();
 
     // Load mcapDb so App.jsx can compute % of MCap for mega orders
-    let mcapDb = [];
+   let mcapDb = [];
     try {
       const mcapPath = path.join(__dirname, "data/marketCapDB.json");
       if (fs.existsSync(mcapPath)) {
-        mcapDb = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
-        if (!Array.isArray(mcapDb)) mcapDb = [];
+        const raw = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
+        // marketCapDB.json is an object {code: {mcap, name}} — convert to array
+        if (Array.isArray(raw)) {
+          mcapDb = raw;
+        } else {
+          mcapDb = Object.entries(raw).map(([code, d]) => ({
+            code,
+            company: d.name || "",
+            mcap:    d.mcap || 0
+          }));
+        }
       }
     } catch (e) {
       console.warn("mcapDb load failed:", e.message);
@@ -403,9 +412,9 @@ app.get("/api/admin/backfill", async (req, res) => {
 
   try {
     const axios  = require("axios");
-    const { updateFromResult, getCompaniesByMcap } = require("./services/data/marketCap");
+    const { updateFromResult, getCompaniesByMcap } = require("./data/marketCap");
     const { extractOrderValueFromPDF } = require("./services/data/pdfReader");
-    const { setConfirmedOrderBook, updateQuarterSeries } = require("./services/intelligence/orderBookEngine");
+    const { setConfirmedOrderBook, updateQuarterSeries } = require("./intelligence/orderBookEngine");
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     const fmt   = d => String(d.getDate()).padStart(2,"0") + "%2F" +
