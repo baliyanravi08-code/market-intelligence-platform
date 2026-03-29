@@ -785,8 +785,8 @@ function FeedPanel({ filteredFeed, activeTab, setActiveTab, feedFilter, setFeedF
     </div>
   );
 }
+function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBook, intelStats, liveOrderBook, obExpanded, setObExpanded, obSearch, setObSearch }) {
 
-function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBook, intelStats, liveOrderBook, obExpanded, setObExpanded }) {
   return (
     <div className="panel right-panel">
       <div className="section">
@@ -857,9 +857,32 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
             {getCurrentQuarter().label} {getCurrentQuarter().range}
           </span>
         </div>
+        <div style={{ position: "relative", marginBottom: 6 }}>
+          <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "#1a5070", fontSize: "11px", pointerEvents: "none" }}>⌕</span>
+          <input
+            type="text"
+            placeholder="Search order book..."
+            value={obSearch}
+            onChange={e => setObSearch(e.target.value)}
+            style={{
+              width: "100%", background: "#010a18", border: "1px solid #0c2240",
+              borderRadius: 4, padding: "5px 8px 5px 24px",
+              color: "#d8eeff", fontSize: "10px", fontFamily: "IBM Plex Mono, monospace",
+              outline: "none", boxSizing: "border-box"
+            }}
+          />
+          {obSearch && (
+            <button onClick={() => setObSearch("")} style={{
+              position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
+              background: "none", border: "none", color: "#1a5070", cursor: "pointer", fontSize: "12px"
+            }}>✕</button>
+          )}
+        </div>
         {liveOrderBook.length === 0 ? (
           <div className="empty">No order book data yet</div>
-        ) : liveOrderBook.map((o, i) => {
+        ) : liveOrderBook.filter(o =>
+            !obSearch || (o.company || "").toLowerCase().includes(obSearch.toLowerCase())
+          ).map((o, i) => {
           const isOpen  = obExpanded === o.code;
           const obToRev = o.obToRevRatio ? parseFloat(o.obToRevRatio) : null;
           const obColor = obToRev === null ? "#4a9abb"
@@ -1005,6 +1028,7 @@ export default function App() {
   const [cryptoAssets,   setCryptoAssets]   = useState([]);
   const [liveOrderBook,  setLiveOrderBook]  = useState([]);
   const [obExpanded,     setObExpanded]     = useState(null);
+  const [obSearch,       setObSearch]       = useState("");
   const [selectedCompany, setSelectedCompany] = useState(null); // for CompanyPanel
 
   // ── Stale watchdog ────────────────────────────────────────────────────────
@@ -1313,7 +1337,7 @@ export default function App() {
       <div className="layout desktop-layout">
         <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
         <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
-        <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} />
+       <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
         <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
       </div>
 
@@ -1328,7 +1352,7 @@ export default function App() {
         <div className="mobile-panel-wrap">
           {mobilePanelTab === "radar" && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />}
           {mobilePanelTab === "feed"  && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
-          {mobilePanelTab === "data"  && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} />}
+          {mobilePanelTab === "data"  && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
           {mobilePanelTab === "intel" && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />}
         </div>
       </div>
