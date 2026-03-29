@@ -31,8 +31,6 @@ async function extractOrderValueFromPDF(pdfUrl) {
       timeout:      12000
     });
 
-    // Extract readable text from PDF buffer without any library
-    // PDFs contain stream text between BT/ET markers and plain strings
     const text   = extractTextFromPDFBuffer(Buffer.from(res.data));
     const crores = extractCroresFromText(text);
 
@@ -48,18 +46,11 @@ async function extractOrderValueFromPDF(pdfUrl) {
   }
 }
 
-/**
- * Extract readable ASCII text from a PDF buffer.
- * PDFs store text in streams — we extract printable ASCII chunks.
- * Not perfect but good enough for Indian BSE filings which use simple text.
- */
 function extractTextFromPDFBuffer(buf) {
-  const str = buf.toString("latin1"); // latin1 preserves all bytes
-
+  const str = buf.toString("latin1");
   let text = "";
 
   // Method 1: Extract text between parentheses (PDF string literals)
-  // PDF text: (Hello World) Tj  or [(H)(e)(l)(l)(o)] TJ
   const parenRegex = /\(([^)]{1,200})\)\s*(?:Tj|TJ|'|")/g;
   let m;
   while ((m = parenRegex.exec(str)) !== null) {
@@ -67,15 +58,13 @@ function extractTextFromPDFBuffer(buf) {
       .replace(/\\n/g, " ")
       .replace(/\\r/g, " ")
       .replace(/\\t/g, " ")
-      .replace(/\\\d{3}/g, " ")  // octal escapes
-      .replace(/\\(.)/g, "$1");   // other escapes
-    // Only keep printable ASCII
+      .replace(/\\\d{3}/g, " ")
+      .replace(/\\(.)/g, "$1");
     const clean = chunk.replace(/[^\x20-\x7E\u20B9]/g, " ").trim();
     if (clean.length > 1) text += clean + " ";
   }
 
-  // Method 2: Also scan raw stream for rupee/number patterns
-  // Look for readable sequences with ₹ or Rs in the raw bytes
+  // Method 2: Scan raw stream for rupee/number patterns
   const rsPattern = /Rs\.?\s*[\d,]+/gi;
   const rawMatches = str.match(rsPattern) || [];
   text += " " + rawMatches.join(" ");
@@ -83,8 +72,63 @@ function extractTextFromPDFBuffer(buf) {
   return text;
 }
 
+// ── Order book specific patterns — highest priority ──
+const ORDER_BOOK_PATTERNS = [
+  /order\s*book\s*(?:as\s*on|position|size|value|stood\s*at|of)?[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+  /outstanding\s*order\s*(?:book|backlog)[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+  /unexecuted\s*order[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+  /order\s*backlog[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+  /pending\s*order[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+  /orders?\s*in\s*hand[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+  /secured\s*orders?[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+  /executable\s*order[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+  /order\s*book\s*stands?[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+  /total\s*order\s*book[^₹\d]{0,30}(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/i,
+];
+
+function extractOrderBookFromText(rawText) {
+  if (!rawText || rawText.length < 5) return null;
+  const t = rawText.replace(/\n/g, " ").replace(/\s+/g, " ");
+
+  for (const pattern of ORDER_BOOK_PATTERNS) {
+    const m = t.match(pattern);
+    if (m) {
+      const val = parseFloat((m[1] || m[2] || "0").replace(/,/g, ""));
+      if (val > 0 && val < 10000000) {
+        console.log(`📦 OB pattern matched: ₹${val}Cr`);
+        return val;
+      }
+    }
+  }
+  return null;
+}
+
+function wordsToNumber(text) {
+  const t = text.toLowerCase().trim();
+  const ones = ["zero","one","two","three","four","five","six","seven","eight","nine","ten",
+    "eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
+  const tens = ["","","twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"];
+  let total = 0, current = 0;
+  for (const w of t.split(/\s+/)) {
+    const oi = ones.indexOf(w), ti = tens.indexOf(w);
+    if      (oi !== -1)                       current += oi;
+    else if (ti !== -1)                       current += ti * 10;
+    else if (w === "hundred")                 current *= 100;
+    else if (w === "thousand")                current *= 1000;
+    else if (w === "lakh"   || w === "lakhs") { total += current * 100000;   current = 0; }
+    else if (w === "crore"  || w === "crores"){ total += current * 10000000; current = 0; }
+  }
+  total += current;
+  if (total === 0) return null;
+  return parseFloat((total / 10000000).toFixed(2));
+}
+
 function extractCroresFromText(rawText) {
   if (!rawText || rawText.length < 5) return null;
+
+  // 1. Try order book specific patterns first
+  const obVal = extractOrderBookFromText(rawText);
+  if (obVal) return obVal;
 
   const t = rawText
     .replace(/\n/g, " ")
@@ -92,7 +136,7 @@ function extractCroresFromText(rawText) {
     .replace(/[''`´]/g, "'")
     .toLowerCase();
 
-  // 1. Symbol + crore: "rs.62.36 crores" "inr 22.50 crore"
+  // 2. Symbol + crore: "rs.62.36 crores"
   const sym = t.match(/(?:rs\.?|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:crores?|cr)\b/gi);
   if (sym) {
     const vals = sym.map(m => {
@@ -102,7 +146,7 @@ function extractCroresFromText(rawText) {
     if (vals.length) return Math.max(...vals);
   }
 
-  // 2. Crore only: "22.50 crores" "7.51 crore"
+  // 3. Crore only: "22.50 crores"
   const cr = t.match(/([\d,]+(?:\.\d+)?)\s*(?:crores?)\b/g);
   if (cr) {
     const vals = cr.map(m => {
@@ -112,7 +156,7 @@ function extractCroresFromText(rawText) {
     if (vals.length) return Math.max(...vals);
   }
 
-  // 3. OCR artifact: "worth ,5.50 crores"
+  // 4. OCR artifact: "worth ,5.50 crores"
   const ocr = t.match(/(?:worth|value|amount)\s*[,'t]\s*([\d.]+)\s*(?:crores?|cr)\b/g);
   if (ocr) {
     const vals = ocr.map(m => {
@@ -122,7 +166,7 @@ function extractCroresFromText(rawText) {
     if (vals.length) return Math.max(...vals);
   }
 
-  // 4. Raw Indian rupee: Rs.7,51,10,062
+  // 5. Raw Indian rupee: Rs.7,51,10,062
   const raw = t.match(/rs\.?\s*([\d,]+(?:\.\d+)?)\b/g);
   if (raw) {
     let max = null;
@@ -138,7 +182,7 @@ function extractCroresFromText(rawText) {
     if (max) return max;
   }
 
-  // 5. Lakh amounts
+  // 6. Lakh amounts
   const lakh = t.match(/([\d,]+(?:\.\d+)?)\s*lakhs?\b/g);
   if (lakh) {
     const vals = lakh.map(m => {
@@ -148,7 +192,7 @@ function extractCroresFromText(rawText) {
     if (vals.length) return Math.max(...vals);
   }
 
-  // 6. Word amounts
+  // 7. Word amounts
   const wm = t.match(/(?:value|amount|worth)[^.]{0,100}((?:(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|lakh|crore)\s*)+)/i);
   if (wm) {
     const c = wordsToNumber(wm[1]);
@@ -158,23 +202,4 @@ function extractCroresFromText(rawText) {
   return null;
 }
 
-function wordsToNumber(text) {
-  const t = text.toLowerCase().trim();
-  const ones = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
-  const tens = ["","","twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"];
-  let total = 0, current = 0;
-  for (const w of t.split(/\s+/)) {
-    const oi = ones.indexOf(w), ti = tens.indexOf(w);
-    if      (oi !== -1)               current += oi;
-    else if (ti !== -1)               current += ti * 10;
-    else if (w === "hundred")         current *= 100;
-    else if (w === "thousand")        current *= 1000;
-    else if (w === "lakh"  || w === "lakhs")  { total += current * 100000;    current = 0; }
-    else if (w === "crore" || w === "crores") { total += current * 10000000;  current = 0; }
-  }
-  total += current;
-  if (total === 0) return null;
-  return parseFloat((total / 10000000).toFixed(2));
-}
-
-module.exports = { extractOrderValueFromPDF };
+module.exports = { extractOrderValueFromPDF, extractOrderBookFromText, extractCroresFromText };

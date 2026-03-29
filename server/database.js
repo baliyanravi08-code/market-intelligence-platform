@@ -77,6 +77,10 @@ async function loadFromMongo() {
       .limit(1000)
       .lean();
 
+    // Clear before reload — prevents duplicates on repeated calls
+    memoryStore.bse = [];
+    memoryStore.nse = [];
+
     let bseCount = 0, nseCount = 0;
     for (const doc of docs) {
       const exchange = (doc.exchange || "bse").toLowerCase();
@@ -126,7 +130,7 @@ function getResults() {
     .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
 }
 
-connectDB();
+connectDB().catch(e => console.log("DB connect error:", e.message));
 
 module.exports = {
   connectDB,
@@ -134,6 +138,7 @@ module.exports = {
   saveEvent: saveResult,
   getResults,
   getEvents,
+  loadFromMongo,
   getRetentionHours,
   getWindowLabel
 };

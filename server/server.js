@@ -265,25 +265,56 @@ app.get("/api/mcap", (req, res) => {
   }
 });
 
-// ── /api/orderbook — MongoDB order book tracker ──────────────────────────────
-app.get("/api/orderbook", async (req, res) => {
+// ── /api/company/:code ───────────────────────────────────────────────────────
+// ── Full order book tracker for all BSE companies ─────────────────────────
+app.get("/api/orderbook", (req, res) => {
   try {
-    const orderBookDB = require("./data/orderBookDB");
-    const result = await orderBookDB.getAllOrderBooks();
-    res.json({ orderBook: result || [], count: (result || []).length });
+    const { getCompaniesByMcap, getEstimatedOrderBook } = require("./data/marketCap");
+    const companies = getCompaniesByMcap(0);
+    const result = [];
+
+    for (const [code, data] of Object.entries(companies)) {
+      const ob = getEstimatedOrderBook(code);
+      if (!ob || !ob.confirmed) continue;
+      result.push({
+        code,
+        company:          data.name || code,
+        mcap:             data.mcap || 0,
+        confirmed:        ob.confirmed,
+        confirmedQuarter: ob.confirmedQuarter,
+        newOrders:        ob.newOrders || 0,
+        estimated:        ob.estimated,
+        currentOrderBook: ob.currentOrderBook,
+        obToRevRatio:     ob.obToRevRatio,
+        bookToBill:       ob.bookToBill,
+        quarterHistory:   ob.quarterHistory || [],
+        lastUpdated:      data.lastResultUpdate || null
+      });
+    }
+
+    // Sort by current order book size desc
+    result.sort((a, b) => (b.currentOrderBook || 0) - (a.currentOrderBook || 0));
+    res.json({ orderBook: result, count: result.length });
   } catch(e) {
     console.error("❌ Order book API error:", e.message);
     res.json({ orderBook: [], count: 0 });
   }
 });
 
-// ── /api/orderbook/:code — single company ────────────────────────────────────
-app.get("/api/orderbook/:code", async (req, res) => {
+// ── Quarter helper ────────────────────────────────────────────────────────
+app.get("/api/orderbook/:code", (req, res) => {
   try {
-    const orderBookDB = require("./data/orderBookDB");
-    const ob = await orderBookDB.getOrderBook(req.params.code);
+    const { getEstimatedOrderBook, getCompanyData } = require("./data/marketCap");
+    const code = req.params.code;
+    const ob   = getEstimatedOrderBook(code);
+    const data = getCompanyData(code);
     if (!ob) return res.json({ error: "No order book data for this company" });
-    res.json(ob);
+    res.json({
+      code,
+      company:        data.name || code,
+      mcap:           data.mcap || 0,
+      ...ob
+    });
   } catch(e) {
     res.json({ error: e.message });
   }
@@ -353,6 +384,128 @@ async function searchBSE(q) {
   } catch (e) {}
   return [];
 }
+
+// ── /api/admin/backfill — runs on server where BSE cookie works ──────────────
+// Hit from browser: https://your-render-url.onrender.com/api/admin/backfill?token=YOUR_SECRET
+app.get("/api/admin/backfill", async (req, res) => {
+  const secret = process.env.ADMIN_SECRET || "backfill2026";
+  if (req.query.token !== secret) {
+    return res.status(401).json({ error: "Unauthorized — pass ?token=YOUR_ADMIN_SECRET" });
+  }
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Transfer-Encoding", "chunked");
+
+  const log = (msg) => { console.log(msg); res.write(msg + "\n"); };
+
+  log("=== BSE ORDER BOOK BACKFILL ===");
+  log("Started: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + " IST");
+
+  try {
+    const axios  = require("axios");
+    const { updateFromResult, getCompaniesByMcap } = require("./services/data/marketCap");
+    const { extractOrderValueFromPDF } = require("./services/data/pdfReader");
+    const { setConfirmedOrderBook, updateQuarterSeries } = require("./services/intelligence/orderBookEngine");
+
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const fmt   = d => String(d.getDate()).padStart(2,"0") + "%2F" +
+                       String(d.getMonth()+1).padStart(2,"0") + "%2F" + d.getFullYear();
+
+    // Get BSE cookie
+    log("\n[1] Getting BSE cookie...");
+    let bseCookie = "";
+    try {
+      const w = await axios.get("https://www.bseindia.com/corporates/ann.html", {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Connection": "keep-alive"
+        }, timeout: 20000, maxRedirects: 5
+      });
+      const ck = w.headers["set-cookie"];
+      if (ck && ck.length) {
+        bseCookie = ck.map(c => c.split(";")[0]).join("; ");
+        log("Cookie: " + bseCookie.substring(0, 60) + "...");
+      } else {
+        log("No Set-Cookie header — continuing without");
+      }
+    } catch(e) { log("Warmup failed: " + e.message); }
+
+    const apiH = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      "Accept": "application/json, text/plain, */*",
+      "Referer": "https://www.bseindia.com/corporates/ann.html",
+      "Origin": "https://www.bseindia.com",
+      "X-Requested-With": "XMLHttpRequest",
+      ...(bseCookie ? { "Cookie": bseCookie } : {})
+    };
+
+    const OB_KW = ["infra","epc","engineer","construct","railway","defense","defence",
+      "solar","renewable","power","water","wabag","rites","rvnl","irfc","hal ","bel ",
+      "ntpc","l&t","larsen","kec ","kalpataru","thermax","bhel","suzlon","tata power",
+      "inox wind","jsw energy","nhpc","abb india","siemens","garden reach","cochin ship",
+      "mazagon","data pattern","mtar","ncc ","hg infra","pnc infra","dilip","j kumar",
+      "titagarh","jupiter wagon","cg power","va tech"];
+    const isOB = n => OB_KW.some(k => (n||"").toLowerCase().includes(k.trim()));
+
+    const quarters = [
+      { name: "Q3FY26", from: new Date("2026-01-01"), to: new Date("2026-03-28") },
+      { name: "Q2FY26", from: new Date("2025-10-01"), to: new Date("2025-11-30") },
+      { name: "Q1FY26", from: new Date("2025-07-01"), to: new Date("2025-08-31") },
+    ];
+
+    const cos = Object.entries(getCompaniesByMcap(0)).filter(([,d]) => isOB(d.name)).slice(0,120);
+    log("\n[2] Companies: " + cos.length);
+
+    let totalPDFs = 0, totalFound = 0;
+
+    for (const q of quarters) {
+      log("\n--- " + q.name + " ---");
+      await sleep(1000);
+
+      for (const [code, data] of cos) {
+        const url = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w" +
+          "?strCat=-1&strPrevDate=" + fmt(q.from) + "&strScrip=" + code +
+          "&strSearch=P&strToDate=" + fmt(q.to) + "&strType=C&subcategory=-1";
+        try {
+          const r = await axios.get(url, { headers: apiH, timeout: 10000 });
+          const d = r.data;
+          if (typeof d === "string" && d.includes("<")) continue;
+          const rows = d && d.Table || d && d.Table1 || d && d.data || (Array.isArray(d) ? d : []);
+          const rf = rows.filter(f => {
+            const h = (f.HEADLINE||"").toLowerCase(), c2 = (f.CATEGORYNAME||"").toLowerCase();
+            return (c2.includes("result")||h.includes("financial result")||
+                    h.includes("quarterly result")||h.includes("unaudited")||
+                    /q[1-4]fy/i.test(h)) && f.ATTACHMENTNAME;
+          });
+          if (!rf.length) continue;
+          const pdfUrl = "https://www.bseindia.com/xml-data/corpfiling/AttachLive/" + rf[0].ATTACHMENTNAME;
+          totalPDFs++;
+          const obValue = await extractOrderValueFromPDF(pdfUrl);
+          if (obValue && obValue > 50) {
+            const company = data.name || code;
+            updateFromResult(code, { confirmedOrderBook: obValue, confirmedQuarter: q.name, newOrdersSinceConfirm: 0 });
+            try { setConfirmedOrderBook(code, company, q.name, obValue); updateQuarterSeries(code, company, q.name, obValue); } catch(e2) {}
+            try { const ob = require("./data/orderBookDB"); await ob.updateFromResultFiling(code, company, obValue, q.name, null); } catch(e2) {}
+            const disp = obValue >= 1000 ? "Rs." + (obValue/1000).toFixed(1) + "K Cr" : "Rs." + Math.round(obValue) + " Cr";
+            log("OK " + company.substring(0,35).padEnd(35) + " " + q.name + "  " + disp);
+            totalFound++;
+          }
+          await sleep(600);
+        } catch(e2) { /* skip */ }
+      }
+      await sleep(2000);
+    }
+
+    log("\n=== DONE: scanned=" + totalPDFs + " found=" + totalFound + " ===");
+    if (totalFound === 0) { log("BSE may be rate-limiting. Try again in 30 mins."); }
+    res.end();
+  } catch(e) {
+    log("FATAL: " + e.message);
+    res.end();
+  }
+});
 
 // ── SPA fallback ─────────────────────────────────────────────────────────────
 app.use((req, res, next) => {

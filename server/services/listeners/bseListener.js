@@ -116,8 +116,8 @@ async function enrichResultWithPDF(signal) {
   if (!signal.pdfUrl) return signal;
   const { getMarketCap } = require("../data/marketCap");
   const hasExistingOB    = getMarketCap(signal.code);
-  const isTrackedCompany = isOrderBookCompany(signal.company) || hasExistingOB;
-  if (!isTrackedCompany) return signal;
+  // Scan ALL result PDFs — order book data valuable for every company
+  // isOrderBookCompany check removed — let PDF patterns decide
 
   try {
     const { extractOrderValueFromPDF } = require("../data/pdfReader");
