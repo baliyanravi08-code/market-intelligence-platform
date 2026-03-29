@@ -530,21 +530,21 @@ function CompanyPanel({ company, onClose }) {
     setProfile(null); setOb(null); setLoading(true);
     const code = company.code;
     const nse  = company.nseSymbol || "";
-    Promise.all([
-      fetch(`/api/company/${code}${nse ? `?nse=${nse}` : ""}`).then(r => r.json()).catch(() => null),
-      fetch(`/api/orderbook/${code}`).then(r => r.json()).catch(() => null),
-    ]).then(([prof, obData]) => {
-      setProfile(prof);
-      setOb(obData);
-      setLoading(false);
-    });
+    fetch(`/api/company/${code}${nse ? `?nse=${nse}` : ""}`)
+  .then(r => r.json())
+  .catch(() => null)
+  .then(prof => {
+    setProfile(prof);
+    setOb(prof); // orderBook is now inside prof
+    setLoading(false);
+  });
   }, [company]);
 
   if (!company) return null;
 
   const p  = profile?.profile || {};
   const f  = profile?.financials || {};
-  const ob_  = ob?.orderBook || ob || null;
+  const ob_ = profile?.orderBook || ob?.orderBook || null;
   const filings = profile?.recentFilings || [];
 
   return (
@@ -576,18 +576,24 @@ function CompanyPanel({ company, onClose }) {
             <>
               {/* Live price + key stats */}
               <div className="cp-stats-grid">
-                {p.price && (
-                  <div className="cp-stat">
-                    <div className="cp-stat-val" style={{ color: "#00ff9c" }}>₹{p.price}</div>
-                    <div className="cp-stat-label">Price</div>
-                  </div>
-                )}
-                {p.marketCap && (
-                  <div className="cp-stat">
-                    <div className="cp-stat-val">₹{p.marketCap}Cr</div>
-                    <div className="cp-stat-label">Market Cap</div>
-                  </div>
-                )}
+                {(p.price || p.lastPrice) && (
+  <div className="cp-stat">
+    <div className="cp-stat-val" style={{ color: "#00ff9c" }}>
+      ₹{p.price || p.lastPrice}
+    </div>
+    <div className="cp-stat-label">Price</div>
+  </div>
+)}
+{(p.mcap || p.marketCap) && (
+  <div className="cp-stat">
+    <div className="cp-stat-val">
+      ₹{((p.mcap || p.marketCap) >= 1000
+        ? ((p.mcap || p.marketCap)/1000).toFixed(1) + "K"
+        : (p.mcap || p.marketCap))}Cr
+    </div>
+    <div className="cp-stat-label">Market Cap</div>
+  </div>
+)}
                 {p.high52 && (
                   <div className="cp-stat">
                     <div className="cp-stat-val" style={{ fontSize: "10px" }}>₹{p.high52} / ₹{p.low52}</div>
