@@ -35,7 +35,7 @@ app.use(express.urlencoded({ extended: false }));
 const clientPath = path.join(__dirname, "../client/dist");
 app.use(express.static(clientPath));
 
-// ── Upstox token store — persisted to disk so restarts don't wipe it ────────
+// ── Upstox token store ───────────────────────────────────────────────────────
 const UPSTOX_API_KEY      = process.env.UPSTOX_API_KEY;
 const UPSTOX_API_SECRET   = process.env.UPSTOX_API_SECRET;
 const UPSTOX_REDIRECT_URI = process.env.UPSTOX_REDIRECT_URI;
@@ -79,7 +79,7 @@ function clearToken() {
   try { if (fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE); } catch (e) {}
 }
 
-loadToken(); // runs once at startup — restores token if still valid
+loadToken();
 
 const UPSTOX_INSTRUMENTS = {
   "NIFTY 50":   "NSE_INDEX|Nifty 50",
@@ -162,7 +162,6 @@ async function fetchUpstoxMarket() {
   const data = res.data?.data || {};
   return INDEX_NAMES.map(name => {
     const key   = UPSTOX_INSTRUMENTS[name];
-    // Upstox sometimes returns key with : instead of |
     const quote = data[key] || data[key.replace("|", ":")] || null;
     if (!quote) return { name, price: "—", change: "—", pct: "—", up: null };
     const price     = quote.last_price || 0;
@@ -180,10 +179,7 @@ async function fetchUpstoxMarket() {
   });
 }
 
-// ── /api/market — Upstox only, no Yahoo fallback ─────────────────────────────
-// Always returns array of 3 index objects + a { _source } sentinel at the end.
-// _source values: "upstox" | "disconnected" | "error"
-// Client reads _source to show correct badge and retry behaviour.
+// ── /api/market ──────────────────────────────────────────────────────────────
 app.get("/api/market", async (req, res) => {
   const blank = INDEX_NAMES.map(name => ({ name, price: "—", change: "—", pct: "—", up: null }));
   const upstoxReady = upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0);
@@ -222,13 +218,11 @@ app.get("/api/events", (req, res) => {
     const { getStored } = require("./coordinator");
     const stored = getStored();
 
-    // Load mcapDb so App.jsx can compute % of MCap for mega orders
-   let mcapDb = [];
+    let mcapDb = [];
     try {
       const mcapPath = path.join(__dirname, "data/marketCapDB.json");
       if (fs.existsSync(mcapPath)) {
         const raw = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
-        // marketCapDB.json is an object {code: {mcap, name}} — convert to array
         if (Array.isArray(raw)) {
           mcapDb = raw;
         } else {
@@ -249,7 +243,7 @@ app.get("/api/events", (req, res) => {
       orderBook:   stored.orderBook  || [],
       sectors:     stored.sectors    || [],
       megaOrders:  stored.megaOrders || [],
-      mcapDb,                           // ← was missing before, App.jsx needs this
+      mcapDb,
       windowHours: getRetentionHours(),
       windowLabel: getWindowLabel()
     });
@@ -267,69 +261,60 @@ app.get("/api/mcap", (req, res) => {
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     if (!fs.existsSync(mcapPath)) return res.json([]);
     const data = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
-const arr = Array.isArray(data) ? data :
-  Object.entries(data).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
-res.json(arr);
+    const arr = Array.isArray(data) ? data :
+      Object.entries(data).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
+    res.json(arr);
   } catch (e) {
     console.log("MCap load failed:", e.message);
     res.json([]);
   }
 });
 
-// ── /api/company/:code ───────────────────────────────────────────────────────
-// ── Full order book tracker for all BSE companies ─────────────────────────
-app.get("/api/orderbook", (req, res) => {
+// ── /api/orderbook ───────────────────────────────────────────────────────────
+app.get("/api/orderbook", async (req, res) => {
   try {
+    // PRIMARY: MongoDB (has confirmed + newOrders + currentOrderBook)
+    const orderBookDB = require("./data/orderBookDB");
+    const mongoData = await orderBookDB.getAllOrderBooks();
+
+    if (mongoData && mongoData.length > 0) {
+      return res.json({ orderBook: mongoData, count: mongoData.length });
+    }
+
+    // FALLBACK: JSON file if MongoDB empty
     const result = [];
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     const obPath   = path.join(__dirname, "data/orderBookHistory.json");
 
-    // Load both DBs
     let mcapDB = {}, obHistory = {};
-    try {
-      const raw = fs.readFileSync(mcapPath, "utf8").trim();
-      if (raw) mcapDB = JSON.parse(raw);
-    } catch { /* ok */ }
-    try {
-      const raw = fs.readFileSync(obPath, "utf8").trim();
-      if (raw) obHistory = JSON.parse(raw);
-    } catch { /* ok */ }
+    try { mcapDB    = JSON.parse(fs.readFileSync(mcapPath, "utf8").trim()); } catch(e) { /* ok */ }
+    try { obHistory = JSON.parse(fs.readFileSync(obPath,   "utf8").trim()); } catch(e) { /* ok */ }
 
     for (const [code, obData] of Object.entries(obHistory)) {
       const quarters = obData.quarters || [];
       if (!quarters.length) continue;
-
-      // Sort quarters descending to get latest
-      const sorted = [...quarters].sort((a, b) =>
-        (b.quarter || "").localeCompare(a.quarter || "")
-      );
+      const sorted = [...quarters].sort((a, b) => (b.quarter || "").localeCompare(a.quarter || ""));
       const latest = sorted[0];
       if (!latest?.confirmedOrderBook) continue;
-
-      const mcap = mcapDB[code]?.mcap || 0;
-      const name = obData.company || mcapDB[code]?.name || code;
-      const confirmed = latest.confirmedOrderBook;
-      const obToRevRatio = null; // calculated if ttmRevenue available
-
       result.push({
         code,
-        company:          name,
-        mcap,
-        confirmed,
+        company:          obData.company || mcapDB[code]?.name || code,
+        mcap:             mcapDB[code]?.mcap || 0,
+        confirmed:        latest.confirmedOrderBook,
         confirmedQuarter: latest.quarter,
         newOrders:        0,
-        currentOrderBook: obData.currentOrderBook || confirmed,
-        obToRevRatio,
+        currentOrderBook: obData.currentOrderBook || latest.confirmedOrderBook,
+        obToRevRatio:     null,
         quarterHistory:   quarters,
       });
     }
 
-    // Also check in-memory store (catches live updates)
+    // Also check in-memory store
     try {
       const { getCompaniesByMcap, getEstimatedOrderBook } = require("./data/marketCap");
       const companies = getCompaniesByMcap(0);
       for (const [code, data] of Object.entries(companies)) {
-        if (result.find(r => r.code === code)) continue; // already have it
+        if (result.find(r => r.code === code)) continue;
         const ob = getEstimatedOrderBook(code);
         if (!ob || !ob.confirmed) continue;
         result.push({
@@ -344,21 +329,23 @@ app.get("/api/orderbook", (req, res) => {
           quarterHistory:   ob.quarterHistory || [],
         });
       }
-    } catch { /* ok */ }
+    } catch(e) { /* ok */ }
 
     result.sort((a, b) => (b.currentOrderBook || 0) - (a.currentOrderBook || 0));
     res.json({ orderBook: result, count: result.length });
-  } catch (e) {
-    console.error("❌ Order book API error:", e.message);
+
+  } catch(e) {
+    console.log("⚠️ /api/orderbook error:", e.message);
     res.json({ orderBook: [], count: 0 });
   }
 });
+
+// ── /api/company/:code ───────────────────────────────────────────────────────
 app.get("/api/company/:code", async (req, res) => {
   try {
     const code   = req.params.code;
     const nseSym = req.query.nse || null;
 
-    // Load local data first — mcap, orderbook, sector
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     const obPath   = path.join(__dirname, "data/orderBookHistory.json");
 
@@ -369,22 +356,41 @@ app.get("/api/company/:code", async (req, res) => {
         const db = JSON.parse(fs.readFileSync(mcapPath, "utf8").trim() || "{}");
         if (db[code]) localCompany = db[code];
       }
-    } catch { /* ok */ }
+    } catch(e) { /* ok */ }
 
     try {
       if (fs.existsSync(obPath)) {
         const ob = JSON.parse(fs.readFileSync(obPath, "utf8").trim() || "{}");
         if (ob[code]) localOB = ob[code];
       }
-    } catch { /* ok */ }
+    } catch(e) { /* ok */ }
 
-    // Build order book summary from local JSON
-    const obSummary = localOB ? (() => {
+    // Try MongoDB first for order book
+    let obSummary = null;
+    try {
+      const orderBookDB = require("./data/orderBookDB");
+      const mongoOB = await orderBookDB.getOrderBook(code);
+      if (mongoOB) {
+        obSummary = {
+          confirmed:        mongoOB.confirmed || 0,
+          confirmedQuarter: mongoOB.confirmedQuarter || null,
+          currentOrderBook: mongoOB.currentOrderBook || 0,
+          newOrders:        mongoOB.newOrders || 0,
+          quarterHistory:   mongoOB.quarterHistory || [],
+          obToRevRatio:     mongoOB.obToRevRatio || null,
+          lastOrderTitle:   mongoOB.lastOrderTitle || null,
+          lastOrderPdfUrl:  mongoOB.lastOrderPdfUrl || null,
+        };
+      }
+    } catch(e) { /* ok */ }
+
+    // Fallback to JSON if MongoDB had nothing
+    if (!obSummary && localOB) {
       const quarters = localOB.quarters || [];
       const latest   = [...quarters].sort((a, b) =>
         (b.quarter || "").localeCompare(a.quarter || "")
       )[0] || null;
-      return {
+      obSummary = {
         confirmed:        latest?.confirmedOrderBook || 0,
         confirmedQuarter: latest?.quarter || null,
         currentOrderBook: localOB.currentOrderBook || latest?.confirmedOrderBook || 0,
@@ -392,13 +398,11 @@ app.get("/api/company/:code", async (req, res) => {
         quarterHistory:   quarters,
         obToRevRatio:     null,
       };
-    })() : null;
+    }
 
-    // Live screener data from BSE
     const { getFullScreenerData } = require("./services/data/liveMcap");
     const screener = await getFullScreenerData(code, nseSym);
 
-    // Merge — local data fills gaps BSE doesn't return
     const profile = {
       ...(screener?.profile || {}),
       name:   screener?.profile?.name   || localCompany?.name   || code,
@@ -415,9 +419,9 @@ app.get("/api/company/:code", async (req, res) => {
 
     res.json({
       profile,
-      financials:   screener?.financials   || {},
-      shareholding: screener?.shareholding || null,
-      orderBook:    obSummary,   // ← this is what CompanyPanel reads
+      financials:    screener?.financials   || {},
+      shareholding:  screener?.shareholding || null,
+      orderBook:     obSummary,
       recentFilings: filings,
     });
   } catch (e) {
@@ -425,13 +429,12 @@ app.get("/api/company/:code", async (req, res) => {
     res.json({ profile: null, financials: null, shareholding: null, orderBook: null, recentFilings: [] });
   }
 });
-  
+
 // ── /api/search/:query ───────────────────────────────────────────────────────
 app.get("/api/search/:query", async (req, res) => {
   try {
     const q = req.params.query.toLowerCase().trim();
 
-    // Search local marketCapDB.json first — instant, no network
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     let localResults = [];
     if (fs.existsSync(mcapPath)) {
@@ -457,13 +460,13 @@ app.get("/api/search/:query", async (req, res) => {
 
     if (localResults.length > 0) return res.json({ results: localResults });
 
-    // Fallback to BSE live search
     const results = await searchBSE(q);
     res.json({ results });
   } catch (e) {
     res.json({ results: [] });
   }
 });
+
 async function searchBSE(q) {
   const BSE_HEADERS = {
     "Referer":    "https://www.bseindia.com",
@@ -484,7 +487,7 @@ async function searchBSE(q) {
       sector:    s.SECTOR     || s.sector    || null,
       nseSymbol: s.NSE_Symbol || s.NSESymbol || null,
     })).filter(s => s.code && s.name);
-  } catch (e) {}
+  } catch (e) { /* ok */ }
   try {
     const r = await axios.get(
       "https://api.bseindia.com/BseIndiaAPI/api/getScripSearchData/w?strSearch=" + encodeURIComponent(q),
@@ -497,12 +500,11 @@ async function searchBSE(q) {
       sector:    s.SECTOR     || null,
       nseSymbol: s.NSE_Symbol || s.symbol    || null,
     })).filter(s => s.code && s.name);
-  } catch (e) {}
+  } catch (e) { /* ok */ }
   return [];
 }
 
-// ── /api/admin/backfill — runs on server where BSE cookie works ──────────────
-// Hit from browser: https://your-render-url.onrender.com/api/admin/backfill?token=YOUR_SECRET
+// ── /api/admin/backfill ──────────────────────────────────────────────────────
 app.get("/api/admin/backfill", async (req, res) => {
   const secret = process.env.ADMIN_SECRET || "backfill2026";
   if (req.query.token !== secret) {
@@ -518,7 +520,6 @@ app.get("/api/admin/backfill", async (req, res) => {
   log("Started: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + " IST");
 
   try {
-    const axios  = require("axios");
     const { updateFromResult, getCompaniesByMcap } = require("./data/marketCap");
     const { extractOrderValueFromPDF } = require("./services/data/pdfReader");
     const { setConfirmedOrderBook, updateQuarterSeries } = require("./intelligence/orderBookEngine");
@@ -527,7 +528,6 @@ app.get("/api/admin/backfill", async (req, res) => {
     const fmt   = d => String(d.getDate()).padStart(2,"0") + "%2F" +
                        String(d.getMonth()+1).padStart(2,"0") + "%2F" + d.getFullYear();
 
-    // Get BSE cookie
     log("\n[1] Getting BSE cookie...");
     let bseCookie = "";
     try {
@@ -603,7 +603,10 @@ app.get("/api/admin/backfill", async (req, res) => {
             const company = data.name || code;
             updateFromResult(code, { confirmedOrderBook: obValue, confirmedQuarter: q.name, newOrdersSinceConfirm: 0 });
             try { setConfirmedOrderBook(code, company, q.name, obValue); updateQuarterSeries(code, company, q.name, obValue); } catch(e2) {}
-            try { const ob = require("./data/orderBookDB"); await ob.updateFromResultFiling(code, company, obValue, q.name, null); } catch(e2) {}
+            try {
+              const ob = require("./data/orderBookDB");
+              await ob.updateFromResultFiling(code, company, obValue, q.name, null);
+            } catch(e2) {}
             const disp = obValue >= 1000 ? "Rs." + (obValue/1000).toFixed(1) + "K Cr" : "Rs." + Math.round(obValue) + " Cr";
             log("OK " + company.substring(0,35).padEnd(35) + " " + q.name + "  " + disp);
             totalFound++;
@@ -634,7 +637,6 @@ startBSEListener(io);
 startNSEDealsListener(io);
 startCoordinator(io);
 
-// ── BSE Data System — daily company list + mcap sync ─────────────────────────
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log("Server running on port", PORT);
