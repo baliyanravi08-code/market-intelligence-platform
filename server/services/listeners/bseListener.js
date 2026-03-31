@@ -38,7 +38,7 @@ const {
 // ── FIX 1: Correct path ──────────────────────────────────────────────────────
 // bseListeners.js is at:   server/services/listeners/bseListeners.js
 // orderBookDB.js is at:    server/services/data/orderBookDB.js
-const orderBookDB = require("../data/orderBookDB");
+const orderBookDB = require("../../data/orderBookDB")
 
 let ioRef     = null;
 let bseCookie = "";
