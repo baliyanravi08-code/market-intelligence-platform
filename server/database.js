@@ -52,7 +52,6 @@ async function connectDB() {
     mongoConnected = true;
     console.log("✅ MongoDB Connected");
 
-    // FIX: was ./services/data/orderBookDB — file is at server/data/orderBookDB.js
     try {
       const orderBookDB = require("./data/orderBookDB");
       orderBookDB.init();
@@ -77,7 +76,6 @@ async function loadFromMongo() {
       .limit(1000)
       .lean();
 
-    // Clear before reload — prevents duplicates on repeated calls
     memoryStore.bse = [];
     memoryStore.nse = [];
 
@@ -98,6 +96,10 @@ async function loadFromMongo() {
 
 function saveResult(data) {
   if (!data) return;
+
+  // Guard — must be a plain object
+  if (typeof data !== "object" || Array.isArray(data)) return;
+
   const exchange = (data.exchange || "bse").toLowerCase();
   const store    = memoryStore[exchange] || memoryStore.bse;
   const key = (data.company || "") + (data.time || "") + (data.title || "");
@@ -105,12 +107,18 @@ function saveResult(data) {
     ((e.company || "") + (e.time || "") + (e.title || "")) === key
   );
   if (exists) return;
+
   store.unshift(data);
   const cutoff = Date.now() - RETENTION_MS;
   memoryStore.bse = memoryStore.bse.filter(e => (e.savedAt || 0) > cutoff).slice(0, 500);
   memoryStore.nse = memoryStore.nse.filter(e => (e.savedAt || 0) > cutoff).slice(0, 500);
+
   if (mongoConnected && Signal) {
-    Signal.create(data).catch(err => {
+    // Spread into a plain object — prevents mongoose receiving a class instance
+    const doc = Object.assign({}, data);
+    // Remove any keys that are undefined — mongoose can choke on them
+    Object.keys(doc).forEach(k => { if (doc[k] === undefined) delete doc[k]; });
+    Signal.create(doc).catch(err => {
       if (!err.message.includes("duplicate")) {
         console.log("⚠️ MongoDB save error:", err.message);
       }
