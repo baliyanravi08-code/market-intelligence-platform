@@ -18,7 +18,6 @@ const SIGNAL_COLOR = {
 
 const FEED_FILTERS = ["ALL", "ORDER", "MERGER", "CAPEX", "RESULT", "INSIDER", ">50"];
 
-// ── defined ONCE at module level ──────────────────────────────────────────────
 const MOBILE_TABS = [
   { key: "feed",  label: "📡 Feed"  },
   { key: "radar", label: "🔍 Radar" },
@@ -531,13 +530,13 @@ function CompanyPanel({ company, onClose }) {
     const code = company.code;
     const nse  = company.nseSymbol || "";
     fetch(`/api/company/${code}${nse ? `?nse=${nse}` : ""}`)
-  .then(r => r.json())
-  .catch(() => null)
-  .then(prof => {
-    setProfile(prof);
-    setOb(prof); // orderBook is now inside prof
-    setLoading(false);
-  });
+      .then(r => r.json())
+      .catch(() => null)
+      .then(prof => {
+        setProfile(prof);
+        setOb(prof);
+        setLoading(false);
+      });
   }, [company]);
 
   if (!company) return null;
@@ -551,7 +550,6 @@ function CompanyPanel({ company, onClose }) {
     <>
       <div className="cp-overlay" onClick={onClose} />
       <div className="cp-panel">
-        {/* Header */}
         <div className="cp-header">
           <div>
             <div className="cp-company">{company.name}</div>
@@ -563,7 +561,6 @@ function CompanyPanel({ company, onClose }) {
           </div>
           <button className="cp-close" onClick={onClose}>✕</button>
         </div>
-
         <div className="cp-body">
           {loading && (
             <div className="cp-loading">
@@ -571,29 +568,25 @@ function CompanyPanel({ company, onClose }) {
               <span>Loading company data...</span>
             </div>
           )}
-
           {!loading && (
             <>
-              {/* Live price + key stats */}
               <div className="cp-stats-grid">
                 {(p.price || p.lastPrice) && (
-  <div className="cp-stat">
-    <div className="cp-stat-val" style={{ color: "#00ff9c" }}>
-      ₹{p.price || p.lastPrice}
-    </div>
-    <div className="cp-stat-label">Price</div>
-  </div>
-)}
-{(p.mcap || p.marketCap) && (
-  <div className="cp-stat">
-    <div className="cp-stat-val">
-      ₹{((p.mcap || p.marketCap) >= 1000
-        ? ((p.mcap || p.marketCap)/1000).toFixed(1) + "K"
-        : (p.mcap || p.marketCap))}Cr
-    </div>
-    <div className="cp-stat-label">Market Cap</div>
-  </div>
-)}
+                  <div className="cp-stat">
+                    <div className="cp-stat-val" style={{ color: "#00ff9c" }}>₹{p.price || p.lastPrice}</div>
+                    <div className="cp-stat-label">Price</div>
+                  </div>
+                )}
+                {(p.mcap || p.marketCap) && (
+                  <div className="cp-stat">
+                    <div className="cp-stat-val">
+                      ₹{((p.mcap || p.marketCap) >= 1000
+                        ? ((p.mcap || p.marketCap)/1000).toFixed(1) + "K"
+                        : (p.mcap || p.marketCap))}Cr
+                    </div>
+                    <div className="cp-stat-label">Market Cap</div>
+                  </div>
+                )}
                 {p.high52 && (
                   <div className="cp-stat">
                     <div className="cp-stat-val" style={{ fontSize: "10px" }}>₹{p.high52} / ₹{p.low52}</div>
@@ -619,8 +612,6 @@ function CompanyPanel({ company, onClose }) {
                   </div>
                 )}
               </div>
-
-              {/* Order Book */}
               <div className="cp-section-label">ORDER BOOK</div>
               {ob_ ? (
                 <div className="cp-ob-card">
@@ -644,8 +635,6 @@ function CompanyPanel({ company, onClose }) {
               ) : (
                 <div className="cp-empty">Populates on ORDER_ALERT filings</div>
               )}
-
-              {/* Recent filings */}
               {filings.length > 0 && (
                 <>
                   <div className="cp-section-label">RECENT FILINGS</div>
@@ -671,7 +660,113 @@ function CompanyPanel({ company, onClose }) {
   );
 }
 
-// ─── PANELS — defined outside App() so they never remount on state change ─────
+// ─── PANELS ───────────────────────────────────────────────────────────────────
+
+// ── Panel header bar — matches the style of Radar/Feed/MegaOrders headers ──
+function PanelHeaderBar({ children }) {
+  return (
+    <div style={{
+      margin: "-10px -10px 10px -10px",
+      padding: "7px 10px",
+      background: "linear-gradient(90deg, #020d1f 0%, #031428 100%)",
+      borderBottom: "1px solid #0d3560",
+      borderRadius: "5px 5px 0 0",
+      flexShrink: 0,
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSource, intelStats }) {
+  const srcLabel =
+    tickerSource === "upstox"       ? "⚡ Upstox Live"  :
+    tickerSource === "disconnected" ? "○ Disconnected"  :
+    tickerSource === "error"        ? "⚠ Error"         :
+                                      "◌ Connecting...";
+  const srcColor =
+    tickerSource === "upstox" ? "#00ff9c" :
+    tickerSource === "error"  ? "#ff5c5c" : "#ffaa00";
+
+  return (
+    <div className="panel intelligence-panel">
+      {/* ── Flush header bar — same style as Radar / Feed / Mega Orders ── */}
+      <PanelHeaderBar>
+        <span style={{ color: "#ffaa00", fontSize: "12px" }}>🔔</span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: "10px", fontWeight: 700,
+          color: "#00cfff", textTransform: "uppercase", letterSpacing: "1px"
+        }}>Alerts</span>
+        {computedRadar.filter(e => e.conflict || e.score >= 80).length > 0 && (
+          <span className="count">
+            {computedRadar.filter(e => e.conflict || e.score >= 80).length}
+          </span>
+        )}
+      </PanelHeaderBar>
+
+      {/* Alerts list */}
+      <div className="section">
+        {computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).length === 0
+          ? <div className="empty">No active alerts</div>
+          : computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).map((e, i) => (
+          <div key={i} className="mini-card" style={{
+            borderLeft: e.conflict ? "3px solid #ff5c5c" : e.score >= 80 ? "3px solid #ff9c00" : undefined,
+            background: e.conflict ? "#0c0208" : undefined,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ color: e.conflict ? "#ff7070" : "#d8eeff", fontSize: "10px" }}>{e.company}</span>
+              {e.conflict
+                ? <span style={{ fontSize: "8px", color: "#ff5c5c", fontFamily: "IBM Plex Mono,monospace" }}>BLOCKED</span>
+                : <span style={{ fontSize: "9px", color: "#ff9c00", fontFamily: "IBM Plex Mono,monospace", fontWeight: 700 }}>{e.score}</span>
+              }
+            </div>
+            <div style={{ display: "flex", gap: 5, marginTop: 3, alignItems: "center" }}>
+              <span className={`type type-${e.type}`} style={{ fontSize: "8px" }}>{e.type}</span>
+              {e.conflict && <ConflictBadge risk={e.conflict} />}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="section">
+        <div className="section-divider">⚡ Pulse</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>BSE Events: {bseEvents.length}</div>
+        <div className="mini-card" style={{ color: "#4a8adf" }}>NSE Events: {nseEvents.length}</div>
+        <div className="mini-card" style={{ color: srcColor }}>Index Feed: {srcLabel}</div>
+      </div>
+
+      <div className="section">
+        <div className="section-divider">🧠 Intelligence Engine</div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Contradiction filter</span>
+          <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>ACTIVE</span>
+        </div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Clean signals</span>
+          <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.clean}</span>
+        </div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Blocked (HIGH risk)</span>
+          <span style={{ fontSize: "9px", color: "#ff5c5c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.blocked}</span>
+        </div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Cautioned (MED risk)</span>
+          <span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.cautioned}</span>
+        </div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "10px", color: "#1a5070" }}>Risk registry</span>
+          <span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono,monospace" }}>{RISK_REGISTRY.length} entities</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
   return (
@@ -785,8 +880,8 @@ function FeedPanel({ filteredFeed, activeTab, setActiveTab, feedFilter, setFeedF
     </div>
   );
 }
-function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBook, intelStats, liveOrderBook, obExpanded, setObExpanded, obSearch, setObSearch }) {
 
+function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBook, intelStats, liveOrderBook, obExpanded, setObExpanded, obSearch, setObSearch }) {
   return (
     <div className="panel right-panel">
       <div className="section">
@@ -939,73 +1034,6 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
   );
 }
 
-function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSource, intelStats }) {
-  const srcLabel =
-    tickerSource === "upstox"       ? "⚡ Upstox Live"  :
-    tickerSource === "disconnected" ? "○ Disconnected"  :
-    tickerSource === "error"        ? "⚠ Error"         :
-                                      "◌ Connecting...";
-  const srcColor =
-    tickerSource === "upstox" ? "#00ff9c" :
-    tickerSource === "error"  ? "#ff5c5c" : "#ffaa00";
-  return (
-    <div className="panel intelligence-panel">
-      <div className="section">
-        <div className="section-divider">🔔 Alerts</div>
-        {computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).map((e, i) => (
-          <div key={i} className="mini-card" style={{
-            borderLeft: e.conflict ? "3px solid #ff5c5c" : e.score >= 80 ? "3px solid #ff9c00" : undefined,
-            background: e.conflict ? "#0c0208" : undefined,
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ color: e.conflict ? "#ff7070" : "#d8eeff", fontSize: "10px" }}>{e.company}</span>
-              {e.conflict
-                ? <span style={{ fontSize: "8px", color: "#ff5c5c", fontFamily: "IBM Plex Mono,monospace" }}>BLOCKED</span>
-                : <span style={{ fontSize: "9px", color: "#ff9c00", fontFamily: "IBM Plex Mono,monospace", fontWeight: 700 }}>{e.score}</span>
-              }
-            </div>
-            <div style={{ display: "flex", gap: 5, marginTop: 3, alignItems: "center" }}>
-              <span className={`type type-${e.type}`} style={{ fontSize: "8px" }}>{e.type}</span>
-              {e.conflict && <ConflictBadge risk={e.conflict} />}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="section">
-        <div className="section-divider">⚡ Pulse</div>
-        <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
-        <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
-        <div className="mini-card" style={{ color: "#4a8adf" }}>BSE Events: {bseEvents.length}</div>
-        <div className="mini-card" style={{ color: "#4a8adf" }}>NSE Events: {nseEvents.length}</div>
-        <div className="mini-card" style={{ color: srcColor }}>Index Feed: {srcLabel}</div>
-      </div>
-      <div className="section">
-        <div className="section-divider">🧠 Intelligence Engine</div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Contradiction filter</span>
-          <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>ACTIVE</span>
-        </div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Clean signals</span>
-          <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.clean}</span>
-        </div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Blocked (HIGH risk)</span>
-          <span style={{ fontSize: "9px", color: "#ff5c5c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.blocked}</span>
-        </div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Cautioned (MED risk)</span>
-          <span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.cautioned}</span>
-        </div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Risk registry</span>
-          <span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono,monospace" }}>{RISK_REGISTRY.length} entities</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -1029,7 +1057,7 @@ export default function App() {
   const [liveOrderBook,  setLiveOrderBook]  = useState([]);
   const [obExpanded,     setObExpanded]     = useState(null);
   const [obSearch,       setObSearch]       = useState("");
-  const [selectedCompany, setSelectedCompany] = useState(null); // for CompanyPanel
+  const [selectedCompany, setSelectedCompany] = useState(null);
 
   // ── Stale watchdog ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1334,13 +1362,15 @@ export default function App() {
 
       <TickerBar indices={marketIndices} assets={cryptoAssets} dataSource={tickerSource} tickerStale={tickerStale} />
 
+      {/* ── Desktop: Intel | Radar | Feed | Right ── */}
       <div className="layout desktop-layout">
+        <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
         <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
         <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
-       <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
-        <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
+        <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
       </div>
 
+      {/* ── Mobile tabs ── */}
       <div className="mobile-layout">
         <div className="mobile-tab-bar">
           {MOBILE_TABS.map(t => (
@@ -1350,14 +1380,13 @@ export default function App() {
           ))}
         </div>
         <div className="mobile-panel-wrap">
+          {mobilePanelTab === "intel" && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />}
           {mobilePanelTab === "radar" && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />}
           {mobilePanelTab === "feed"  && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
           {mobilePanelTab === "data"  && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
-          {mobilePanelTab === "intel" && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />}
         </div>
       </div>
 
-      {/* Company slide-in panel */}
       <CompanyPanel company={selectedCompany} onClose={() => setSelectedCompany(null)} />
     </div>
   );
