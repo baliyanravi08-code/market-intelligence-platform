@@ -1,3 +1,21 @@
+/**
+ * bseListeners.js  — patched
+ *
+ * Changes from original:
+ *  1. Fixed orderBookDB require path (was ../../data/orderBookDB, now ../data/orderBookDB
+ *     because this file lives at server/services/listeners/bseListeners.js)
+ *  2. enrichResultWithPDF — now passes correct quarter derived from filing title/date
+ *     instead of always using getCurrentFYQuarter() (which returns *current* quarter,
+ *     not the quarter the result is *for*)
+ *  3. Quarter-rollover is handled by orderBookDB.updateFromResultFiling() already —
+ *     it resets newOrders to 0 and pushes history. We just need to send the right quarter.
+ *  4. Added extractConfirmedOBFromText() — scrapes OB value from result PDF text
+ *     when pdfReader returns a generic "order value" that may be wrong for results.
+ *  5. ORDER_ALERT path unchanged — already works correctly.
+ */
+
+"use strict";
+
 const axios = require("axios");
 
 const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
@@ -16,6 +34,11 @@ const {
   persistMegaOrder,
   sendStoredToClient
 } = require("../../coordinator");
+
+// ── FIX 1: Correct path ──────────────────────────────────────────────────────
+// bseListeners.js is at:   server/services/listeners/bseListeners.js
+// orderBookDB.js is at:    server/services/data/orderBookDB.js
+const orderBookDB = require("../data/orderBookDB");
 
 let ioRef     = null;
 let bseCookie = "";
@@ -76,6 +99,143 @@ function parseExchangeTs(timeStr) {
   return null;
 }
 
+// ── FIX 2: Parse which quarter a result filing covers ─────────────────────────
+// "Quarter ended December 2025" → Q3FY26
+// "Quarter ended March 2026"    → Q4FY26
+// "Quarter ended June 2025"     → Q1FY26
+// "Quarter ended September"     → Q2FY26
+function parseResultQuarterFromTitle(title) {
+  const t = (title || "").toLowerCase();
+
+  const monthMap = {
+    january:1, jan:1, february:2, feb:2, march:3, mar:3,
+    april:4, apr:4, may:5, june:6, jun:6,
+    july:7, jul:7, august:8, aug:8, september:9, sep:9, sept:9,
+    october:10, oct:10, november:11, nov:11, december:12, dec:12,
+  };
+
+  // "ended december 2025" / "ended 31st march 2026" / "ended march 31, 2026"
+  const m = t.match(/ended\s+(?:\d+(?:st|nd|rd|th)?\s+)?(\w+)(?:[,\s]+(\d{4}))?/);
+  if (m) {
+    const monthName = m[1].toLowerCase();
+    const month = monthMap[monthName];
+    if (month) {
+      // Infer year: if no year in title, use filing date context
+      let year = m[2] ? parseInt(m[2]) : new Date().getFullYear();
+      // If month is in the future relative to now, it's last year
+      if (!m[2] && month > new Date().getMonth() + 1) year -= 1;
+
+      const fy    = month >= 4 ? year + 1 : year;
+      const short = String(fy).slice(-2);
+      if (month >= 4  && month <= 6)  return `Q1FY${short}`;
+      if (month >= 7  && month <= 9)  return `Q2FY${short}`;
+      if (month >= 10 && month <= 12) return `Q3FY${short}`;
+      return `Q4FY${short}`;
+    }
+  }
+
+  // Direct "Q3FY26" in title
+  const direct = (title || "").match(/\b(Q[1-4]FY\d{2})\b/i);
+  if (direct) return direct[1].toUpperCase();
+
+  // Fallback — return current quarter (will be slightly wrong but safe)
+  return orderBookDB.getCurrentQuarter();
+}
+
+// ── FIX 3: Extract confirmed OB from result PDF text ──────────────────────────
+// pdfReader.extractOrderValueFromPDF is tuned for ORDER filings.
+// Result PDFs mention OB differently — "order book of ₹94,000 Cr"
+function extractConfirmedOBFromText(text) {
+  if (!text) return null;
+  const t = String(text).replace(/,/g, "").replace(/₹/g, "Rs").replace(/INR/gi, "Rs");
+
+  const patterns = [
+    /order\s*book\s+(?:stood\s+at|of|at|is|stands?\s+at|as\s+(?:on|of)[^₹\d]{0,20})\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)/i,
+    /order\s*backlog\s+(?:of|at|is|stands?\s+at)\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)/i,
+    /unexecuted\s+order\s+(?:book|backlog)\s+(?:of|at|is)\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)/i,
+    /outstanding\s+order\s*(?:book|s)?\s+(?:of|at|is|worth)\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)/i,
+    /order\s*book\s*(?:position|size|value)\s+(?:of|at|is)\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)/i,
+    // "₹94,000 Cr order book"
+    /(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)\s+order\s*book/i,
+    // Lakh crore: "₹5.64 lakh crore"
+    /order\s*book\s+(?:of|at|is)\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*lakh\s*cr/i,
+  ];
+
+  for (let i = 0; i < patterns.length; i++) {
+    const m = t.match(patterns[i]);
+    if (m) {
+      let val = parseFloat(m[1]);
+      if (i === patterns.length - 1) val = val * 100000; // lakh crore
+      if (val > 100) return parseFloat(val.toFixed(2));
+    }
+  }
+  return null;
+}
+
+// ── enrichResultWithPDF — now quarter-aware ───────────────────────────────────
+async function enrichResultWithPDF(signal) {
+  if (!signal.pdfUrl) return signal;
+
+  try {
+    const { extractOrderValueFromPDF } = require("../data/pdfReader");
+    const { updateFromResult }         = require("../data/marketCap");
+
+    console.log(`📄 Result PDF scan: ${signal.company}`);
+
+    // pdfReader returns raw extracted text OR a crore number
+    const pdfResult = await extractOrderValueFromPDF(signal.pdfUrl);
+
+    // Try to get confirmed OB — first from OB-specific patterns, then fallback
+    let confirmedOB = null;
+
+    if (typeof pdfResult === "string") {
+      // pdfReader returned text — extract OB from it
+      confirmedOB = extractConfirmedOBFromText(pdfResult);
+    } else if (typeof pdfResult === "number" && pdfResult > 100) {
+      // pdfReader returned a number directly
+      confirmedOB = pdfResult;
+    }
+
+    if (!confirmedOB || confirmedOB <= 0) {
+      console.log(`📄 Result PDF: no OB found for ${signal.company}`);
+      return signal;
+    }
+
+    // ── FIX: Use quarter the result is FOR, not current quarter ──────────────
+    const resultQuarter = parseResultQuarterFromTitle(signal.title);
+
+    console.log(`📦 Result OB: ${signal.company} ₹${confirmedOB}Cr (${resultQuarter})`);
+
+    // Update in-memory store
+    updateFromResult(String(signal.code), {
+      confirmedOrderBook:    confirmedOB,
+      confirmedQuarter:      resultQuarter,
+      newOrdersSinceConfirm: 0,
+    });
+
+    // Update MongoDB — this resets newOrders to 0 and pushes to quarterHistory
+    await orderBookDB.updateFromResultFiling(
+      String(signal.code),
+      signal.company,
+      confirmedOB,
+      resultQuarter,
+      null
+    );
+
+    if (!signal.resultSignals) signal.resultSignals = [];
+    signal.resultSignals.push(
+      `OB ₹${confirmedOB >= 1000 ? (confirmedOB / 1000).toFixed(1) + "K" : confirmedOB}Cr (${resultQuarter})`
+    );
+
+  } catch (e) {
+    console.log(`📄 Result PDF failed: ${e.message}`);
+  }
+
+  return signal;
+}
+
+// ── warmup, extractList, scan, backfill — unchanged ──────────────────────────
+
 async function warmup() {
   try {
     const res = await axios.get(BSE_HOME, {
@@ -110,53 +270,6 @@ function extractList(data) {
     if (Array.isArray(data[key]) && data[key].length > 0) return data[key];
   }
   return [];
-}
-
-async function enrichResultWithPDF(signal) {
-  if (!signal.pdfUrl) return signal;
-  const { getMarketCap } = require("../data/marketCap");
-  const hasExistingOB    = getMarketCap(signal.code);
-  // Scan ALL result PDFs — order book data valuable for every company
-  // isOrderBookCompany check removed — let PDF patterns decide
-
-  try {
-    const { extractOrderValueFromPDF } = require("../data/pdfReader");
-    const { updateFromResult, getCurrentFYQuarter } = require("../data/marketCap");
-
-    console.log(`📄 Result PDF scan: ${signal.company}`);
-    const pdfText = await extractOrderValueFromPDF(signal.pdfUrl);
-
-    if (pdfText && pdfText > 0) {
-      const quarter = getCurrentFYQuarter();
-      updateFromResult(String(signal.code), {
-        confirmedOrderBook:    pdfText,
-        confirmedQuarter:      quarter,
-        newOrdersSinceConfirm: 0
-      });
-
-      // FIX 1: was require("./orderBookDB") — wrong path from listeners/ dir
-      try {
-        const orderBookDB = require("../../data/orderBookDB");
-        await orderBookDB.updateFromResultFiling(
-          String(signal.code),
-          signal.company,
-          pdfText,
-          quarter,
-          null
-        );
-      } catch(e) {
-        console.log("⚠️ OrderBook result update failed:", e.message);
-      }
-
-      console.log(`📦 Result PDF order book: ${signal.company} ₹${pdfText}Cr (${quarter})`);
-      if (!signal.resultSignals) signal.resultSignals = [];
-      signal.resultSignals.push(`OB ₹${pdfText >= 1000 ? (pdfText/1000).toFixed(1)+"K" : pdfText}Cr (PDF)`);
-    }
-  } catch(e) {
-    console.log(`📄 Result PDF failed: ${e.message}`);
-  }
-
-  return signal;
 }
 
 async function processItem(item) {
@@ -201,7 +314,7 @@ async function processItem(item) {
     }
   }
 
-  // PDF enrichment for RESULT
+  // PDF enrichment for RESULT — quarter-aware (fixed)
   if ((signal.type === "RESULT" || signal.type === "BANK_RESULT") && signal.pdfUrl) {
     enrichResultWithPDF(signal).catch(() => {});
   }
@@ -223,14 +336,12 @@ async function processItem(item) {
 
   if (signalWithTs.type === "ORDER_ALERT") {
     const enrichedSignal = { ...signalWithTs, _orderInfo: signal._orderInfo };
-
     const orderData = orderBookEngine(enrichedSignal);
     const _crores   = signal._orderInfo?.crores || 0;
 
     if (_crores > 0 && signalWithTs.code) {
+      // Add to MongoDB order book (accumulates newOrders for current quarter)
       try {
-        // FIX 2: path was already correct here — keeping as-is
-        const orderBookDB = require("../../data/orderBookDB");
         await orderBookDB.addOrderToBook(
           String(signalWithTs.code),
           signalWithTs.company,
@@ -242,6 +353,7 @@ async function processItem(item) {
         console.log("⚠️ OrderBook addOrder failed:", e.message);
       }
 
+      // Also update in-memory store
       try {
         const { addNewOrder } = require("../data/marketCap");
         addNewOrder(String(signalWithTs.code), _crores, id);
