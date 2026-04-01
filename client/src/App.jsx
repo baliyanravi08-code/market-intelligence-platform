@@ -161,39 +161,31 @@ function extractAmount(text) {
 
 // ─── COMPONENTS ───────────────────────────────────────────────────────────────
 
+// Single LiveAgo component used everywhere — renders time + delay inline.
+// Replaces the old split LiveAgo / LiveAgoCompact pair.
 function LiveAgo({ exchangeTime, receivedAt }) {
   const exMs = parseExchangeTime(exchangeTime);
-  const [agoEx,  setAgoEx]  = useState(() => toAgo(exMs));
-  const [agoRec, setAgoRec] = useState(() => toAgo(receivedAt));
+  const [agoEx, setAgoEx] = useState(() => toAgo(exMs));
 
   useEffect(() => {
-    const tick = () => { setAgoEx(toAgo(exMs)); setAgoRec(toAgo(receivedAt)); };
+    const tick = () => setAgoEx(toAgo(exMs));
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
-  }, [exMs, receivedAt]);
+  }, [exMs]);
 
-  const delay = (exMs && receivedAt) ? Math.floor((receivedAt - exMs) / 1000) : null;
-  const delayColor = delay === null ? null : delay < 30 ? "#00ff9c" : delay < 120 ? "#ffaa00" : "#ff5c5c";
+  const delay = (exMs && receivedAt)
+    ? Math.floor((receivedAt - exMs) / 1000) : null;
+  const delayColor = delay === null ? null
+    : delay < 30 ? "#00ff9c" : delay < 120 ? "#ffaa00" : "#ff5c5c";
 
   return (
-    <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center", flexWrap: "wrap" }}>
-      {exchangeTime && (
-        <span style={{ fontSize: "9px", color: "#4a8adf", fontFamily: "IBM Plex Mono, monospace" }}>
-          🕐 {formatTime(exchangeTime)} · {agoEx}
-        </span>
-      )}
-      {receivedAt && (
-        <span style={{ fontSize: "9px", color: "#ff9c00", fontFamily: "IBM Plex Mono, monospace" }}>
-          ⬇ {agoRec}
-        </span>
-      )}
+    <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "9px", color: "#2a7090" }}>
+      {exchangeTime && `${formatTime(exchangeTime)} · ${agoEx}`}
       {delay !== null && delay > 0 && delay < 86400 && (
-        <span style={{ fontSize: "9px", color: delayColor, fontFamily: "IBM Plex Mono, monospace" }}>
-          Δ {delay}s
-        </span>
+        <span style={{ color: delayColor, marginLeft: 5 }}>Δ{delay}s</span>
       )}
-    </div>
+    </span>
   );
 }
 
@@ -285,7 +277,6 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
-// ── TickerBar — uses _ts key on price span to restart blink animation on each tick
 function TickerBar({ indices, assets, dataSource, tickerStale }) {
   const session = getSession();
   return (
@@ -298,8 +289,6 @@ function TickerBar({ indices, assets, dataSource, tickerStale }) {
         return (
           <div className="ticker-item" key={`idx-${i}`} style={isDash ? { opacity: 0.4 } : {}}>
             <span className="ticker-name">{m.name}</span>
-            {/* key={m._ts} — React remounts this element on each new tick,
-                which restarts the CSS animation automatically — no JS needed */}
             <span
               key={m._ts || m.price}
               className={`ticker-price${m._ts ? " blink" : ""}`}
@@ -720,14 +709,19 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
               <span style={{ background: r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11", color: r.score >= 80 ? "#ff2d55" : r.score >= 60 ? "#ff9c00" : "#666", border: r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333", borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700 }}>{r.conflict ? "—" : r.score}</span>
             </div>
           </div>
-          <div className="tag-row">
+          {/* tag-row + LiveAgo on same line */}
+          <div className="tag-row" style={{ alignItems: "center" }}>
             <span className={`type type-${r.type}`}>{r.type}</span>
             {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
             {r.conflict  && <ConflictBadge risk={r.conflict} />}
             {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
-            {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">📄 Filing</a>}
+            {r.pdfUrl && (
+              <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
+                📄 Filing
+              </a>
+            )}
+            <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
           </div>
-          <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
         </div>
       ))}
     </div>
@@ -890,7 +884,6 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
                 )}
                 {obToRev && <span style={{ fontSize: "9px", color: obColor, fontFamily: "IBM Plex Mono, monospace" }}>{o.obToRevRatio}x rev</span>}
               </div>
-              {/* Progress bar */}
               <div className="ob-bar"><div className="ob-bar-fill" style={{ width: `${barPct}%` }} /></div>
               {isOpen && o.quarterHistory && o.quarterHistory.length > 0 && (
                 <div style={{ marginTop: 8, borderTop: "1px solid #0c2240", paddingTop: 6 }}>
@@ -937,7 +930,6 @@ export default function App() {
   const [obSearch,       setObSearch]       = useState("");
   const [selectedCompany, setSelectedCompany] = useState(null);
 
-  // ── Dark mode — auto-detects OS, remembers user choice ───────────────────
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem("mi-theme");
     if (saved) return saved === "dark";
@@ -950,7 +942,6 @@ export default function App() {
     else          { root.classList.remove("dark"); localStorage.setItem("mi-theme", "light"); }
   }, [darkMode]);
 
-  // Listen for OS preference changes (only if user hasn't manually chosen)
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = (e) => {
@@ -960,43 +951,29 @@ export default function App() {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  // ── Socket.io — live Upstox ticks ─────────────────────────────────────────
   useEffect(() => {
     const socket = socketIO({ transports: ["websocket", "polling"] });
-
-    socket.on("connect", () => {
-      console.log("Socket.io connected");
-    });
-
-    // Live tick from Upstox WebSocket (server pushes on every price change)
+    socket.on("connect", () => { console.log("Socket.io connected"); });
     socket.on("market-tick", (updates) => {
       if (!Array.isArray(updates)) return;
       setMarketIndices(prev =>
         prev.map(idx => {
           const update = updates.find(u => u.name === idx.name);
           if (!update) return idx;
-          return { ...update, _ts: Date.now() }; // _ts key change triggers blink
+          return { ...update, _ts: Date.now() };
         })
       );
       setTickerSource("upstox");
       setTickerLastOk(Date.now());
       setTickerStale(false);
     });
-
-    // WebSocket connection status from server
     socket.on("upstox-status", ({ connected }) => {
       if (!connected) setTickerSource("connecting");
     });
-
-    socket.on("disconnect", () => {
-      setTickerSource("error");
-    });
-
+    socket.on("disconnect", () => { setTickerSource("error"); });
     return () => socket.disconnect();
   }, []);
 
-  // ── REST fallback — one-time fetch on mount for initial values ────────────
-  // After this, live ticks come via Socket.io. No polling loop.
   useEffect(() => {
     fetch("/api/market")
       .then(r => r.json())
@@ -1012,7 +989,6 @@ export default function App() {
       .catch(() => setTickerSource("disconnected"));
   }, []);
 
-  // ── Stale watchdog ────────────────────────────────────────────────────────
   useEffect(() => {
     const t = setInterval(() => {
       if (tickerLastOk && Date.now() - tickerLastOk > 90000) setTickerStale(true);
@@ -1020,7 +996,6 @@ export default function App() {
     return () => clearInterval(t);
   }, [tickerLastOk]);
 
-  // ── BTC WebSocket (Binance) ───────────────────────────────────────────────
   const btcWsRef    = useRef(null);
   const btcReconRef = useRef(null);
   const btc24hRef   = useRef(0);
@@ -1070,7 +1045,6 @@ export default function App() {
     };
   }, []);
 
-  // ── PI / GOLD / SILVER every 60s ─────────────────────────────────────────
   useEffect(() => {
     const fmt = (n, prefix = "$") => {
       if (!n && n !== 0) return "—";
@@ -1110,7 +1084,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // ── Order book every 60s ─────────────────────────────────────────────────
   useEffect(() => {
     const fetchOB = () => {
       fetch("/api/orderbook").then(r => r.json()).then(data => setLiveOrderBook(data.orderBook || [])).catch(e => console.log("OB fetch error:", e));
@@ -1120,7 +1093,6 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  // ── Events every 15s ─────────────────────────────────────────────────────
   useEffect(() => {
     const fetchEvents = () => {
       fetch("/api/events").then(r => r.json()).then(data => {
@@ -1133,7 +1105,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // ── MCap DB once on startup ──────────────────────────────────────────────
   useEffect(() => {
     fetch("/api/mcap").then(r => r.json()).then(data => { if (Array.isArray(data) && data.length > 0) window._mcapDb = data; }).catch(() => {});
   }, []);
@@ -1244,7 +1215,6 @@ export default function App() {
           )}
         </div>
         <GlobalSearch onSelectCompany={setSelectedCompany} />
-        {/* Dark / Light mode toggle */}
         <button
           className="mode-toggle"
           onClick={() => setDarkMode(d => !d)}
@@ -1256,7 +1226,6 @@ export default function App() {
 
       <TickerBar indices={marketIndices} assets={cryptoAssets} dataSource={tickerSource} tickerStale={tickerStale} />
 
-      {/* ── Desktop: Intel | Radar | Feed | Right ── */}
       <div className="layout desktop-layout">
         <IntelPanel  computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
         <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
@@ -1264,7 +1233,6 @@ export default function App() {
         <RightPanel  computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
       </div>
 
-      {/* ── Mobile tabs ── */}
       <div className="mobile-layout">
         <div className="mobile-tab-bar">
           {MOBILE_TABS.map(t => (
