@@ -4,16 +4,17 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 const express = require("express");
-const http = require("http");
+const http    = require("http");
 const { Server } = require("socket.io");
-const path = require("path");
-const fs = require("fs");
-const axios = require("axios");
-const cors = require("cors");
+const path    = require("path");
+const fs      = require("fs");
+const axios   = require("axios");
+const cors    = require("cors");
 
-const startBSEListener = require("./services/listeners/bseListener");
+const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
-const { startCoordinator } = require("./coordinator");
+const { startCoordinator }  = require("./coordinator");
+const { startStreamer, stopStreamer } = require("./services/upstoxStream");
 
 const {
   getEvents,
@@ -21,7 +22,7 @@ const {
   getWindowLabel
 } = require("./database");
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -45,24 +46,24 @@ const TOKEN_FILE = path.join(__dirname, "data/upstox_token.json");
 let upstoxAccessToken = null;
 let upstoxTokenExpiry = null;
 
-// ── After your existing loadToken() call ────────────────────────────────────
 function loadToken() {
-  // NEW: check analytics token from env first (1-year validity, no OAuth)
+  // Check analytics token from env first (1-year validity, no OAuth needed)
   if (process.env.UPSTOX_ANALYTICS_TOKEN) {
     upstoxAccessToken = process.env.UPSTOX_ANALYTICS_TOKEN;
-    upstoxTokenExpiry = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 year
-    console.log("✅ Upstox Analytics Token loaded from env (1-year validity)");
+    upstoxTokenExpiry = Date.now() + 365 * 24 * 60 * 60 * 1000;
+    console.log("✅ Upstox Analytics Token loaded from env");
     return;
   }
-
-  // fallback: existing disk token logic (your current code stays here)
+  // Fallback: disk token
   try {
     if (fs.existsSync(TOKEN_FILE)) {
       const saved = JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8"));
       if (saved.token && saved.expiry && Date.now() < saved.expiry) {
         upstoxAccessToken = saved.token;
         upstoxTokenExpiry = saved.expiry;
-        console.log("Upstox token loaded from disk");
+        console.log("Upstox token loaded from disk, expires:", new Date(saved.expiry).toISOString());
+      } else {
+        console.log("Upstox saved token is expired — reconnect via /auth/upstox");
       }
     }
   } catch (e) {
@@ -88,6 +89,12 @@ function clearToken() {
 }
 
 loadToken();
+
+// Start live WebSocket stream if token already valid at boot
+if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
+  // Delay 2s to let io finish initialising
+  setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
+}
 
 const UPSTOX_INSTRUMENTS = {
   "NIFTY 50":   "NSE_INDEX|Nifty 50",
@@ -133,10 +140,13 @@ app.get("/auth/upstox/callback", async (req, res) => {
     saveToken(upstoxAccessToken, upstoxTokenExpiry);
     console.log("Upstox token saved, expires:", new Date(upstoxTokenExpiry).toISOString());
 
+    // ── START LIVE WEBSOCKET STREAM ──────────────────────────────────────────
+    startStreamer(upstoxAccessToken, io);
+
     res.send(
       "<html><body style='background:#010812;color:#00ff9c;font-family:monospace;padding:40px;text-align:center'>" +
       "<h2>Upstox Connected!</h2>" +
-      "<p style='color:#b8cfe8'>Live NIFTY / SENSEX / BANK NIFTY data is now active.</p>" +
+      "<p style='color:#b8cfe8'>Live NIFTY / SENSEX / BANK NIFTY WebSocket stream is now active.</p>" +
       "<p style='color:#4a8adf'>Token expires: " + new Date(upstoxTokenExpiry).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + " IST</p><br>" +
       "<a href='/' style='color:#00cfff;text-decoration:none;border:1px solid #00cfff33;padding:8px 16px;border-radius:4px'>Back to Dashboard</a>" +
       "</body></html>"
@@ -157,7 +167,8 @@ app.get("/auth/upstox/status", (req, res) => {
   });
 });
 
-// ── Fetch live data from Upstox ──────────────────────────────────────────────
+// ── /api/market — REST fallback (used when WS not yet connected) ─────────────
+// Frontend only polls this on first load. After WS connects, ticks come via socket.
 async function fetchUpstoxMarket() {
   const keys = Object.values(UPSTOX_INSTRUMENTS).join(",");
   const res = await axios.get(
@@ -187,25 +198,22 @@ async function fetchUpstoxMarket() {
   });
 }
 
-// ── /api/market ──────────────────────────────────────────────────────────────
 app.get("/api/market", async (req, res) => {
   const blank = INDEX_NAMES.map(name => ({ name, price: "—", change: "—", pct: "—", up: null }));
   const upstoxReady = upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0);
 
   if (!upstoxReady) {
-    console.log("Market: Upstox not connected — visit /auth/upstox");
     return res.json([...blank, { _source: "disconnected" }]);
   }
 
   try {
     const data = await fetchUpstoxMarket();
-    console.log("Market: Upstox live");
     return res.json([...data, { _source: "upstox" }]);
   } catch (e) {
     console.error("Upstox market fetch failed:", e.message);
     if (e.response?.status === 401) {
       clearToken();
-      console.log("Upstox token expired — visit /auth/upstox to reconnect");
+      stopStreamer();
       return res.json([...blank, { _source: "disconnected" }]);
     }
     return res.json([...blank, { _source: "error" }]);
@@ -235,15 +243,11 @@ app.get("/api/events", (req, res) => {
           mcapDb = raw;
         } else {
           mcapDb = Object.entries(raw).map(([code, d]) => ({
-            code,
-            company: d.name || "",
-            mcap:    d.mcap || 0
+            code, company: d.name || "", mcap: d.mcap || 0
           }));
         }
       }
-    } catch (e) {
-      console.warn("mcapDb load failed:", e.message);
-    }
+    } catch (e) { console.warn("mcapDb load failed:", e.message); }
 
     res.json({
       bse:         getEvents("bse")  || [],
@@ -256,10 +260,7 @@ app.get("/api/events", (req, res) => {
       windowLabel: getWindowLabel()
     });
   } catch (e) {
-    res.json({
-      bse: [], nse: [], orderBook: [], sectors: [],
-      megaOrders: [], mcapDb: [], windowHours: 24, windowLabel: "24h"
-    });
+    res.json({ bse: [], nse: [], orderBook: [], sectors: [], megaOrders: [], mcapDb: [], windowHours: 24, windowLabel: "24h" });
   }
 });
 
@@ -281,7 +282,6 @@ app.get("/api/mcap", (req, res) => {
 // ── /api/orderbook ───────────────────────────────────────────────────────────
 app.get("/api/orderbook", async (req, res) => {
   try {
-    // PRIMARY: MongoDB (has confirmed + newOrders + currentOrderBook)
     const orderBookDB = require("./data/orderBookDB");
     const mongoData = await orderBookDB.getAllOrderBooks();
 
@@ -289,14 +289,13 @@ app.get("/api/orderbook", async (req, res) => {
       return res.json({ orderBook: mongoData, count: mongoData.length });
     }
 
-    // FALLBACK: JSON file if MongoDB empty
     const result = [];
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     const obPath   = path.join(__dirname, "data/orderBookHistory.json");
 
     let mcapDB = {}, obHistory = {};
-    try { mcapDB    = JSON.parse(fs.readFileSync(mcapPath, "utf8").trim()); } catch(e) { /* ok */ }
-    try { obHistory = JSON.parse(fs.readFileSync(obPath,   "utf8").trim()); } catch(e) { /* ok */ }
+    try { mcapDB    = JSON.parse(fs.readFileSync(mcapPath, "utf8").trim()); } catch { /* ok */ }
+    try { obHistory = JSON.parse(fs.readFileSync(obPath,   "utf8").trim()); } catch { /* ok */ }
 
     for (const [code, obData] of Object.entries(obHistory)) {
       const quarters = obData.quarters || [];
@@ -310,14 +309,13 @@ app.get("/api/orderbook", async (req, res) => {
         mcap:             mcapDB[code]?.mcap || 0,
         confirmed:        latest.confirmedOrderBook,
         confirmedQuarter: latest.quarter,
-        newOrders:        0,
-        currentOrderBook: obData.currentOrderBook || latest.confirmedOrderBook,
+        newOrders:        obData.newOrders || 0,
+        currentOrderBook: (obData.currentOrderBook || latest.confirmedOrderBook) + (obData.newOrders || 0),
         obToRevRatio:     null,
         quarterHistory:   quarters,
       });
     }
 
-    // Also check in-memory store
     try {
       const { getCompaniesByMcap, getEstimatedOrderBook } = require("./data/marketCap");
       const companies = getCompaniesByMcap(0);
@@ -337,14 +335,28 @@ app.get("/api/orderbook", async (req, res) => {
           quarterHistory:   ob.quarterHistory || [],
         });
       }
-    } catch(e) { /* ok */ }
+    } catch { /* ok */ }
 
     result.sort((a, b) => (b.currentOrderBook || 0) - (a.currentOrderBook || 0));
     res.json({ orderBook: result, count: result.length });
 
-  } catch(e) {
+  } catch (e) {
     console.log("⚠️ /api/orderbook error:", e.message);
     res.json({ orderBook: [], count: 0 });
+  }
+});
+
+// ── /api/orderbook/:code ─────────────────────────────────────────────────────
+app.get("/api/orderbook/:code", (req, res) => {
+  try {
+    const { getEstimatedOrderBook, getCompanyData } = require("./data/marketCap");
+    const code = req.params.code;
+    const ob   = getEstimatedOrderBook(code);
+    const data = getCompanyData(code);
+    if (!ob) return res.json({ error: "No order book data for this company" });
+    res.json({ code, company: data.name || code, mcap: data.mcap || 0, ...ob });
+  } catch (e) {
+    res.json({ error: e.message });
   }
 });
 
@@ -358,22 +370,19 @@ app.get("/api/company/:code", async (req, res) => {
     const obPath   = path.join(__dirname, "data/orderBookHistory.json");
 
     let localCompany = null, localOB = null;
-
     try {
       if (fs.existsSync(mcapPath)) {
         const db = JSON.parse(fs.readFileSync(mcapPath, "utf8").trim() || "{}");
         if (db[code]) localCompany = db[code];
       }
-    } catch(e) { /* ok */ }
-
+    } catch { /* ok */ }
     try {
       if (fs.existsSync(obPath)) {
         const ob = JSON.parse(fs.readFileSync(obPath, "utf8").trim() || "{}");
         if (ob[code]) localOB = ob[code];
       }
-    } catch(e) { /* ok */ }
+    } catch { /* ok */ }
 
-    // Try MongoDB first for order book
     let obSummary = null;
     try {
       const orderBookDB = require("./data/orderBookDB");
@@ -387,17 +396,13 @@ app.get("/api/company/:code", async (req, res) => {
           quarterHistory:   mongoOB.quarterHistory || [],
           obToRevRatio:     mongoOB.obToRevRatio || null,
           lastOrderTitle:   mongoOB.lastOrderTitle || null,
-          lastOrderPdfUrl:  mongoOB.lastOrderPdfUrl || null,
         };
       }
-    } catch(e) { /* ok */ }
+    } catch { /* ok */ }
 
-    // Fallback to JSON if MongoDB had nothing
     if (!obSummary && localOB) {
       const quarters = localOB.quarters || [];
-      const latest   = [...quarters].sort((a, b) =>
-        (b.quarter || "").localeCompare(a.quarter || "")
-      )[0] || null;
+      const latest   = [...quarters].sort((a, b) => (b.quarter || "").localeCompare(a.quarter || ""))[0] || null;
       obSummary = {
         confirmed:        latest?.confirmedOrderBook || 0,
         confirmedQuarter: latest?.quarter || null,
@@ -425,13 +430,7 @@ app.get("/api/company/:code", async (req, res) => {
       .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
       .slice(0, 15);
 
-    res.json({
-      profile,
-      financials:    screener?.financials   || {},
-      shareholding:  screener?.shareholding || null,
-      orderBook:     obSummary,
-      recentFilings: filings,
-    });
+    res.json({ profile, financials: screener?.financials || {}, shareholding: screener?.shareholding || null, orderBook: obSummary, recentFilings: filings });
   } catch (e) {
     console.log("Company profile error:", e.message);
     res.json({ profile: null, financials: null, shareholding: null, orderBook: null, recentFilings: [] });
@@ -442,7 +441,6 @@ app.get("/api/company/:code", async (req, res) => {
 app.get("/api/search/:query", async (req, res) => {
   try {
     const q = req.params.query.toLowerCase().trim();
-
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     let localResults = [];
     if (fs.existsSync(mcapPath)) {
@@ -465,9 +463,7 @@ app.get("/api/search/:query", async (req, res) => {
           }));
       }
     }
-
     if (localResults.length > 0) return res.json({ results: localResults });
-
     const results = await searchBSE(q);
     res.json({ results });
   } catch (e) {
@@ -477,25 +473,23 @@ app.get("/api/search/:query", async (req, res) => {
 
 async function searchBSE(q) {
   const BSE_HEADERS = {
-    "Referer":    "https://www.bseindia.com",
-    "Origin":     "https://www.bseindia.com",
+    "Referer": "https://www.bseindia.com", "Origin": "https://www.bseindia.com",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept":     "application/json, text/plain, */*"
+    "Accept": "application/json, text/plain, */*"
   };
   try {
     const r = await axios.get(
-      "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&shname=" +
-        encodeURIComponent(q) + "&industry=&segment=Equity&status=Active",
+      "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&shname=" + encodeURIComponent(q) + "&industry=&segment=Equity&status=Active",
       { headers: BSE_HEADERS, timeout: 8000 }
     );
     const rows = r.data?.Table || r.data?.Table1 || r.data?.data || (Array.isArray(r.data) ? r.data : []);
     if (rows.length > 0) return rows.slice(0, 10).map(s => ({
-      code:      s.SCRIP_CD   || s.scripCd   || s.Scrip_Cd,
-      name:      s.Scrip_Name || s.LONG_NAME || s.CompanyName,
-      sector:    s.SECTOR     || s.sector    || null,
+      code: s.SCRIP_CD || s.scripCd || s.Scrip_Cd,
+      name: s.Scrip_Name || s.LONG_NAME || s.CompanyName,
+      sector: s.SECTOR || s.sector || null,
       nseSymbol: s.NSE_Symbol || s.NSESymbol || null,
     })).filter(s => s.code && s.name);
-  } catch (e) { /* ok */ }
+  } catch { /* ok */ }
   try {
     const r = await axios.get(
       "https://api.bseindia.com/BseIndiaAPI/api/getScripSearchData/w?strSearch=" + encodeURIComponent(q),
@@ -503,12 +497,12 @@ async function searchBSE(q) {
     );
     const rows = r.data?.Table || r.data?.data || (Array.isArray(r.data) ? r.data : []);
     if (rows.length > 0) return rows.slice(0, 10).map(s => ({
-      code:      s.SCRIP_CD   || s.scripcode,
-      name:      s.Scrip_Name || s.scripname || s.LONG_NAME,
-      sector:    s.SECTOR     || null,
-      nseSymbol: s.NSE_Symbol || s.symbol    || null,
+      code: s.SCRIP_CD || s.scripcode,
+      name: s.Scrip_Name || s.scripname || s.LONG_NAME,
+      sector: s.SECTOR || null,
+      nseSymbol: s.NSE_Symbol || s.symbol || null,
     })).filter(s => s.code && s.name);
-  } catch (e) { /* ok */ }
+  } catch { /* ok */ }
   return [];
 }
 
@@ -540,37 +534,19 @@ app.get("/api/admin/backfill", async (req, res) => {
     let bseCookie = "";
     try {
       const w = await axios.get("https://www.bseindia.com/corporates/ann.html", {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Connection": "keep-alive"
-        }, timeout: 20000, maxRedirects: 5
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9", "Connection": "keep-alive" },
+        timeout: 20000, maxRedirects: 5
       });
       const ck = w.headers["set-cookie"];
-      if (ck && ck.length) {
+      if (ck?.length) {
         bseCookie = ck.map(c => c.split(";")[0]).join("; ");
         log("Cookie: " + bseCookie.substring(0, 60) + "...");
-      } else {
-        log("No Set-Cookie header — continuing without");
-      }
+      } else { log("No Set-Cookie header — continuing without"); }
     } catch(e) { log("Warmup failed: " + e.message); }
 
-    const apiH = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      "Accept": "application/json, text/plain, */*",
-      "Referer": "https://www.bseindia.com/corporates/ann.html",
-      "Origin": "https://www.bseindia.com",
-      "X-Requested-With": "XMLHttpRequest",
-      ...(bseCookie ? { "Cookie": bseCookie } : {})
-    };
+    const apiH = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36", "Accept": "application/json, text/plain, */*", "Referer": "https://www.bseindia.com/corporates/ann.html", "Origin": "https://www.bseindia.com", "X-Requested-With": "XMLHttpRequest", ...(bseCookie ? { "Cookie": bseCookie } : {}) };
 
-    const OB_KW = ["infra","epc","engineer","construct","railway","defense","defence",
-      "solar","renewable","power","water","wabag","rites","rvnl","irfc","hal ","bel ",
-      "ntpc","l&t","larsen","kec ","kalpataru","thermax","bhel","suzlon","tata power",
-      "inox wind","jsw energy","nhpc","abb india","siemens","garden reach","cochin ship",
-      "mazagon","data pattern","mtar","ncc ","hg infra","pnc infra","dilip","j kumar",
-      "titagarh","jupiter wagon","cg power","va tech"];
+    const OB_KW = ["infra","epc","engineer","construct","railway","defense","defence","solar","renewable","power","water","wabag","rites","rvnl","irfc","hal ","bel ","ntpc","l&t","larsen","kec ","kalpataru","thermax","bhel","suzlon","tata power","inox wind","jsw energy","nhpc","abb india","siemens","garden reach","cochin ship","mazagon","data pattern","mtar","ncc ","hg infra","pnc infra","dilip","j kumar","titagarh","jupiter wagon","cg power","va tech"];
     const isOB = n => OB_KW.some(k => (n||"").toLowerCase().includes(k.trim()));
 
     const quarters = [
@@ -587,22 +563,14 @@ app.get("/api/admin/backfill", async (req, res) => {
     for (const q of quarters) {
       log("\n--- " + q.name + " ---");
       await sleep(1000);
-
       for (const [code, data] of cos) {
-        const url = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w" +
-          "?strCat=-1&strPrevDate=" + fmt(q.from) + "&strScrip=" + code +
-          "&strSearch=P&strToDate=" + fmt(q.to) + "&strType=C&subcategory=-1";
+        const url = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=" + fmt(q.from) + "&strScrip=" + code + "&strSearch=P&strToDate=" + fmt(q.to) + "&strType=C&subcategory=-1";
         try {
           const r = await axios.get(url, { headers: apiH, timeout: 10000 });
           const d = r.data;
           if (typeof d === "string" && d.includes("<")) continue;
           const rows = d && d.Table || d && d.Table1 || d && d.data || (Array.isArray(d) ? d : []);
-          const rf = rows.filter(f => {
-            const h = (f.HEADLINE||"").toLowerCase(), c2 = (f.CATEGORYNAME||"").toLowerCase();
-            return (c2.includes("result")||h.includes("financial result")||
-                    h.includes("quarterly result")||h.includes("unaudited")||
-                    /q[1-4]fy/i.test(h)) && f.ATTACHMENTNAME;
-          });
+          const rf = rows.filter(f => { const h = (f.HEADLINE||"").toLowerCase(), c2 = (f.CATEGORYNAME||"").toLowerCase(); return (c2.includes("result")||h.includes("financial result")||h.includes("quarterly result")||h.includes("unaudited")||/q[1-4]fy/i.test(h)) && f.ATTACHMENTNAME; });
           if (!rf.length) continue;
           const pdfUrl = "https://www.bseindia.com/xml-data/corpfiling/AttachLive/" + rf[0].ATTACHMENTNAME;
           totalPDFs++;
@@ -610,17 +578,14 @@ app.get("/api/admin/backfill", async (req, res) => {
           if (obValue && obValue > 50) {
             const company = data.name || code;
             updateFromResult(code, { confirmedOrderBook: obValue, confirmedQuarter: q.name, newOrdersSinceConfirm: 0 });
-            try { setConfirmedOrderBook(code, company, q.name, obValue); updateQuarterSeries(code, company, q.name, obValue); } catch(e2) {}
-            try {
-              const ob = require("./data/orderBookDB");
-              await ob.updateFromResultFiling(code, company, obValue, q.name, null);
-            } catch(e2) {}
+            try { setConfirmedOrderBook(code, company, q.name, obValue); updateQuarterSeries(code, company, q.name, obValue); } catch { /* ok */ }
+            try { const ob = require("./data/orderBookDB"); await ob.updateFromResultFiling(code, company, obValue, q.name, null); } catch { /* ok */ }
             const disp = obValue >= 1000 ? "Rs." + (obValue/1000).toFixed(1) + "K Cr" : "Rs." + Math.round(obValue) + " Cr";
             log("OK " + company.substring(0,35).padEnd(35) + " " + q.name + "  " + disp);
             totalFound++;
           }
           await sleep(600);
-        } catch(e2) { /* skip */ }
+        } catch { /* skip */ }
       }
       await sleep(2000);
     }
@@ -652,6 +617,6 @@ server.listen(PORT, () => {
   if (UPSTOX_API_KEY) {
     console.log("Upstox configured — visit /auth/upstox to connect");
   } else {
-    console.log("WARNING: UPSTOX_API_KEY not set — market ticker will show dashes until connected");
+    console.log("WARNING: UPSTOX_API_KEY not set");
   }
 });

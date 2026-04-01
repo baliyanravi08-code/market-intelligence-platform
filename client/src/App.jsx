@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { io as socketIO } from "socket.io-client";
 import "./App.css";
 
 const SIGNAL_COLOR = {
@@ -166,10 +167,7 @@ function LiveAgo({ exchangeTime, receivedAt }) {
   const [agoRec, setAgoRec] = useState(() => toAgo(receivedAt));
 
   useEffect(() => {
-    const tick = () => {
-      setAgoEx(toAgo(exMs));
-      setAgoRec(toAgo(receivedAt));
-    };
+    const tick = () => { setAgoEx(toAgo(exMs)); setAgoRec(toAgo(receivedAt)); };
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
@@ -210,13 +208,7 @@ function Tag({ type, crores }) {
 
 function MarketStatus() {
   return (
-    <span style={{
-      fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700,
-      color: "#00ff9c", background: "#001a0a",
-      border: "1px solid #00ff9c33", borderRadius: "3px", padding: "1px 6px"
-    }}>
-      ● LIVE
-    </span>
+    <span className="live-badge">● LIVE</span>
   );
 }
 
@@ -293,6 +285,7 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
+// ── TickerBar — uses _ts key on price span to restart blink animation on each tick
 function TickerBar({ indices, assets, dataSource, tickerStale }) {
   const session = getSession();
   return (
@@ -305,7 +298,14 @@ function TickerBar({ indices, assets, dataSource, tickerStale }) {
         return (
           <div className="ticker-item" key={`idx-${i}`} style={isDash ? { opacity: 0.4 } : {}}>
             <span className="ticker-name">{m.name}</span>
-            <span className="ticker-price">{m.price}</span>
+            {/* key={m._ts} — React remounts this element on each new tick,
+                which restarts the CSS animation automatically — no JS needed */}
+            <span
+              key={m._ts || m.price}
+              className={`ticker-price${m._ts ? " blink" : ""}`}
+            >
+              {m.price}
+            </span>
             <span className={`ticker-change ${cls}`}>
               {isUp ? "▲" : isDown ? "▼" : "●"} {m.change} ({m.pct})
             </span>
@@ -455,9 +455,7 @@ function GlobalSearch({ onSelectCompany }) {
   };
 
   const handleSelect = (company) => {
-    setQuery("");
-    setResults([]);
-    setOpen(false);
+    setQuery(""); setResults([]); setOpen(false);
     onSelectCompany(company);
   };
 
@@ -465,11 +463,8 @@ function GlobalSearch({ onSelectCompany }) {
     <div className="gs-wrap" ref={wrapRef}>
       <span className="gs-icon">⌕</span>
       <input
-        className="gs-input"
-        type="text"
-        placeholder="Search company..."
-        value={query}
-        onChange={handleChange}
+        className="gs-input" type="text" placeholder="Search company..."
+        value={query} onChange={handleChange}
         onFocus={() => results.length > 0 && setOpen(true)}
       />
       {loading && <span className="gs-spinner" />}
@@ -485,9 +480,7 @@ function GlobalSearch({ onSelectCompany }) {
         </div>
       )}
       {open && results.length === 0 && !loading && query.length >= 2 && (
-        <div className="gs-dropdown">
-          <div className="gs-empty">No results for "{query}"</div>
-        </div>
+        <div className="gs-dropdown"><div className="gs-empty">No results for "{query}"</div></div>
       )}
     </div>
   );
@@ -504,11 +497,7 @@ function OBBarChart({ history }) {
         const pct = Math.max(((q.confirmedOrderBook || 0) / max) * 100, 2);
         return (
           <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-            <div style={{
-              width: "100%", height: `${pct}%`,
-              background: "linear-gradient(180deg, #00cfff, #004a6a)",
-              borderRadius: "2px 2px 0 0", minHeight: 2
-            }} />
+            <div style={{ width: "100%", height: `${pct}%`, background: "linear-gradient(180deg, #00cfff, #004a6a)", borderRadius: "2px 2px 0 0", minHeight: 2 }} />
             <span style={{ fontSize: "7px", color: "#2a5070", fontFamily: "IBM Plex Mono", whiteSpace: "nowrap" }}>
               {q.quarter?.replace("FY", "")?.slice(-4) || ""}
             </span>
@@ -530,19 +519,14 @@ function CompanyPanel({ company, onClose }) {
     const code = company.code;
     const nse  = company.nseSymbol || "";
     fetch(`/api/company/${code}${nse ? `?nse=${nse}` : ""}`)
-      .then(r => r.json())
-      .catch(() => null)
-      .then(prof => {
-        setProfile(prof);
-        setOb(prof);
-        setLoading(false);
-      });
+      .then(r => r.json()).catch(() => null)
+      .then(prof => { setProfile(prof); setOb(prof); setLoading(false); });
   }, [company]);
 
   if (!company) return null;
 
-  const p  = profile?.profile || {};
-  const f  = profile?.financials || {};
+  const p   = profile?.profile || {};
+  const f   = profile?.financials || {};
   const ob_ = profile?.orderBook || ob?.orderBook || null;
   const filings = profile?.recentFilings || [];
 
@@ -593,44 +577,23 @@ function CompanyPanel({ company, onClose }) {
                     <div className="cp-stat-label">52W High / Low</div>
                   </div>
                 )}
-                {f.pe && (
-                  <div className="cp-stat">
-                    <div className="cp-stat-val">{f.pe}</div>
-                    <div className="cp-stat-label">P/E</div>
-                  </div>
-                )}
-                {f.bookValue && (
-                  <div className="cp-stat">
-                    <div className="cp-stat-val">₹{f.bookValue}</div>
-                    <div className="cp-stat-label">Book Value</div>
-                  </div>
-                )}
-                {f.roe && (
-                  <div className="cp-stat">
-                    <div className="cp-stat-val">{f.roe}%</div>
-                    <div className="cp-stat-label">ROE</div>
-                  </div>
-                )}
+                {f.pe && <div className="cp-stat"><div className="cp-stat-val">{f.pe}</div><div className="cp-stat-label">P/E</div></div>}
+                {f.bookValue && <div className="cp-stat"><div className="cp-stat-val">₹{f.bookValue}</div><div className="cp-stat-label">Book Value</div></div>}
+                {f.roe && <div className="cp-stat"><div className="cp-stat-val">{f.roe}%</div><div className="cp-stat-label">ROE</div></div>}
               </div>
               <div className="cp-section-label">ORDER BOOK</div>
               {ob_ ? (
                 <div className="cp-ob-card">
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ color: "#d8eeff", fontWeight: 700 }}>₹{(ob_.currentOrderBook || 0).toLocaleString("en-IN")}Cr</span>
-                    {ob_.obToRevRatio && (
-                      <span style={{ fontSize: "10px", color: "#00cfff", fontFamily: "IBM Plex Mono" }}>{ob_.obToRevRatio}x OB/Rev</span>
-                    )}
+                    {ob_.obToRevRatio && <span style={{ fontSize: "10px", color: "#00cfff", fontFamily: "IBM Plex Mono" }}>{ob_.obToRevRatio}x OB/Rev</span>}
                   </div>
                   <div style={{ fontSize: "9px", color: "#4a9abb", marginTop: 4 }}>
                     Confirmed: ₹{(ob_.confirmed || 0).toLocaleString("en-IN")}Cr ({ob_.confirmedQuarter || "—"})
                     {ob_.newOrders > 0 && ` · +₹${ob_.newOrders.toLocaleString("en-IN")}Cr new`}
                   </div>
                   {ob_.quarterHistory && <OBBarChart history={ob_.quarterHistory} />}
-                  {ob_.lastOrderTitle && (
-                    <div style={{ fontSize: "9px", color: "#2a5070", marginTop: 6, fontStyle: "italic" }}>
-                      Latest: {ob_.lastOrderTitle}
-                    </div>
-                  )}
+                  {ob_.lastOrderTitle && <div style={{ fontSize: "9px", color: "#2a5070", marginTop: 6, fontStyle: "italic" }}>Latest: {ob_.lastOrderTitle}</div>}
                 </div>
               ) : (
                 <div className="cp-empty">Populates on ORDER_ALERT filings</div>
@@ -662,19 +625,13 @@ function CompanyPanel({ company, onClose }) {
 
 // ─── PANELS ───────────────────────────────────────────────────────────────────
 
-// ── Panel header bar — matches the style of Radar/Feed/MegaOrders headers ──
 function PanelHeaderBar({ children }) {
   return (
     <div style={{
-      margin: "-10px -10px 10px -10px",
-      padding: "7px 10px",
+      margin: "-10px -10px 10px -10px", padding: "7px 10px",
       background: "linear-gradient(90deg, #020d1f 0%, #031428 100%)",
-      borderBottom: "1px solid #0d3560",
-      borderRadius: "5px 5px 0 0",
-      flexShrink: 0,
-      display: "flex",
-      alignItems: "center",
-      gap: 6,
+      borderBottom: "1px solid #0d3560", borderRadius: "5px 5px 0 0",
+      flexShrink: 0, display: "flex", alignItems: "center", gap: 6,
     }}>
       {children}
     </div>
@@ -685,38 +642,25 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
   const srcLabel =
     tickerSource === "upstox"       ? "⚡ Upstox Live"  :
     tickerSource === "disconnected" ? "○ Disconnected"  :
-    tickerSource === "error"        ? "⚠ Error"         :
-                                      "◌ Connecting...";
+    tickerSource === "error"        ? "⚠ Error"         : "◌ Connecting...";
   const srcColor =
     tickerSource === "upstox" ? "#00ff9c" :
     tickerSource === "error"  ? "#ff5c5c" : "#ffaa00";
 
   return (
     <div className="panel intelligence-panel">
-      {/* ── Flush header bar — same style as Radar / Feed / Mega Orders ── */}
       <PanelHeaderBar>
         <span style={{ color: "#ffaa00", fontSize: "12px" }}>🔔</span>
-        <span style={{
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: "10px", fontWeight: 700,
-          color: "#00cfff", textTransform: "uppercase", letterSpacing: "1px"
-        }}>Alerts</span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "10px", fontWeight: 700, color: "#00cfff", textTransform: "uppercase", letterSpacing: "1px" }}>Alerts</span>
         {computedRadar.filter(e => e.conflict || e.score >= 80).length > 0 && (
-          <span className="count">
-            {computedRadar.filter(e => e.conflict || e.score >= 80).length}
-          </span>
+          <span className="count">{computedRadar.filter(e => e.conflict || e.score >= 80).length}</span>
         )}
       </PanelHeaderBar>
-
-      {/* Alerts list */}
       <div className="section">
         {computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).length === 0
           ? <div className="empty">No active alerts</div>
           : computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).map((e, i) => (
-          <div key={i} className="mini-card" style={{
-            borderLeft: e.conflict ? "3px solid #ff5c5c" : e.score >= 80 ? "3px solid #ff9c00" : undefined,
-            background: e.conflict ? "#0c0208" : undefined,
-          }}>
+          <div key={i} className="mini-card" style={{ borderLeft: e.conflict ? "3px solid #ff5c5c" : e.score >= 80 ? "3px solid #ff9c00" : undefined, background: e.conflict ? "#0c0208" : undefined }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ color: e.conflict ? "#ff7070" : "#d8eeff", fontSize: "10px" }}>{e.company}</span>
               {e.conflict
@@ -731,7 +675,6 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
           </div>
         ))}
       </div>
-
       <div className="section">
         <div className="section-divider">⚡ Pulse</div>
         <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
@@ -740,29 +683,13 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
         <div className="mini-card" style={{ color: "#4a8adf" }}>NSE Events: {nseEvents.length}</div>
         <div className="mini-card" style={{ color: srcColor }}>Index Feed: {srcLabel}</div>
       </div>
-
       <div className="section">
         <div className="section-divider">🧠 Intelligence Engine</div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Contradiction filter</span>
-          <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>ACTIVE</span>
-        </div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Clean signals</span>
-          <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.clean}</span>
-        </div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Blocked (HIGH risk)</span>
-          <span style={{ fontSize: "9px", color: "#ff5c5c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.blocked}</span>
-        </div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Cautioned (MED risk)</span>
-          <span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.cautioned}</span>
-        </div>
-        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "10px", color: "#1a5070" }}>Risk registry</span>
-          <span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono,monospace" }}>{RISK_REGISTRY.length} entities</span>
-        </div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#1a5070" }}>Contradiction filter</span><span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>ACTIVE</span></div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#1a5070" }}>Clean signals</span><span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.clean}</span></div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#1a5070" }}>Blocked (HIGH risk)</span><span style={{ fontSize: "9px", color: "#ff5c5c", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.blocked}</span></div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#1a5070" }}>Cautioned (MED risk)</span><span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.cautioned}</span></div>
+        <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#1a5070" }}>Risk registry</span><span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono,monospace" }}>{RISK_REGISTRY.length} entities</span></div>
       </div>
     </div>
   );
@@ -776,12 +703,7 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
       </div>
       <div className="search-wrap">
         <span className="search-icon">⌕</span>
-        <input
-          type="text" className="radar-search"
-          placeholder="Search company, type..."
-          value={radarQuery}
-          onChange={e => setRadarQuery(e.target.value)}
-        />
+        <input type="text" className="radar-search" placeholder="Search company, type..." value={radarQuery} onChange={e => setRadarQuery(e.target.value)} />
         {radarQuery && <button className="clear-btn" onClick={() => setRadarQuery("")}>✕</button>}
       </div>
       {filteredRadar.length === 0 ? (
@@ -794,18 +716,8 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
           <div className="rc-top">
             <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>{r.company}</span>
             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{
-                fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
-                background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
-                color:      r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
-                border:     r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44"
-              }}>{r.exchange}</span>
-              <span style={{
-                background:   r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11",
-                color:        r.score >= 80 ? "#ff2d55"   : r.score >= 60 ? "#ff9c00"   : "#666",
-                border:       r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333",
-                borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700
-              }}>{r.conflict ? "—" : r.score}</span>
+              <span style={{ fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px", background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a", color: r.exchange === "BSE" ? "#4a9eff" : "#00ff9c", border: r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44" }}>{r.exchange}</span>
+              <span style={{ background: r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11", color: r.score >= 80 ? "#ff2d55" : r.score >= 60 ? "#ff9c00" : "#666", border: r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333", borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700 }}>{r.conflict ? "—" : r.score}</span>
             </div>
           </div>
           <div className="tag-row">
@@ -860,10 +772,7 @@ function FeedPanel({ filteredFeed, activeTab, setActiveTab, feedFilter, setFeedF
               </span>
               <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                 {e.type !== "NEWS" && <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />}
-                {pdfUrl && (
-                  <a href={pdfUrl} target="_blank" rel="noreferrer" className="filing-link"
-                    onClick={ev => ev.stopPropagation()}>📄 Filing</a>
-                )}
+                {pdfUrl && <a href={pdfUrl} target="_blank" rel="noreferrer" className="filing-link" onClick={ev => ev.stopPropagation()}>📄 Filing</a>}
               </div>
             </div>
             <div className="fc-text">
@@ -889,9 +798,7 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
         {computedMegaOrders.length === 0 ? <div className="empty">No mega orders yet</div> : (
           <div className="mega-grid">
             {computedMegaOrders.slice(0, 10).map((o, i) => {
-              const mcapEntry = window._mcapDb?.find?.(m =>
-                (m.company || "").toLowerCase() === (o.company || "").toLowerCase()
-              );
+              const mcapEntry = window._mcapDb?.find?.(m => (m.company || "").toLowerCase() === (o.company || "").toLowerCase());
               const mcap = mcapEntry?.mcap || 0;
               const pct  = mcap > 0 ? ((o.crores / mcap) * 100).toFixed(1) : null;
               return (
@@ -906,15 +813,12 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
           </div>
         )}
       </div>
-
       <div className="section">
         <div className="section-divider">💡 Opportunities <span className="count">{computedOpportunities.length}</span></div>
         <IntelSummaryBar blocked={intelStats.blocked} clean={intelStats.clean} cautioned={intelStats.cautioned} />
         {computedOpportunities.length === 0 ? <div className="empty">No opportunities yet</div>
           : computedOpportunities.map((o, i) => (
-          <div className="opp-card" key={i} style={{
-            borderLeft: o.caution ? "3px solid #ffaa00" : "3px solid #0c2240",
-          }}>
+          <div className="opp-card" key={i} style={{ borderLeft: o.caution ? "3px solid #ffaa00" : "3px solid #0c2240" }}>
             <div className="opp-row" style={{ display: "flex", justifyContent: "space-between" }}>
               <span className="co-name">{o.company}</span>
               <span className="opp-pct">{o.score}%</span>
@@ -928,7 +832,6 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
           </div>
         ))}
       </div>
-
       <div className="section">
         <div className="section-divider">🏭 Sectors <span className="count">{sector.length}</span></div>
         {sector.length === 0 ? <div className="empty">No sector activity yet</div>
@@ -936,14 +839,11 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
           <div className="sec-card" key={i}>
             <div className="sec-row">
               <span className="sec-name">{s.sector}</span>
-              <span className="sec-val">
-                {s.totalValue ? `₹${s.totalValue}Cr` : s.count ? `${s.count} filing${s.count > 1 ? "s" : ""}` : "—"}
-              </span>
+              <span className="sec-val">{s.totalValue ? `₹${s.totalValue}Cr` : s.count ? `${s.count} filing${s.count > 1 ? "s" : ""}` : "—"}</span>
             </div>
           </div>
         ))}
       </div>
-
       <div className="section">
         <div className="section-divider">
           📦 Order Book Tracker
@@ -955,36 +855,24 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
         <div style={{ position: "relative", marginBottom: 6 }}>
           <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "#1a5070", fontSize: "11px", pointerEvents: "none" }}>⌕</span>
           <input
-            type="text"
-            placeholder="Search order book..."
-            value={obSearch}
+            type="text" placeholder="Search order book..." value={obSearch}
             onChange={e => setObSearch(e.target.value)}
-            style={{
-              width: "100%", background: "#010a18", border: "1px solid #0c2240",
-              borderRadius: 4, padding: "5px 8px 5px 24px",
-              color: "#d8eeff", fontSize: "10px", fontFamily: "IBM Plex Mono, monospace",
-              outline: "none", boxSizing: "border-box"
-            }}
+            style={{ width: "100%", background: "#010a18", border: "1px solid #0c2240", borderRadius: 4, padding: "5px 8px 5px 24px", color: "#d8eeff", fontSize: "10px", fontFamily: "IBM Plex Mono, monospace", outline: "none", boxSizing: "border-box" }}
           />
           {obSearch && (
-            <button onClick={() => setObSearch("")} style={{
-              position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
-              background: "none", border: "none", color: "#1a5070", cursor: "pointer", fontSize: "12px"
-            }}>✕</button>
+            <button onClick={() => setObSearch("")} style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#1a5070", cursor: "pointer", fontSize: "12px" }}>✕</button>
           )}
         </div>
         {liveOrderBook.length === 0 ? (
           <div className="empty">No order book data yet</div>
-        ) : liveOrderBook.filter(o =>
-            !obSearch || (o.company || "").toLowerCase().includes(obSearch.toLowerCase())
-          ).map((o, i) => {
+        ) : liveOrderBook.filter(o => !obSearch || (o.company || "").toLowerCase().includes(obSearch.toLowerCase())).map((o, i) => {
           const isOpen  = obExpanded === o.code;
           const obToRev = o.obToRevRatio ? parseFloat(o.obToRevRatio) : null;
-          const obColor = obToRev === null ? "#4a9abb"
-            : obToRev >= 3 ? "#00ff9c" : obToRev >= 1.5 ? "#ffaa00" : "#ff5c5c";
+          const obColor = obToRev === null ? "#4a9abb" : obToRev >= 3 ? "#00ff9c" : obToRev >= 1.5 ? "#ffaa00" : "#ff5c5c";
+          const maxOB   = Math.max(...liveOrderBook.map(x => x.currentOrderBook || 0), 1);
+          const barPct  = Math.round(((o.currentOrderBook || 0) / maxOB) * 100);
           return (
-            <div key={i} className="ord-card"
-              style={{ cursor: "pointer", borderLeft: `3px solid ${obColor}` }}
+            <div key={i} className="ord-card" style={{ cursor: "pointer", borderLeft: `3px solid ${obColor}` }}
               onClick={() => setObExpanded(isOpen ? null : o.code)}
             >
               <div className="ord-top">
@@ -1000,28 +888,18 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
                     +₹{o.newOrders.toLocaleString("en-IN")}Cr new
                   </span>
                 )}
-                {obToRev && (
-                  <span style={{ fontSize: "9px", color: obColor, fontFamily: "IBM Plex Mono, monospace" }}>
-                    {o.obToRevRatio}x rev
-                  </span>
-                )}
+                {obToRev && <span style={{ fontSize: "9px", color: obColor, fontFamily: "IBM Plex Mono, monospace" }}>{o.obToRevRatio}x rev</span>}
               </div>
+              {/* Progress bar */}
+              <div className="ob-bar"><div className="ob-bar-fill" style={{ width: `${barPct}%` }} /></div>
               {isOpen && o.quarterHistory && o.quarterHistory.length > 0 && (
                 <div style={{ marginTop: 8, borderTop: "1px solid #0c2240", paddingTop: 6 }}>
-                  <div style={{ fontSize: "9px", color: "#00cfff", marginBottom: 4, fontWeight: 700 }}>
-                    QUARTER HISTORY
-                  </div>
+                  <div style={{ fontSize: "9px", color: "#00cfff", marginBottom: 4, fontWeight: 700 }}>QUARTER HISTORY</div>
                   {[...o.quarterHistory].reverse().map((q, qi) => (
-                    <div key={qi} style={{
-                      display: "flex", justifyContent: "space-between",
-                      fontSize: "9px", fontFamily: "IBM Plex Mono, monospace",
-                      padding: "3px 0", borderBottom: "1px solid #0a1828"
-                    }}>
+                    <div key={qi} style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", padding: "3px 0", borderBottom: "1px solid #0a1828" }}>
                       <span style={{ color: "#7ab0d0" }}>{q.quarter}</span>
                       <span style={{ color: "#d8eeff" }}>₹{(q.confirmedOrderBook || 0).toLocaleString("en-IN")}Cr</span>
-                      {q.addedOrders > 0 && (
-                        <span style={{ color: "#00ff9c" }}>+₹{q.addedOrders.toLocaleString("en-IN")}Cr</span>
-                      )}
+                      {q.addedOrders > 0 && <span style={{ color: "#00ff9c" }}>+₹{q.addedOrders.toLocaleString("en-IN")}Cr</span>}
                     </div>
                   ))}
                 </div>
@@ -1058,6 +936,81 @@ export default function App() {
   const [obExpanded,     setObExpanded]     = useState(null);
   const [obSearch,       setObSearch]       = useState("");
   const [selectedCompany, setSelectedCompany] = useState(null);
+
+  // ── Dark mode — auto-detects OS, remembers user choice ───────────────────
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem("mi-theme");
+    if (saved) return saved === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (darkMode) { root.classList.add("dark"); localStorage.setItem("mi-theme", "dark"); }
+    else          { root.classList.remove("dark"); localStorage.setItem("mi-theme", "light"); }
+  }, [darkMode]);
+
+  // Listen for OS preference changes (only if user hasn't manually chosen)
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e) => {
+      if (!localStorage.getItem("mi-theme")) setDarkMode(e.matches);
+    };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  // ── Socket.io — live Upstox ticks ─────────────────────────────────────────
+  useEffect(() => {
+    const socket = socketIO({ transports: ["websocket", "polling"] });
+
+    socket.on("connect", () => {
+      console.log("Socket.io connected");
+    });
+
+    // Live tick from Upstox WebSocket (server pushes on every price change)
+    socket.on("market-tick", (updates) => {
+      if (!Array.isArray(updates)) return;
+      setMarketIndices(prev =>
+        prev.map(idx => {
+          const update = updates.find(u => u.name === idx.name);
+          if (!update) return idx;
+          return { ...update, _ts: Date.now() }; // _ts key change triggers blink
+        })
+      );
+      setTickerSource("upstox");
+      setTickerLastOk(Date.now());
+      setTickerStale(false);
+    });
+
+    // WebSocket connection status from server
+    socket.on("upstox-status", ({ connected }) => {
+      if (!connected) setTickerSource("connecting");
+    });
+
+    socket.on("disconnect", () => {
+      setTickerSource("error");
+    });
+
+    return () => socket.disconnect();
+  }, []);
+
+  // ── REST fallback — one-time fetch on mount for initial values ────────────
+  // After this, live ticks come via Socket.io. No polling loop.
+  useEffect(() => {
+    fetch("/api/market")
+      .then(r => r.json())
+      .then(data => {
+        if (!Array.isArray(data)) return;
+        const indices    = data.filter(d => d.name && !d._source);
+        const sourceMeta = data.find(d => d._source);
+        const src        = sourceMeta?._source || "disconnected";
+        if (indices.length) setMarketIndices(indices);
+        if (src !== "upstox") setTickerSource(src);
+        else { setTickerSource("upstox"); setTickerLastOk(Date.now()); }
+      })
+      .catch(() => setTickerSource("disconnected"));
+  }, []);
 
   // ── Stale watchdog ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1100,27 +1053,20 @@ export default function App() {
             const next = [...prev];
             const idx  = next.findIndex(a => a.name === "BTC");
             const entry = { name: "BTC", icon: "₿", type: "crypto", price: formatted, change24h };
-            if (idx >= 0) next[idx] = entry;
-            else next.unshift(entry);
+            if (idx >= 0) next[idx] = entry; else next.unshift(entry);
             return next;
           });
         } catch (e) {}
       };
       ws.onerror  = (e) => { console.warn("BTC WebSocket error:", e.message || e); };
-      ws.onclose  = () => {
-        if (cancelled) return;
-        btcReconRef.current = setTimeout(connectWS, 2000);
-      };
+      ws.onclose  = () => { if (cancelled) return; btcReconRef.current = setTimeout(connectWS, 2000); };
     };
     connectWS();
     return () => {
       cancelled = true;
       clearInterval(hourly);
       if (btcReconRef.current) clearTimeout(btcReconRef.current);
-      if (btcWsRef.current) {
-        btcWsRef.current.onclose = null;
-        try { btcWsRef.current.close(); } catch (e) {}
-      }
+      if (btcWsRef.current) { btcWsRef.current.onclose = null; try { btcWsRef.current.close(); } catch (e) {} }
     };
   }, []);
 
@@ -1135,10 +1081,7 @@ export default function App() {
     const fetchOtherAssets = async () => {
       const updates = {};
       try {
-        const cgRes = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true",
-          { headers: { "Accept": "application/json" } }
-        );
+        const cgRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true", { headers: { "Accept": "application/json" } });
         const cg = await cgRes.json();
         if (cg?.["pi-network"]) updates["PI"] = { name: "PI", icon: "π", type: "crypto", price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0 };
         if (cg?.["tether-gold"]) updates["GOLD"] = { name: "GOLD", icon: "Au", type: "gold", price: fmt(cg["tether-gold"].usd), change24h: cg["tether-gold"].usd_24h_change || 0 };
@@ -1170,10 +1113,7 @@ export default function App() {
   // ── Order book every 60s ─────────────────────────────────────────────────
   useEffect(() => {
     const fetchOB = () => {
-      fetch("/api/orderbook")
-        .then(r => r.json())
-        .then(data => setLiveOrderBook(data.orderBook || []))
-        .catch(e => console.log("OB fetch error:", e));
+      fetch("/api/orderbook").then(r => r.json()).then(data => setLiveOrderBook(data.orderBook || [])).catch(e => console.log("OB fetch error:", e));
     };
     fetchOB();
     const iv = setInterval(fetchOB, 60000);
@@ -1183,15 +1123,10 @@ export default function App() {
   // ── Events every 15s ─────────────────────────────────────────────────────
   useEffect(() => {
     const fetchEvents = () => {
-      fetch("/api/events")
-        .then(r => r.json())
-        .then(data => {
-          setBseEvents(data.bse       || []);
-          setNseEvents(data.nse       || []);
-          setOrderBook(data.orderBook || []);
-          setSector(data.sectors      || []);
-        })
-        .catch(err => console.log("Events fetch error:", err));
+      fetch("/api/events").then(r => r.json()).then(data => {
+        setBseEvents(data.bse || []); setNseEvents(data.nse || []);
+        setOrderBook(data.orderBook || []); setSector(data.sectors || []);
+      }).catch(err => console.log("Events fetch error:", err));
     };
     fetchEvents();
     const interval = setInterval(fetchEvents, 15000);
@@ -1200,50 +1135,7 @@ export default function App() {
 
   // ── MCap DB once on startup ──────────────────────────────────────────────
   useEffect(() => {
-    fetch("/api/mcap")
-      .then(r => r.json())
-      .then(data => { if (Array.isArray(data) && data.length > 0) window._mcapDb = data; })
-      .catch(() => {});
-  }, []);
-
-  // ── Market indices — Upstox with exponential backoff ────────────────────
-  const retryRef   = useRef(null);
-  const retryDelay = useRef(3000);
-  const abortRef   = useRef(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const doFetch = async () => {
-      if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
-      if (abortRef.current) abortRef.current.abort();
-      abortRef.current = new AbortController();
-      try {
-        const res  = await fetch("/api/market", { signal: abortRef.current.signal });
-        const data = await res.json();
-        if (cancelled) return;
-        if (Array.isArray(data)) {
-          const indices    = data.filter(d => d.name && !d._source);
-          const sourceMeta = data.find(d => d._source);
-          const src        = sourceMeta?._source || "disconnected";
-          setTickerSource(src);
-          if (indices.length) setMarketIndices(indices);
-          if (src === "upstox") { setTickerLastOk(Date.now()); setTickerStale(false); retryDelay.current = 3000; }
-          retryRef.current = setTimeout(doFetch, src === "upstox" ? 30000 : Math.min(retryDelay.current * 2, 30000));
-          if (src !== "upstox") retryDelay.current = Math.min(retryDelay.current * 2, 30000);
-        }
-      } catch (e) {
-        if (cancelled || e.name === "AbortError") return;
-        setTickerSource("error");
-        retryRef.current = setTimeout(doFetch, retryDelay.current);
-        retryDelay.current = Math.min(retryDelay.current * 2, 30000);
-      }
-    };
-    doFetch();
-    return () => {
-      cancelled = true;
-      if (retryRef.current) clearTimeout(retryRef.current);
-      if (abortRef.current) abortRef.current.abort();
-    };
+    fetch("/api/mcap").then(r => r.json()).then(data => { if (Array.isArray(data) && data.length > 0) window._mcapDb = data; }).catch(() => {});
   }, []);
 
   // ── Computed data ─────────────────────────────────────────────────────────
@@ -1277,13 +1169,7 @@ export default function App() {
     .map(e => {
       const t = (e?.title || "").toLowerCase();
       let type = "NEWS", score = 10;
-      const isNonOrder = (
-        t.includes("solar") || t.includes("renewable") || t.includes("green energy") ||
-        t.includes("spv")   || t.includes("equity stake") || t.includes("power purchase") ||
-        t.includes("subscribe") || t.includes("invest") ||
-        t.includes("income tax") || t.includes("assessment") || t.includes("tax demand") ||
-        t.includes("penalty") || t.includes("nclt")
-      );
+      const isNonOrder = (t.includes("solar") || t.includes("renewable") || t.includes("green energy") || t.includes("spv") || t.includes("equity stake") || t.includes("power purchase") || t.includes("subscribe") || t.includes("invest") || t.includes("income tax") || t.includes("assessment") || t.includes("tax demand") || t.includes("penalty") || t.includes("nclt"));
       if (t.includes("fraud") || t.includes("insolvency") || t.includes("default"))   { type = "RISK";   score = 95; }
       else if (t.includes("penalty") || t.includes("nclt"))                            { type = "RISK";   score = 85; }
       else if (t.includes("solar") || t.includes("renewable") || t.includes("capex") || t.includes("greenfield") || t.includes("brownfield") || t.includes("expansion") || t.includes("power purchase") || t.includes("spv") || (t.includes("equity stake") || (t.includes("subscribe") && t.includes("equity"))) || (t.includes("invest") && !t.includes("investor") && !t.includes("investment in"))) { type = "CAPEX"; score = 75; }
@@ -1295,11 +1181,11 @@ export default function App() {
       else if (t.includes("dividend")) { type = "DIVIDEND"; score = 60; }
       else if (t.includes("partnership") || t.includes("joint venture") || t.includes("mou")) { type = "PARTNERSHIP"; score = 72; }
       return {
-        company:     e?.company || "Unknown", score, type,
-        exchange:    e._exchange || "BSE",
-        receivedAt:  e?.receivedAt, time: e?.time,
-        pdfUrl:      e?.pdfUrl || e?.attachment || null,
-        orderValue:  extractAmount(e?.title),
+        company: e?.company || "Unknown", score, type,
+        exchange: e._exchange || "BSE",
+        receivedAt: e?.receivedAt, time: e?.time,
+        pdfUrl: e?.pdfUrl || e?.attachment || null,
+        orderValue: extractAmount(e?.title),
         conflict:    getContradict(e?.company || "", e?.title || ""),
         caution:     !getContradict(e?.company || "", e?.title || "") ? getSoftRisk(e?.company || "", e?.title || "") : null,
         priceImpact: estimatePriceImpact(type, extractAmount(e?.title || ""), e?.title || ""),
@@ -1358,16 +1244,24 @@ export default function App() {
           )}
         </div>
         <GlobalSearch onSelectCompany={setSelectedCompany} />
+        {/* Dark / Light mode toggle */}
+        <button
+          className="mode-toggle"
+          onClick={() => setDarkMode(d => !d)}
+          title="Toggle light/dark mode"
+        >
+          {darkMode ? "☀ Light" : "◑ Dark"}
+        </button>
       </div>
 
       <TickerBar indices={marketIndices} assets={cryptoAssets} dataSource={tickerSource} tickerStale={tickerStale} />
 
       {/* ── Desktop: Intel | Radar | Feed | Right ── */}
       <div className="layout desktop-layout">
-        <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
-        <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
-        <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
-        <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
+        <IntelPanel  computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
+        <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
+        <FeedPanel   filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
+        <RightPanel  computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
       </div>
 
       {/* ── Mobile tabs ── */}
