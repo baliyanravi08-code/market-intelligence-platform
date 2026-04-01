@@ -45,16 +45,24 @@ const TOKEN_FILE = path.join(__dirname, "data/upstox_token.json");
 let upstoxAccessToken = null;
 let upstoxTokenExpiry = null;
 
+// ── After your existing loadToken() call ────────────────────────────────────
 function loadToken() {
+  // NEW: check analytics token from env first (1-year validity, no OAuth)
+  if (process.env.UPSTOX_ANALYTICS_TOKEN) {
+    upstoxAccessToken = process.env.UPSTOX_ANALYTICS_TOKEN;
+    upstoxTokenExpiry = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 year
+    console.log("✅ Upstox Analytics Token loaded from env (1-year validity)");
+    return;
+  }
+
+  // fallback: existing disk token logic (your current code stays here)
   try {
     if (fs.existsSync(TOKEN_FILE)) {
       const saved = JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8"));
       if (saved.token && saved.expiry && Date.now() < saved.expiry) {
         upstoxAccessToken = saved.token;
         upstoxTokenExpiry = saved.expiry;
-        console.log("Upstox token loaded from disk, expires:", new Date(saved.expiry).toISOString());
-      } else {
-        console.log("Upstox saved token is expired — reconnect via /auth/upstox");
+        console.log("Upstox token loaded from disk");
       }
     }
   } catch (e) {
