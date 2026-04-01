@@ -916,3 +916,146 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .ai-powered { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #1a4060; }
 .ai-pdf-link { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #00cfff; text-decoration: none; opacity: 0.8; }
 .ai-pdf-link:hover { opacity: 1; text-decoration: underline; }
+
+/* ===== LIGHT MODE ===== */
+[data-theme="light"],
+[data-theme="light"] body {
+  background: #e8f0f8 !important;
+  color: #1a2a3a;
+}
+[data-theme="light"] #root { background: #e8f0f8; }
+[data-theme="light"] .terminal { background: #e8f0f8; }
+
+[data-theme="light"] .header {
+  background: linear-gradient(90deg, #d0dff0 0%, #c4d4e8 100%) !important;
+  border-bottom: 1px solid #a0bcd8;
+}
+[data-theme="light"] .title { color: #0a1e38; }
+[data-theme="light"] .live-badge { color: #00aa66; background: rgba(0,170,102,0.12); border-color: rgba(0,170,102,0.35); }
+[data-theme="light"] .mode-toggle { background: #dce8f4; color: #2a5070; border-color: #a0bcd8; }
+
+[data-theme="light"] .ticker-bar { background: #dce8f4; border-bottom: 1px solid #a8c4dc; }
+[data-theme="light"] .ticker-item { border-right-color: #b0cce0; }
+[data-theme="light"] .ticker-item:hover { background: #ccdaec; }
+[data-theme="light"] .ticker-name  { color: #1a4060; }
+[data-theme="light"] .ticker-price { color: #060f1c; }
+[data-theme="light"] .ticker-change.flat { background: #d0e0ee; color: #3a6070; border-color: #98b8d0; }
+[data-theme="light"] .ticker-clock { color: #2a5070; }
+[data-theme="light"] .ticker-right { border-left-color: #a8c4dc; }
+
+[data-theme="light"] .panel {
+  background: #ffffff;
+  border-color: #b8d0e8;
+  box-shadow: 0 2px 8px rgba(0,40,80,0.06);
+}
+[data-theme="light"] .panel-title { color: #005fa0; }
+[data-theme="light"] .section-divider { color: #005fa0; border-bottom-color: #b8d0e8; }
+[data-theme="light"] .count { color: #3a7090; }
+[data-theme="light"] .empty { color: #5a7890; }
+
+[data-theme="light"] .radar-card {
+  background: linear-gradient(145deg, #f4f8fc, #eaf2f8);
+  border-color: #b0cce0;
+}
+[data-theme="light"] .radar-card:hover { border-color: #007ab8; box-shadow: 0 0 10px rgba(0,122,184,0.15); }
+[data-theme="light"] .co-name { color: #060f1c; }
+[data-theme="light"] .order-val { color: #cc4400; }
+[data-theme="light"] .score-high { color: #00aa66; text-shadow: none; }
+
+[data-theme="light"] .radar-search { background: #eef4fa; border-color: #a8c4dc; color: #060f1c; }
+[data-theme="light"] .radar-search::placeholder { color: #6a90a8; }
+[data-theme="light"] .radar-search:focus { border-color: #007ab8; }
+[data-theme="light"] .search-icon { color: #4a7090; }
+
+[data-theme="light"] .feed-card { border-left-color: #2a70a8; }
+[data-theme="light"] .feed-card.fc-news    { background: #f6faff; border-left-color: #2a5878; }
+[data-theme="light"] .feed-card.fc-order   { background: linear-gradient(135deg,#fff4ef,#fff8f5,#f6faff); border-left-color: #e03800; box-shadow: none; }
+[data-theme="light"] .feed-card.fc-merger  { background: linear-gradient(135deg,#fff8ee,#fffbf4,#f6faff); border-left-color: #d07800; box-shadow: none; }
+[data-theme="light"] .feed-card.fc-result  { background: linear-gradient(135deg,#eef6ff,#f3f9ff,#f6faff); border-left-color: #006bb0; box-shadow: none; }
+[data-theme="light"] .feed-card.fc-capex   { background: linear-gradient(135deg,#eefbff,#f3fdff,#f6faff); border-left-color: #0090b0; box-shadow: none; }
+[data-theme="light"] .feed-card.fc-insider { background: linear-gradient(135deg,#faeeff,#fdf3ff,#f6faff); border-left-color: #aa22aa; box-shadow: none; }
+
+[data-theme="light"] .feed-card.fc-news    .fc-company { color: #2a5878; }
+[data-theme="light"] .feed-card.fc-order   .fc-company { color: #c03000; }
+[data-theme="light"] .feed-card.fc-merger  .fc-company { color: #a06000; }
+[data-theme="light"] .feed-card.fc-result  .fc-company { color: #005890; }
+[data-theme="light"] .feed-card.fc-capex   .fc-company { color: #007898; }
+[data-theme="light"] .feed-card.fc-insider .fc-company { color: #8800aa; }
+
+[data-theme="light"] .feed-card.fc-news    .fc-text { color: #2a5070; }
+[data-theme="light"] .feed-card.fc-order   .fc-text { color: #7a3020; }
+[data-theme="light"] .feed-card.fc-merger  .fc-text { color: #7a5010; }
+[data-theme="light"] .feed-card.fc-result  .fc-text { color: #104878; }
+[data-theme="light"] .feed-card.fc-capex   .fc-text { color: #0a6878; }
+[data-theme="light"] .feed-card.fc-insider .fc-text { color: #6a1878; }
+[data-theme="light"] .fc-time   { color: #3a6880; }
+[data-theme="light"] .fc-word     { color: #3a6880; }
+[data-theme="light"] .fc-word-hot { color: #1a3858; font-weight: 600; }
+
+[data-theme="light"] .tbtn, [data-theme="light"] .fbtn { background: #e4f0f8; border-color: #a8c4dc; color: #2a5070; }
+[data-theme="light"] .active { background: #005fa0 !important; color: #fff !important; }
+
+[data-theme="light"] .mini-card { background: #edf4fb; border-color: #b8d0e8; color: #1a3a5a; }
+[data-theme="light"] .market-row .m-price { color: #060f1c; }
+
+[data-theme="light"] .mega-card-grid { background: linear-gradient(145deg,#fff3ee,#fff7f3); border-color: #d8b8a8; border-left-color: #e03800; }
+[data-theme="light"] .mega-company { color: #060f1c; }
+[data-theme="light"] .mega-time    { color: #2a5878; }
+
+[data-theme="light"] .sec-card, [data-theme="light"] .ord-card { background: #f6faff; border-color: #b8d0e8; }
+[data-theme="light"] .sec-name { color: #060f1c; }
+[data-theme="light"] .sec-val  { color: #00884a; }
+[data-theme="light"] .ord-val  { color: #c03000; }
+[data-theme="light"] .ob-bar   { background: #ccdaec; }
+[data-theme="light"] .ob-bar-fill { background: #0078a0; }
+[data-theme="light"] .str-lbl.building { background: #ddeeff; color: #005fa0; border-color: #99bbdd; }
+
+[data-theme="light"] .intel-summary-bar { background: #edf4fb; border-color: #b8d0e8; }
+[data-theme="light"] .time-label { color: #3a6880; }
+[data-theme="light"] .ago { color: #aa7700; }
+
+[data-theme="light"] .gs-input { background: #eef4fa; border-color: #a8c4dc; color: #060f1c; }
+[data-theme="light"] .gs-input::placeholder { color: #6a90a8; }
+[data-theme="light"] .gs-input:focus { border-color: #007ab8; }
+[data-theme="light"] .gs-dropdown { background: #ffffff; border-color: #a8c4dc; box-shadow: 0 8px 24px rgba(0,40,80,0.12); }
+[data-theme="light"] .gs-result { border-bottom-color: #d8e8f4; }
+[data-theme="light"] .gs-result:hover { background: #e8f2fa; }
+[data-theme="light"] .gs-name { color: #060f1c; }
+[data-theme="light"] .gs-meta { color: #3a6070; }
+
+[data-theme="light"] .cp-overlay { background: rgba(0,20,50,0.3); }
+[data-theme="light"] .cp-panel   { background: #ffffff; border-left-color: #a8c4dc; }
+[data-theme="light"] .cp-header  { background: linear-gradient(90deg, #d0dff0, #c4d4e8); border-bottom-color: #98b8d0; }
+[data-theme="light"] .cp-company { color: #005fa0; }
+[data-theme="light"] .cp-meta    { color: #3a6070; }
+[data-theme="light"] .cp-stat    { background: #eef4fa; border-color: #b8d0e8; }
+[data-theme="light"] .cp-stat-val   { color: #060f1c; }
+[data-theme="light"] .cp-stat-label { color: #3a6070; }
+[data-theme="light"] .cp-section-label { color: #3a6880; border-bottom-color: #c0d4e8; }
+[data-theme="light"] .cp-ob-card { background: #eef4fa; border-color: #b8d0e8; border-left-color: #007ab8; }
+[data-theme="light"] .cp-empty   { color: #5a7890; }
+[data-theme="light"] .cp-filing  { background: #f4f8fc; border-color: #c8dcea; }
+[data-theme="light"] .cp-filing:hover { background: #e4f0f8; }
+[data-theme="light"] .cp-filing-title { color: #1a5080; }
+[data-theme="light"] .cp-filing-time  { color: #3a6070; }
+
+[data-theme="light"] .ai-modal-overlay { background: rgba(0,20,50,0.5); }
+[data-theme="light"] .ai-modal  { background: #ffffff; border-color: #a8c4dc; box-shadow: 0 0 40px rgba(0,80,160,0.12); }
+[data-theme="light"] .ai-modal-header { background: linear-gradient(90deg,#d0dff0,#c4d4e8); border-bottom-color: #98b8d0; }
+[data-theme="light"] .ai-modal-company { color: #005fa0; }
+[data-theme="light"] .ai-modal-title   { color: #3a6070; }
+[data-theme="light"] .ai-modal-body    { background: #ffffff; }
+[data-theme="light"] .ai-modal-footer  { background: #f0f6fc; border-top-color: #c0d4e8; }
+[data-theme="light"] .ai-headline      { color: #060f1c; border-bottom-color: #c0d4e8; }
+[data-theme="light"] .ai-point         { color: #1a3a5a; }
+[data-theme="light"] .ai-point-num     { color: #005fa0; background: #ddeeff; border-color: #aaccee; }
+[data-theme="light"] .ai-section-label { color: #3a6070; }
+[data-theme="light"] .ai-analyst-note  { color: #2a5070; background: #eef4fa; border-left-color: #7aaad0; }
+[data-theme="light"] .ai-number-item   { background: #eef4fa; border-color: #c0d4e8; }
+[data-theme="light"] .ai-number-label  { color: #3a6070; }
+
+[data-theme="light"] .mobile-tab-bar { background: #d0dff0; border-bottom-color: #98b8d0; }
+[data-theme="light"] .mobile-tab-btn { color: #3a6070; }
+[data-theme="light"] .mobile-tab-btn.active { color: #005fa0; border-bottom-color: #005fa0; background: #eef4fa; }
+
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: #a8c4dc; }

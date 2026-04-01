@@ -710,18 +710,20 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
             </div>
           </div>
           {/* tag-row + LiveAgo on same line */}
-          <div className="tag-row" style={{ alignItems: "center" }}>
-            <span className={`type type-${r.type}`}>{r.type}</span>
-            {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
-            {r.conflict  && <ConflictBadge risk={r.conflict} />}
-            {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
-            {r.pdfUrl && (
-              <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
-                📄 Filing
-              </a>
-            )}
-            <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
-          </div>
+          {/* REPLACE the tag-row div inside RadarPanel's .map() */}
+<div className="tag-row" style={{ alignItems: "center" }}>
+  <span className={`type type-${r.type}`}>{r.type}</span>
+  {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
+  {r.conflict  && <ConflictBadge risk={r.conflict} />}
+  {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
+  {r.pdfUrl ? (
+    <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
+      📄 <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
+    </a>
+  ) : (
+    <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
+  )}
+</div>
         </div>
       ))}
     </div>
@@ -937,10 +939,9 @@ export default function App() {
   });
 
   useEffect(() => {
-    const root = document.documentElement;
-    if (darkMode) { root.classList.add("dark"); localStorage.setItem("mi-theme", "dark"); }
-    else          { root.classList.remove("dark"); localStorage.setItem("mi-theme", "light"); }
-  }, [darkMode]);
+  document.body.setAttribute("data-theme", darkMode ? "dark" : "light");
+  localStorage.setItem("mi-theme", darkMode ? "dark" : "light");
+}, [darkMode]);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
