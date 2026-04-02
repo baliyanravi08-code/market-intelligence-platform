@@ -273,63 +273,64 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
-// ─── TICKER MODAL ─────────────────────────────────────────────────────────────
+// ─── TICKER MODAL (fixed) ─────────────────────────────────────────────────────
 
 function TickerModal({ item, onClose }) {
   if (!item) return null;
 
-  const getTVSymbol = (name) => {
-    if (name === "NIFTY 50")   return "NSE:NIFTY";
-    if (name === "SENSEX")     return "BSE:SENSEX";
-    if (name === "BANK NIFTY") return "NSE:BANKNIFTY";
-    if (name === "BTC")        return "BINANCE:BTCUSDT";
-    if (name === "GOLD")       return "TVC:GOLD";
-    if (name === "SILVER")     return "TVC:SILVER";
+  const getChartConfig = (name) => {
+    if (name === "NIFTY 50")   return { type: "upstox", url: "https://upstox.com/market-quote/indices/NSE/Nifty%2050/" };
+    if (name === "SENSEX")     return { type: "upstox", url: "https://upstox.com/market-quote/indices/BSE/SENSEX/" };
+    if (name === "BANK NIFTY") return { type: "upstox", url: "https://upstox.com/market-quote/indices/NSE/Nifty%20Bank/" };
+    if (name === "BTC")        return { type: "tv", symbol: "BINANCE:BTCUSDT" };
+    if (name === "GOLD")       return { type: "tv", symbol: "TVC:GOLD" };
+    if (name === "SILVER")     return { type: "tv", symbol: "TVC:SILVER" };
     return null;
   };
 
-  const symbol  = getTVSymbol(item.name);
-  const isUp    = item.up === true || (item.change24h ?? 0) > 0;
-  const isDown  = item.up === false || (item.change24h ?? 0) < 0;
-  const color   = isUp ? "#00ff9c" : isDown ? "#ff5c5c" : "#4a9abb";
-  const arrow   = isUp ? "▲" : isDown ? "▼" : "●";
+  const config = getChartConfig(item.name);
+  const isUp   = item.up === true  || (item.change24h ?? 0) > 0;
+  const isDown = item.up === false || (item.change24h ?? 0) < 0;
+  const color  = isUp ? "#00ff9c" : isDown ? "#ff5c5c" : "#4a9abb";
+  const arrow  = isUp ? "▲" : isDown ? "▼" : "●";
   const changeTxt = item.change && item.change !== "—"
     ? `${item.change}${item.pct && item.pct !== "—" ? ` (${item.pct})` : ""}`
-    : item.change24h != null
-      ? `${Math.abs(item.change24h).toFixed(2)}%`
-      : "";
+    : item.change24h != null ? `${Math.abs(item.change24h).toFixed(2)}%` : "";
+
+  const tvIndexSymbol =
+    item.name === "NIFTY 50"   ? "INDEX:NIFTY" :
+    item.name === "SENSEX"     ? "INDEX:SENSEX" :
+    item.name === "BANK NIFTY" ? "INDEX:BANKNIFTY" : "";
 
   return (
-    <div style={{
-      position: "fixed", inset: 0,
-      background: "rgba(0,0,0,0.82)",
-      backdropFilter: "blur(4px)",
-      zIndex: 1000,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: 16,
-    }} onClick={onClose}>
-      <div style={{
-        background: "#030e1e",
-        border: "1px solid #0d3560",
-        borderRadius: 10,
-        width: "94vw",
-        maxWidth: 760,
-        maxHeight: "88vh",
-        display: "flex",
-        flexDirection: "column",
-        boxShadow: "0 0 60px rgba(0,150,255,0.18)",
-        overflow: "hidden",
-      }} onClick={e => e.stopPropagation()}>
-
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0,
+        background: "rgba(0,0,0,0.82)",
+        backdropFilter: "blur(4px)",
+        zIndex: 1000,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "#030e1e",
+          border: "1px solid #0d3560",
+          borderRadius: 10,
+          width: "94vw", maxWidth: 760, maxHeight: "88vh",
+          display: "flex", flexDirection: "column",
+          boxShadow: "0 0 60px rgba(0,150,255,0.18)",
+          overflow: "hidden",
+        }}
+      >
         {/* Header */}
         <div style={{
           display: "flex", justifyContent: "space-between", alignItems: "flex-start",
-          padding: "14px 16px 12px",
-          borderBottom: "1px solid #0a2540",
-          background: "linear-gradient(90deg, #020d1f, #041828)",
-          flexShrink: 0,
+          padding: "14px 16px 12px", borderBottom: "1px solid #0a2540",
+          background: "linear-gradient(90deg, #020d1f, #041828)", flexShrink: 0,
         }}>
           <div>
             <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, fontWeight: 700, color: "#00cfff" }}>
@@ -346,33 +347,113 @@ function TickerModal({ item, onClose }) {
               )}
             </div>
           </div>
-          <button onClick={onClose} style={{
-            background: "none", border: "none", color: "#2a5070",
-            fontSize: 18, cursor: "pointer", padding: "0 0 0 12px", flexShrink: 0,
-          }}>✕</button>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none", border: "none", color: "#2a5070",
+              fontSize: 18, cursor: "pointer", padding: "0 0 0 12px", flexShrink: 0,
+            }}
+          >✕</button>
         </div>
 
-        {/* Chart */}
+        {/* Chart area */}
         <div style={{ flex: 1, minHeight: 420, flexShrink: 0 }}>
-          {symbol ? (
+
+          {/* Indian indices — Upstox */}
+          {config?.type === "upstox" && (
+            <div style={{
+              display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center",
+              height: 420, gap: 16,
+              background: "linear-gradient(145deg, #020c1a, #041828)",
+            }}>
+              <div style={{ fontSize: 40 }}>📈</div>
+              <div style={{
+                fontFamily: "IBM Plex Mono, monospace", fontSize: 13,
+                color: "#d8eeff", fontWeight: 700, textAlign: "center",
+              }}>
+                {item.name}
+              </div>
+              <div style={{
+                fontFamily: "IBM Plex Mono, monospace", fontSize: 10,
+                color: "#2a6070", textAlign: "center", maxWidth: 340, lineHeight: 1.6,
+              }}>
+                Indian index charts are available in real-time on Upstox.<br />
+                Your ticker bar already shows live data via Upstox WebSocket.
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <a
+                  href={config.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "8px 18px", borderRadius: 5,
+                    background: "#00cfff", color: "#000",
+                    fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700,
+                    textDecoration: "none", cursor: "pointer",
+                  }}
+                >
+                  📊 Open Live Chart on Upstox ↗
+                </a>
+                <a
+                  href={"https://www.tradingview.com/chart/?symbol=" + tvIndexSymbol}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "8px 18px", borderRadius: 5,
+                    background: "#0a2040", color: "#4a9abb",
+                    border: "1px solid #0d3560",
+                    fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700,
+                    textDecoration: "none", cursor: "pointer",
+                  }}
+                >
+                  TradingView ↗
+                </a>
+              </div>
+              <div style={{
+                fontSize: 9, color: "#1a4060",
+                fontFamily: "IBM Plex Mono, monospace", marginTop: 4,
+              }}>
+                TradingView shows 15-min delayed data for NSE/BSE without a subscription
+              </div>
+            </div>
+          )}
+
+          {/* Crypto / Commodities — TradingView embed */}
+          {config?.type === "tv" && (
             <iframe
-              key={symbol}
-              src={`https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${symbol}&interval=D&hidesidetoolbar=0&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=020c1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&showpopupbutton=1&locale=en`}
+              key={config.symbol}
+              src={
+                "https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=" +
+                config.symbol +
+                "&interval=D&hidesidetoolbar=0&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=020c1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&showpopupbutton=1&locale=en"
+              }
               style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }}
               allowFullScreen
-              title={`${item.name} Chart`}
+              title={item.name + " Chart"}
             />
-          ) : (
+          )}
+
+          {/* PI or unknown */}
+          {!config && (
             <div style={{
               display: "flex", flexDirection: "column", alignItems: "center",
               justifyContent: "center", height: 420,
-              color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8
+              color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8,
             }}>
               <span style={{ fontSize: 32 }}>π</span>
               <span>Chart not available for {item.name}</span>
-              <a href="https://coinmarketcap.com/currencies/pi-network/"
-                target="_blank" rel="noreferrer"
-                style={{ color: "#00cfff", fontSize: 10 }}>
+              <a
+                href="https://coinmarketcap.com/currencies/pi-network/"
+                target="_blank"
+                rel="noreferrer"
+                onClick={e => e.stopPropagation()}
+                style={{ color: "#00cfff", fontSize: 10 }}
+              >
                 View on CoinMarketCap ↗
               </a>
             </div>
@@ -386,13 +467,20 @@ function TickerModal({ item, onClose }) {
           background: "#020b18", flexShrink: 0,
         }}>
           <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#1a4060" }}>
-            TradingView · Live chart · Click chart to interact
+            {config?.type === "upstox"
+              ? "⚡ Real-time via Upstox · 15-min delay on TradingView"
+              : config?.type === "tv"
+              ? "TradingView · Real-time crypto & commodities"
+              : "π PI Network · CoinMarketCap"}
           </span>
-          {symbol && (
-            <a href={`https://www.tradingview.com/chart/?symbol=${symbol}`}
-              target="_blank" rel="noreferrer"
+          {config?.type === "tv" && (
+            <a
+              href={"https://www.tradingview.com/chart/?symbol=" + config.symbol}
+              target="_blank"
+              rel="noreferrer"
+              onClick={e => e.stopPropagation()}
               style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#00cfff", textDecoration: "none", opacity: 0.8 }}
-              onClick={e => e.stopPropagation()}>
+            >
               Open Full Chart ↗
             </a>
           )}
@@ -401,6 +489,7 @@ function TickerModal({ item, onClose }) {
     </div>
   );
 }
+
 // ─── TICKER BAR ───────────────────────────────────────────────────────────────
 
 function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) {
@@ -850,7 +939,6 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
             background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined,
           }}
         >
-          {/* TOP ROW: company name LEFT · type badge RIGHT */}
           <div className="rc-top">
             <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>
               {r.company}
@@ -861,10 +949,7 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
               <span className={`type type-${r.type}`}>{r.type}</span>
             </div>
           </div>
-
-          {/* BOTTOM ROW: exchange badge · order value · filing · time+latency */}
           <div className="tag-row">
-            {/* Exchange badge */}
             <span style={{
               fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
               background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
@@ -872,11 +957,9 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
               border: r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44",
               flexShrink: 0
             }}>{r.exchange}</span>
-
             {r.orderValue > 0 && (
               <span className="order-val" style={{ flexShrink: 0 }}>₹{r.orderValue}Cr</span>
             )}
-
             {r.pdfUrl && (
               <a
                 href={r.pdfUrl} target="_blank" rel="noreferrer"
@@ -885,8 +968,6 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
                 style={{ flexShrink: 0 }}
               >📄</a>
             )}
-
-            {/* LiveAgo — pushed to right via margin-left: auto inside component */}
             <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
           </div>
         </div>
