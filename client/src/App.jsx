@@ -716,13 +716,12 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
   {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
   {r.conflict  && <ConflictBadge risk={r.conflict} />}
   {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
-  {r.pdfUrl ? (
+  {r.pdfUrl && (
     <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
-      📄 <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
+      📄 Filing
     </a>
-  ) : (
-    <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
   )}
+  <LiveAgoCompact exchangeTime={r.time} receivedAt={r.receivedAt} />
 </div>
         </div>
       ))}
