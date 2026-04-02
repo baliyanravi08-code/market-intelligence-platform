@@ -1183,3 +1183,200 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 /* ── Scrollbar ── */
 [data-theme="light"] ::-webkit-scrollbar-thumb { background: #a8c4dc; }
 [data-theme="light"] ::-webkit-scrollbar-track { background: #e0ecf8; }
+/* ============================================================
+   FIX 1 — LIGHT MODE: Alert card company names invisible
+   The mini-card text was white-on-white in light mode.
+   Add these rules to your existing light mode block in App.css
+   ============================================================ */
+
+[data-theme="light"] .intelligence-panel .mini-card {
+  background: #ffffff !important;
+  border-color: #c0d4e8 !important;
+  color: #060f1c !important;
+}
+
+/* Company name span inside alert mini-cards */
+[data-theme="light"] .intelligence-panel .mini-card span {
+  color: #060f1c !important;
+}
+
+/* The "BLOCKED" label on the right side of alert cards */
+[data-theme="light"] .intelligence-panel .mini-card span[style*="ff5c5c"] {
+  color: #cc0022 !important;
+}
+
+/* Score number (80, 90 etc) on right side */
+[data-theme="light"] .intelligence-panel .mini-card span[style*="ff9c00"] {
+  color: #b06000 !important;
+}
+
+/* Conflict badge inside alert mini-cards */
+[data-theme="light"] .intelligence-panel .mini-card .conflict-badge {
+  color: #cc0022 !important;
+  background: #ffe0e0 !important;
+  border-color: rgba(204,0,34,0.3) !important;
+}
+
+/* Type badges inside alert mini-cards — ensure text is dark enough */
+[data-theme="light"] .intelligence-panel .mini-card .type-MERGER     { background: #ff9c00; color: #1a0800 !important; }
+[data-theme="light"] .intelligence-panel .mini-card .type-ORDER      { background: #00ff9c; color: #001a0a !important; }
+[data-theme="light"] .intelligence-panel .mini-card .type-RISK       { background: #ff2d55; color: #fff    !important; }
+[data-theme="light"] .intelligence-panel .mini-card .type-NEWS       { background: #e0eaf4; color: #2a5878 !important; border: 1px solid #a8c4dc; }
+[data-theme="light"] .intelligence-panel .mini-card .type-CAPEX      { background: #00cfff; color: #001820 !important; }
+[data-theme="light"] .intelligence-panel .mini-card .type-INSIDER    { background: #ff5cff; color: #1a001a !important; }
+[data-theme="light"] .intelligence-panel .mini-card .type-RESULT     { background: #0088dd; color: #fff    !important; }
+[data-theme="light"] .intelligence-panel .mini-card .type-PARTNERSHIP{ background: #ffe14d; color: #1a1000 !important; }
+
+/* Alert card border accents stay visible in light */
+[data-theme="light"] .intelligence-panel .mini-card[style*="ff5c5c"] {
+  background: #fff5f5 !important;
+  border-left-color: #cc0022 !important;
+}
+[data-theme="light"] .intelligence-panel .mini-card[style*="ff9c00"] {
+  background: #fffaf0 !important;
+  border-left-color: #cc7700 !important;
+}
+[data-theme="light"] .intelligence-panel .mini-card[style*="0c0208"] {
+  background: #fff5f5 !important;
+}
+
+
+/* ============================================================
+   FIX 2 — COMPACT RADAR CARD REDESIGN
+   Replace the existing .radar-card block in App.css with this.
+   More cards visible, clean scannable layout, easy on eyes.
+   ============================================================ */
+
+.radar-card {
+  background: #020c1a;
+  border: 1px solid #0c2240;
+  border-left: 3px solid #0c3060;
+  padding: 7px 10px;          /* was 12px — tighter vertical */
+  margin-bottom: 5px;
+  border-radius: 5px;
+  transition: all 0.15s ease;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 2px 6px;
+  align-items: start;
+}
+
+.radar-card:hover {
+  transform: translateY(-1px);
+  border-color: #00cfff;
+  box-shadow: 0 0 8px rgba(0,200,255,0.15);
+}
+
+/* Blocked / caution stays */
+.radar-card.rc-blocked {
+  border-left: 3px solid #ff5c5c !important;
+  background: linear-gradient(145deg, #0d0208, #020c1a) !important;
+}
+.radar-card.rc-caution {
+  border-left: 3px solid #ffaa00 !important;
+  background: linear-gradient(145deg, #0d0a02, #020c1a) !important;
+}
+
+/* Top row: company name (left) + exchange+score badges (right) */
+.rc-top {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0;           /* was 5px */
+}
+
+/* Bottom row: tag-row spans full width */
+.radar-card .tag-row {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;          /* single line, no wrap */
+  overflow: hidden;
+  margin-top: 3px;
+}
+
+/* Company name — slightly smaller for density */
+.radar-card .co-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: #d8eeff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+/* Type badge — compact */
+.radar-card .type {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+/* Order value — compact */
+.radar-card .order-val {
+  font-size: 9px;
+  color: #ff8844;
+  font-family: 'IBM Plex Mono', monospace;
+  flex-shrink: 0;
+}
+
+/* Filing link — minimal */
+.radar-card .filing-link {
+  font-size: 8px;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+.radar-card .filing-link:hover { opacity: 1; }
+
+/* LiveAgo inside radar — push to far right */
+.radar-card .tag-row > span:last-child {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Exchange + score badges — tighter */
+.radar-card .rc-top > div {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Score badge — slightly smaller */
+.radar-card .rc-top > div > span:last-child {
+  font-size: 9px !important;
+  padding: 1px 5px !important;
+}
+
+
+/* ============================================================
+   LIGHT MODE — compact radar cards
+   ============================================================ */
+
+[data-theme="light"] .radar-card {
+  background: linear-gradient(145deg, #f4f8fc, #eaf2f8);
+  border-color: #b0cce0;
+  border-left-color: #7aaad0;
+}
+[data-theme="light"] .radar-card:hover {
+  border-color: #007ab8;
+  box-shadow: 0 0 8px rgba(0,122,184,0.12);
+}
+[data-theme="light"] .radar-card .co-name {
+  color: #060f1c;
+}
+/* Blocked/caution in light */
+[data-theme="light"] .radar-card[style*="ff5c5c"] {
+  background: linear-gradient(145deg, #fff0f0, #fde4e4) !important;
+  border-left-color: #cc0022 !important;
+}
+[data-theme="light"] .radar-card[style*="ffaa00"] {
+  background: linear-gradient(145deg, #fff8ec, #fdf0d4) !important;
+  border-left-color: #cc7700 !important;
+}
