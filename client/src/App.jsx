@@ -300,13 +300,41 @@ function TickerModal({ item, onClose }) {
       : "";
 
   return (
-    <>
-      <div className="ai-modal-overlay" onClick={onClose} />
-      <div className="ai-modal" style={{ maxWidth: 740, width: "94vw", maxHeight: "88vh" }}>
+    <div style={{
+      position: "fixed", inset: 0,
+      background: "rgba(0,0,0,0.82)",
+      backdropFilter: "blur(4px)",
+      zIndex: 1000,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 16,
+    }} onClick={onClose}>
+      <div style={{
+        background: "#030e1e",
+        border: "1px solid #0d3560",
+        borderRadius: 10,
+        width: "94vw",
+        maxWidth: 760,
+        maxHeight: "88vh",
+        display: "flex",
+        flexDirection: "column",
+        boxShadow: "0 0 60px rgba(0,150,255,0.18)",
+        overflow: "hidden",
+      }} onClick={e => e.stopPropagation()}>
+
         {/* Header */}
-        <div className="ai-modal-header">
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+          padding: "14px 16px 12px",
+          borderBottom: "1px solid #0a2540",
+          background: "linear-gradient(90deg, #020d1f, #041828)",
+          flexShrink: 0,
+        }}>
           <div>
-            <div className="ai-modal-company">{item.name}</div>
+            <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, fontWeight: 700, color: "#00cfff" }}>
+              {item.name}
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
               <span style={{ fontSize: 20, fontWeight: 700, color, fontFamily: "IBM Plex Mono, monospace" }}>
                 {item.price}
@@ -318,47 +346,61 @@ function TickerModal({ item, onClose }) {
               )}
             </div>
           </div>
-          <button className="ai-modal-close" onClick={onClose}>✕</button>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: "#2a5070",
+            fontSize: 18, cursor: "pointer", padding: "0 0 0 12px", flexShrink: 0,
+          }}>✕</button>
         </div>
 
         {/* Chart */}
-        <div style={{ height: 440, flexShrink: 0 }}>
+        <div style={{ flex: 1, minHeight: 420, flexShrink: 0 }}>
           {symbol ? (
             <iframe
               key={symbol}
               src={`https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${symbol}&interval=D&hidesidetoolbar=0&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=020c1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&showpopupbutton=1&locale=en`}
-              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+              style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }}
               allowFullScreen
               title={`${item.name} Chart`}
             />
           ) : (
             <div style={{
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              height: "100%", color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8
+              display: "flex", flexDirection: "column", alignItems: "center",
+              justifyContent: "center", height: 420,
+              color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8
             }}>
               <span style={{ fontSize: 32 }}>π</span>
               <span>Chart not available for {item.name}</span>
-              <a href="https://coinmarketcap.com/currencies/pi-network/" target="_blank" rel="noreferrer"
-                style={{ color: "#00cfff", fontSize: 10 }}>View on CoinMarketCap ↗</a>
+              <a href="https://coinmarketcap.com/currencies/pi-network/"
+                target="_blank" rel="noreferrer"
+                style={{ color: "#00cfff", fontSize: 10 }}>
+                View on CoinMarketCap ↗
+              </a>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="ai-modal-footer">
-          <span className="ai-powered">TradingView · Live chart · Click to interact</span>
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: "10px 16px", borderTop: "1px solid #0a2540",
+          background: "#020b18", flexShrink: 0,
+        }}>
+          <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#1a4060" }}>
+            TradingView · Live chart · Click chart to interact
+          </span>
           {symbol && (
             <a href={`https://www.tradingview.com/chart/?symbol=${symbol}`}
-              target="_blank" rel="noreferrer" className="ai-pdf-link">
+              target="_blank" rel="noreferrer"
+              style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#00cfff", textDecoration: "none", opacity: 0.8 }}
+              onClick={e => e.stopPropagation()}>
               Open Full Chart ↗
             </a>
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 }
-
 // ─── TICKER BAR ───────────────────────────────────────────────────────────────
 
 function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) {
