@@ -161,8 +161,6 @@ function extractAmount(text) {
 
 // ─── COMPONENTS ───────────────────────────────────────────────────────────────
 
-// Single LiveAgo component used everywhere — renders time + delay inline.
-// Replaces the old split LiveAgo / LiveAgoCompact pair.
 function LiveAgo({ exchangeTime, receivedAt }) {
   const exMs = parseExchangeTime(exchangeTime);
   const [agoEx, setAgoEx] = useState(() => toAgo(exMs));
@@ -180,7 +178,7 @@ function LiveAgo({ exchangeTime, receivedAt }) {
     : delay < 30 ? "#00ff9c" : delay < 120 ? "#ffaa00" : "#ff5c5c";
 
   return (
-    <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "9px", color: "#2a7090" }}>
+    <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "9px", color: "#2a7090", marginLeft: "auto", flexShrink: 0 }}>
       {exchangeTime && `${formatTime(exchangeTime)} · ${agoEx}`}
       {delay !== null && delay > 0 && delay < 86400 && (
         <span style={{ color: delayColor, marginLeft: 5 }}>Δ{delay}s</span>
@@ -199,9 +197,7 @@ function Tag({ type, crores }) {
 }
 
 function MarketStatus() {
-  return (
-    <span className="live-badge">● LIVE</span>
-  );
+  return <span className="live-badge">● LIVE</span>;
 }
 
 function DataSourceBadge({ source }) {
@@ -277,7 +273,95 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
-function TickerBar({ indices, assets, dataSource, tickerStale }) {
+// ─── TICKER MODAL ─────────────────────────────────────────────────────────────
+
+function TickerModal({ item, onClose }) {
+  if (!item) return null;
+
+  const getTVSymbol = (name) => {
+    if (name === "NIFTY 50")   return "NSE:NIFTY";
+    if (name === "SENSEX")     return "BSE:SENSEX";
+    if (name === "BANK NIFTY") return "NSE:BANKNIFTY";
+    if (name === "BTC")        return "BINANCE:BTCUSDT";
+    if (name === "GOLD")       return "TVC:GOLD";
+    if (name === "SILVER")     return "TVC:SILVER";
+    return null;
+  };
+
+  const symbol  = getTVSymbol(item.name);
+  const isUp    = item.up === true || (item.change24h ?? 0) > 0;
+  const isDown  = item.up === false || (item.change24h ?? 0) < 0;
+  const color   = isUp ? "#00ff9c" : isDown ? "#ff5c5c" : "#4a9abb";
+  const arrow   = isUp ? "▲" : isDown ? "▼" : "●";
+  const changeTxt = item.change && item.change !== "—"
+    ? `${item.change}${item.pct && item.pct !== "—" ? ` (${item.pct})` : ""}`
+    : item.change24h != null
+      ? `${Math.abs(item.change24h).toFixed(2)}%`
+      : "";
+
+  return (
+    <>
+      <div className="ai-modal-overlay" onClick={onClose} />
+      <div className="ai-modal" style={{ maxWidth: 740, width: "94vw", maxHeight: "88vh" }}>
+        {/* Header */}
+        <div className="ai-modal-header">
+          <div>
+            <div className="ai-modal-company">{item.name}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
+              <span style={{ fontSize: 20, fontWeight: 700, color, fontFamily: "IBM Plex Mono, monospace" }}>
+                {item.price}
+              </span>
+              {changeTxt && (
+                <span style={{ fontSize: 11, color, fontFamily: "IBM Plex Mono, monospace" }}>
+                  {arrow} {changeTxt}
+                </span>
+              )}
+            </div>
+          </div>
+          <button className="ai-modal-close" onClick={onClose}>✕</button>
+        </div>
+
+        {/* Chart */}
+        <div style={{ height: 440, flexShrink: 0 }}>
+          {symbol ? (
+            <iframe
+              key={symbol}
+              src={`https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${symbol}&interval=D&hidesidetoolbar=0&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=020c1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&showpopupbutton=1&locale=en`}
+              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+              allowFullScreen
+              title={`${item.name} Chart`}
+            />
+          ) : (
+            <div style={{
+              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+              height: "100%", color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8
+            }}>
+              <span style={{ fontSize: 32 }}>π</span>
+              <span>Chart not available for {item.name}</span>
+              <a href="https://coinmarketcap.com/currencies/pi-network/" target="_blank" rel="noreferrer"
+                style={{ color: "#00cfff", fontSize: 10 }}>View on CoinMarketCap ↗</a>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="ai-modal-footer">
+          <span className="ai-powered">TradingView · Live chart · Click to interact</span>
+          {symbol && (
+            <a href={`https://www.tradingview.com/chart/?symbol=${symbol}`}
+              target="_blank" rel="noreferrer" className="ai-pdf-link">
+              Open Full Chart ↗
+            </a>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── TICKER BAR ───────────────────────────────────────────────────────────────
+
+function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) {
   const session = getSession();
   return (
     <div className="ticker-bar">
@@ -287,12 +371,15 @@ function TickerBar({ indices, assets, dataSource, tickerStale }) {
         const cls    = isUp ? "up" : isDown ? "down" : "flat";
         const isDash = m.price === "—";
         return (
-          <div className="ticker-item" key={`idx-${i}`} style={isDash ? { opacity: 0.4 } : {}}>
+          <div
+            className="ticker-item ticker-clickable"
+            key={`idx-${i}`}
+            style={isDash ? { opacity: 0.4 } : {}}
+            onClick={() => !isDash && onTickerClick(m)}
+            title={`Click to view ${m.name} chart`}
+          >
             <span className="ticker-name">{m.name}</span>
-            <span
-              key={m._ts || m.price}
-              className={`ticker-price${m._ts ? " blink" : ""}`}
-            >
+            <span key={m._ts || m.price} className={`ticker-price${m._ts ? " blink" : ""}`}>
               {m.price}
             </span>
             <span className={`ticker-change ${cls}`}>
@@ -307,7 +394,12 @@ function TickerBar({ indices, assets, dataSource, tickerStale }) {
         const isDown = a.change24h < 0;
         const cls    = isUp ? "up" : isDown ? "down" : "flat";
         return (
-          <div className="ticker-item secondary" key={`asset-${i}`}>
+          <div
+            className="ticker-item secondary ticker-clickable"
+            key={`asset-${i}`}
+            onClick={() => onTickerClick(a)}
+            title={`Click to view ${a.name} chart`}
+          >
             <span className={`ticker-asset-icon ${a.type}`}>{a.icon}</span>
             <span className="ticker-name">{a.name}</span>
             <span key={a._ts || a.price} className={`ticker-price${a._ts ? " blink" : ""}`}>{a.price}</span>
@@ -649,12 +741,15 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
         {computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).length === 0
           ? <div className="empty">No active alerts</div>
           : computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).map((e, i) => (
-          <div key={i} className="mini-card" style={{ borderLeft: e.conflict ? "3px solid #ff5c5c" : e.score >= 80 ? "3px solid #ff9c00" : undefined, background: e.conflict ? "#0c0208" : undefined }}>
+          <div key={i} className="mini-card" style={{
+            borderLeft: e.conflict ? "3px solid #ff5c5c" : e.score >= 80 ? "3px solid #ff9c00" : undefined,
+            background: e.conflict ? "#0c0208" : undefined
+          }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ color: e.conflict ? "#ff7070" : "#d8eeff", fontSize: "10px" }}>{e.company}</span>
+              <span className="mini-card-name" style={{ color: e.conflict ? "#ff7070" : undefined }}>{e.company}</span>
               {e.conflict
-                ? <span style={{ fontSize: "8px", color: "#ff5c5c", fontFamily: "IBM Plex Mono,monospace" }}>BLOCKED</span>
-                : <span style={{ fontSize: "9px", color: "#ff9c00", fontFamily: "IBM Plex Mono,monospace", fontWeight: 700 }}>{e.score}</span>
+                ? <span className="mini-card-blocked">BLOCKED</span>
+                : <span className="mini-card-score">{e.score}</span>
               }
             </div>
             <div style={{ display: "flex", gap: 5, marginTop: 3, alignItems: "center" }}>
@@ -684,6 +779,8 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
   );
 }
 
+// ─── RADAR PANEL ──────────────────────────────────────────────────────────────
+
 function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
   return (
     <div className="panel radar-panel">
@@ -692,45 +789,65 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
       </div>
       <div className="search-wrap">
         <span className="search-icon">⌕</span>
-        <input type="text" className="radar-search" placeholder="Search company, type..." value={radarQuery} onChange={e => setRadarQuery(e.target.value)} />
+        <input
+          type="text" className="radar-search"
+          placeholder="Search company, type..."
+          value={radarQuery}
+          onChange={e => setRadarQuery(e.target.value)}
+        />
         {radarQuery && <button className="clear-btn" onClick={() => setRadarQuery("")}>✕</button>}
       </div>
       {filteredRadar.length === 0 ? (
         <div className="empty">No matches for "{radarQuery}"</div>
       ) : filteredRadar.map((r, i) => (
-        <div className="radar-card" key={i} style={{
-  borderLeft: r.conflict ? "3px solid #ff5c5c" : r.caution ? "3px solid #ffaa00" : undefined,
-  background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined,
-}}>
-  {/* TOP ROW: company name + type badge */}
-  <div className="rc-top">
-    <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>
-      {r.company}
-    </span>
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      {r.conflict && <ConflictBadge risk={r.conflict} />}
-      {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
-      <span className={`type type-${r.type}`}>{r.type}</span>
-    </div>
-  </div>
+        <div
+          className="radar-card"
+          key={i}
+          style={{
+            borderLeft: r.conflict ? "3px solid #ff5c5c" : r.caution ? "3px solid #ffaa00" : "3px solid #0c3060",
+            background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined,
+          }}
+        >
+          {/* TOP ROW: company name LEFT · type badge RIGHT */}
+          <div className="rc-top">
+            <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>
+              {r.company}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+              {r.conflict && <ConflictBadge risk={r.conflict} />}
+              {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
+              <span className={`type type-${r.type}`}>{r.type}</span>
+            </div>
+          </div>
 
-  {/* BOTTOM ROW: exchange + filing + time + latency */}
-  <div className="tag-row" style={{ alignItems: "center", marginTop: 3 }}>
-    <span style={{
-      fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
-      background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
-      color: r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
-      border: r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44",
-      flexShrink: 0
-    }}>{r.exchange}</span>
-    {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
-    {r.pdfUrl && (
-      <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link"
-        onClick={ev => ev.stopPropagation()}>📄</a>
-    )}
-    <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
-  </div>
-</div>
+          {/* BOTTOM ROW: exchange badge · order value · filing · time+latency */}
+          <div className="tag-row">
+            {/* Exchange badge */}
+            <span style={{
+              fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
+              background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
+              color: r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
+              border: r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44",
+              flexShrink: 0
+            }}>{r.exchange}</span>
+
+            {r.orderValue > 0 && (
+              <span className="order-val" style={{ flexShrink: 0 }}>₹{r.orderValue}Cr</span>
+            )}
+
+            {r.pdfUrl && (
+              <a
+                href={r.pdfUrl} target="_blank" rel="noreferrer"
+                className="filing-link"
+                onClick={ev => ev.stopPropagation()}
+                style={{ flexShrink: 0 }}
+              >📄</a>
+            )}
+
+            {/* LiveAgo — pushed to right via margin-left: auto inside component */}
+            <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
+          </div>
+        </div>
       ))}
     </div>
   );
@@ -936,7 +1053,8 @@ export default function App() {
   const [liveOrderBook,  setLiveOrderBook]  = useState([]);
   const [obExpanded,     setObExpanded]     = useState(null);
   const [obSearch,       setObSearch]       = useState("");
-  const [selectedCompany, setSelectedCompany] = useState(null);
+  const [selectedCompany,  setSelectedCompany]  = useState(null);
+  const [selectedTicker,   setSelectedTicker]   = useState(null);
 
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem("mi-theme");
@@ -945,9 +1063,9 @@ export default function App() {
   });
 
   useEffect(() => {
-  document.body.setAttribute("data-theme", darkMode ? "dark" : "light");
-  localStorage.setItem("mi-theme", darkMode ? "dark" : "light");
-}, [darkMode]);
+    document.body.setAttribute("data-theme", darkMode ? "dark" : "light");
+    localStorage.setItem("mi-theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1064,8 +1182,8 @@ export default function App() {
       try {
         const cgRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true", { headers: { "Accept": "application/json" } });
         const cg = await cgRes.json();
-        if (cg?.["pi-network"]) updates["PI"] = { name: "PI", icon: "π", type: "crypto", price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0, _ts: Date.now() };
-        if (cg?.["tether-gold"]) updates["GOLD"] = { name: "GOLD", icon: "Au", type: "gold", price: fmt(cg["tether-gold"].usd), change24h: cg["tether-gold"].usd_24h_change || 0, _ts: Date.now() };
+        if (cg?.["pi-network"])   updates["PI"]   = { name: "PI",   icon: "π",  type: "crypto", price: fmt(cg["pi-network"].usd),    change24h: cg["pi-network"].usd_24h_change    || 0, _ts: Date.now() };
+        if (cg?.["tether-gold"])  updates["GOLD"] = { name: "GOLD", icon: "Au", type: "gold",   price: fmt(cg["tether-gold"].usd),   change24h: cg["tether-gold"].usd_24h_change   || 0, _ts: Date.now() };
       } catch (e) { console.error("CoinGecko error:", e); }
       let silverPrice = 33.50, silverChange = 0;
       try {
@@ -1078,7 +1196,7 @@ export default function App() {
           if (prev) silverChange = ((silverPrice - prev) / prev) * 100;
         }
       } catch (e) { console.warn("Silver fetch failed:", e.message); }
-      updates["SILVER"] = { name: "SILVER", icon: "Ag", type: "silver", price: fmt(silverPrice), change24h: silverChange };
+      updates["SILVER"] = { name: "SILVER", icon: "Ag", type: "silver", price: fmt(silverPrice), change24h: silverChange, _ts: Date.now() };
       setCryptoAssets(prev => {
         const map = {};
         prev.forEach(a => { map[a.name] = a; });
@@ -1231,7 +1349,13 @@ export default function App() {
         </button>
       </div>
 
-      <TickerBar indices={marketIndices} assets={cryptoAssets} dataSource={tickerSource} tickerStale={tickerStale} />
+      <TickerBar
+        indices={marketIndices}
+        assets={cryptoAssets}
+        dataSource={tickerSource}
+        tickerStale={tickerStale}
+        onTickerClick={setSelectedTicker}
+      />
 
       <div className="layout desktop-layout">
         <IntelPanel  computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
@@ -1257,6 +1381,7 @@ export default function App() {
       </div>
 
       <CompanyPanel company={selectedCompany} onClose={() => setSelectedCompany(null)} />
+      <TickerModal  item={selectedTicker}    onClose={() => setSelectedTicker(null)} />
     </div>
   );
 }

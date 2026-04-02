@@ -54,10 +54,20 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   border-right: 1px solid #0a2540;
   white-space: nowrap;
   flex-shrink: 0;
-  transition: background 0.15s;
+  transition: background 0.15s, border-bottom 0.15s;
   cursor: default;
+  border-bottom: 2px solid transparent;
 }
-.ticker-item:hover { background: #030f20; }
+
+/* Clickable ticker items */
+.ticker-clickable {
+  cursor: pointer;
+}
+.ticker-clickable:hover {
+  background: #041828 !important;
+  border-bottom: 2px solid #00cfff !important;
+}
+
 .ticker-item.secondary .ticker-name  { color: #3a6888; }
 .ticker-item.secondary .ticker-price { font-size: 11px; color: #b0c8e0; }
 
@@ -74,15 +84,17 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   font-weight: 600;
   color: #e8f4ff;
 }
-/* Ticker price flash animation — triggered by _ts timestamp in TickerBar */
+
+/* ── Blink flash animation — fires on every BTC trade tick & PI/GOLD refresh ── */
 @keyframes blink-flash {
-  0%   { opacity: 1; }
-  20%  { opacity: 0.25; }
-  50%  { opacity: 1; }
-  75%  { opacity: 0.5; }
-  100% { opacity: 1; }
+  0%   { opacity: 1; color: #e8f4ff; }
+  15%  { opacity: 0.2; color: #00ff9c; }
+  40%  { opacity: 1; color: #fff; }
+  70%  { opacity: 0.5; color: #00cfff; }
+  100% { opacity: 1; color: #e8f4ff; }
 }
-.blink { animation: blink-flash 0.55s ease; }
+.blink { animation: blink-flash 0.6s ease; }
+
 .ticker-change {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 9px;
@@ -326,7 +338,7 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   .desktop-layout { padding: 0 4px 4px 4px; column-gap: 4px; row-gap: 0; }
   .co-name { font-size: 11px; }
   .feed-card { padding: 8px 10px; }
-  .radar-card { padding: 9px 10px; }
+  .radar-card { padding: 7px 8px; }
   .section-divider { font-size: 9px; }
   .tbtn, .fbtn { padding: 2px 5px; font-size: 8px; }
   .filter-bar { flex-wrap: wrap; gap: 3px; }
@@ -375,6 +387,7 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   text-transform: uppercase;
 }
 
+/* ===== MINI CARDS (Intel / Alert panel) ===== */
 .mini-card {
   font-size: 10px;
   padding: 8px;
@@ -384,11 +397,31 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   margin-bottom: 4px;
 }
 
+/* Named classes for company name, score, blocked inside mini-card
+   so light mode can target them without relying on inline color styles */
+.mini-card-name {
+  font-size: 10px;
+  font-weight: 600;
+  color: #d8eeff;
+}
+.mini-card-score {
+  font-size: 9px;
+  color: #ff9c00;
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700;
+}
+.mini-card-blocked {
+  font-size: 8px;
+  color: #ff5c5c;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
 .market-row { display: flex; justify-content: space-between; align-items: center; }
 .m-price { color: #fff; font-weight: 700; font-family: 'IBM Plex Mono'; }
 .m-change { color: #ff5c5c; font-size: 9px; text-align: right; }
 
-.radar-card, .feed-card, .mega-card, .opp-card, .sec-card, .ord-card {
+/* ===== BASE CARD STYLES ===== */
+.feed-card, .mega-card, .opp-card, .sec-card, .ord-card {
   background: #020c1a;
   border: 1px solid #0c2240;
   padding: 10px;
@@ -420,7 +453,7 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 }
 .active { background: #0d3060; color: #fff; }
 
-.tag-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.tag-row { display: flex; align-items: center; gap: 5px; margin-top: 4px; flex-wrap: nowrap; overflow: hidden; }
 
 .search-wrap { position: relative; margin-bottom: 6px; }
 .radar-search {
@@ -531,7 +564,6 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .fc-company { font-size: 11px; font-weight: 600; }
 
 .opp-row { display: flex; justify-content: space-between; align-items: center; }
-
 .opp-card .time-label {
   font-size: 9px;
   color: #4a9abb;
@@ -553,34 +585,80 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .feed-card.fc-insider .fc-word     { color: #703070; }
 .feed-card.fc-insider .fc-word-hot { color: #ff88ff; font-weight: 700; }
 
-/* ===== PREMIUM RADAR ===== */
+/* ===== COMPACT RADAR CARDS ===== */
 .radar-card {
   background: linear-gradient(145deg, #020c1a, #041a30);
   border: 1px solid #0c2240;
-  padding: 12px;
-  margin-bottom: 8px;
-  border-radius: 6px;
-  transition: all 0.2s ease;
+  border-left: 3px solid #0c3060;
+  padding: 7px 10px;
+  margin-bottom: 5px;
+  border-radius: 5px;
+  transition: all 0.15s ease;
 }
+
 .radar-card:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   border-color: #00cfff;
-  box-shadow: 0 0 12px rgba(0, 200, 255, 0.2);
+  box-shadow: 0 0 8px rgba(0, 200, 255, 0.15);
 }
 
-.radar-card.rc-blocked {
-  border-left: 3px solid #ff5c5c !important;
-  background: linear-gradient(145deg, #0d0208, #020c1a) !important;
-  opacity: 0.85;
-}
-.radar-card.rc-caution {
-  border-left: 3px solid #ffaa00 !important;
-  background: linear-gradient(145deg, #0d0a02, #020c1a) !important;
+/* TOP ROW: company name left, type badge right */
+.rc-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 3px;
 }
 
-.rc-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
-.score-high { color: #00ff9c; text-shadow: 0 0 6px #00ff9c88; }
+/* BOTTOM ROW: exchange + filing + time */
+.radar-card .tag-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
 
+/* Company name in radar — full width, ellipsis */
+.radar-card .co-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: #d8eeff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 155px;
+  flex-shrink: 1;
+}
+
+/* Type badge in radar — compact */
+.radar-card .type {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+/* Order value */
+.order-val {
+  font-size: 9px;
+  color: #ff8844;
+  font-family: 'IBM Plex Mono', monospace;
+  flex-shrink: 0;
+}
+
+/* Filing link — emoji only in radar */
+.radar-card .filing-link {
+  font-size: 9px;
+  opacity: 0.65;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+.radar-card .filing-link:hover { opacity: 1; }
+
+/* ===== TYPE BADGES ===== */
 .type {
   font-size: 10px;
   padding: 2px 6px;
@@ -607,9 +685,6 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   opacity: .75; display: flex; align-items: center; gap: 2px;
 }
 .filing-link:hover { opacity: 1; text-decoration: underline; }
-
-/* ===== ORDER VAL ===== */
-.order-val { font-size: 10px; color: #ff8844; font-family: 'IBM Plex Mono', monospace; }
 
 /* ===== PANEL HEADER ===== */
 .panel-header {
@@ -821,10 +896,10 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .cp-filing-title { display: block; font-size: 11px; color: #7ab0d0; line-height: 1.45; }
 .cp-filing-time  { display: block; font-size: 9px; color: #2a6070; font-family: 'IBM Plex Mono', monospace; margin-top: 3px; }
 
-/* ===== AI MODAL ===== */
+/* ===== AI / TICKER MODAL ===== */
 .ai-modal-overlay {
   position: fixed; inset: 0;
-  background: rgba(0, 0, 0, 0.75);
+  background: rgba(0, 0, 0, 0.78);
   backdrop-filter: blur(4px);
   z-index: 1000;
   display: flex; align-items: center; justify-content: center;
@@ -918,9 +993,9 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 .ai-pdf-link { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #00cfff; text-decoration: none; opacity: 0.8; }
 .ai-pdf-link:hover { opacity: 1; text-decoration: underline; }
 
-/* ===================================================
-   LIGHT MODE — COMPREHENSIVE FIX
-   =================================================== */
+/* =====================================================================
+   LIGHT MODE — COMPREHENSIVE
+   ===================================================================== */
 
 [data-theme="light"],
 [data-theme="light"] body {
@@ -945,6 +1020,7 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .ticker-bar  { background: #dce8f4; border-bottom: 1px solid #a8c4dc; }
 [data-theme="light"] .ticker-item { border-right-color: #b0cce0; }
 [data-theme="light"] .ticker-item:hover { background: #ccdaec; }
+[data-theme="light"] .ticker-clickable:hover { background: #c4d8ee !important; border-bottom-color: #005fa0 !important; }
 [data-theme="light"] .ticker-item.secondary .ticker-name  { color: #3a6070; }
 [data-theme="light"] .ticker-item.secondary .ticker-price { color: #1a3a5a; }
 [data-theme="light"] .ticker-name  { color: #1a4060; }
@@ -958,7 +1034,6 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .ticker-session.open   { background: #d0f0e4; color: #006633; border-color: rgba(0,102,51,0.3); }
 [data-theme="light"] .ticker-session.closed { background: #fce8d8; color: #c05000; border-color: rgba(192,80,0,0.3); }
 [data-theme="light"] .ticker-session.pre    { background: #eef6d0; color: #6a8800; border-color: rgba(106,136,0,0.3); }
-/* Asset icon badges */
 [data-theme="light"] .ticker-asset-icon.crypto { background: #fff4e0; color: #c07000; border-color: rgba(192,112,0,0.3); }
 [data-theme="light"] .ticker-asset-icon.gold   { background: #fff8d0; color: #9a7a00; border-color: rgba(154,122,0,0.3); }
 [data-theme="light"] .ticker-asset-icon.silver { background: #eef2f8; color: #5a7090; border-color: rgba(90,112,144,0.3); }
@@ -976,17 +1051,50 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .empty { color: #5a7890; }
 [data-theme="light"] .co-name { color: #060f1c; }
 
-/* ── Intel panel header bar (rendered via PanelHeaderBar component inline style) ── */
+/* ── Intel panel header ── */
 [data-theme="light"] .intelligence-panel .panel-header,
 [data-theme="light"] .intelligence-panel > div:first-child {
   background: linear-gradient(90deg, #d0dff0 0%, #c4d4e8 100%) !important;
   border-bottom-color: #a0bcd8 !important;
 }
 
-/* ── Mini-cards (Intel panel pulse/stats) ── */
-[data-theme="light"] .mini-card { background: #edf4fb; border-color: #b8d0e8; color: #1a3a5a; }
+/* ── Mini-cards (Alert panel) — FIX for invisible company names in light mode ── */
+[data-theme="light"] .mini-card {
+  background: #ffffff !important;
+  border-color: #c0d4e8 !important;
+  color: #060f1c !important;
+}
+[data-theme="light"] .mini-card-name   { color: #060f1c !important; }
+[data-theme="light"] .mini-card-score  { color: #b06000 !important; }
+[data-theme="light"] .mini-card-blocked { color: #cc0022 !important; }
 
-/* ── Conflict / caution badges ── */
+/* Conflict / caution badges inside mini-cards */
+[data-theme="light"] .mini-card .conflict-badge {
+  color: #cc0022 !important; background: #ffe0e0 !important; border-color: rgba(204,0,34,0.3) !important;
+}
+[data-theme="light"] .mini-card .caution-badge {
+  color: #996600 !important; background: #fff0cc !important; border-color: rgba(153,102,0,0.3) !important;
+}
+
+/* Type badges inside mini-cards */
+[data-theme="light"] .mini-card .type-MERGER     { background: #ff9c00; color: #1a0800 !important; }
+[data-theme="light"] .mini-card .type-ORDER      { background: #00ff9c; color: #001a0a !important; }
+[data-theme="light"] .mini-card .type-RISK       { background: #ff2d55; color: #fff    !important; }
+[data-theme="light"] .mini-card .type-NEWS       { background: #e0eaf4; color: #2a5878 !important; border: 1px solid #a8c4dc; }
+[data-theme="light"] .mini-card .type-CAPEX      { background: #00cfff; color: #001820 !important; }
+[data-theme="light"] .mini-card .type-INSIDER    { background: #ff5cff; color: #1a001a !important; }
+[data-theme="light"] .mini-card .type-RESULT     { background: #0088dd; color: #fff    !important; }
+[data-theme="light"] .mini-card .type-PARTNERSHIP{ background: #ffe14d; color: #1a1000 !important; }
+
+/* Alert card border accents */
+[data-theme="light"] .mini-card[style*="ff5c5c"] { background: #fff5f5 !important; border-left-color: #cc0022 !important; }
+[data-theme="light"] .mini-card[style*="ff9c00"] { background: #fffaf0 !important; border-left-color: #cc7700 !important; }
+[data-theme="light"] .mini-card[style*="0c0208"] { background: #fff5f5 !important; }
+
+/* Pulse stats text in mini-cards */
+[data-theme="light"] .mini-card[style*="4a8adf"] { color: #1a4888 !important; }
+
+/* ── Conflict / caution badges (global) ── */
 [data-theme="light"] .conflict-badge {
   color: #cc0022 !important; background: #ffe0e0 !important; border-color: rgba(204,0,34,0.3) !important;
 }
@@ -994,7 +1102,7 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   color: #996600 !important; background: #fff0cc !important; border-color: rgba(153,102,0,0.3) !important;
 }
 
-/* ── Type badges ── */
+/* ── Type badges (global light fixes) ── */
 [data-theme="light"] .type-NEWS { background: #e0eaf4; color: #2a5878; border: 1px solid #a8c4dc; }
 
 /* ── Filing link ── */
@@ -1011,22 +1119,16 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .radar-card {
   background: linear-gradient(145deg, #f4f8fc, #eaf2f8);
   border-color: #b0cce0;
+  border-left-color: #7aaad0;
 }
 [data-theme="light"] .radar-card:hover {
   border-color: #007ab8;
-  box-shadow: 0 0 10px rgba(0,122,184,0.15);
-  transform: translateY(-1px);
+  box-shadow: 0 0 8px rgba(0,122,184,0.12);
 }
-/* Blocked / caution radar cards */
-[data-theme="light"] .radar-card[style*="ff5c5c"] {
-  background: linear-gradient(145deg, #fff0f0, #fde4e4) !important;
-}
-[data-theme="light"] .radar-card[style*="ffaa00"] {
-  background: linear-gradient(145deg, #fff8ec, #fdf0d4) !important;
-}
-[data-theme="light"] .radar-card[style*="0c0208"] {
-  background: linear-gradient(145deg, #fff0f0, #fde4e4) !important;
-}
+[data-theme="light"] .radar-card .co-name { color: #060f1c; }
+[data-theme="light"] .radar-card[style*="ff5c5c"] { background: linear-gradient(145deg, #fff0f0, #fde4e4) !important; }
+[data-theme="light"] .radar-card[style*="ffaa00"] { background: linear-gradient(145deg, #fff8ec, #fdf0d4) !important; }
+[data-theme="light"] .radar-card[style*="0c0208"] { background: linear-gradient(145deg, #fff0f0, #fde4e4) !important; }
 [data-theme="light"] .order-val  { color: #cc4400; }
 [data-theme="light"] .score-high { color: #00aa66; text-shadow: none; }
 
@@ -1062,7 +1164,6 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .feed-card.fc-insider .fc-text { color: #6a1878; }
 [data-theme="light"] .fc-time { color: #3a6880; }
 
-/* Feed word highlights — all card types */
 [data-theme="light"] .feed-card .fc-word     { color: #4a7090; }
 [data-theme="light"] .feed-card .fc-word-hot { color: #1a3858; font-weight: 600; }
 [data-theme="light"] .feed-card.fc-news    .fc-word     { color: #3a6070; }
@@ -1077,7 +1178,6 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .feed-card.fc-capex   .fc-word-hot { color: #007898; font-weight: 700; }
 [data-theme="light"] .feed-card.fc-insider .fc-word     { color: #703070; }
 [data-theme="light"] .feed-card.fc-insider .fc-word-hot { color: #880099; font-weight: 700; }
-/* fc-tag-news badge */
 [data-theme="light"] .fc-tag-news { background: #e0eaf4 !important; color: #2a5878 !important; border-color: #a8c4dc !important; }
 
 /* ── Right panel — Mega Orders ── */
@@ -1092,9 +1192,7 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .opp-pct  { color: #cc0033; }
 [data-theme="light"] .opp-card .co-name    { color: #060f1c; }
 [data-theme="light"] .opp-card .time-label { color: #3a6880; }
-/* Intel summary bar */
 [data-theme="light"] .intel-summary-bar { background: #edf4fb !important; border-color: #b8d0e8 !important; }
-/* Price impact inline badges */
 [data-theme="light"] .price-impact.pos { color: #006633; background: #d0f0e4; border-color: rgba(0,102,51,0.3); }
 [data-theme="light"] .price-impact.neg { color: #cc0022; background: #ffe0e0; border-color: rgba(204,0,34,0.3); }
 
@@ -1110,7 +1208,7 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .ob-bar-fill  { background: #0078a0; }
 [data-theme="light"] .str-lbl.building { background: #ddeeff; color: #005fa0; border-color: #99bbdd; }
 
-/* ── time / ago labels ── */
+/* ── Time / ago ── */
 [data-theme="light"] .time-label { color: #3a6880; }
 [data-theme="light"] .ago        { color: #aa7700; }
 
@@ -1148,8 +1246,8 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .cp-filing-title { color: #1a5080; }
 [data-theme="light"] .cp-filing-time  { color: #3a6070; }
 
-/* ── AI modal ── */
-[data-theme="light"] .ai-modal-overlay { background: rgba(0,20,50,0.5); }
+/* ── AI / Ticker modal ── */
+[data-theme="light"] .ai-modal-overlay { background: rgba(0,20,50,0.55); }
 [data-theme="light"] .ai-modal  { background: #ffffff; border-color: #a8c4dc; box-shadow: 0 0 40px rgba(0,80,160,0.12); }
 [data-theme="light"] .ai-modal-header  { background: linear-gradient(90deg,#d0dff0,#c4d4e8); border-bottom-color: #98b8d0; }
 [data-theme="light"] .ai-modal-company { color: #005fa0; }
@@ -1174,209 +1272,12 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] .mobile-tab-btn.active { color: #005fa0; border-bottom-color: #005fa0; background: #eef4fa; }
 [data-theme="light"] .mobile-panel-wrap { background: #e8f0f8; }
 
-/* ── Animations: tone down glow effects in light ── */
+/* ── Animations: tone down in light ── */
 [data-theme="light"] .pulse-orange { animation: none; box-shadow: none; border-left-color: #e05000; }
 [data-theme="light"] .fresh-pulse  { animation: none; border-left-color: #00884a; }
 [data-theme="light"] .glow-red     { background: #fff0f2; border-left-color: #cc0033; }
 [data-theme="light"] .glow-hover:hover { box-shadow: 0 4px 12px rgba(0,60,120,0.12); border-color: #4a9abb; background: #f0f8ff; transform: translateY(-1px); }
 
-/* ── Scrollbar ── */
+/* ── Scrollbar in light ── */
 [data-theme="light"] ::-webkit-scrollbar-thumb { background: #a8c4dc; }
 [data-theme="light"] ::-webkit-scrollbar-track { background: #e0ecf8; }
-/* ============================================================
-   FIX 1 — LIGHT MODE: Alert card company names invisible
-   The mini-card text was white-on-white in light mode.
-   Add these rules to your existing light mode block in App.css
-   ============================================================ */
-
-[data-theme="light"] .intelligence-panel .mini-card {
-  background: #ffffff !important;
-  border-color: #c0d4e8 !important;
-  color: #060f1c !important;
-}
-
-/* Company name span inside alert mini-cards */
-[data-theme="light"] .intelligence-panel .mini-card span {
-  color: #060f1c !important;
-}
-
-/* The "BLOCKED" label on the right side of alert cards */
-[data-theme="light"] .intelligence-panel .mini-card span[style*="ff5c5c"] {
-  color: #cc0022 !important;
-}
-
-/* Score number (80, 90 etc) on right side */
-[data-theme="light"] .intelligence-panel .mini-card span[style*="ff9c00"] {
-  color: #b06000 !important;
-}
-
-/* Conflict badge inside alert mini-cards */
-[data-theme="light"] .intelligence-panel .mini-card .conflict-badge {
-  color: #cc0022 !important;
-  background: #ffe0e0 !important;
-  border-color: rgba(204,0,34,0.3) !important;
-}
-
-/* Type badges inside alert mini-cards — ensure text is dark enough */
-[data-theme="light"] .intelligence-panel .mini-card .type-MERGER     { background: #ff9c00; color: #1a0800 !important; }
-[data-theme="light"] .intelligence-panel .mini-card .type-ORDER      { background: #00ff9c; color: #001a0a !important; }
-[data-theme="light"] .intelligence-panel .mini-card .type-RISK       { background: #ff2d55; color: #fff    !important; }
-[data-theme="light"] .intelligence-panel .mini-card .type-NEWS       { background: #e0eaf4; color: #2a5878 !important; border: 1px solid #a8c4dc; }
-[data-theme="light"] .intelligence-panel .mini-card .type-CAPEX      { background: #00cfff; color: #001820 !important; }
-[data-theme="light"] .intelligence-panel .mini-card .type-INSIDER    { background: #ff5cff; color: #1a001a !important; }
-[data-theme="light"] .intelligence-panel .mini-card .type-RESULT     { background: #0088dd; color: #fff    !important; }
-[data-theme="light"] .intelligence-panel .mini-card .type-PARTNERSHIP{ background: #ffe14d; color: #1a1000 !important; }
-
-/* Alert card border accents stay visible in light */
-[data-theme="light"] .intelligence-panel .mini-card[style*="ff5c5c"] {
-  background: #fff5f5 !important;
-  border-left-color: #cc0022 !important;
-}
-[data-theme="light"] .intelligence-panel .mini-card[style*="ff9c00"] {
-  background: #fffaf0 !important;
-  border-left-color: #cc7700 !important;
-}
-[data-theme="light"] .intelligence-panel .mini-card[style*="0c0208"] {
-  background: #fff5f5 !important;
-}
-
-
-/* ============================================================
-   FIX 2 — COMPACT RADAR CARD REDESIGN
-   Replace the existing .radar-card block in App.css with this.
-   More cards visible, clean scannable layout, easy on eyes.
-   ============================================================ */
-
-.radar-card {
-  background: #020c1a;
-  border: 1px solid #0c2240;
-  border-left: 3px solid #0c3060;
-  padding: 7px 10px;          /* was 12px — tighter vertical */
-  margin-bottom: 5px;
-  border-radius: 5px;
-  transition: all 0.15s ease;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-rows: auto auto;
-  gap: 2px 6px;
-  align-items: start;
-}
-
-.radar-card:hover {
-  transform: translateY(-1px);
-  border-color: #00cfff;
-  box-shadow: 0 0 8px rgba(0,200,255,0.15);
-}
-
-/* Blocked / caution stays */
-.radar-card.rc-blocked {
-  border-left: 3px solid #ff5c5c !important;
-  background: linear-gradient(145deg, #0d0208, #020c1a) !important;
-}
-.radar-card.rc-caution {
-  border-left: 3px solid #ffaa00 !important;
-  background: linear-gradient(145deg, #0d0a02, #020c1a) !important;
-}
-
-/* Top row: company name (left) + exchange+score badges (right) */
-.rc-top {
-  grid-column: 1 / -1;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0;           /* was 5px */
-}
-
-/* Bottom row: tag-row spans full width */
-.radar-card .tag-row {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: nowrap;          /* single line, no wrap */
-  overflow: hidden;
-  margin-top: 3px;
-}
-
-/* Company name — slightly smaller for density */
-.radar-card .co-name {
-  font-size: 11px;
-  font-weight: 700;
-  color: #d8eeff;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 160px;
-}
-
-/* Type badge — compact */
-.radar-card .type {
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  flex-shrink: 0;
-}
-
-/* Order value — compact */
-.radar-card .order-val {
-  font-size: 9px;
-  color: #ff8844;
-  font-family: 'IBM Plex Mono', monospace;
-  flex-shrink: 0;
-}
-
-/* Filing link — minimal */
-.radar-card .filing-link {
-  font-size: 8px;
-  opacity: 0.6;
-  flex-shrink: 0;
-}
-.radar-card .filing-link:hover { opacity: 1; }
-
-/* LiveAgo inside radar — push to far right */
-.radar-card .tag-row > span:last-child {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-/* Exchange + score badges — tighter */
-.radar-card .rc-top > div {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-/* Score badge — slightly smaller */
-.radar-card .rc-top > div > span:last-child {
-  font-size: 9px !important;
-  padding: 1px 5px !important;
-}
-
-
-/* ============================================================
-   LIGHT MODE — compact radar cards
-   ============================================================ */
-
-[data-theme="light"] .radar-card {
-  background: linear-gradient(145deg, #f4f8fc, #eaf2f8);
-  border-color: #b0cce0;
-  border-left-color: #7aaad0;
-}
-[data-theme="light"] .radar-card:hover {
-  border-color: #007ab8;
-  box-shadow: 0 0 8px rgba(0,122,184,0.12);
-}
-[data-theme="light"] .radar-card .co-name {
-  color: #060f1c;
-}
-/* Blocked/caution in light */
-[data-theme="light"] .radar-card[style*="ff5c5c"] {
-  background: linear-gradient(145deg, #fff0f0, #fde4e4) !important;
-  border-left-color: #cc0022 !important;
-}
-[data-theme="light"] .radar-card[style*="ffaa00"] {
-  background: linear-gradient(145deg, #fff8ec, #fdf0d4) !important;
-  border-left-color: #cc7700 !important;
-}
