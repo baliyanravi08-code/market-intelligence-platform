@@ -721,7 +721,7 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
       📄 Filing
     </a>
   )}
-  <LiveAgoCompact exchangeTime={r.time} receivedAt={r.receivedAt} />
+  <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
 </div>
         </div>
       ))}
