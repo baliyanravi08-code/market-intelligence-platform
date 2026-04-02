@@ -310,7 +310,7 @@ function TickerBar({ indices, assets, dataSource, tickerStale }) {
           <div className="ticker-item secondary" key={`asset-${i}`}>
             <span className={`ticker-asset-icon ${a.type}`}>{a.icon}</span>
             <span className="ticker-name">{a.name}</span>
-            <span className="ticker-price">{a.price}</span>
+            <span key={a._ts || a.price} className={`ticker-price${a._ts ? " blink" : ""}`}>{a.price}</span>
             <span className={`ticker-change ${cls}`}>
               {isUp ? "▲" : isDown ? "▼" : "●"} {Math.abs(a.change24h).toFixed(2)}%
             </span>
@@ -699,31 +699,38 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
         <div className="empty">No matches for "{radarQuery}"</div>
       ) : filteredRadar.map((r, i) => (
         <div className="radar-card" key={i} style={{
-          borderLeft: r.conflict ? "3px solid #ff5c5c" : r.caution ? "3px solid #ffaa00" : undefined,
-          background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined,
-        }}>
-          <div className="rc-top">
-            <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>{r.company}</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{ fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px", background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a", color: r.exchange === "BSE" ? "#4a9eff" : "#00ff9c", border: r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44" }}>{r.exchange}</span>
-              <span style={{ background: r.score >= 80 ? "#ff2d5522" : r.score >= 60 ? "#ff9c0022" : "#ffffff11", color: r.score >= 80 ? "#ff2d55" : r.score >= 60 ? "#ff9c00" : "#666", border: r.score >= 80 ? "1px solid #ff2d5544" : r.score >= 60 ? "1px solid #ff9c0044" : "1px solid #333", borderRadius: "3px", padding: "1px 6px", fontSize: "10px", fontWeight: 700 }}>{r.conflict ? "—" : r.score}</span>
-            </div>
-          </div>
-          {/* tag-row + LiveAgo on same line */}
-          {/* REPLACE the tag-row div inside RadarPanel's .map() */}
-<div className="tag-row" style={{ alignItems: "center" }}>
-  <span className={`type type-${r.type}`}>{r.type}</span>
-  {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
-  {r.conflict  && <ConflictBadge risk={r.conflict} />}
-  {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
-  {r.pdfUrl && (
-    <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link">
-      📄 Filing
-    </a>
-  )}
-  <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
+  borderLeft: r.conflict ? "3px solid #ff5c5c" : r.caution ? "3px solid #ffaa00" : undefined,
+  background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined,
+}}>
+  {/* TOP ROW: company name + type badge */}
+  <div className="rc-top">
+    <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>
+      {r.company}
+    </span>
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      {r.conflict && <ConflictBadge risk={r.conflict} />}
+      {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
+      <span className={`type type-${r.type}`}>{r.type}</span>
+    </div>
+  </div>
+
+  {/* BOTTOM ROW: exchange + filing + time + latency */}
+  <div className="tag-row" style={{ alignItems: "center", marginTop: 3 }}>
+    <span style={{
+      fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
+      background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
+      color: r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
+      border: r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44",
+      flexShrink: 0
+    }}>{r.exchange}</span>
+    {r.orderValue > 0 && <span className="order-val">₹{r.orderValue}Cr</span>}
+    {r.pdfUrl && (
+      <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link"
+        onClick={ev => ev.stopPropagation()}>📄</a>
+    )}
+    <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
+  </div>
 </div>
-        </div>
       ))}
     </div>
   );
@@ -1027,7 +1034,7 @@ export default function App() {
           setCryptoAssets(prev => {
             const next = [...prev];
             const idx  = next.findIndex(a => a.name === "BTC");
-            const entry = { name: "BTC", icon: "₿", type: "crypto", price: formatted, change24h };
+            const entry = { name: "BTC", icon: "₿", type: "crypto", price: formatted, change24h, _ts: Date.now() };
             if (idx >= 0) next[idx] = entry; else next.unshift(entry);
             return next;
           });
@@ -1057,8 +1064,8 @@ export default function App() {
       try {
         const cgRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true", { headers: { "Accept": "application/json" } });
         const cg = await cgRes.json();
-        if (cg?.["pi-network"]) updates["PI"] = { name: "PI", icon: "π", type: "crypto", price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0 };
-        if (cg?.["tether-gold"]) updates["GOLD"] = { name: "GOLD", icon: "Au", type: "gold", price: fmt(cg["tether-gold"].usd), change24h: cg["tether-gold"].usd_24h_change || 0 };
+        if (cg?.["pi-network"]) updates["PI"] = { name: "PI", icon: "π", type: "crypto", price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0, _ts: Date.now() };
+        if (cg?.["tether-gold"]) updates["GOLD"] = { name: "GOLD", icon: "Au", type: "gold", price: fmt(cg["tether-gold"].usd), change24h: cg["tether-gold"].usd_24h_change || 0, _ts: Date.now() };
       } catch (e) { console.error("CoinGecko error:", e); }
       let silverPrice = 33.50, silverChange = 0;
       try {
