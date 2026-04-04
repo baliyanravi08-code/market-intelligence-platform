@@ -2,7 +2,7 @@ const express = require("express")
 const http = require("http")
 const { Server } = require("socket.io")
 
-const { subscribe } = require("../server/queue")
+const { subscribe } = require("../queue")
 
 const app = express()
 const server = http.createServer(app)

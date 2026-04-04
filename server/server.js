@@ -15,6 +15,7 @@ const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
 const { startStreamer, stopStreamer } = require("./services/upstoxStream");
+const { commoditiesRoute }  = require("./api/commodities");  // ← ADDED
 
 const {
   getEvents,
@@ -47,14 +48,12 @@ let upstoxAccessToken = null;
 let upstoxTokenExpiry = null;
 
 function loadToken() {
-  // Check analytics token from env first (1-year validity, no OAuth needed)
   if (process.env.UPSTOX_ANALYTICS_TOKEN) {
     upstoxAccessToken = process.env.UPSTOX_ANALYTICS_TOKEN;
     upstoxTokenExpiry = Date.now() + 365 * 24 * 60 * 60 * 1000;
     console.log("✅ Upstox Analytics Token loaded from env");
     return;
   }
-  // Fallback: disk token
   try {
     if (fs.existsSync(TOKEN_FILE)) {
       const saved = JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8"));
@@ -90,9 +89,7 @@ function clearToken() {
 
 loadToken();
 
-// Start live WebSocket stream if token already valid at boot
 if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
-  // Delay 2s to let io finish initialising
   setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
 }
 
@@ -140,7 +137,6 @@ app.get("/auth/upstox/callback", async (req, res) => {
     saveToken(upstoxAccessToken, upstoxTokenExpiry);
     console.log("Upstox token saved, expires:", new Date(upstoxTokenExpiry).toISOString());
 
-    // ── START LIVE WEBSOCKET STREAM ──────────────────────────────────────────
     startStreamer(upstoxAccessToken, io);
 
     res.send(
@@ -167,8 +163,7 @@ app.get("/auth/upstox/status", (req, res) => {
   });
 });
 
-// ── /api/market — REST fallback (used when WS not yet connected) ─────────────
-// Frontend only polls this on first load. After WS connects, ticks come via socket.
+// ── /api/market ──────────────────────────────────────────────────────────────
 async function fetchUpstoxMarket() {
   const keys = Object.values(UPSTOX_INSTRUMENTS).join(",");
   const res = await axios.get(
@@ -219,6 +214,9 @@ app.get("/api/market", async (req, res) => {
     return res.json([...blank, { _source: "error" }]);
   }
 });
+
+// ── /api/commodities ─────────────────────────────────────────────────────────
+app.get("/api/commodities", commoditiesRoute);  // ← ADDED
 
 // ── /health ──────────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
