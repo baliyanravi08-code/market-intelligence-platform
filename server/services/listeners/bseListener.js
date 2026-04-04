@@ -1,19 +1,3 @@
-/**
- * bseListeners.js  — patched
- *
- * Changes from original:
- *  1. Fixed orderBookDB require path (was ../../data/orderBookDB, now ../data/orderBookDB
- *     because this file lives at server/services/listeners/bseListeners.js)
- *  2. enrichResultWithPDF — now passes correct quarter derived from filing title/date
- *     instead of always using getCurrentFYQuarter() (which returns *current* quarter,
- *     not the quarter the result is *for*)
- *  3. Quarter-rollover is handled by orderBookDB.updateFromResultFiling() already —
- *     it resets newOrders to 0 and pushes history. We just need to send the right quarter.
- *  4. Added extractConfirmedOBFromText() — scrapes OB value from result PDF text
- *     when pdfReader returns a generic "order value" that may be wrong for results.
- *  5. ORDER_ALERT path unchanged — already works correctly.
- */
-
 "use strict";
 
 const axios = require("axios");
@@ -22,9 +6,9 @@ const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 const { updateRadar, getRadar } = require("../intelligence/radarEngine");
 const { orderBookEngine } = require("../intelligence/orderBookEngine");
 const opportunityEngine = require("../intelligence/opportunityEngine");
-const sectorQueue      = require("../intelligence/sectorQueue");
-const sectorRadar      = require("../intelligence/sectorRadar");
-const sectorBoomEngine = require("../intelligence/sectorBoomEngine");
+const sectorQueue       = require("../intelligence/sectorQueue");
+const sectorRadar       = require("../intelligence/sectorRadar");
+const sectorBoomEngine  = require("../intelligence/sectorBoomEngine");
 const { saveResult, getRetentionHours, getWindowLabel } = require("../../database");
 const {
   persistRadar,
@@ -32,13 +16,23 @@ const {
   persistSector,
   persistOpportunity,
   persistMegaOrder,
+  persistGuidance,
+  persistCredibility,
   sendStoredToClient
 } = require("../../coordinator");
 
-// ── FIX 1: Correct path ──────────────────────────────────────────────────────
-// bseListeners.js is at:   server/services/listeners/bseListeners.js
-// orderBookDB.js is at:    server/services/data/orderBookDB.js
-const orderBookDB = require("../../data/orderBookDB")
+const orderBookDB = require("../../data/orderBookDB");
+
+const {
+  isPresentationFiling,
+  handleLivePresentationFiling
+} = require("../intelligence/presentationParser");
+
+const {
+  saveActualResult,
+  extractActualsFromResultText,
+  recomputeCredibility
+} = require("../intelligence/credibilityEngine");
 
 let ioRef     = null;
 let bseCookie = "";
@@ -66,20 +60,20 @@ function buildHistoricalUrl(fromDate, toDate) {
 }
 
 const BROWSER_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Accept-Encoding": "gzip, deflate, br",
-  "Connection": "keep-alive",
+  "User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  "Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  "Accept-Language":           "en-US,en;q=0.9",
+  "Accept-Encoding":           "gzip, deflate, br",
+  "Connection":                "keep-alive",
   "Upgrade-Insecure-Requests": "1"
 };
 
 function getIndianTime() {
   return new Date().toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata",
-    month: "short", day: "numeric",
-    hour: "numeric", minute: "numeric",
-    hour12: true
+    timeZone:  "Asia/Kolkata",
+    month:     "short", day: "numeric",
+    hour:      "numeric", minute: "numeric",
+    hour12:    true
   });
 }
 
@@ -99,32 +93,23 @@ function parseExchangeTs(timeStr) {
   return null;
 }
 
-// ── FIX 2: Parse which quarter a result filing covers ─────────────────────────
-// "Quarter ended December 2025" → Q3FY26
-// "Quarter ended March 2026"    → Q4FY26
-// "Quarter ended June 2025"     → Q1FY26
-// "Quarter ended September"     → Q2FY26
 function parseResultQuarterFromTitle(title) {
   const t = (title || "").toLowerCase();
 
   const monthMap = {
     january:1, jan:1, february:2, feb:2, march:3, mar:3,
-    april:4, apr:4, may:5, june:6, jun:6,
-    july:7, jul:7, august:8, aug:8, september:9, sep:9, sept:9,
-    october:10, oct:10, november:11, nov:11, december:12, dec:12,
+    april:4,   apr:4, may:5,      june:6, jun:6,
+    july:7,    jul:7, august:8,   aug:8,  september:9, sep:9, sept:9,
+    october:10,oct:10,november:11,nov:11, december:12, dec:12,
   };
 
-  // "ended december 2025" / "ended 31st march 2026" / "ended march 31, 2026"
   const m = t.match(/ended\s+(?:\d+(?:st|nd|rd|th)?\s+)?(\w+)(?:[,\s]+(\d{4}))?/);
   if (m) {
     const monthName = m[1].toLowerCase();
-    const month = monthMap[monthName];
+    const month     = monthMap[monthName];
     if (month) {
-      // Infer year: if no year in title, use filing date context
       let year = m[2] ? parseInt(m[2]) : new Date().getFullYear();
-      // If month is in the future relative to now, it's last year
       if (!m[2] && month > new Date().getMonth() + 1) year -= 1;
-
       const fy    = month >= 4 ? year + 1 : year;
       const short = String(fy).slice(-2);
       if (month >= 4  && month <= 6)  return `Q1FY${short}`;
@@ -134,17 +119,12 @@ function parseResultQuarterFromTitle(title) {
     }
   }
 
-  // Direct "Q3FY26" in title
   const direct = (title || "").match(/\b(Q[1-4]FY\d{2})\b/i);
   if (direct) return direct[1].toUpperCase();
 
-  // Fallback — return current quarter (will be slightly wrong but safe)
   return orderBookDB.getCurrentQuarter();
 }
 
-// ── FIX 3: Extract confirmed OB from result PDF text ──────────────────────────
-// pdfReader.extractOrderValueFromPDF is tuned for ORDER filings.
-// Result PDFs mention OB differently — "order book of ₹94,000 Cr"
 function extractConfirmedOBFromText(text) {
   if (!text) return null;
   const t = String(text).replace(/,/g, "").replace(/₹/g, "Rs").replace(/INR/gi, "Rs");
@@ -155,9 +135,7 @@ function extractConfirmedOBFromText(text) {
     /unexecuted\s+order\s+(?:book|backlog)\s+(?:of|at|is)\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)/i,
     /outstanding\s+order\s*(?:book|s)?\s+(?:of|at|is|worth)\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)/i,
     /order\s*book\s*(?:position|size|value)\s+(?:of|at|is)\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)/i,
-    // "₹94,000 Cr order book"
     /(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*(?:crore|cr\b)\s+order\s*book/i,
-    // Lakh crore: "₹5.64 lakh crore"
     /order\s*book\s+(?:of|at|is)\s*(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*lakh\s*cr/i,
   ];
 
@@ -165,14 +143,13 @@ function extractConfirmedOBFromText(text) {
     const m = t.match(patterns[i]);
     if (m) {
       let val = parseFloat(m[1]);
-      if (i === patterns.length - 1) val = val * 100000; // lakh crore
+      if (i === patterns.length - 1) val = val * 100000;
       if (val > 100) return parseFloat(val.toFixed(2));
     }
   }
   return null;
 }
 
-// ── enrichResultWithPDF — now quarter-aware ───────────────────────────────────
 async function enrichResultWithPDF(signal) {
   if (!signal.pdfUrl) return signal;
 
@@ -182,18 +159,40 @@ async function enrichResultWithPDF(signal) {
 
     console.log(`📄 Result PDF scan: ${signal.company}`);
 
-    // pdfReader returns raw extracted text OR a crore number
     const pdfResult = await extractOrderValueFromPDF(signal.pdfUrl);
 
-    // Try to get confirmed OB — first from OB-specific patterns, then fallback
-    let confirmedOB = null;
+    let confirmedOB  = null;
+    let rawPdfText   = null;
 
     if (typeof pdfResult === "string") {
-      // pdfReader returned text — extract OB from it
+      rawPdfText  = pdfResult;
       confirmedOB = extractConfirmedOBFromText(pdfResult);
     } else if (typeof pdfResult === "number" && pdfResult > 100) {
-      // pdfReader returned a number directly
       confirmedOB = pdfResult;
+    }
+
+    const resultQuarter = parseResultQuarterFromTitle(signal.title);
+
+    // ── Credibility: extract actuals and save ─────────────────────────────
+    if (rawPdfText) {
+      const actuals = extractActualsFromResultText(rawPdfText);
+      if (actuals) {
+        await saveActualResult(
+          String(signal.code),
+          signal.company,
+          resultQuarter,
+          { ...actuals, pdfUrl: signal.pdfUrl, filingDate: signal.time }
+        );
+
+        recomputeCredibility(String(signal.code), signal.company)
+          .then(credDoc => {
+            if (credDoc) {
+              persistCredibility(credDoc);
+              if (ioRef) ioRef.emit("credibility_update", credDoc);
+            }
+          })
+          .catch(() => {});
+      }
     }
 
     if (!confirmedOB || confirmedOB <= 0) {
@@ -201,19 +200,14 @@ async function enrichResultWithPDF(signal) {
       return signal;
     }
 
-    // ── FIX: Use quarter the result is FOR, not current quarter ──────────────
-    const resultQuarter = parseResultQuarterFromTitle(signal.title);
-
     console.log(`📦 Result OB: ${signal.company} ₹${confirmedOB}Cr (${resultQuarter})`);
 
-    // Update in-memory store
     updateFromResult(String(signal.code), {
       confirmedOrderBook:    confirmedOB,
       confirmedQuarter:      resultQuarter,
       newOrdersSinceConfirm: 0,
     });
 
-    // Update MongoDB — this resets newOrders to 0 and pushes to quarterHistory
     await orderBookDB.updateFromResultFiling(
       String(signal.code),
       signal.company,
@@ -233,8 +227,6 @@ async function enrichResultWithPDF(signal) {
 
   return signal;
 }
-
-// ── warmup, extractList, scan, backfill — unchanged ──────────────────────────
 
 async function warmup() {
   try {
@@ -291,7 +283,7 @@ async function processItem(item) {
 
   if (!signal) return;
 
-  // PDF enrichment for ORDER_ALERT with no crore value
+  // ── PDF enrichment for ORDER_ALERT with no crore value ───────────────────
   if (signal.type === "ORDER_ALERT" && !signal._orderInfo?.crores && signal.pdfUrl) {
     try {
       const { extractOrderValueFromPDF } = require("../data/pdfReader");
@@ -314,9 +306,21 @@ async function processItem(item) {
     }
   }
 
-  // PDF enrichment for RESULT — quarter-aware (fixed)
+  // ── Result filing — OB extraction + actuals for credibility ──────────────
   if ((signal.type === "RESULT" || signal.type === "BANK_RESULT") && signal.pdfUrl) {
     enrichResultWithPDF(signal).catch(() => {});
+  }
+
+  // ── Investor presentation — extract 3-year guidance ───────────────────────
+  if (isPresentationFiling(signal.title) && signal.pdfUrl) {
+    handleLivePresentationFiling({ ...signal }, ioRef)
+      .then(doc => {
+        if (doc) {
+          persistGuidance(doc);
+          if (ioRef) ioRef.emit("guidance_update", doc);
+        }
+      })
+      .catch(() => {});
   }
 
   const exchangeTs   = parseExchangeTs(signal.time);
@@ -331,16 +335,15 @@ async function processItem(item) {
   const radar = getRadar();
   persistRadar(radar);
 
-  if (ioRef) ioRef.emit("bse_events", [signalWithTs]);
-  if (ioRef) ioRef.emit("radar_update", radar);
+  if (ioRef) ioRef.emit("bse_events",    [signalWithTs]);
+  if (ioRef) ioRef.emit("radar_update",  radar);
 
   if (signalWithTs.type === "ORDER_ALERT") {
     const enrichedSignal = { ...signalWithTs, _orderInfo: signal._orderInfo };
-    const orderData = orderBookEngine(enrichedSignal);
-    const _crores   = signal._orderInfo?.crores || 0;
+    const orderData      = orderBookEngine(enrichedSignal);
+    const _crores        = signal._orderInfo?.crores || 0;
 
     if (_crores > 0 && signalWithTs.code) {
-      // Add to MongoDB order book (accumulates newOrders for current quarter)
       try {
         await orderBookDB.addOrderToBook(
           String(signalWithTs.code),
@@ -353,7 +356,6 @@ async function processItem(item) {
         console.log("⚠️ OrderBook addOrder failed:", e.message);
       }
 
-      // Also update in-memory store
       try {
         const { addNewOrder } = require("../data/marketCap");
         addNewOrder(String(signalWithTs.code), _crores, id);
@@ -416,11 +418,11 @@ async function scan() {
     const res = await axios.get(BSE_API, {
       headers: {
         ...BROWSER_HEADERS,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.bseindia.com/corporates/ann.html",
-        "Origin": "https://www.bseindia.com",
-        "X-Requested-With": "XMLHttpRequest",
-        "Sec-Fetch-Site": "same-origin",
+        "Accept":            "application/json, text/plain, */*",
+        "Referer":           "https://www.bseindia.com/corporates/ann.html",
+        "Origin":            "https://www.bseindia.com",
+        "X-Requested-With":  "XMLHttpRequest",
+        "Sec-Fetch-Site":    "same-origin",
         ...(bseCookie ? { "Cookie": bseCookie } : {})
       },
       timeout: 20000
@@ -463,12 +465,12 @@ async function backfill() {
     const res = await axios.get(url, {
       headers: {
         ...BROWSER_HEADERS,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.bseindia.com/corporates/ann.html",
-        "Origin": "https://www.bseindia.com",
+        "Accept":           "application/json, text/plain, */*",
+        "Referer":          "https://www.bseindia.com/corporates/ann.html",
+        "Origin":           "https://www.bseindia.com",
         "X-Requested-With": "XMLHttpRequest",
-        "Sec-Fetch-Site": "same-origin",
-        "Cookie": bseCookie
+        "Sec-Fetch-Site":   "same-origin",
+        "Cookie":           bseCookie
       },
       timeout: 30000
     });

@@ -1,8 +1,18 @@
-const orderDetector  = require("../intelligence/orderDetector");
-const analyzeResult  = require("./resultAnalyzer");
-const { getLiveMcap } = require("../data/liveMcap");
-const { getMarketCap } = require("../data/marketCap");
+/**
+ * announcementAnalyzer.js
+ * Classifies BSE/NSE announcements into signal types with scores.
+ */
 
+"use strict";
+
+const orderDetector   = require("../intelligence/orderDetector");
+const analyzeResult   = require("./resultAnalyzer");
+const { getLiveMcap } = require("../data/liveMcap");
+const { getMarketCap} = require("../data/marketCap");
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEGATIVE PATTERNS — always classified as NEWS regardless of other matches
+// ─────────────────────────────────────────────────────────────────────────────
 const NEGATIVE_PATTERNS = [
   "income tax", "tax demand", "tax notice", "demand notice",
   "assessment order", "penalty order", "show cause",
@@ -119,6 +129,9 @@ const NEGATIVE_PATTERNS = [
   "disclosure for intimation",
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ORDER patterns
+// ─────────────────────────────────────────────────────────────────────────────
 const ORDER_POSITIVE = [
   "received order", "receives order", "new order",
   "work order", "epc order", "supply order",
@@ -216,6 +229,9 @@ const ORDER_SIZE_KEYWORDS = [
   { pattern: "large contract",          crores: 400  },
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MERGER patterns
+// ─────────────────────────────────────────────────────────────────────────────
 const MERGER_POSITIVE = [
   "merger with", "merger of", "proposed merger",
   "scheme of merger", "scheme of amalgamation",
@@ -240,6 +256,9 @@ const MERGER_NEGATIVE = [
   "sebi exemption order", "regulation 29"
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CAPEX patterns
+// ─────────────────────────────────────────────────────────────────────────────
 const CAPEX_POSITIVE = [
   "capex of", "capital expenditure of", "invest rs",
   "investment of rs", "setting up new",
@@ -260,6 +279,9 @@ const CAPEX_NEGATIVE = [
   "reduce capex", "cut capex"
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// INSIDER BUY patterns
+// ─────────────────────────────────────────────────────────────────────────────
 const INSIDER_BUY_POSITIVE = [
   "promoter buying", "promoter purchase",
   "creeping acquisition", "insider buying",
@@ -283,6 +305,9 @@ const INSIDER_BUY_NEGATIVE = [
   "off market transfer", "off-market transfer"
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PARTNERSHIP patterns
+// ─────────────────────────────────────────────────────────────────────────────
 const PARTNERSHIP_POSITIVE = [
   "signs mou", "signed mou", "mou with",
   "joint venture with", "jv with", "forms jv",
@@ -303,6 +328,9 @@ const PARTNERSHIP_NEGATIVE = [
   "winds up jv"
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CORPORATE ACTION patterns
+// ─────────────────────────────────────────────────────────────────────────────
 const CORPORATE_ACTION_POSITIVE = [
   "dividend of rs", "interim dividend",
   "final dividend", "special dividend",
@@ -313,6 +341,9 @@ const CORPORATE_ACTION_POSITIVE = [
   "consolidation of shares", "face value change"
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SMART MONEY patterns
+// ─────────────────────────────────────────────────────────────────────────────
 const SMART_MONEY_POSITIVE = [
   "fii buying", "dii buying", "institutional buying",
   "mutual fund buying", "bulk deal",
@@ -322,6 +353,9 @@ const SMART_MONEY_POSITIVE = [
   "fpi increases stake", "institutional stake increase"
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// FUNDRAISE patterns
+// ─────────────────────────────────────────────────────────────────────────────
 const FUNDRAISE_POSITIVE = [
   "qip of", "ipo of", "ncd issue",
   "rights issue proceeds", "fpo of",
@@ -331,6 +365,9 @@ const FUNDRAISE_POSITIVE = [
   "private placement of"
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 function matchesAny(text, patterns) {
   return patterns.some(p => text.includes(p));
 }
@@ -364,7 +401,7 @@ function insiderScoreBySize(title) {
   return 25;
 }
 
-// ── MCap-relative scoring ──
+// ── MCap-relative scoring ─────────────────────────────────────────────────────
 function scoreFromMcapRatio(crores, mcap) {
   const pct = (crores / mcap) * 100;
   if      (pct >= 50)  return 98;
@@ -379,7 +416,7 @@ function scoreFromMcapRatio(crores, mcap) {
   else                 return 28;
 }
 
-// ── Absolute size scoring (fallback when no MCap) ──
+// ── Absolute size scoring (fallback when no MCap) ────────────────────────────
 function scoreFromAbsoluteSize(crores) {
   if      (crores >= 50000) return 98;
   else if (crores >= 20000) return 95;
@@ -396,37 +433,27 @@ function scoreFromAbsoluteSize(crores) {
   else                      return 32;
 }
 
-// ── FIXED: Enhanced order value extraction ──
-// Catches Indian number formats that orderDetector misses
+// ── Enhanced order value extraction ──────────────────────────────────────────
 function extractOrderValue(title) {
   if (!title) return null;
 
-  // First try orderDetector
   try {
     const detected = orderDetector(title);
     if (detected?.crores && detected.crores > 0) return detected;
   } catch(e) {}
 
-  const t = title;
   const patterns = [
-    // Rs. 123.45 Crore/Crores
     { re: /rs\.?\s*([\d,]+(?:\.\d+)?)\s*(?:crore|crores|cr)\b/i,  isLakh: false },
-    // ₹123 Cr
     { re: /₹\s*([\d,]+(?:\.\d+)?)\s*(?:crore|crores|cr)\b/i,      isLakh: false },
-    // INR 123 Cr
     { re: /inr\s*([\d,]+(?:\.\d+)?)\s*(?:crore|crores|cr)\b/i,    isLakh: false },
-    // 123 Crore (number directly before crore)
     { re: /\b([\d,]+(?:\.\d+)?)\s*(?:crore|crores)\b/i,           isLakh: false },
-    // Rs. 123 Lakh → convert to crores
     { re: /rs\.?\s*([\d,]+(?:\.\d+)?)\s*(?:lakh|lakhs|lac)\b/i,   isLakh: true  },
-    // ₹123 Lakh
     { re: /₹\s*([\d,]+(?:\.\d+)?)\s*(?:lakh|lakhs|lac)\b/i,       isLakh: true  },
-    // 123 lakh
     { re: /\b([\d,]+(?:\.\d+)?)\s*(?:lakh|lakhs|lac)\b/i,         isLakh: true  },
   ];
 
   for (const { re, isLakh } of patterns) {
-    const match = t.match(re);
+    const match = title.match(re);
     if (match) {
       const val = parseFloat(match[1].replace(/,/g, ""));
       if (!isNaN(val) && val > 0) {
@@ -439,12 +466,15 @@ function extractOrderValue(title) {
   return null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Main classifier
+// ─────────────────────────────────────────────────────────────────────────────
 async function analyzeAnnouncement(data) {
   if (!data || !data.title) return null;
 
   const text = data.title.toLowerCase();
 
-  // ── STEP 1: Negative context always wins ──
+  // STEP 1: Negative context always wins
   if (isNegativeContext(text)) {
     return { ...data, type: "NEWS", value: 5, _orderInfo: null, ago: data.ago || "just now" };
   }
@@ -453,7 +483,7 @@ async function analyzeAnnouncement(data) {
   let value      = 10;
   let _orderInfo = null;
 
-  // ── STEP 2: ORDER ALERT ──
+  // STEP 2: ORDER ALERT
   if (
     matchesAny(text, ORDER_POSITIVE) &&
     !matchesAny(text, ORDER_NEGATIVE) &&
@@ -466,12 +496,10 @@ async function analyzeAnnouncement(data) {
       if (text.includes(k.pattern)) { keywordCrores = k.crores; break; }
     }
 
-    // ── FIXED: Use enhanced extraction that handles Indian formats ──
     const orderInfo = extractOrderValue(data.title);
     const crores    = keywordCrores || orderInfo?.crores || null;
 
     if (crores) {
-      // Fetch live MCap, fall back to static
       const mcap = (await getLiveMcap(data.code)) || getMarketCap(data.code) || null;
 
       if (mcap && mcap > 0) {
@@ -497,35 +525,35 @@ async function analyzeAnnouncement(data) {
       value = 30;
     }
 
-  // ── STEP 3: MERGER ──
+  // STEP 3: MERGER
   } else if (matchesAny(text, MERGER_POSITIVE) && !matchesAny(text, MERGER_NEGATIVE)) {
     type = "MERGER"; value = 80;
 
-  // ── STEP 4: CAPEX ──
+  // STEP 4: CAPEX
   } else if (matchesAny(text, CAPEX_POSITIVE) && !matchesAny(text, CAPEX_NEGATIVE)) {
     type = "CAPEX"; value = 60;
 
-  // ── STEP 5: INSIDER BUY ──
+  // STEP 5: INSIDER BUY
   } else if (matchesAny(text, INSIDER_BUY_POSITIVE) && !matchesAny(text, INSIDER_BUY_NEGATIVE)) {
     type = "INSIDER_BUY"; value = insiderScoreBySize(data.title);
 
-  // ── STEP 6: PARTNERSHIP ──
+  // STEP 6: PARTNERSHIP
   } else if (matchesAny(text, PARTNERSHIP_POSITIVE) && !matchesAny(text, PARTNERSHIP_NEGATIVE)) {
     type = "PARTNERSHIP"; value = 40;
 
-  // ── STEP 7: SMART MONEY ──
+  // STEP 7: SMART MONEY
   } else if (matchesAny(text, SMART_MONEY_POSITIVE)) {
     type = "SMART_MONEY"; value = 35;
 
-  // ── STEP 8: FUNDRAISE ──
+  // STEP 8: FUNDRAISE
   } else if (matchesAny(text, FUNDRAISE_POSITIVE)) {
     type = "CORPORATE_ACTION"; value = 25;
 
-  // ── STEP 9: CORPORATE ACTION ──
+  // STEP 9: CORPORATE ACTION
   } else if (matchesAny(text, CORPORATE_ACTION_POSITIVE)) {
     type = "CORPORATE_ACTION"; value = 30;
 
-  // ── STEP 10: RESULT FILING ──
+  // STEP 10: RESULT FILING
   } else {
     const resultData = analyzeResult(data);
     if (resultData) return resultData;

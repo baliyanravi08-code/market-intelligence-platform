@@ -273,12 +273,9 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
-// ─── FIX 2: TICKER MODAL — correct Upstox URLs (verified Apr 2026) ──────────
-
 function TickerModal({ item, onClose }) {
   if (!item) return null;
 
-  // FIX: Updated all Upstox URLs — old /market-quote/indices/ format returns 404
   const getChartConfig = (name) => {
     if (name === "NIFTY 50")   return { type: "upstox", url: "https://upstox.com/stocks-market/indices/nse/nifty-50-index/" };
     if (name === "SENSEX")     return { type: "upstox", url: "https://upstox.com/stocks-market/indices/bse/bse-sensex-index/" };
@@ -527,19 +524,26 @@ function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) 
         const isUp   = a.change24h > 0;
         const isDown = a.change24h < 0;
         const cls    = isUp ? "up" : isDown ? "down" : "flat";
+        // ── FIX: show dash if price not yet loaded, make non-clickable ──────
+        const isDash = !a.price || a.price === "—" || a.price === "$0.0000";
         return (
           <div
-            className="ticker-item secondary ticker-clickable"
+            className={`ticker-item secondary${isDash ? "" : " ticker-clickable"}`}
             key={`asset-${i}`}
-            onClick={() => onTickerClick(a)}
-            title={`Click to view ${a.name} chart`}
+            style={isDash ? { opacity: 0.4, cursor: "default" } : { cursor: "pointer" }}
+            onClick={() => !isDash && onTickerClick(a)}
+            title={isDash ? `${a.name} — loading...` : `Click to view ${a.name} chart`}
           >
             <span className={`ticker-asset-icon ${a.type}`}>{a.icon}</span>
             <span className="ticker-name">{a.name}</span>
-            <span key={a._ts || a.price} className={`ticker-price${a._ts ? " blink" : ""}`}>{a.price}</span>
-            <span className={`ticker-change ${cls}`}>
-              {isUp ? "▲" : isDown ? "▼" : "●"} {Math.abs(a.change24h).toFixed(2)}%
+            <span key={a._ts || a.price} className={`ticker-price${a._ts ? " blink" : ""}`}>
+              {isDash ? "—" : a.price}
             </span>
+            {!isDash && (
+              <span className={`ticker-change ${cls}`}>
+                {isUp ? "▲" : isDown ? "▼" : "●"} {Math.abs(a.change24h).toFixed(2)}%
+              </span>
+            )}
           </div>
         );
       })}
@@ -1295,10 +1299,11 @@ export default function App() {
     };
   }, []);
 
-  // ── FIX 1: Silver + Gold + PI — all via CoinGecko (no Yahoo Finance) ──────
-  // Yahoo Finance blocks browser requests with CORS errors.
-  // CoinGecko free tier supports: silver (XAG), gold (XAU), PI, and more.
-  // Silver CoinGecko ID: "silver"  Gold CoinGecko ID: "gold"
+  // ── FIXED: Gold + Silver + PI via your own server proxy ──────────────────
+  // Root cause: CoinGecko IDs "gold" and "silver" don't exist on free tier.
+  // Fix: fetch from /api/commodities (your Express server fetches metals.live
+  // server-side — no CORS, no rate limits hitting the browser).
+  // PI still fetched from CoinGecko directly (correct ID: "pi-network").
   useEffect(() => {
     const fmt = (n, prefix = "$") => {
       if (!n && n !== 0) return "—";
@@ -1307,51 +1312,52 @@ export default function App() {
       return prefix + n.toFixed(4);
     };
 
-    const fetchOtherAssets = async () => {
+    const fetchCommodities = async () => {
       const updates = {};
+
+      // ── Gold + Silver via your own server (no CORS, reliable) ────────────
       try {
-        // FIX: fetch silver + gold + PI all in one CoinGecko call
-        // "silver" = XAG silver spot, "gold" = XAU gold spot, "pi-network" = PI
+        const res  = await fetch("/api/commodities");
+        const data = await res.json();
+
+        if (data?.GOLD?.price) {
+          updates["GOLD"] = {
+            name: "GOLD", icon: "Au", type: "gold",
+            price:     fmt(data.GOLD.price),
+            change24h: data.GOLD.change24h || 0,
+            _ts: Date.now()
+          };
+        }
+
+        if (data?.SILVER?.price) {
+          updates["SILVER"] = {
+            name: "SILVER", icon: "Ag", type: "silver",
+            price:     fmt(data.SILVER.price),
+            change24h: data.SILVER.change24h || 0,
+            _ts: Date.now()
+          };
+        }
+      } catch (e) {
+        console.warn("Commodities fetch failed:", e.message);
+      }
+
+      // ── PI via CoinGecko (correct ID is "pi-network") ────────────────────
+      try {
         const cgRes = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=pi-network,gold,silver&vs_currencies=usd&include_24hr_change=true",
+          "https://api.coingecko.com/api/v3/simple/price?ids=pi-network&vs_currencies=usd&include_24hr_change=true",
           { headers: { "Accept": "application/json" } }
         );
         const cg = await cgRes.json();
-
-        if (cg?.["pi-network"]) {
+        if (cg?.["pi-network"]?.usd) {
           updates["PI"] = {
             name: "PI", icon: "π", type: "crypto",
-            price: fmt(cg["pi-network"].usd),
+            price:     fmt(cg["pi-network"].usd),
             change24h: cg["pi-network"].usd_24h_change || 0,
             _ts: Date.now()
           };
         }
-
-        // Gold from CoinGecko (XAU spot price in USD per troy oz)
-        if (cg?.["gold"]) {
-          updates["GOLD"] = {
-            name: "GOLD", icon: "Au", type: "gold",
-            price: fmt(cg["gold"].usd),
-            change24h: cg["gold"].usd_24h_change || 0,
-            _ts: Date.now()
-          };
-        }
-
-        // FIX: Silver from CoinGecko — live, updates every 60s, no CORS issues
-        if (cg?.["silver"]) {
-          updates["SILVER"] = {
-            name: "SILVER", icon: "Ag", type: "silver",
-            price: fmt(cg["silver"].usd),
-            change24h: cg["silver"].usd_24h_change || 0,
-            _ts: Date.now()
-          };
-        } else {
-          // Fallback: keep existing silver price if CoinGecko doesn't have it
-          console.warn("Silver not in CoinGecko response — keeping last known price");
-        }
-
       } catch (e) {
-        console.error("CoinGecko fetch error:", e);
+        console.warn("PI fetch failed:", e.message);
       }
 
       if (Object.keys(updates).length > 0) {
@@ -1359,14 +1365,15 @@ export default function App() {
           const map = {};
           prev.forEach(a => { map[a.name] = a; });
           Object.assign(map, updates);
+          // Maintain display order: BTC first, then PI, GOLD, SILVER
           return ["BTC", "PI", "GOLD", "SILVER"].map(n => map[n]).filter(Boolean);
         });
       }
     };
 
-    fetchOtherAssets();
-    // Refresh every 60s — CoinGecko free tier allows ~30 calls/min
-    const interval = setInterval(fetchOtherAssets, 60000);
+    fetchCommodities();
+    // Refresh every 60s
+    const interval = setInterval(fetchCommodities, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -1501,7 +1508,6 @@ export default function App() {
           )}
         </div>
         <GlobalSearch onSelectCompany={setSelectedCompany} />
-        {/* FIX 3: High-visibility theme toggle — pill shape, glowing, impossible to miss */}
         <button
           className="mode-toggle"
           onClick={() => setDarkMode(d => !d)}

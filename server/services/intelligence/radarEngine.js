@@ -2,6 +2,7 @@
  * radarEngine.js
  * Tracks company signals and builds radar scores.
  * Persists to disk via radar.json — no DB dependency.
+ * Attaches credibility score from credibilityEngine to each radar entry.
  */
 
 const fs   = require("fs");
@@ -34,9 +35,9 @@ const SIGNAL_SCORES = {
 function getIndianTime() {
   return new Date().toLocaleString("en-IN", {
     timeZone: "Asia/Kolkata",
-    month: "short", day: "numeric",
-    hour: "numeric", minute: "numeric",
-    hour12: true
+    month:    "short", day: "numeric",
+    hour:     "numeric", minute: "numeric",
+    hour12:   true
   });
 }
 
@@ -80,6 +81,35 @@ function saveToDisk() {
 loadFromDisk();
 setInterval(saveToDisk, 3 * 60 * 1000);
 
+function getCredibility(code) {
+  if (!code) return null;
+  try {
+    const { getCredibilityForScrip } = require("./credibilityEngine");
+    return getCredibilityForScrip(String(code));
+  } catch(e) {
+    return null;
+  }
+}
+
+function getGuidanceSummary(code) {
+  if (!code) return null;
+  try {
+    const { getGuidanceForScrip } = require("./presentationParser");
+    const g = getGuidanceForScrip(String(code));
+    if (!g || !g.hasData) return null;
+    return {
+      quarter:       g.quarter,
+      revenueTargets: g.guidance?.revenue  || [],
+      ebitdaTargets:  g.guidance?.ebitda   || [],
+      capexTargets:   g.guidance?.capex    || [],
+      orderTargets:   g.guidance?.orders   || [],
+      extractedAt:    g.extractedAt
+    };
+  } catch(e) {
+    return null;
+  }
+}
+
 function updateRadar(company, signal) {
   if (!company || !signal) return;
 
@@ -90,18 +120,22 @@ function updateRadar(company, signal) {
 
   if (!radarMap.has(key)) {
     radarMap.set(key, {
-      company:    normalizeName(company),
-      code:       signal.code || null,
-      score:      0,
-      signals:    [],
-      strength:   "WEAK",
-      pdfUrl:     null,
-      time:       null,
-      receivedAt: Date.now(),
-      savedAt:    signal.savedAt || Date.now(),
-      exchanges:  [],
-      _orderInfo: null,
-      mcapRatio:  null,
+      company:          normalizeName(company),
+      code:             signal.code || null,
+      score:            0,
+      signals:          [],
+      strength:         "WEAK",
+      pdfUrl:           null,
+      time:             null,
+      receivedAt:       Date.now(),
+      savedAt:          signal.savedAt || Date.now(),
+      exchanges:        [],
+      _orderInfo:       null,
+      mcapRatio:        null,
+      credibilityScore: null,
+      credibilityLabel: null,
+      credibilityColor: null,
+      guidance:         null
     });
   }
 
@@ -120,13 +154,27 @@ function updateRadar(company, signal) {
     data.signals = data.signals.slice(0, MAX_SIGNAL_HISTORY);
   }
 
-  if (signal._orderInfo)          data._orderInfo = signal._orderInfo;
-  if (signal.mcapRatio !== undefined) data.mcapRatio = signal.mcapRatio;
+  if (signal._orderInfo)              data._orderInfo = signal._orderInfo;
+  if (signal.mcapRatio !== undefined) data.mcapRatio  = signal.mcapRatio;
+
+  // ── Attach credibility score ──────────────────────────────────────────────
+  const cred = getCredibility(data.code);
+  if (cred) {
+    data.credibilityScore = cred.overallScore;
+    data.credibilityLabel = cred.label;
+    data.credibilityColor = cred.color;
+  }
+
+  // ── Attach guidance summary ───────────────────────────────────────────────
+  const guidance = getGuidanceSummary(data.code);
+  if (guidance) {
+    data.guidance = guidance;
+  }
 
   data.score      = Math.min(100, data.score + signalScore);
   data.receivedAt = Date.now();
   data.savedAt    = signal.savedAt || Date.now();
-  data.time       = signal.time || getIndianTime();
+  data.time       = signal.time    || getIndianTime();
   if (signal.pdfUrl) data.pdfUrl = signal.pdfUrl;
 
   if      (data.score >= 70) data.strength = "VERY STRONG";
