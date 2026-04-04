@@ -808,21 +808,55 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   border: 1px solid rgba(0,255,156,0.35);
 }
 
-/* ===== MODE TOGGLE — FIX: was near invisible in dark mode ===== */
+/* ===== MODE TOGGLE — FIX 3: High-visibility pill, impossible to miss ===== */
 .mode-toggle {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 9px; font-weight: 700;
-  padding: 3px 10px; border-radius: 4px; cursor: pointer;
-  background: #041828;
-  color: #4a9abb;           /* FIX: was #2a5070 — contrast ratio < 2:1 */
-  border: 1px solid #1a4a70; /* FIX: was #0c2240 — invisible border */
+  font-size: 10px;
+  font-weight: 700;
+  padding: 5px 14px;
+  border-radius: 20px;          /* pill shape */
+  cursor: pointer;
   letter-spacing: 0.5px;
-  transition: all .2s;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+
+  /* Dark mode — bright cyan pill, glows */
+  background: linear-gradient(135deg, #0a2a48, #062038);
+  color: #00e5ff;               /* bright cyan — high contrast on dark */
+  border: 1.5px solid #00cfff66;
+  box-shadow:
+    0 0 10px rgba(0, 207, 255, 0.2),
+    inset 0 0 8px rgba(0, 207, 255, 0.05);
 }
+
 .mode-toggle:hover {
-  color: #00cfff;
-  background: #062038;
-  border-color: #2a6888;
+  background: linear-gradient(135deg, #0d3a62, #083050);
+  color: #ffffff;
+  border-color: #00cfff;
+  box-shadow:
+    0 0 18px rgba(0, 207, 255, 0.4),
+    inset 0 0 10px rgba(0, 207, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.mode-toggle:active {
+  transform: translateY(0);
+  box-shadow: 0 0 8px rgba(0, 207, 255, 0.2);
+}
+
+/* Light mode toggle — solid blue pill, clearly visible */
+[data-theme="light"] .mode-toggle {
+  background: linear-gradient(135deg, #1565c0, #0d47a1);
+  color: #ffffff;
+  border: 1.5px solid #1976d2;
+  box-shadow: 0 2px 8px rgba(21, 101, 192, 0.4);
+}
+
+[data-theme="light"] .mode-toggle:hover {
+  background: linear-gradient(135deg, #1976d2, #1565c0);
+  box-shadow: 0 4px 16px rgba(21, 101, 192, 0.5);
+  transform: translateY(-1px);
 }
 
 /* ===== GLOBAL SEARCH — FIX: entire block was near invisible in dark mode ===== */

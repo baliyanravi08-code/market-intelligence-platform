@@ -273,15 +273,16 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
-// ─── TICKER MODAL (fixed) ─────────────────────────────────────────────────────
+// ─── FIX 2: TICKER MODAL — correct Upstox URLs (verified Apr 2026) ──────────
 
 function TickerModal({ item, onClose }) {
   if (!item) return null;
 
+  // FIX: Updated all Upstox URLs — old /market-quote/indices/ format returns 404
   const getChartConfig = (name) => {
-    if (name === "NIFTY 50")   return { type: "upstox", url: "https://upstox.com/market-quote/indices/NSE/Nifty%2050/" };
-    if (name === "SENSEX")     return { type: "upstox", url: "https://upstox.com/market-quote/indices/BSE/SENSEX/" };
-    if (name === "BANK NIFTY") return { type: "upstox", url: "https://upstox.com/market-quote/indices/NSE/Nifty%20Bank/" };
+    if (name === "NIFTY 50")   return { type: "upstox", url: "https://upstox.com/stocks-market/indices/nse/nifty-50-index/" };
+    if (name === "SENSEX")     return { type: "upstox", url: "https://upstox.com/stocks-market/indices/bse/bse-sensex-index/" };
+    if (name === "BANK NIFTY") return { type: "upstox", url: "https://upstox.com/stocks-market/indices/nse/nifty-bank-index/" };
     if (name === "BTC")        return { type: "tv", symbol: "BINANCE:BTCUSDT" };
     if (name === "GOLD")       return { type: "tv", symbol: "TVC:GOLD" };
     if (name === "SILVER")     return { type: "tv", symbol: "TVC:SILVER" };
@@ -397,22 +398,24 @@ function TickerModal({ item, onClose }) {
                 >
                   📊 Open Live Chart on Upstox ↗
                 </a>
-                <a
-                  href={"https://www.tradingview.com/chart/?symbol=" + tvIndexSymbol}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={e => e.stopPropagation()}
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    padding: "8px 18px", borderRadius: 5,
-                    background: "#0a2040", color: "#4a9abb",
-                    border: "1px solid #0d3560",
-                    fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700,
-                    textDecoration: "none", cursor: "pointer",
-                  }}
-                >
-                  TradingView ↗
-                </a>
+                {tvIndexSymbol && (
+                  <a
+                    href={"https://www.tradingview.com/chart/?symbol=" + tvIndexSymbol}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      padding: "8px 18px", borderRadius: 5,
+                      background: "#0a2040", color: "#4a9abb",
+                      border: "1px solid #0d3560",
+                      fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700,
+                      textDecoration: "none", cursor: "pointer",
+                    }}
+                  >
+                    TradingView ↗
+                  </a>
+                )}
               </div>
               <div style={{
                 fontSize: 9, color: "#1a4060",
@@ -910,8 +913,6 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
   );
 }
 
-// ─── RADAR PANEL ──────────────────────────────────────────────────────────────
-
 function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
   return (
     <div className="panel radar-panel">
@@ -1244,6 +1245,7 @@ export default function App() {
     return () => clearInterval(t);
   }, [tickerLastOk]);
 
+  // ── BTC WebSocket (Binance) ───────────────────────────────────────────────
   const btcWsRef    = useRef(null);
   const btcReconRef = useRef(null);
   const btc24hRef   = useRef(0);
@@ -1293,6 +1295,10 @@ export default function App() {
     };
   }, []);
 
+  // ── FIX 1: Silver + Gold + PI — all via CoinGecko (no Yahoo Finance) ──────
+  // Yahoo Finance blocks browser requests with CORS errors.
+  // CoinGecko free tier supports: silver (XAG), gold (XAU), PI, and more.
+  // Silver CoinGecko ID: "silver"  Gold CoinGecko ID: "gold"
   useEffect(() => {
     const fmt = (n, prefix = "$") => {
       if (!n && n !== 0) return "—";
@@ -1300,34 +1306,66 @@ export default function App() {
       if (n >= 1)    return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
       return prefix + n.toFixed(4);
     };
+
     const fetchOtherAssets = async () => {
       const updates = {};
       try {
-        const cgRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pi-network,tether-gold&vs_currencies=usd&include_24hr_change=true", { headers: { "Accept": "application/json" } });
+        // FIX: fetch silver + gold + PI all in one CoinGecko call
+        // "silver" = XAG silver spot, "gold" = XAU gold spot, "pi-network" = PI
+        const cgRes = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=pi-network,gold,silver&vs_currencies=usd&include_24hr_change=true",
+          { headers: { "Accept": "application/json" } }
+        );
         const cg = await cgRes.json();
-        if (cg?.["pi-network"])   updates["PI"]   = { name: "PI",   icon: "π",  type: "crypto", price: fmt(cg["pi-network"].usd),    change24h: cg["pi-network"].usd_24h_change    || 0, _ts: Date.now() };
-        if (cg?.["tether-gold"])  updates["GOLD"] = { name: "GOLD", icon: "Au", type: "gold",   price: fmt(cg["tether-gold"].usd),   change24h: cg["tether-gold"].usd_24h_change   || 0, _ts: Date.now() };
-      } catch (e) { console.error("CoinGecko error:", e); }
-      let silverPrice = 33.50, silverChange = 0;
-      try {
-        const r = await fetch("https://query1.finance.yahoo.com/v8/finance/chart/SI%3DF?interval=1d&range=2d", { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" } });
-        const data = await r.json();
-        const meta = data?.chart?.result?.[0]?.meta;
-        if (meta?.regularMarketPrice && meta.regularMarketPrice > 5) {
-          silverPrice = meta.regularMarketPrice;
-          const prev = meta.previousClose || meta.chartPreviousClose;
-          if (prev) silverChange = ((silverPrice - prev) / prev) * 100;
+
+        if (cg?.["pi-network"]) {
+          updates["PI"] = {
+            name: "PI", icon: "π", type: "crypto",
+            price: fmt(cg["pi-network"].usd),
+            change24h: cg["pi-network"].usd_24h_change || 0,
+            _ts: Date.now()
+          };
         }
-      } catch (e) { console.warn("Silver fetch failed:", e.message); }
-      updates["SILVER"] = { name: "SILVER", icon: "Ag", type: "silver", price: fmt(silverPrice), change24h: silverChange, _ts: Date.now() };
-      setCryptoAssets(prev => {
-        const map = {};
-        prev.forEach(a => { map[a.name] = a; });
-        Object.assign(map, updates);
-        return ["BTC", "PI", "GOLD", "SILVER"].map(n => map[n]).filter(Boolean);
-      });
+
+        // Gold from CoinGecko (XAU spot price in USD per troy oz)
+        if (cg?.["gold"]) {
+          updates["GOLD"] = {
+            name: "GOLD", icon: "Au", type: "gold",
+            price: fmt(cg["gold"].usd),
+            change24h: cg["gold"].usd_24h_change || 0,
+            _ts: Date.now()
+          };
+        }
+
+        // FIX: Silver from CoinGecko — live, updates every 60s, no CORS issues
+        if (cg?.["silver"]) {
+          updates["SILVER"] = {
+            name: "SILVER", icon: "Ag", type: "silver",
+            price: fmt(cg["silver"].usd),
+            change24h: cg["silver"].usd_24h_change || 0,
+            _ts: Date.now()
+          };
+        } else {
+          // Fallback: keep existing silver price if CoinGecko doesn't have it
+          console.warn("Silver not in CoinGecko response — keeping last known price");
+        }
+
+      } catch (e) {
+        console.error("CoinGecko fetch error:", e);
+      }
+
+      if (Object.keys(updates).length > 0) {
+        setCryptoAssets(prev => {
+          const map = {};
+          prev.forEach(a => { map[a.name] = a; });
+          Object.assign(map, updates);
+          return ["BTC", "PI", "GOLD", "SILVER"].map(n => map[n]).filter(Boolean);
+        });
+      }
     };
+
     fetchOtherAssets();
+    // Refresh every 60s — CoinGecko free tier allows ~30 calls/min
     const interval = setInterval(fetchOtherAssets, 60000);
     return () => clearInterval(interval);
   }, []);
@@ -1463,12 +1501,13 @@ export default function App() {
           )}
         </div>
         <GlobalSearch onSelectCompany={setSelectedCompany} />
+        {/* FIX 3: High-visibility theme toggle — pill shape, glowing, impossible to miss */}
         <button
           className="mode-toggle"
           onClick={() => setDarkMode(d => !d)}
-          title="Toggle light/dark mode"
+          title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
         >
-          {darkMode ? "☀ Light" : "◑ Dark"}
+          {darkMode ? "☀ Light" : "🌙 Dark"}
         </button>
       </div>
 
