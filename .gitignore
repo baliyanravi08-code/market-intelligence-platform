@@ -2,3 +2,8 @@ node_modules/
 client/node_modules/
 server/data.json
 .env*
+server.js
+database.js
+coordinator.js
+upstoxStream.js
+listeners

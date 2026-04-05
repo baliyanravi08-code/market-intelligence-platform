@@ -15,7 +15,7 @@ const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
 const { startStreamer, stopStreamer } = require("./services/upstoxStream");
-const { commoditiesRoute }  = require("./api/commodities");  // ← ADDED
+const { commoditiesRoute }  = require("./api/commodities");
 
 const {
   getEvents,
@@ -42,10 +42,120 @@ const UPSTOX_API_KEY      = process.env.UPSTOX_API_KEY;
 const UPSTOX_API_SECRET   = process.env.UPSTOX_API_SECRET;
 const UPSTOX_REDIRECT_URI = process.env.UPSTOX_REDIRECT_URI;
 
-const TOKEN_FILE = path.join(__dirname, "data/upstox_token.json");
+const TOKEN_FILE      = path.join(__dirname, "data/upstox_token.json");
+const INSTRUMENT_FILE = path.join(__dirname, "data/upstox_instruments.json");
 
 let upstoxAccessToken = null;
 let upstoxTokenExpiry = null;
+
+// ── Instrument master cache ──────────────────────────────────────────────────
+// Maps NSE symbol → Upstox instrument_key (e.g. RELIANCE → NSE_EQ|INE002A01018)
+let instrumentMap = {};
+
+async function loadInstrumentMaster() {
+  // Try disk cache first (refreshed daily)
+  try {
+    if (fs.existsSync(INSTRUMENT_FILE)) {
+      const cached = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
+      if (cached._ts && Date.now() - cached._ts < 24 * 60 * 60 * 1000) {
+        instrumentMap = cached.map || {};
+        console.log(`✅ Instrument master loaded from cache: ${Object.keys(instrumentMap).length} symbols`);
+        return;
+      }
+    }
+  } catch (e) { /* rebuild */ }
+
+  // Fetch from Upstox instrument master CSV
+  try {
+    console.log("📥 Fetching Upstox instrument master...");
+    const res = await axios.get(
+      "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
+      { timeout: 30_000, responseType: "arraybuffer" }
+    );
+
+    // It's gzipped JSON
+    const zlib = require("zlib");
+    const decompressed = zlib.gunzipSync(Buffer.from(res.data));
+    const instruments  = JSON.parse(decompressed.toString("utf8"));
+
+    // Build symbol → instrument_key map for EQ segment only
+    const map = {};
+    for (const inst of instruments) {
+      if (inst.segment === "NSE_EQ" && inst.instrument_type === "EQ") {
+        map[inst.trading_symbol] = inst.instrument_key;
+      }
+    }
+
+    instrumentMap = map;
+
+    // Save to disk
+    const dir = path.dirname(INSTRUMENT_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(INSTRUMENT_FILE, JSON.stringify({ _ts: Date.now(), map }), "utf8");
+    console.log(`✅ Instrument master fetched & cached: ${Object.keys(map).length} NSE EQ symbols`);
+
+  } catch (e) {
+    console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
+    // Fall back to a minimal hardcoded map so circuit watcher still works partially
+    instrumentMap = {
+      "RELIANCE":    "NSE_EQ|INE002A01018",
+      "TCS":         "NSE_EQ|INE467B01029",
+      "HDFCBANK":    "NSE_EQ|INE040A01034",
+      "INFY":        "NSE_EQ|INE009A01021",
+      "ICICIBANK":   "NSE_EQ|INE090A01021",
+      "SBIN":        "NSE_EQ|INE062A01020",
+      "AXISBANK":    "NSE_EQ|INE238A01034",
+      "KOTAKBANK":   "NSE_EQ|INE237A01028",
+      "LT":          "NSE_EQ|INE018A01030",
+      "WIPRO":       "NSE_EQ|INE075A01022",
+      "BAJFINANCE":  "NSE_EQ|INE296A01024",
+      "BHARTIARTL":  "NSE_EQ|INE397D01024",
+      "HINDUNILVR":  "NSE_EQ|INE030A01027",
+      "NTPC":        "NSE_EQ|INE733E01010",
+      "SUNPHARMA":   "NSE_EQ|INE044A01036",
+      "TATAMOTORS":  "NSE_EQ|INE155A01022",
+      "TATASTEEL":   "NSE_EQ|INE081A01020",
+      "MARUTI":      "NSE_EQ|INE585B01010",
+      "TITAN":       "NSE_EQ|INE280A01028",
+      "ULTRACEMCO":  "NSE_EQ|INE481G01011",
+      "ITC":         "NSE_EQ|INE154A01025",
+      "ADANIENT":    "NSE_EQ|INE423A01024",
+      "ADANIPORTS":  "NSE_EQ|INE742F01042",
+      "POWERGRID":   "NSE_EQ|INE752E01010",
+      "ONGC":        "NSE_EQ|INE213A01029",
+      "JSWSTEEL":    "NSE_EQ|INE019A01038",
+      "HINDALCO":    "NSE_EQ|INE038A01020",
+      "COALINDIA":   "NSE_EQ|INE522F01014",
+      "BPCL":        "NSE_EQ|INE029A01011",
+      "GRASIM":      "NSE_EQ|INE047A01021",
+      "DIVISLAB":    "NSE_EQ|INE361B01024",
+      "DRREDDY":     "NSE_EQ|INE089A01023",
+      "CIPLA":       "NSE_EQ|INE059A01026",
+      "EICHERMOT":   "NSE_EQ|INE066A01021",
+      "HEROMOTOCO":  "NSE_EQ|INE158A01026",
+      "INDUSINDBK":  "NSE_EQ|INE095A01012",
+      "BAJAJ-AUTO":  "NSE_EQ|INE917I01010",
+      "BAJAJFINSV":  "NSE_EQ|INE918I01026",
+      "HCLTECH":     "NSE_EQ|INE860A01027",
+      "TECHM":       "NSE_EQ|INE669C01036",
+      "NESTLEIND":   "NSE_EQ|INE239A01016",
+      "ASIANPAINT":  "NSE_EQ|INE021A01026",
+      "BRITANNIA":   "NSE_EQ|INE216A01030",
+      "TATACONSUM":  "NSE_EQ|INE192A01025",
+      "SBILIFE":     "NSE_EQ|INE123W01016",
+      "HDFCLIFE":    "NSE_EQ|INE795G01014",
+      "HAL":         "NSE_EQ|INE066F01020",
+      "BEL":         "NSE_EQ|INE263A01024",
+      "ZOMATO":      "NSE_EQ|INE758T01015",
+      "RECLTD":      "NSE_EQ|INE020B01018",
+      "PFC":         "NSE_EQ|INE134E01011",
+    };
+    console.log(`⚠️ Using fallback instrument map: ${Object.keys(instrumentMap).length} symbols`);
+  }
+}
+
+// Expose instrument map for circuit watcher
+function getInstrumentMap() { return instrumentMap; }
 
 function loadToken() {
   if (process.env.UPSTOX_ANALYTICS_TOKEN) {
@@ -88,6 +198,9 @@ function clearToken() {
 }
 
 loadToken();
+
+// Load instrument master on startup (async, non-blocking)
+loadInstrumentMaster().catch(() => {});
 
 if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
   setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
@@ -216,13 +329,55 @@ app.get("/api/market", async (req, res) => {
 });
 
 // ── /api/commodities ─────────────────────────────────────────────────────────
-app.get("/api/commodities", commoditiesRoute);  // ← ADDED
+app.get("/api/commodities", commoditiesRoute);
 
 // ── /health ──────────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     upstox: (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) ? "connected" : "disconnected"
+  });
+});
+
+// ── /api/test-circuit ── DIAGNOSTIC: test Upstox equity quote access ─────────
+app.get("/api/test-circuit", async (req, res) => {
+  const symbol = req.query.symbol || "RELIANCE";
+  const ikey   = instrumentMap[symbol];
+
+  if (!ikey) {
+    return res.json({
+      error: `Symbol ${symbol} not in instrument map`,
+      mapSize: Object.keys(instrumentMap).length,
+      sample: Object.entries(instrumentMap).slice(0, 5),
+    });
+  }
+
+  try {
+    const r = await axios.get(
+      "https://api.upstox.com/v2/market-quote/quotes",
+      {
+        params:  { instrument_key: ikey },
+        headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
+        timeout: 10_000,
+      }
+    );
+    res.json({ symbol, instrument_key: ikey, response: r.data });
+  } catch (e) {
+    res.json({
+      symbol,
+      instrument_key: ikey,
+      error:  e.message,
+      status: e.response?.status,
+      body:   e.response?.data,
+    });
+  }
+});
+
+// ── /api/test-instrument-map ── check map loaded correctly ───────────────────
+app.get("/api/test-instrument-map", (req, res) => {
+  res.json({
+    total: Object.keys(instrumentMap).length,
+    sample: Object.entries(instrumentMap).slice(0, 10),
   });
 });
 
@@ -362,7 +517,7 @@ app.get("/api/orderbook/:code", (req, res) => {
 app.get("/api/company/:code", async (req, res) => {
   try {
     const code   = req.params.code;
-    const nseSym = req.query.nse || null;
+    const nsySym = req.query.nse || null;
 
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     const obPath   = path.join(__dirname, "data/orderBookHistory.json");
@@ -412,7 +567,7 @@ app.get("/api/company/:code", async (req, res) => {
     }
 
     const { getFullScreenerData } = require("./services/data/liveMcap");
-    const screener = await getFullScreenerData(code, nseSym);
+    const screener = await getFullScreenerData(code, nsySym);
 
     const profile = {
       ...(screener?.profile || {}),
@@ -606,7 +761,7 @@ app.use((req, res, next) => {
 
 startBSEListener(io);
 startNSEDealsListener(io);
-startCoordinator(io, () => upstoxAccessToken);
+startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
 
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
@@ -618,3 +773,5 @@ server.listen(PORT, () => {
     console.log("WARNING: UPSTOX_API_KEY not set");
   }
 });
+
+module.exports = { getInstrumentMap };

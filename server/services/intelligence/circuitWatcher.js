@@ -4,8 +4,7 @@
  *
  * Monitors F&O stocks for proximity to upper/lower circuit limits.
  * Data source: Upstox REST /v2/market-quote/quotes (works on Render — no IP blocking).
- * prevClose = ohlc.close from Upstox response.
- * Circuit bands: ±20% default, ±10% narrow-band.
+ * Instrument keys resolved via instrument master map injected from server.js.
  */
 
 "use strict";
@@ -13,15 +12,14 @@
 const axios        = require("axios");
 const EventEmitter = require("events");
 
-// ─── Config ──────────────────────────────────────────────────────────────────
+// ─── Config ───────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS    = 30_000;
 const COOLDOWN_MS         = 30 * 60 * 1000;
 const DEFAULT_CIRCUIT_PCT = 20;
 const NARROW_CIRCUIT_PCT  = 10;
 const UPSTOX_BATCH_SIZE   = 500;
 
-// NSE F&O stock symbols — top liquid names
-// Add/remove as needed. Full list from NSE F&O page.
+// NSE F&O stock symbols (trading symbols only — instrument keys resolved via map)
 const FNO_SYMBOLS = [
   "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","SBIN","BAJFINANCE",
   "BHARTIARTL","KOTAKBANK","LT","ASIANPAINT","AXISBANK","MARUTI","TITAN",
@@ -58,18 +56,19 @@ const FNO_SYMBOLS = [
 const NARROW_BAND_SYMBOLS = new Set(["YESBANK", "RBLBANK", "BANDHANBNK"]);
 const TIER_THRESHOLDS     = { LOCKED: 0, CRITICAL: 1, WARNING: 2, WATCH: 5 };
 
-// ─── State ───────────────────────────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────────────────────────
 const cooldownMap   = new Map();
 const lockedSymbols = new Set();
 
-let ioRef     = null;
-let pollTimer = null;
-let isRunning = false;
-let getToken  = () => null;
+let ioRef      = null;
+let pollTimer  = null;
+let isRunning  = false;
+let getToken   = () => null;
+let getInstMap = () => ({});
 
 const emitter = new EventEmitter();
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function getCircuitLimits(symbol, prevClose) {
   const pct = NARROW_BAND_SYMBOLS.has(symbol) ? NARROW_CIRCUIT_PCT : DEFAULT_CIRCUIT_PCT;
   return {
@@ -107,24 +106,50 @@ function isOnCooldown(symbol) {
 
 // ─── Poll loop ────────────────────────────────────────────────────────────────
 async function runPoll() {
-  const token = getToken();
+  const token   = getToken();
+  const instMap = getInstMap();
+
   if (!token) {
     console.warn("⚠️ Circuit watcher: no Upstox token — skipping poll");
     return;
   }
 
-  try {
-    const keys = FNO_SYMBOLS.map((s) => `NSE:${s}`);
-    const chunks = [];
-    for (let i = 0; i < keys.length; i += UPSTOX_BATCH_SIZE) {
-      chunks.push(keys.slice(i, i + UPSTOX_BATCH_SIZE));
-    }
+  if (!instMap || Object.keys(instMap).length === 0) {
+    console.warn("⚠️ Circuit watcher: instrument map not ready yet — skipping poll");
+    return;
+  }
 
-    const stocks = [];
+  // Resolve trading symbols → instrument keys, skip unknown symbols
+  const symbolToKey = {};
+  for (const sym of FNO_SYMBOLS) {
+    const key = instMap[sym];
+    if (key) symbolToKey[sym] = key;
+  }
 
-    for (const chunk of chunks) {
+  const instrumentKeys = Object.values(symbolToKey);
+  if (instrumentKeys.length === 0) {
+    console.warn("⚠️ Circuit watcher: no valid instrument keys resolved — check instrument map");
+    return;
+  }
+
+  // Reverse map: instrument_key → trading symbol
+  const keyToSymbol = {};
+  for (const [sym, key] of Object.entries(symbolToKey)) {
+    keyToSymbol[key] = sym;
+  }
+
+  // Batch into chunks of 500
+  const chunks = [];
+  for (let i = 0; i < instrumentKeys.length; i += UPSTOX_BATCH_SIZE) {
+    chunks.push(instrumentKeys.slice(i, i + UPSTOX_BATCH_SIZE));
+  }
+
+  const stocks = [];
+
+  for (const chunk of chunks) {
+    try {
       const res = await axios.get(
-        "https://api.upstox.com/v2/market-quote/ltp",
+        "https://api.upstox.com/v2/market-quote/quotes",
         {
           params:  { instrument_key: chunk.join(",") },
           headers: { Authorization: "Bearer " + token, Accept: "application/json" },
@@ -134,7 +159,7 @@ async function runPoll() {
 
       const data = res.data?.data || {};
       for (const [key, quote] of Object.entries(data)) {
-        const symbol    = key.split(/[|:]/).pop();
+        const symbol    = keyToSymbol[key] || key.split(/[|:]/).pop();
         const ltp       = parseFloat(quote.last_price || 0);
         const prevClose = parseFloat(quote.ohlc?.close || 0);
         if (ltp > 0 && prevClose > 0) {
@@ -149,59 +174,59 @@ async function runPoll() {
           });
         }
       }
-    }
-
-    console.log(`🔔 Circuit watcher: checked ${stocks.length} stocks via Upstox`);
-
-    const alerts = [];
-    for (const stock of stocks) {
-      const { symbol, ltp, prevClose, change, changePercent } = stock;
-      if (isOnCooldown(symbol)) continue;
-
-      const { upper, lower, bandPct } = getCircuitLimits(symbol, prevClose);
-      const { side, distPct, limit }  = circuitProximity(ltp, upper, lower);
-      const tier = getTier(distPct);
-
-      if (!tier) { lockedSymbols.delete(symbol); continue; }
-      if (tier === "LOCKED" && lockedSymbols.has(symbol)) continue;
-
-      alerts.push({
-        symbol, ltp, prevClose,
-        circuitLimit: limit, bandPct, distPct, side, tier,
-        action:        getActionTag(side, tier),
-        change, changePercent,
-        tradedValue:   0,
-        timestamp:     new Date().toISOString(),
-        _ts:           Date.now(),
-      });
-
-      cooldownMap.set(symbol, Date.now());
-      if (tier === "LOCKED") lockedSymbols.add(symbol);
-      else lockedSymbols.delete(symbol);
-    }
-
-    if (!alerts.length) return;
-    console.log(`⚡ ${alerts.length} circuit alert(s) fired`);
-    if (ioRef) ioRef.emit("circuit-alerts", alerts);
-    emitter.emit("circuit-alerts", alerts);
-
-   } catch (err) {
+    } catch (err) {
       if (err.response?.status === 401) {
         console.error("❌ Circuit watcher: Upstox token expired — reconnect via /auth/upstox");
-      } else {
-        console.error("❌ Circuit watcher poll error:", err.message);
-        console.error("❌ Upstox response body:", JSON.stringify(err.response?.data));
-        console.error("❌ Upstox status:", err.response?.status);
+        return;
       }
+      console.error("❌ Circuit watcher poll error:", err.message);
+      console.error("❌ Upstox response:", JSON.stringify(err.response?.data));
+      continue;
     }
+  }
+
+  console.log(`🔔 Circuit watcher: checked ${stocks.length} stocks via Upstox`);
+
+  const alerts = [];
+  for (const stock of stocks) {
+    const { symbol, ltp, prevClose, change, changePercent } = stock;
+    if (isOnCooldown(symbol)) continue;
+
+    const { upper, lower, bandPct } = getCircuitLimits(symbol, prevClose);
+    const { side, distPct, limit }  = circuitProximity(ltp, upper, lower);
+    const tier = getTier(distPct);
+
+    if (!tier) { lockedSymbols.delete(symbol); continue; }
+    if (tier === "LOCKED" && lockedSymbols.has(symbol)) continue;
+
+    alerts.push({
+      symbol, ltp, prevClose,
+      circuitLimit: limit, bandPct, distPct, side, tier,
+      action:        getActionTag(side, tier),
+      change, changePercent,
+      tradedValue:   0,
+      timestamp:     new Date().toISOString(),
+      _ts:           Date.now(),
+    });
+
+    cooldownMap.set(symbol, Date.now());
+    if (tier === "LOCKED") lockedSymbols.add(symbol);
+    else lockedSymbols.delete(symbol);
+  }
+
+  if (!alerts.length) return;
+  console.log(`⚡ ${alerts.length} circuit alert(s) fired`);
+  if (ioRef) ioRef.emit("circuit-alerts", alerts);
+  emitter.emit("circuit-alerts", alerts);
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
-function startCircuitWatcher(io, tokenGetter) {
+function startCircuitWatcher(io, tokenGetter, instrumentMapGetter) {
   if (isRunning) return;
   isRunning = true;
   ioRef     = io;
-  if (tokenGetter) getToken = tokenGetter;
+  if (tokenGetter)         getToken   = tokenGetter;
+  if (instrumentMapGetter) getInstMap = instrumentMapGetter;
   console.log("🔔 Circuit watcher started — polling Upstox every 30s");
   runPoll();
   pollTimer = setInterval(runPoll, POLL_INTERVAL_MS);
@@ -212,7 +237,7 @@ function stopCircuitWatcher() {
   isRunning = false;
 }
 
-function onCircuitAlert(cb)                { emitter.on("circuit-alerts", cb); }
-function registerNarrowBandSymbols(syms)   { syms.forEach((s) => NARROW_BAND_SYMBOLS.add(s)); }
+function onCircuitAlert(cb)              { emitter.on("circuit-alerts", cb); }
+function registerNarrowBandSymbols(syms) { syms.forEach((s) => NARROW_BAND_SYMBOLS.add(s)); }
 
 module.exports = { startCircuitWatcher, stopCircuitWatcher, onCircuitAlert, registerNarrowBandSymbols };

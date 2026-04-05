@@ -192,7 +192,7 @@ function getStored() {
  * tokenGetter: function that returns current upstoxAccessToken from server.js
  * Pass as: () => upstoxAccessToken
  */
-function startCoordinator(io, tokenGetter) {
+function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   console.log("🚀 Coordinator Running");
 
   setInterval(() => {
@@ -207,7 +207,7 @@ function startCoordinator(io, tokenGetter) {
   });
 
   // Circuit watcher — Upstox source, works everywhere
-  startCircuitWatcher(io, tokenGetter);
+  startCircuitWatcher(io, tokenGetter, instrumentMapGetter);
   onCircuitAlert((alerts) => {
     persistCircuitAlerts(alerts);
     console.log(`💾 Persisted ${alerts.length} circuit alert(s) to disk`);
