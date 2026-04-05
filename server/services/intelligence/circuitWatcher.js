@@ -124,9 +124,9 @@ async function runPoll() {
 
     for (const chunk of chunks) {
       const res = await axios.get(
-        "https://api.upstox.com/v2/market-quote/quotes?instrument_key=" +
-          encodeURIComponent(chunk.join(",")),
+        "https://api.upstox.com/v2/market-quote/quotes",
         {
+          params:  { instrument_key: chunk.join(",") },
           headers: { Authorization: "Bearer " + token, Accept: "application/json" },
           timeout: 15_000,
         }
