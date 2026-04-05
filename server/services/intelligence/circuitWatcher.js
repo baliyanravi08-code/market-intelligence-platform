@@ -185,13 +185,15 @@ async function runPoll() {
     if (ioRef) ioRef.emit("circuit-alerts", alerts);
     emitter.emit("circuit-alerts", alerts);
 
-  } catch (err) {
-    if (err.response?.status === 401) {
-      console.error("❌ Circuit watcher: Upstox token expired — reconnect via /auth/upstox");
-    } else {
-      console.error("❌ Circuit watcher poll error:", err.message);
+   } catch (err) {
+      if (err.response?.status === 401) {
+        console.error("❌ Circuit watcher: Upstox token expired — reconnect via /auth/upstox");
+      } else {
+        console.error("❌ Circuit watcher poll error:", err.message);
+        console.error("❌ Upstox response body:", JSON.stringify(err.response?.data));
+        console.error("❌ Upstox status:", err.response?.status);
+      }
     }
-  }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
