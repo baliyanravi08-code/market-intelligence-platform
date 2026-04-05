@@ -114,7 +114,7 @@ async function runPoll() {
   }
 
   try {
-    const keys   = FNO_SYMBOLS.map((s) => `NSE_EQ|${s}`);
+    const keys = FNO_SYMBOLS.map((s) => `NSE:${s}`);
     const chunks = [];
     for (let i = 0; i < keys.length; i += UPSTOX_BATCH_SIZE) {
       chunks.push(keys.slice(i, i + UPSTOX_BATCH_SIZE));
@@ -124,7 +124,7 @@ async function runPoll() {
 
     for (const chunk of chunks) {
       const res = await axios.get(
-        "https://api.upstox.com/v2/market-quote/quotes",
+        "https://api.upstox.com/v2/market-quote/ltp",
         {
           params:  { instrument_key: chunk.join(",") },
           headers: { Authorization: "Bearer " + token, Accept: "application/json" },
