@@ -1,13 +1,10 @@
 /**
  * coordinator.js
- * Persists radar, orderBook, sectors, opportunities, guidance, credibility,
- * delivery spikes, and circuit alerts to disk.
- * Sends stored data to new clients on connect.
+ * Location: server/coordinator.js
  *
- * UPDATED: 06 Apr 2026
- * - Added circuitWatcher integration
- * - Persists circuit alerts to disk
- * - Sends stored circuit alerts to new clients on connect
+ * UPDATED: 06 Apr 2026 (Session 2 patch)
+ * - circuitWatcher now receives Upstox token getter → works on Render
+ * - deliveryAnalyzer unchanged (NSE-only, blocked on cloud — graceful fallback)
  */
 
 const fs   = require("fs");
@@ -191,23 +188,26 @@ function getStored() {
 
 // ── Start coordinator + all intelligence services ─────────────────────────────
 
-function startCoordinator(io) {
+/**
+ * tokenGetter: function that returns current upstoxAccessToken from server.js
+ * Pass as: () => upstoxAccessToken
+ */
+function startCoordinator(io, tokenGetter) {
   console.log("🚀 Coordinator Running");
 
-  // Heartbeat
   setInterval(() => {
     io.emit("system_event", { type: "heartbeat", time: new Date().toISOString() });
   }, 30000);
 
-  // Delivery analyzer
+  // Delivery analyzer — NSE source, graceful fallback when blocked on cloud
   startDeliveryAnalyzer(io);
   onDeliverySpike((spikes) => {
     persistDeliverySpike(spikes);
     console.log(`💾 Persisted ${spikes.length} delivery spike(s) to disk`);
   });
 
-  // Circuit watcher
-  startCircuitWatcher(io);
+  // Circuit watcher — Upstox source, works everywhere
+  startCircuitWatcher(io, tokenGetter);
   onCircuitAlert((alerts) => {
     persistCircuitAlerts(alerts);
     console.log(`💾 Persisted ${alerts.length} circuit alert(s) to disk`);

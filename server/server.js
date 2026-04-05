@@ -606,7 +606,7 @@ app.use((req, res, next) => {
 
 startBSEListener(io);
 startNSEDealsListener(io);
-startCoordinator(io);
+startCoordinator(io, () => upstoxAccessToken);
 
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {

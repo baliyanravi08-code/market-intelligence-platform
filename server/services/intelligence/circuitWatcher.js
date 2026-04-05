@@ -3,34 +3,60 @@
  * Location: server/services/intelligence/circuitWatcher.js
  *
  * Monitors F&O stocks for proximity to upper/lower circuit limits.
- * Self-contained — polls NSE F&O endpoint directly (same source as deliveryAnalyzer).
- * Derives circuit bands from previousClose field in NSE response.
- * Emits `circuit-alerts` via Socket.io + internal EventEmitter (for compositeScoreEngine).
+ * Data source: Upstox REST /v2/market-quote/quotes (works on Render — no IP blocking).
+ * prevClose = ohlc.close from Upstox response.
+ * Circuit bands: ±20% default, ±10% narrow-band.
  */
 
 "use strict";
 
-const https        = require("https");
+const axios        = require("axios");
 const EventEmitter = require("events");
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-const POLL_INTERVAL_MS    = 30_000;          // every 30s
-const COOLDOWN_MS         = 30 * 60 * 1000;  // same stock max once per 30 min
-const MIN_TRADED_VALUE    = 5_00_00_000;     // ₹5 Cr minimum
-const DEFAULT_CIRCUIT_PCT = 20;              // ±20% from prevClose (standard NSE)
-const NARROW_CIRCUIT_PCT  = 10;              // ±10% for narrow-band stocks
+const POLL_INTERVAL_MS    = 30_000;
+const COOLDOWN_MS         = 30 * 60 * 1000;
+const DEFAULT_CIRCUIT_PCT = 20;
+const NARROW_CIRCUIT_PCT  = 10;
+const UPSTOX_BATCH_SIZE   = 500;
 
-// Add NSE symbols known to be in ±10% category here
-const NARROW_BAND_SYMBOLS = new Set([
-  // e.g. 'YESBANK', 'RBLBANK'
-]);
+// NSE F&O stock symbols — top liquid names
+// Add/remove as needed. Full list from NSE F&O page.
+const FNO_SYMBOLS = [
+  "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","SBIN","BAJFINANCE",
+  "BHARTIARTL","KOTAKBANK","LT","ASIANPAINT","AXISBANK","MARUTI","TITAN",
+  "SUNPHARMA","ULTRACEMCO","WIPRO","NESTLEIND","POWERGRID","NTPC","TECHM",
+  "HCLTECH","ONGC","JSWSTEEL","TATASTEEL","COALINDIA","BPCL","GRASIM","DIVISLAB",
+  "BRITANNIA","CIPLA","DRREDDY","EICHERMOT","APOLLOHOSP","BAJAJ-AUTO","BAJAJFINSV",
+  "HEROMOTOCO","HINDALCO","INDUSINDBK","ITC","M&M","SBILIFE","HDFCLIFE",
+  "TATACONSUM","ADANIENT","ADANIPORTS","LTIM","UPL","VEDL",
+  "BANKBARODA","CANBK","PNB","UNIONBANK","FEDERALBNK","IDFCFIRSTB","RBLBANK",
+  "YESBANK","BANDHANBNK","AUBANK","CHOLAFIN","MUTHOOTFIN","MANAPPURAM",
+  "RECLTD","PFC","IRFC","HUDCO","NHPC","SJVN",
+  "ADANIPOWER","ADANIGREEN","TATAPOWER","CESC","TORNTPOWER","JSWENERGY",
+  "SUZLON","INOXWIND",
+  "HAL","BEL","BHEL","COCHINSHIP","MAZDOCK","GRSE","BEML","DATAPATTNS",
+  "MTAR","RVNL","RAILTEL","IRCTC","TITAGARH",
+  "TATAMOTORS","M&MFIN","ASHOKLEY","BALKRISIND","EXIDEIND","MOTHERSON","BOSCHLTD",
+  "ABB","SIEMENS","HAVELLS","POLYCAB","CGPOWER",
+  "AIAENG","GRINDWELL","CARBORUNIV","SCHAEFFLER","TIMKEN","SKF",
+  "PIDILITIND","ASTRAL","AARTIIND","DEEPAKNITR","GNFC","CHAMBLFERT",
+  "COROMANDEL","PIIND","RALLIS","SUMICHEM",
+  "ZOMATO","NYKAA","PAYTM","POLICYBZR","DELHIVERY",
+  "KEC","KALPATPOWR","THERMAX","APLAPOLLO",
+  "GODREJCP","DABUR","MARICO","EMAMILTD","VBL","RADICO","MCDOWELL-N",
+  "ZYDUSLIFE","LUPIN","ALKEM","TORNTPHARM","IPCALAB","LAURUSLABS",
+  "GRANULES","BIOCON","ABBOTINDIA",
+  "OBEROIRLTY","PHOENIXLTD","DLF","GODREJPROP","PRESTIGE","BRIGADE","SOBHA",
+  "MCX","BSE","CDSL","CAMS","ANGELONE","MOFSL","360ONE",
+  "HDFCAMC","NIPPONLIFE","UTIAMC","ICICIGI","STARHEALTH",
+  "SAIL","NMDC","MOIL","GMRINFRA","CONCOR","BLUEDART",
+  "ZEEL","SUNTV","PVRINOX",
+  "HFCL","STLTECH","TATACOMM","INDIAMART","NAUKRI","AFFLE","TANLA",
+];
 
-// NSE F&O stocks endpoint (same as deliveryAnalyzer — no auth needed)
-const NSE_FNO_URL =
-  "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O";
-
-// Alert tiers — distance from circuit as % of LTP
-const TIER_THRESHOLDS = { LOCKED: 0, CRITICAL: 1, WARNING: 2, WATCH: 5 };
+const NARROW_BAND_SYMBOLS = new Set(["YESBANK", "RBLBANK", "BANDHANBNK"]);
+const TIER_THRESHOLDS     = { LOCKED: 0, CRITICAL: 1, WARNING: 2, WATCH: 5 };
 
 // ─── State ───────────────────────────────────────────────────────────────────
 const cooldownMap   = new Map();
@@ -39,38 +65,13 @@ const lockedSymbols = new Set();
 let ioRef     = null;
 let pollTimer = null;
 let isRunning = false;
+let getToken  = () => null;
 
 const emitter = new EventEmitter();
 
-// ─── NSE HTTP helper (same pattern as deliveryAnalyzer) ──────────────────────
-function nseGet(url) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120",
-        "Accept":          "application/json, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer":         "https://www.nseindia.com/",
-        "Connection":      "keep-alive",
-      },
-    };
-    https.get(url, options, (res) => {
-      let body = "";
-      res.on("data", (chunk) => (body += chunk));
-      res.on("end", () => {
-        try { resolve(JSON.parse(body)); }
-        catch { reject(new Error(`NSE parse error at ${url}`)); }
-      });
-    }).on("error", reject);
-  });
-}
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function getCircuitLimits(symbol, prevClose) {
-  const pct = NARROW_BAND_SYMBOLS.has(symbol)
-    ? NARROW_CIRCUIT_PCT
-    : DEFAULT_CIRCUIT_PCT;
+  const pct = NARROW_BAND_SYMBOLS.has(symbol) ? NARROW_CIRCUIT_PCT : DEFAULT_CIRCUIT_PCT;
   return {
     upper:   +(prevClose * (1 + pct / 100)).toFixed(2),
     lower:   +(prevClose * (1 - pct / 100)).toFixed(2),
@@ -81,9 +82,7 @@ function getCircuitLimits(symbol, prevClose) {
 function circuitProximity(ltp, upper, lower) {
   const distUpper = ((upper - ltp) / ltp) * 100;
   const distLower = ((ltp - lower) / ltp) * 100;
-  if (distUpper <= distLower) {
-    return { side: "UPPER", distPct: +distUpper.toFixed(2), limit: upper };
-  }
+  if (distUpper <= distLower) return { side: "UPPER", distPct: +distUpper.toFixed(2), limit: upper };
   return { side: "LOWER", distPct: +distLower.toFixed(2), limit: lower };
 }
 
@@ -106,104 +105,102 @@ function isOnCooldown(symbol) {
   return last && Date.now() - last < COOLDOWN_MS;
 }
 
-// ─── Fetch + parse NSE F&O data ───────────────────────────────────────────────
-async function fetchStockData() {
-  const data = await nseGet(NSE_FNO_URL);
-
-  if (!data?.data || !Array.isArray(data.data)) {
-    throw new Error("Unexpected NSE response format");
-  }
-
-  return data.data
-    .filter((s) => s.symbol && s.lastPrice != null && s.previousClose != null)
-    .map((s) => ({
-      symbol:        s.symbol,
-      ltp:           parseFloat(s.lastPrice       || 0),
-      prevClose:     parseFloat(s.previousClose   || 0),
-      tradedValue:   parseFloat(s.totalTradedValue || 0) * 1_00_000,
-      change:        parseFloat(s.change          || 0),
-      changePercent: parseFloat(s.pChange         || 0),
-    }))
-    .filter(
-      (s) =>
-        s.ltp > 0 &&
-        s.prevClose > 0 &&
-        s.tradedValue >= MIN_TRADED_VALUE
-    );
-}
-
-// ─── Core analysis ────────────────────────────────────────────────────────────
-function analyzeStocks(stocks) {
-  const alerts = [];
-
-  for (const stock of stocks) {
-    const { symbol, ltp, prevClose, tradedValue, change, changePercent } = stock;
-
-    if (isOnCooldown(symbol)) continue;
-
-    const { upper, lower, bandPct } = getCircuitLimits(symbol, prevClose);
-    const { side, distPct, limit }  = circuitProximity(ltp, upper, lower);
-    const tier = getTier(distPct);
-
-    if (!tier) {
-      lockedSymbols.delete(symbol);
-      continue;
-    }
-
-    if (tier === "LOCKED" && lockedSymbols.has(symbol)) continue;
-
-    alerts.push({
-      symbol,
-      ltp,
-      prevClose,
-      circuitLimit:  limit,
-      bandPct,
-      distPct,
-      side,
-      tier,
-      action:        getActionTag(side, tier),
-      change,
-      changePercent,
-      tradedValue,
-      timestamp:     new Date().toISOString(),
-      _ts:           Date.now(),
-    });
-
-    cooldownMap.set(symbol, Date.now());
-    if (tier === "LOCKED") lockedSymbols.add(symbol);
-    else lockedSymbols.delete(symbol);
-  }
-
-  return alerts;
-}
-
 // ─── Poll loop ────────────────────────────────────────────────────────────────
 async function runPoll() {
+  const token = getToken();
+  if (!token) {
+    console.warn("⚠️ Circuit watcher: no Upstox token — skipping poll");
+    return;
+  }
+
   try {
-    const stocks = await fetchStockData();
-    console.log(`🔔 Circuit watcher: checked ${stocks.length} stocks`);
+    const keys   = FNO_SYMBOLS.map((s) => `NSE_EQ|${s}`);
+    const chunks = [];
+    for (let i = 0; i < keys.length; i += UPSTOX_BATCH_SIZE) {
+      chunks.push(keys.slice(i, i + UPSTOX_BATCH_SIZE));
+    }
 
-    const alerts = analyzeStocks(stocks);
+    const stocks = [];
+
+    for (const chunk of chunks) {
+      const res = await axios.get(
+        "https://api.upstox.com/v2/market-quote/quotes?instrument_key=" +
+          encodeURIComponent(chunk.join(",")),
+        {
+          headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+          timeout: 15_000,
+        }
+      );
+
+      const data = res.data?.data || {};
+      for (const [key, quote] of Object.entries(data)) {
+        const symbol    = key.split(/[|:]/).pop();
+        const ltp       = parseFloat(quote.last_price || 0);
+        const prevClose = parseFloat(quote.ohlc?.close || 0);
+        if (ltp > 0 && prevClose > 0) {
+          const change    = ltp - prevClose;
+          const changePct = (change / prevClose) * 100;
+          stocks.push({
+            symbol,
+            ltp,
+            prevClose,
+            change:        +change.toFixed(2),
+            changePercent: +changePct.toFixed(2),
+          });
+        }
+      }
+    }
+
+    console.log(`🔔 Circuit watcher: checked ${stocks.length} stocks via Upstox`);
+
+    const alerts = [];
+    for (const stock of stocks) {
+      const { symbol, ltp, prevClose, change, changePercent } = stock;
+      if (isOnCooldown(symbol)) continue;
+
+      const { upper, lower, bandPct } = getCircuitLimits(symbol, prevClose);
+      const { side, distPct, limit }  = circuitProximity(ltp, upper, lower);
+      const tier = getTier(distPct);
+
+      if (!tier) { lockedSymbols.delete(symbol); continue; }
+      if (tier === "LOCKED" && lockedSymbols.has(symbol)) continue;
+
+      alerts.push({
+        symbol, ltp, prevClose,
+        circuitLimit: limit, bandPct, distPct, side, tier,
+        action:        getActionTag(side, tier),
+        change, changePercent,
+        tradedValue:   0,
+        timestamp:     new Date().toISOString(),
+        _ts:           Date.now(),
+      });
+
+      cooldownMap.set(symbol, Date.now());
+      if (tier === "LOCKED") lockedSymbols.add(symbol);
+      else lockedSymbols.delete(symbol);
+    }
+
     if (!alerts.length) return;
-
     console.log(`⚡ ${alerts.length} circuit alert(s) fired`);
-
     if (ioRef) ioRef.emit("circuit-alerts", alerts);
     emitter.emit("circuit-alerts", alerts);
 
   } catch (err) {
-    console.error("❌ Circuit watcher poll error:", err.message);
+    if (err.response?.status === 401) {
+      console.error("❌ Circuit watcher: Upstox token expired — reconnect via /auth/upstox");
+    } else {
+      console.error("❌ Circuit watcher poll error:", err.message);
+    }
   }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
-function startCircuitWatcher(io) {
+function startCircuitWatcher(io, tokenGetter) {
   if (isRunning) return;
   isRunning = true;
   ioRef     = io;
-
-  console.log("🔔 Circuit watcher started — polling NSE every 30s");
-
+  if (tokenGetter) getToken = tokenGetter;
+  console.log("🔔 Circuit watcher started — polling Upstox every 30s");
   runPoll();
   pollTimer = setInterval(runPoll, POLL_INTERVAL_MS);
 }
@@ -211,21 +208,9 @@ function startCircuitWatcher(io) {
 function stopCircuitWatcher() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   isRunning = false;
-  console.log("🔔 Circuit watcher stopped");
 }
 
-function onCircuitAlert(cb) {
-  emitter.on("circuit-alerts", cb);
-}
+function onCircuitAlert(cb)                { emitter.on("circuit-alerts", cb); }
+function registerNarrowBandSymbols(syms)   { syms.forEach((s) => NARROW_BAND_SYMBOLS.add(s)); }
 
-function registerNarrowBandSymbols(symbols = []) {
-  symbols.forEach((s) => NARROW_BAND_SYMBOLS.add(s));
-  console.log(`[circuitWatcher] Registered ${symbols.length} narrow-band symbols`);
-}
-
-module.exports = {
-  startCircuitWatcher,
-  stopCircuitWatcher,
-  onCircuitAlert,
-  registerNarrowBandSymbols,
-};
+module.exports = { startCircuitWatcher, stopCircuitWatcher, onCircuitAlert, registerNarrowBandSymbols };
