@@ -1,3 +1,5 @@
+"use strict";
+
 const axios = require("axios");
 const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 const { updateRadar, getRadar } = require("../intelligence/radarEngine");
@@ -7,42 +9,55 @@ const { persistRadar } = require("../../coordinator");
 let ioRef = null;
 const seen = new Set();
 
-/* ───────────────────────────── */
-/* NSE URLS                      */
-/* ───────────────────────────── */
+const NSE_HOME     = "https://www.nseindia.com";
+const NSE_EQUITY   = "https://www.nseindia.com/market-data/live-equity-market";
+const NSE_FILINGS  = "https://www.nseindia.com/companies-listing/corporate-filings-announcements";
+const NSE_API      = "https://www.nseindia.com/api/corporate-announcements?index=equities";
 
-const NSE_API =
-  "https://www.nseindia.com/api/corporate-announcements?index=equities";
-
-/* ───────────────────────────── */
-/* Axios client                  */
-/* ───────────────────────────── */
-
-const client = axios.create({
-  timeout: 20000,
-  headers: {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept":          "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer":         "https://www.nseindia.com/",
-    "Origin":          "https://www.nseindia.com",
-    "Connection":      "keep-alive",
-    "sec-ch-ua":       '"Chromium";v="122", "Not(A:Brand";v="24"',
-    "sec-ch-ua-mobile":"?0",
-    "sec-fetch-dest":  "empty",
-    "sec-fetch-mode":  "cors",
-    "sec-fetch-site":  "same-origin"
-  }
-});
-
-let cookie = "";
+// ── Cookie jar ────────────────────────────────────────────────────────────────
+let cookieJar        = {};   // name → value map
+let cookieString     = "";   // flat "k=v; k=v" string for headers
+let lastWarmupAt     = 0;
 let warmupInProgress = false;
+let consecutiveFails = 0;
+const MAX_FAILS      = 3;    // after this many fails, back off 5 min
 
-/* ───────────────────────────── */
-/* Helpers                       */
-/* ───────────────────────────── */
+// ── Axios client with shared defaults ─────────────────────────────────────────
+const client = axios.create({ timeout: 25000 });
+
+// Modern Chrome 123 on Windows — same UA across all requests
+const BASE_HEADERS = {
+  "User-Agent":         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Accept-Language":    "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+  "Accept-Encoding":    "gzip, deflate, br",
+  "Connection":         "keep-alive",
+  "Sec-Ch-Ua":          '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+  "Sec-Ch-Ua-Mobile":   "?0",
+  "Sec-Ch-Ua-Platform": '"Windows"',
+};
+
+const PAGE_HEADERS = {
+  ...BASE_HEADERS,
+  "Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+  "Cache-Control":             "max-age=0",
+  "Sec-Fetch-Dest":            "document",
+  "Sec-Fetch-Mode":            "navigate",
+  "Sec-Fetch-Site":            "none",
+  "Sec-Fetch-User":            "?1",
+  "Upgrade-Insecure-Requests": "1",
+};
+
+const API_HEADERS = {
+  ...BASE_HEADERS,
+  "Accept":          "application/json, text/plain, */*",
+  "Referer":         "https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+  "Origin":          "https://www.nseindia.com",
+  "Sec-Fetch-Dest":  "empty",
+  "Sec-Fetch-Mode":  "cors",
+  "Sec-Fetch-Site":  "same-origin",
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
@@ -51,10 +66,8 @@ function sleep(ms) {
 function getIndianTime() {
   return new Date().toLocaleString("en-IN", {
     timeZone: "Asia/Kolkata",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
+    month: "short", day: "numeric",
+    hour: "numeric", minute: "numeric",
     hour12: true
   });
 }
@@ -74,77 +87,132 @@ function buildPdfUrl(attchmntFile) {
   return `https://www.nseindia.com${attchmntFile}`;
 }
 
-function extractCookies(responses) {
-  const all = [];
-  for (const res of responses) {
-    const h = res?.headers?.["set-cookie"] || [];
-    all.push(...h);
+// Parse Set-Cookie headers from a response and merge into jar
+function absorbCookies(res) {
+  const headers = res?.headers?.["set-cookie"] || [];
+  let absorbed  = 0;
+  for (const raw of headers) {
+    const pair = raw.split(";")[0].trim();
+    const eq   = pair.indexOf("=");
+    if (eq < 1) continue;
+    const name  = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (name && value) {
+      cookieJar[name] = value;
+      absorbed++;
+    }
   }
-  if (!all.length) return "";
-  return all.map(c => c.split(";")[0]).join("; ");
+  // Rebuild flat string
+  cookieString = Object.entries(cookieJar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("; ");
+  return absorbed;
 }
 
-/* ───────────────────────────── */
-/* Warmup — hit pages in order   */
-/* with delays between requests  */
-/* ───────────────────────────── */
+function hasCookies() {
+  return Object.keys(cookieJar).length > 0;
+}
 
+// ── Warmup — simulate real browser navigation ─────────────────────────────────
 async function warmup() {
   if (warmupInProgress) return;
+
+  // Back off after repeated failures
+  if (consecutiveFails >= MAX_FAILS) {
+    const backoffMs = 5 * 60 * 1000;
+    if (Date.now() - lastWarmupAt < backoffMs) return;
+    console.log("🔄 NSE back-off elapsed — retrying warmup");
+  }
+
+  // Don't re-warmup if session is fresh (< 20 min old) and working
+  if (hasCookies() && Date.now() - lastWarmupAt < 20 * 60 * 1000) return;
+
   warmupInProgress = true;
+  cookieJar        = {};   // reset jar for fresh session
+  cookieString     = "";
 
   try {
-    // Step 1: Hit homepage — establishes initial session
-    const home = await client.get("https://www.nseindia.com", {
-      validateStatus: () => true
+    // Step 1: Homepage — gets initial session + nseappid cookie
+    console.log("🔌 NSE session: hitting homepage...");
+    const home = await client.get(NSE_HOME, {
+      headers: PAGE_HEADERS,
+      validateStatus: () => true,
+      maxRedirects: 5,
     });
-    await sleep(2500);
+    absorbCookies(home);
+    await sleep(2000 + Math.random() * 1000);
 
-    // Step 2: Hit live equity market page — triggers session cookie
-    const equityPage = await client.get(
-      "https://www.nseindia.com/market-data/live-equity-market",
-      { validateStatus: () => true }
-    );
-    await sleep(2000);
+    // Step 2: Live equity market page — triggers nsit cookie
+    const equity = await client.get(NSE_EQUITY, {
+      headers: { ...PAGE_HEADERS, "Referer": NSE_HOME, "Sec-Fetch-Site": "same-origin" },
+      validateStatus: () => true,
+    });
+    absorbCookies(equity);
+    await sleep(1500 + Math.random() * 800);
 
-    // Step 3: Hit corporate filings page — required before API call
-    const filingsPage = await client.get(
-      "https://www.nseindia.com/companies-listing/corporate-filings-announcements",
-      { validateStatus: () => true }
-    );
-    await sleep(1500);
+    // Step 3: Corporate filings page — required before API call works
+    const filings = await client.get(NSE_FILINGS, {
+      headers: { ...PAGE_HEADERS, "Referer": NSE_EQUITY, "Sec-Fetch-Site": "same-origin" },
+      validateStatus: () => true,
+    });
+    absorbCookies(filings);
+    await sleep(1000 + Math.random() * 500);
 
-    // Collect cookies from all 3 responses
-    const extracted = extractCookies([home, equityPage, filingsPage]);
-
-    if (extracted) {
-      cookie = extracted;
-      client.defaults.headers["Cookie"] = cookie;
-      console.log("✅ NSE session established");
+    if (hasCookies()) {
+      lastWarmupAt     = Date.now();
+      consecutiveFails = 0;
+      console.log(`✅ NSE session established (${Object.keys(cookieJar).length} cookies)`);
     } else {
-      console.log("⚠️ NSE still blocked (no cookies)");
+      consecutiveFails++;
+      console.log(`⚠️ NSE warmup: no cookies received (attempt ${consecutiveFails}/${MAX_FAILS})`);
     }
 
   } catch (err) {
-    console.log("⚠️ NSE warmup failed:", err.message);
+    consecutiveFails++;
+    lastWarmupAt = Date.now(); // prevent hammering
+    console.log(`⚠️ NSE warmup error: ${err.message} (fail ${consecutiveFails}/${MAX_FAILS})`);
   } finally {
     warmupInProgress = false;
   }
 }
 
-/* ───────────────────────────── */
-/* Scan announcements            */
-/* ───────────────────────────── */
-
+// ── Scan announcements ────────────────────────────────────────────────────────
 async function scan() {
+  // Ensure we have a session before hitting the API
+  if (!hasCookies()) {
+    await warmup();
+    if (!hasCookies()) {
+      // Still no cookies — skip this cycle silently (no spam)
+      return;
+    }
+  }
+
   try {
-    if (!cookie) {
-      await warmup();
-      // If still no cookie after warmup, skip this cycle
-      if (!cookie) return;
+    const res = await client.get(NSE_API, {
+      headers: {
+        ...API_HEADERS,
+        "Cookie": cookieString,
+      },
+      validateStatus: () => true,
+    });
+
+    // Absorb any refreshed cookies
+    absorbCookies(res);
+
+    if (res.status === 403 || res.status === 401) {
+      console.log(`⚠️ NSE API blocked (${res.status}) — refreshing session`);
+      cookieJar        = {};
+      cookieString     = "";
+      lastWarmupAt     = 0;
+      consecutiveFails++;
+      if (ioRef) ioRef.emit("nse_status", "disconnected");
+      return;
     }
 
-    const res = await client.get(NSE_API);
+    if (res.status !== 200) {
+      console.log(`⚠️ NSE API unexpected status: ${res.status}`);
+      return;
+    }
 
     const list = Array.isArray(res.data)
       ? res.data
@@ -155,14 +223,14 @@ async function scan() {
       return;
     }
 
+    consecutiveFails = 0;
     console.log(`✅ NSE announcements: ${list.length}`);
-
     if (ioRef) ioRef.emit("nse_status", "connected");
 
     for (const item of list) {
       const id =
-        (item.symbol || "") +
-        (item.an_dt  || "") +
+        (item.symbol  || "") +
+        (item.an_dt   || "") +
         (item.subject || "");
 
       if (!id || seen.has(id)) continue;
@@ -194,9 +262,7 @@ async function scan() {
           receivedAt: Date.now()
         };
 
-        // ── FIXED: saveEvent now exists in database.js (was undefined before) ──
         saveEvent("nse", signal);
-
         updateRadar(signal.company, signal);
 
         const { persistMegaOrder } = require("../../coordinator");
@@ -206,52 +272,50 @@ async function scan() {
         persistRadar(radar);
 
         if (ioRef) {
-          ioRef.emit("nse_events", [signal]);
+          ioRef.emit("nse_events",   [signal]);
           ioRef.emit("radar_update", radar);
         }
       } catch (e) {
         console.log("⚠️ NSE item error:", e.message);
       }
     }
+
   } catch (err) {
     console.log("❌ NSE scan failed:", err.message);
+    consecutiveFails++;
 
-    if (err.response?.status === 403) {
-      console.log("⚠️ NSE session expired → refreshing cookie");
-      cookie = "";
-      client.defaults.headers["Cookie"] = "";
-      // Wait 5s before retrying to avoid hammering NSE
-      await sleep(5000);
-      await warmup();
+    if (err.response?.status === 403 || err.response?.status === 401) {
+      console.log("🔄 NSE session expired — will re-warmup next cycle");
+      cookieJar        = {};
+      cookieString     = "";
+      lastWarmupAt     = 0;
     }
 
     if (ioRef) ioRef.emit("nse_status", "disconnected");
   }
 }
 
-/* ───────────────────────────── */
-/* Start listener                */
-/* ───────────────────────────── */
-
+// ── Start listener ────────────────────────────────────────────────────────────
 function startNSEDealsListener(io) {
   ioRef = io;
 
-  // Initial warmup then scan
-  warmup().then(() => {
-    // Wait a bit after warmup before first scan
-    setTimeout(() => scan(), 3000);
+  // Warmup → wait → first scan
+  warmup().then(async () => {
+    await sleep(3000);
+    await scan();
   });
 
   // Scan every 15s
   setInterval(scan, 15000);
 
-  // Re-warmup every 25 minutes to keep session alive
+  // Proactive session refresh every 18 minutes
   setInterval(() => {
-    console.log("🔄 NSE session refresh (scheduled)");
-    cookie = "";
-    client.defaults.headers["Cookie"] = "";
-    warmup();
-  }, 25 * 60 * 1000);
+    console.log("🔄 NSE proactive session refresh");
+    cookieJar        = {};
+    cookieString     = "";
+    lastWarmupAt     = 0;
+    warmup().catch(() => {});
+  }, 18 * 60 * 1000);
 }
 
 module.exports = startNSEDealsListener;

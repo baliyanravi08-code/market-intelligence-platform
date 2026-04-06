@@ -36,10 +36,19 @@ const {
 
 let ioRef     = null;
 let bseCookie = "";
+let lastWarmupAt = 0;
 const seen    = new Set();
 
 const BSE_HOME = "https://www.bseindia.com/corporates/ann.html";
 const BSE_API  = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C&subcategory=-1";
+
+// Multiple warmup URLs — try each in order until one gives cookies
+const BSE_WARMUP_URLS = [
+  "https://www.bseindia.com/corporates/ann.html",
+  "https://www.bseindia.com/",
+  "https://www.bseindia.com/markets/equity/EQReports/MarketWatch.aspx",
+  "https://www.bseindia.com/markets/Equity/EQReports/StockPrcHistori.aspx",
+];
 
 const ORDER_BOOK_SECTORS = [
   "infra", "epc", "engineer", "construct", "railway", "defense", "defence",
@@ -59,14 +68,45 @@ function buildHistoricalUrl(fromDate, toDate) {
   return `https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?strCat=-1&strPrevDate=${fmt(fromDate)}&strScrip=&strSearch=P&strToDate=${fmt(toDate)}&strType=C&subcategory=-1`;
 }
 
+// Modern Chrome 123 headers — bypass BSE bot detection
 const BROWSER_HEADERS = {
-  "User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-  "Accept-Language":           "en-US,en;q=0.9",
+  "User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+  "Accept-Language":           "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
   "Accept-Encoding":           "gzip, deflate, br",
   "Connection":                "keep-alive",
-  "Upgrade-Insecure-Requests": "1"
+  "Cache-Control":             "max-age=0",
+  "Sec-Ch-Ua":                 '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+  "Sec-Ch-Ua-Mobile":          "?0",
+  "Sec-Ch-Ua-Platform":        '"Windows"',
+  "Sec-Fetch-Dest":            "document",
+  "Sec-Fetch-Mode":            "navigate",
+  "Sec-Fetch-Site":            "none",
+  "Sec-Fetch-User":            "?1",
+  "Upgrade-Insecure-Requests": "1",
 };
+
+// API call headers (XHR/fetch style)
+const API_HEADERS = {
+  "User-Agent":        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Accept":            "application/json, text/plain, */*",
+  "Accept-Language":   "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+  "Accept-Encoding":   "gzip, deflate, br",
+  "Connection":        "keep-alive",
+  "Referer":           "https://www.bseindia.com/corporates/ann.html",
+  "Origin":            "https://www.bseindia.com",
+  "X-Requested-With":  "XMLHttpRequest",
+  "Sec-Ch-Ua":         '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+  "Sec-Ch-Ua-Mobile":  "?0",
+  "Sec-Ch-Ua-Platform":'"Windows"',
+  "Sec-Fetch-Site":    "same-origin",
+  "Sec-Fetch-Mode":    "cors",
+  "Sec-Fetch-Dest":    "empty",
+};
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
 
 function getIndianTime() {
   return new Date().toLocaleString("en-IN", {
@@ -173,7 +213,6 @@ async function enrichResultWithPDF(signal) {
 
     const resultQuarter = parseResultQuarterFromTitle(signal.title);
 
-    // ── Credibility: extract actuals and save ─────────────────────────────
     if (rawPdfText) {
       const actuals = extractActualsFromResultText(rawPdfText);
       if (actuals) {
@@ -228,23 +267,44 @@ async function enrichResultWithPDF(signal) {
   return signal;
 }
 
+// ── Warmup: try multiple BSE pages, collect cookies ──────────────────────────
 async function warmup() {
-  try {
-    const res = await axios.get(BSE_HOME, {
-      headers: BROWSER_HEADERS, timeout: 20000, maxRedirects: 5
-    });
-    const cookies = res.headers["set-cookie"];
-    if (cookies?.length) {
-      bseCookie = cookies.map(c => c.split(";")[0]).join("; ");
-      console.log("✅ BSE warmup successful");
-    } else {
-      console.log("⚠️ BSE warmup without cookies (continuing anyway)");
-    }
+  // Don't re-warmup more than once every 10 minutes
+  if (Date.now() - lastWarmupAt < 10 * 60 * 1000 && bseCookie && bseCookie !== "cookieless") {
     return true;
-  } catch (err) {
-    console.log("⚠️ BSE warmup failed:", err.message);
-    return false;
   }
+
+  for (const url of BSE_WARMUP_URLS) {
+    try {
+      const res = await axios.get(url, {
+        headers: BROWSER_HEADERS,
+        timeout: 20000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+      });
+
+      const cookies = res.headers["set-cookie"];
+      if (cookies?.length) {
+        bseCookie    = cookies.map(c => c.split(";")[0]).join("; ");
+        lastWarmupAt = Date.now();
+        console.log("✅ BSE warmup successful");
+        return true;
+      }
+
+      // Small delay between attempts
+      await sleep(1500);
+
+    } catch (err) {
+      // Silently continue to next URL
+    }
+  }
+
+  // Cookie-less sentinel — scan() works without real cookies
+  // Set it so backfill doesn't skip unnecessarily
+  bseCookie    = "cookieless";
+  lastWarmupAt = Date.now();
+  console.log("⚠️ BSE running cookie-less (announcements still work via API)");
+  return true;
 }
 
 function extractList(data) {
@@ -262,6 +322,14 @@ function extractList(data) {
     if (Array.isArray(data[key]) && data[key].length > 0) return data[key];
   }
   return [];
+}
+
+// Build headers — include cookie only if we have a real one
+function buildApiHeaders(extra = {}) {
+  const cookieHeader = bseCookie && bseCookie !== "cookieless"
+    ? { "Cookie": bseCookie }
+    : {};
+  return { ...API_HEADERS, ...cookieHeader, ...extra };
 }
 
 async function processItem(item) {
@@ -283,7 +351,7 @@ async function processItem(item) {
 
   if (!signal) return;
 
-  // ── PDF enrichment for ORDER_ALERT with no crore value ───────────────────
+  // PDF enrichment for ORDER_ALERT with no crore value
   if (signal.type === "ORDER_ALERT" && !signal._orderInfo?.crores && signal.pdfUrl) {
     try {
       const { extractOrderValueFromPDF } = require("../data/pdfReader");
@@ -306,12 +374,12 @@ async function processItem(item) {
     }
   }
 
-  // ── Result filing — OB extraction + actuals for credibility ──────────────
+  // Result filing — OB extraction + actuals for credibility
   if ((signal.type === "RESULT" || signal.type === "BANK_RESULT") && signal.pdfUrl) {
     enrichResultWithPDF(signal).catch(() => {});
   }
 
-  // ── Investor presentation — extract 3-year guidance ───────────────────────
+  // Investor presentation — extract 3-year guidance
   if (isPresentationFiling(signal.title) && signal.pdfUrl) {
     handleLivePresentationFiling({ ...signal }, ioRef)
       .then(doc => {
@@ -416,21 +484,15 @@ async function scan() {
     if (!bseCookie) await warmup();
 
     const res = await axios.get(BSE_API, {
-      headers: {
-        ...BROWSER_HEADERS,
-        "Accept":            "application/json, text/plain, */*",
-        "Referer":           "https://www.bseindia.com/corporates/ann.html",
-        "Origin":            "https://www.bseindia.com",
-        "X-Requested-With":  "XMLHttpRequest",
-        "Sec-Fetch-Site":    "same-origin",
-        ...(bseCookie ? { "Cookie": bseCookie } : {})
-      },
-      timeout: 20000
+      headers: buildApiHeaders(),
+      timeout: 20000,
     });
 
     const list = extractList(res.data);
     if (!list.length) {
       console.log("⚠️ BSE returned empty list");
+      // Cookie may have expired — reset and re-warmup next cycle
+      bseCookie = "";
       if (ioRef) ioRef.emit("bse_status", "disconnected");
       return;
     }
@@ -444,7 +506,14 @@ async function scan() {
 
   } catch (err) {
     console.log("❌ BSE fetch failed:", err.message);
-    bseCookie = "";
+
+    // On 403/401 reset cookie so next cycle re-warms up
+    if (err.response?.status === 403 || err.response?.status === 401) {
+      console.log("🔄 BSE session expired — will re-warmup next cycle");
+      bseCookie    = "";
+      lastWarmupAt = 0;
+    }
+
     if (ioRef) ioRef.emit("bse_status", "disconnected");
   }
 }
@@ -453,8 +522,8 @@ async function backfill() {
   console.log("🔄 Starting BSE historical backfill...");
   try {
     if (!bseCookie) await warmup();
-    if (!bseCookie) { console.log("⚠️ Backfill skipped — no cookie"); return; }
 
+    // ── No longer skips when cookie-less — API works without cookies too ──
     const now      = new Date();
     const fromDate = new Date(now);
     fromDate.setDate(fromDate.getDate() - 4);
@@ -463,15 +532,7 @@ async function backfill() {
     console.log(`📅 Backfill: ${fromDate.toDateString()} → ${now.toDateString()}`);
 
     const res = await axios.get(url, {
-      headers: {
-        ...BROWSER_HEADERS,
-        "Accept":           "application/json, text/plain, */*",
-        "Referer":          "https://www.bseindia.com/corporates/ann.html",
-        "Origin":           "https://www.bseindia.com",
-        "X-Requested-With": "XMLHttpRequest",
-        "Sec-Fetch-Site":   "same-origin",
-        "Cookie":           bseCookie
-      },
+      headers: buildApiHeaders(),
       timeout: 30000
     });
 
@@ -499,7 +560,7 @@ function startBSEListener(io) {
 
   io.on("connection", (socket) => {
     console.log("Client connected:", socket.id);
-    socket.emit("bse_status", bseCookie ? "connected" : "connecting");
+    socket.emit("bse_status", bseCookie && bseCookie !== "cookieless" ? "connected" : "connecting");
 
     const { getEvents } = require("../../database");
     const storedBse = getEvents("bse") || [];
@@ -522,6 +583,16 @@ function startBSEListener(io) {
 
     sendStoredToClient(socket);
   });
+
+  // Re-warmup every 20 minutes to keep session alive
+  setInterval(() => {
+    if (bseCookie && bseCookie !== "cookieless") {
+      console.log("🔄 BSE session refresh (scheduled)");
+      bseCookie    = "";
+      lastWarmupAt = 0;
+      warmup().catch(() => {});
+    }
+  }, 20 * 60 * 1000);
 
   warmup().then(async () => {
     await backfill();
