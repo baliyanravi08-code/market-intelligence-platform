@@ -836,11 +836,65 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
   );
 }
 
+// ─── NAV HEADER (shared between pages) ───────────────────────────────────────
+
+function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsConnect, onSelectCompany }) {
+  const isOptions = currentPage === "options";
+  return (
+    <div className="header">
+      <div className="header-left">
+        <span className="star">★</span>
+        <span className="title">Market Intelligence</span>
+        <MarketStatus />
+
+        {/* ⚡ Options button — lives right next to the brand always */}
+        <button
+          className={`options-nav-btn${isOptions ? " active" : ""}`}
+          onClick={() => setCurrentPage(isOptions ? "dashboard" : "options")}
+          title="Option Chain OI Heatmap"
+        >
+          <span className="options-nav-icon">⚡</span>
+          <span className="options-nav-label">{isOptions ? "Dashboard" : "Options"}</span>
+          {isOptions && <span className="options-nav-back">←</span>}
+        </button>
+
+        {needsConnect && !isOptions && (
+          <span
+            style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }}
+            onClick={() => window.open("/auth/upstox", "_blank")}
+          >
+            Connect Upstox →
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {!isOptions && <GlobalSearch onSelectCompany={onSelectCompany} />}
+        {isOptions && (
+          <button
+            className="back-to-dashboard-btn"
+            onClick={() => setCurrentPage("dashboard")}
+          >
+            ← Dashboard
+          </button>
+        )}
+      </div>
+
+      <button
+        className="mode-toggle"
+        onClick={() => setDarkMode(d => !d)}
+        title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+      >
+        {darkMode ? "☀ Light" : "🌙 Dark"}
+      </button>
+    </div>
+  );
+}
+
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  // ── Page routing ───────────────────────────────────────────────────────────
-  const [currentPage, setCurrentPage] = useState("dashboard"); // "dashboard" | "options"
+  const [currentPage, setCurrentPage] = useState("dashboard");
 
   const [marketIndices,  setMarketIndices]  = useState([
     { name: "NIFTY 50",   price: "—", change: "—", pct: "—", up: null },
@@ -917,7 +971,6 @@ export default function App() {
     return () => clearInterval(t);
   }, [tickerLastOk]);
 
-  // ── BTC WebSocket ─────────────────────────────────────────────────────────
   const btcWsRef    = useRef(null);
   const btcReconRef = useRef(null);
   const btc24hRef   = useRef(0);
@@ -967,7 +1020,6 @@ export default function App() {
     };
   }, []);
 
-  // ── Gold + Silver + PI ────────────────────────────────────────────────────
   useEffect(() => {
     const fmt = (n, prefix = "$") => {
       if (!n && n !== 0) return "—";
@@ -1114,73 +1166,45 @@ export default function App() {
 
   const needsConnect = tickerSource === "disconnected" || tickerSource === "error";
 
-  // ── If on options page, render it full-screen below the header ────────────
+  const sharedHeader = (
+    <AppHeader
+      currentPage={currentPage}
+      setCurrentPage={setCurrentPage}
+      darkMode={darkMode}
+      setDarkMode={setDarkMode}
+      needsConnect={needsConnect}
+      onSelectCompany={setSelectedCompany}
+    />
+  );
+
+  const sharedTicker = (
+    <TickerBar
+      indices={marketIndices}
+      assets={cryptoAssets}
+      dataSource={tickerSource}
+      tickerStale={tickerStale}
+      onTickerClick={setSelectedTicker}
+    />
+  );
+
+  // ── Options page ───────────────────────────────────────────────────────────
   if (currentPage === "options") {
     return (
       <div className="terminal">
-        <div className="header">
-          <div className="header-left">
-            <span className="star">★</span>
-            <span className="title">Market Intelligence</span>
-            <MarketStatus />
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button
-              className="nav-page-btn active"
-              onClick={() => setCurrentPage("options")}
-            >
-              ⚡ Options
-            </button>
-            <button
-              className="nav-page-btn"
-              onClick={() => setCurrentPage("dashboard")}
-            >
-              ← Dashboard
-            </button>
-          </div>
-          <button className="mode-toggle" onClick={() => setDarkMode(d => !d)} title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
-            {darkMode ? "☀ Light" : "🌙 Dark"}
-          </button>
-        </div>
-        <TickerBar indices={marketIndices} assets={cryptoAssets} dataSource={tickerSource} tickerStale={tickerStale} onTickerClick={setSelectedTicker} />
-        <OptionChain />
+        {sharedHeader}
+        {sharedTicker}
+        <OptionChain onBack={() => setCurrentPage("dashboard")} />
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
     );
   }
 
-  // ── Dashboard ─────────────────────────────────────────────────────────────
+  // ── Dashboard ──────────────────────────────────────────────────────────────
   return (
     <div className="terminal">
-      <div className="header">
-        <div className="header-left">
-          <span className="star">★</span>
-          <span className="title">Market Intelligence</span>
-          <MarketStatus />
-          {needsConnect && (
-            <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }} onClick={() => window.open("/auth/upstox", "_blank")}>
-              Connect Upstox →
-            </span>
-          )}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button
-            className="nav-page-btn"
-            onClick={() => setCurrentPage("options")}
-            title="Open Option Chain OI Heatmap"
-          >
-            ⚡ Options
-          </button>
-          <GlobalSearch onSelectCompany={setSelectedCompany} />
-        </div>
-        <button className="mode-toggle" onClick={() => setDarkMode(d => !d)} title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
-          {darkMode ? "☀ Light" : "🌙 Dark"}
-        </button>
-      </div>
+      {sharedHeader}
+      {sharedTicker}
 
-      <TickerBar indices={marketIndices} assets={cryptoAssets} dataSource={tickerSource} tickerStale={tickerStale} onTickerClick={setSelectedTicker} />
-
-      {/* ── Desktop layout ── */}
       <div className="layout desktop-layout">
         <IntelPanel  computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />
         <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
@@ -1188,7 +1212,6 @@ export default function App() {
         <RightPanel  computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
       </div>
 
-      {/* ── Mobile layout ── */}
       <div className="mobile-layout">
         <div className="mobile-tab-bar">
           {MOBILE_TABS.map(t => (

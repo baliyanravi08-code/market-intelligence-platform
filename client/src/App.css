@@ -1394,3 +1394,127 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   background: var(--border);
   color: var(--text-pri);
 }
+/* ─────────────────────────────────────────────────────────────────────────────
+   ADD THESE TO THE BOTTOM OF client/src/App.css
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Options nav button — lives in header next to brand ─────────────────────── */
+.options-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border-radius: 5px;
+  border: 1px solid #1a3a6a;
+  background: #030e1e;
+  color: #4a9abb;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  margin-left: 8px;
+}
+
+.options-nav-btn:hover {
+  background: #0a1e3a;
+  border-color: #00cfff55;
+  color: #00cfff;
+}
+
+.options-nav-btn.active {
+  background: linear-gradient(135deg, #0a1e3a, #041828);
+  border-color: #ffd60a88;
+  color: #ffd60a;
+  box-shadow: 0 0 10px rgba(255, 214, 10, 0.15);
+}
+
+.options-nav-icon { font-size: 13px; }
+.options-nav-back { font-size: 11px; opacity: 0.7; }
+
+/* ── Back to dashboard button (right side of header on options page) ────────── */
+.back-to-dashboard-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 5px;
+  border: 1px solid #1a3a6a;
+  background: #030e1e;
+  color: #4a9abb;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.back-to-dashboard-btn:hover {
+  background: #0a1e3a;
+  border-color: #00cfff55;
+  color: #00cfff;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   ADD THESE TO THE BOTTOM OF client/src/pages/OptionChain.css
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Greeks toggle button ────────────────────────────────────────────────────── */
+.greeks-toggle { color: #a78bfa; }
+.greeks-toggle.active {
+  background: rgba(167, 139, 250, 0.15) !important;
+  color: #a78bfa !important;
+  border-color: rgba(167, 139, 250, 0.4) !important;
+}
+
+/* ── Back button in option chain controls ───────────────────────────────────── */
+.back-btn {
+  color: #4a6a8a !important;
+  border-left: 1px solid var(--border-dim) !important;
+  margin-left: 4px;
+}
+.back-btn:hover { color: #00cfff !important; }
+
+/* ── Greeks cell ─────────────────────────────────────────────────────────────── */
+.greek-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 72px;
+}
+
+.greek-item {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.greek-label {
+  color: var(--text-muted);
+  font-size: 8px;
+  min-width: 8px;
+}
+
+.greeks-th {
+  min-width: 80px;
+  color: rgba(167, 139, 250, 0.6) !important;
+}
+
+/* ── Greeks legend bar ───────────────────────────────────────────────────────── */
+.greeks-legend {
+  display: flex;
+  gap: 20px;
+  padding: 5px 16px;
+  background: rgba(167, 139, 250, 0.04);
+  border-bottom: 1px solid rgba(167, 139, 250, 0.1);
+  font-size: 9px;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.3px;
+}
