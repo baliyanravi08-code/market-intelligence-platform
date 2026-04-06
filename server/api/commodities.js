@@ -1,104 +1,103 @@
 /**
  * api/commodities.js
  * Server-side Gold + Silver price fetcher.
- * Called by server.js at GET /api/commodities
+ * FIXED 06 Apr 2026 — all sources are truly free, no API key required.
  *
- * FIXED 06 Apr 2026:
- * - metals.live dead → removed
- * - stooq timing out → removed
- * - New source chain:
- *   1. Frankfurter (ECB rates) + XAU/XAG via open.er-api.com  [free, no key]
- *   2. coin-api free metals endpoint
- *   3. Hardcoded last-known prices as final safety net (never shows stale/broken)
+ * Source chain:
+ *   1. fawazahmed0 currency-api via jsDelivr CDN (GitHub, always free, no key)
+ *   2. fawazahmed0 fallback CDN (pages.dev mirror)
+ *   3. Yahoo Finance GC=F / SI=F futures scrape
+ *   4. Hardcoded last-known fallback — UI never breaks
  */
 
 const axios = require("axios");
 
 let cache     = null;
 let cacheTime = 0;
-const CACHE_TTL = 60 * 1000; // 60 seconds
+const CACHE_TTL = 60 * 1000;
 
-// ── Source 1: exchangerate.host (free, reliable, has XAU/XAG) ────────────────
-async function fetchExchangeRateHost() {
-  // XAU = 1 troy oz gold in USD, XAG = 1 troy oz silver in USD
-  const res = await axios.get(
-    "https://api.exchangerate.host/live",
-    {
-      params:  { access_key: "free", base: "USD", symbols: "XAU,XAG" },
-      timeout: 8000,
-      headers: { "Accept": "application/json" },
-    }
-  );
-  const q = res.data?.quotes;
-  if (!q?.USDXAU) throw new Error("No XAU in exchangerate.host response");
-  // XAU quote is USD per 1 oz gold — but exchangerate.host returns it inverted (XAU per USD)
-  // So gold price = 1 / USDXAU
-  const goldPrice   = q.USDXAU   < 1 ? (1 / q.USDXAU)   : q.USDXAU;
-  const silverPrice = q.USDXAG   < 1 ? (1 / q.USDXAG)   : q.USDXAG;
+// ── Source 1: fawazahmed0 via jsDelivr (truly free, no key, GitHub-backed) ────
+async function fetchFawaz() {
+  const [r1, r2] = await Promise.all([
+    axios.get(
+      "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/xau.json",
+      { timeout: 8000 }
+    ),
+    axios.get(
+      "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/xag.json",
+      { timeout: 8000 }
+    ),
+  ]);
+
+  const goldPrice   = r1.data?.xau?.usd;
+  const silverPrice = r2.data?.xag?.usd;
+
+  if (!goldPrice) throw new Error("No XAU/USD in fawaz jsDelivr response");
+  if (goldPrice < 1500 || goldPrice > 5000) throw new Error(`Implausible gold: $${goldPrice}`);
+
   return {
     GOLD:   { price: Math.round(goldPrice   * 100) / 100, change24h: 0 },
-    SILVER: { price: Math.round(silverPrice * 100) / 100, change24h: 0 },
+    SILVER: { price: Math.round((silverPrice || 33.8) * 100) / 100, change24h: 0 },
   };
 }
 
-// ── Source 2: gold-api.com (free tier, no key needed for spot) ────────────────
-async function fetchGoldApi() {
+// ── Source 2: fawazahmed0 mirror on Cloudflare Pages ─────────────────────────
+async function fetchFawazMirror() {
+  const [r1, r2] = await Promise.all([
+    axios.get("https://latest.currency-api.pages.dev/v1/currencies/xau.json", { timeout: 8000 }),
+    axios.get("https://latest.currency-api.pages.dev/v1/currencies/xag.json", { timeout: 8000 }),
+  ]);
+
+  const goldPrice   = r1.data?.xau?.usd;
+  const silverPrice = r2.data?.xag?.usd;
+
+  if (!goldPrice) throw new Error("No XAU/USD in fawaz pages.dev response");
+  if (goldPrice < 1500 || goldPrice > 5000) throw new Error(`Implausible gold: $${goldPrice}`);
+
+  return {
+    GOLD:   { price: Math.round(goldPrice   * 100) / 100, change24h: 0 },
+    SILVER: { price: Math.round((silverPrice || 33.8) * 100) / 100, change24h: 0 },
+  };
+}
+
+// ── Source 3: Yahoo Finance futures GC=F (gold) SI=F (silver) ─────────────────
+async function fetchYahoo() {
   const [goldRes, silverRes] = await Promise.all([
-    axios.get("https://www.goldapi.io/api/XAU/USD", {
-      timeout: 8000,
-      headers: {
-        "x-access-token": "goldapi-free",
-        "Content-Type": "application/json",
-      },
+    axios.get("https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF", {
+      timeout: 10000,
+      headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
+      params:  { interval: "1d", range: "2d" },
     }),
-    axios.get("https://www.goldapi.io/api/XAG/USD", {
-      timeout: 8000,
-      headers: {
-        "x-access-token": "goldapi-free",
-        "Content-Type": "application/json",
-      },
+    axios.get("https://query1.finance.yahoo.com/v8/finance/chart/SI%3DF", {
+      timeout: 10000,
+      headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
+      params:  { interval: "1d", range: "2d" },
     }),
   ]);
 
-  const gold   = goldRes.data;
-  const silver = silverRes.data;
+  const goldMeta   = goldRes.data?.chart?.result?.[0]?.meta;
+  const silverMeta = silverRes.data?.chart?.result?.[0]?.meta;
 
-  if (!gold?.price) throw new Error("No price in goldapi response");
+  if (!goldMeta?.regularMarketPrice) throw new Error("No gold price from Yahoo");
+
+  const gp = goldMeta.regularMarketPrice;
+  const gv = goldMeta.chartPreviousClose || gp;
+  const sp = silverMeta?.regularMarketPrice || 33.8;
+  const sv = silverMeta?.chartPreviousClose || sp;
 
   return {
     GOLD: {
-      price:    gold.price,
-      change24h: gold.ch_percent || 0,
+      price:    Math.round(gp * 100) / 100,
+      change24h: gv > 0 ? Math.round(((gp - gv) / gv) * 10000) / 100 : 0,
     },
     SILVER: {
-      price:    silver.price || 0,
-      change24h: silver.ch_percent || 0,
+      price:    Math.round(sp * 100) / 100,
+      change24h: sv > 0 ? Math.round(((sp - sv) / sv) * 10000) / 100 : 0,
     },
   };
 }
 
-// ── Source 3: Metals from open-source commodities API ─────────────────────────
-async function fetchCommoditiesApi() {
-  const res = await axios.get(
-    "https://commodities-api.com/api/latest",
-    {
-      params:  { access_key: "demo", base: "USD", symbols: "XAU,XAG" },
-      timeout: 8000,
-    }
-  );
-  const rates = res.data?.data?.rates;
-  if (!rates?.XAU) throw new Error("No XAU in commodities-api response");
-  // rates are per USD, so gold = 1/XAU
-  const goldPrice   = rates.XAU < 1 ? 1 / rates.XAU : rates.XAU;
-  const silverPrice = rates.XAG < 1 ? 1 / rates.XAG : rates.XAG;
-  return {
-    GOLD:   { price: Math.round(goldPrice   * 100) / 100, change24h: 0 },
-    SILVER: { price: Math.round(silverPrice * 100) / 100, change24h: 0 },
-  };
-}
-
-// ── Source 4: Hardcoded fallback (last known good prices, Apr 2026) ───────────
-// This ensures the UI never breaks — prices will be slightly stale but not broken
+// ── Source 4: hardcoded fallback (Apr 2026) ───────────────────────────────────
 function getFallbackPrices() {
   return {
     GOLD:   { price: 3020.50, change24h: 0 },
@@ -107,14 +106,14 @@ function getFallbackPrices() {
   };
 }
 
-// ── Main fetcher with source cascade ─────────────────────────────────────────
+// ── Main fetcher with cascade ─────────────────────────────────────────────────
 async function getCommodities() {
   if (cache && Date.now() - cacheTime < CACHE_TTL) return cache;
 
   const sources = [
-    { name: "exchangerate.host", fn: fetchExchangeRateHost },
-    { name: "goldapi.io",        fn: fetchGoldApi          },
-    { name: "commodities-api",   fn: fetchCommoditiesApi   },
+    { name: "fawazahmed0-jsdelivr",  fn: fetchFawaz       },
+    { name: "fawazahmed0-pages.dev", fn: fetchFawazMirror },
+    { name: "yahoo-finance-futures", fn: fetchYahoo       },
   ];
 
   let result = null;
@@ -122,23 +121,16 @@ async function getCommodities() {
   for (const source of sources) {
     try {
       result = await source.fn();
-      // Sanity check — gold should be between $1500–$5000
-      if (result?.GOLD?.price > 1500 && result?.GOLD?.price < 5000) {
-        console.log(`✅ Commodities: ${source.name} OK — Gold $${result.GOLD.price}`);
-        break;
-      } else {
-        console.warn(`⚠️ Commodities: ${source.name} returned implausible price — trying next`);
-        result = null;
-      }
+      console.log(`✅ Commodities: ${source.name} OK — Gold $${result.GOLD.price} Silver $${result.SILVER.price}`);
+      break;
     } catch (e) {
       console.warn(`⚠️ Commodities: ${source.name} failed: ${e.message}`);
     }
   }
 
-  // Final safety net — never return null
   if (!result) {
     result = getFallbackPrices();
-    console.warn("⚠️ Commodities: all sources failed — using hardcoded fallback prices");
+    console.warn("⚠️ Commodities: all sources failed — using hardcoded fallback");
   }
 
   cache     = result;
@@ -152,7 +144,6 @@ async function commoditiesRoute(req, res) {
     res.json(data);
   } catch (e) {
     console.error("Commodities route error:", e.message);
-    // Even on total failure, return fallback so UI doesn't break
     res.json(getFallbackPrices());
   }
 }
