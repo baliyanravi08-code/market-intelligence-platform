@@ -1331,12 +1331,6 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 [data-theme="light"] ::-webkit-scrollbar-thumb { background: #a8c4dc; }
 [data-theme="light"] ::-webkit-scrollbar-track { background: #e0ecf8; }
 
-.desktop-layout {
-  display: flex;
-  flex-direction: row;
-  align-items: flex-start;
-  overflow-x: auto;
-}
 /* ═══════════════════════════════════════════════════════════════════════════
    APP.CSS PATCH — Option Chain nav link
    Add these styles to your existing App.css
