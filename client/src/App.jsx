@@ -3,6 +3,7 @@ import { io as socketIO } from "socket.io-client";
 import "./App.css";
 import CircuitAlerts from "./components/CircuitAlerts";
 import OptionChain from "./pages/OptionChain";
+import ScoresPage from "./pages/ScoresPage";
 
 const SIGNAL_COLOR = {
   ORDER_ALERT:         { bg: "#00ff9c", fg: "#000" },
@@ -159,6 +160,35 @@ function toAgo(ms) {
 function extractAmount(text) {
   const match = text?.match(/(\d+(?:\.\d+)?)\s?(crore|cr)/i);
   return match ? parseFloat(match[1]) : 0;
+}
+
+// ─── COMPOSITE SCORE BADGE ────────────────────────────────────────────────────
+
+function CompositeScoreBadge({ symbol, compositeMap }) {
+  if (!symbol || !compositeMap) return null;
+  const score = compositeMap[symbol] || compositeMap[symbol?.toUpperCase()];
+  if (!score) return null;
+
+  const colors = { A: "#00ff88", B: "#4fc3f7", C: "#ffd54f", D: "#ff8a65", F: "#ef5350" };
+  const color  = colors[score.grade] || "#546e7a";
+
+  return (
+    <span
+      title={`Composite: ${score.finalScore} · ${score.bias} · ${score.top3Reasons?.[0]?.label || ""}`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 3,
+        padding: "1px 6px", borderRadius: 3,
+        background: `${color}18`,
+        border: `1px solid ${color}40`,
+        fontSize: 10, fontWeight: 700, color,
+        fontFamily: "'IBM Plex Mono', monospace",
+        cursor: "default", flexShrink: 0,
+      }}
+    >
+      ⚡{score.finalScore}
+      <span style={{ fontSize: 9, opacity: 0.7 }}>{score.grade}</span>
+    </span>
+  );
 }
 
 // ─── COMPONENTS ───────────────────────────────────────────────────────────────
@@ -653,7 +683,7 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
   );
 }
 
-function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
+function RadarPanel({ filteredRadar, radarQuery, setRadarQuery, compositeMap }) {
   return (
     <div className="panel radar-panel">
       <div className="panel-header">
@@ -671,6 +701,8 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
           <div className="rc-top">
             <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>{r.company}</span>
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+              {/* Composite score badge inline on radar card */}
+              <CompositeScoreBadge symbol={r.code || r.company} compositeMap={compositeMap} />
               {r.conflict && <ConflictBadge risk={r.conflict} />}
               {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
               <span className={`type type-${r.type}`}>{r.type}</span>
@@ -836,10 +868,12 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
   );
 }
 
-// ─── NAV HEADER (shared between pages) ───────────────────────────────────────
+// ─── NAV HEADER ───────────────────────────────────────────────────────────────
 
 function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsConnect, onSelectCompany }) {
   const isOptions = currentPage === "options";
+  const isScores  = currentPage === "scores";
+
   return (
     <div className="header">
       <div className="header-left">
@@ -847,7 +881,7 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
         <span className="title">Market Intelligence</span>
         <MarketStatus />
 
-        {/* ⚡ Options button — lives right next to the brand always */}
+        {/* Options page button */}
         <button
           className={`options-nav-btn${isOptions ? " active" : ""}`}
           onClick={() => setCurrentPage(isOptions ? "dashboard" : "options")}
@@ -858,7 +892,19 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           {isOptions && <span className="options-nav-back">←</span>}
         </button>
 
-        {needsConnect && !isOptions && (
+        {/* Scores page button */}
+        <button
+          className={`options-nav-btn${isScores ? " active" : ""}`}
+          onClick={() => setCurrentPage(isScores ? "dashboard" : "scores")}
+          title="Composite Score Leaderboard"
+          style={{ marginLeft: 4 }}
+        >
+          <span className="options-nav-icon">🏆</span>
+          <span className="options-nav-label">{isScores ? "Dashboard" : "Scores"}</span>
+          {isScores && <span className="options-nav-back">←</span>}
+        </button>
+
+        {needsConnect && !isOptions && !isScores && (
           <span
             style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }}
             onClick={() => window.open("/auth/upstox", "_blank")}
@@ -869,8 +915,8 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {!isOptions && <GlobalSearch onSelectCompany={onSelectCompany} />}
-        {isOptions && (
+        {!isOptions && !isScores && <GlobalSearch onSelectCompany={onSelectCompany} />}
+        {(isOptions || isScores) && (
           <button
             className="back-to-dashboard-btn"
             onClick={() => setCurrentPage("dashboard")}
@@ -920,6 +966,11 @@ export default function App() {
   const [selectedTicker,   setSelectedTicker]   = useState(null);
   const [socket,           setSocket]           = useState(null);
 
+  // Composite scores: map of symbol → score object for badge lookups
+  const [compositeScores,  setCompositeScores]  = useState([]);
+  const compositeMap = {};
+  compositeScores.forEach(s => { compositeMap[s.symbol] = s; });
+
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem("mi-theme");
     if (saved) return saved === "dark";
@@ -941,7 +992,13 @@ export default function App() {
   useEffect(() => {
     const sock = socketIO({ transports: ["websocket", "polling"] });
     setSocket(sock);
-    sock.on("connect", () => { console.log("Socket.io connected"); });
+
+    sock.on("connect", () => {
+      console.log("Socket.io connected");
+      // Request composite leaderboard on connect
+      sock.emit("get-composite-scores");
+    });
+
     sock.on("market-tick", (updates) => {
       if (!Array.isArray(updates)) return;
       setMarketIndices(prev => prev.map(idx => { const update = updates.find(u => u.name === idx.name); if (!update) return idx; return { ...update, _ts: Date.now() }; }));
@@ -949,8 +1006,24 @@ export default function App() {
       setTickerLastOk(Date.now());
       setTickerStale(false);
     });
+
+    // Composite scores — full leaderboard
+    sock.on("composite-scores", (scores) => {
+      if (Array.isArray(scores)) setCompositeScores(scores);
+    });
+
+    // Composite score — single stock update (live push every 30s from circuit poll)
+    sock.on("composite-update", (update) => {
+      if (!update?.symbol) return;
+      setCompositeScores(prev => {
+        const next = prev.filter(s => s.symbol !== update.symbol);
+        return [update, ...next];
+      });
+    });
+
     sock.on("upstox-status", ({ connected }) => { if (!connected) setTickerSource("connecting"); });
     sock.on("disconnect", () => { setTickerSource("error"); });
+
     return () => sock.disconnect();
   }, []);
 
@@ -1199,6 +1272,18 @@ export default function App() {
     );
   }
 
+  // ── Scores page ────────────────────────────────────────────────────────────
+  if (currentPage === "scores") {
+    return (
+      <div className="terminal">
+        {sharedHeader}
+        {sharedTicker}
+        <ScoresPage socket={socket} compositeScores={compositeScores} />
+        <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
+      </div>
+    );
+  }
+
   // ── Dashboard ──────────────────────────────────────────────────────────────
   return (
     <div className="terminal">
@@ -1207,7 +1292,7 @@ export default function App() {
 
       <div className="layout desktop-layout">
         <IntelPanel  computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />
-        <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
+        <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} />
         <FeedPanel   filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
         <RightPanel  computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
       </div>
@@ -1218,10 +1303,11 @@ export default function App() {
             <button key={t.key} className={`mobile-tab-btn ${mobilePanelTab === t.key ? "active" : ""}`} onClick={() => setMobilePanelTab(t.key)}>{t.label}</button>
           ))}
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("options")}>⚡ OI</button>
+          <button className="mobile-tab-btn" onClick={() => setCurrentPage("scores")}>🏆 SCR</button>
         </div>
         <div className="mobile-panel-wrap">
           {mobilePanelTab === "intel"   && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />}
-          {mobilePanelTab === "radar"   && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />}
+          {mobilePanelTab === "radar"   && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} />}
           {mobilePanelTab === "feed"    && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
           {mobilePanelTab === "data"    && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
         </div>

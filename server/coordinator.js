@@ -2,35 +2,41 @@
  * coordinator.js
  * Location: server/coordinator.js
  *
- * UPDATED: 06 Apr 2026 (Session 3 patch)
- * - circuit-watchlist event added: full 167-stock proximity list every 30s
- * - sendStoredToClient replays both circuitAlerts + circuitWatchlist on connect
- * - WATCH threshold widened to 15% in circuitWatcher
+ * UPDATED: 06 Apr 2026 (Session 4 patch)
+ * - compositeScoreEngine wired: startCompositeEngine, ingestSmartMoney, ingestOpportunity
+ * - composite-scores emitted on connect + on-demand via socket event
+ * - All prior patches preserved (circuit watcher, delivery analyzer, etc.)
  */
 
 const fs   = require("fs");
 const path = require("path");
 
-const { startDeliveryAnalyzer, onDeliverySpike } = require("./services/intelligence/deliveryAnalyzer");
+const { startDeliveryAnalyzer, onDeliverySpike }   = require("./services/intelligence/deliveryAnalyzer");
+const { startCircuitWatcher, onCircuitAlert, onCircuitWatchlist } = require("./services/intelligence/circuitWatcher");
+
 const {
-  startCircuitWatcher,
-  onCircuitAlert,
-  onCircuitWatchlist,
-} = require("./services/intelligence/circuitWatcher");
+  startCompositeEngine,
+  ingestSmartMoney,
+  ingestOpportunity,
+  getLeaderboard,
+  getCompositeForScrip,
+} = require("./services/intelligence/compositeScoreEngine");
+
+const { getCredibilityForScrip } = require("./services/intelligence/credibilityEngine");
 
 const DATA_FILE = path.join(__dirname, "data/coordinator.json");
 
 let stored = {
-  radar:           [],
-  orderBook:       [],
-  sectors:         [],
-  opportunities:   [],
-  megaOrders:      [],
-  guidance:        [],
-  credibility:     [],
-  deliverySpikes:  [],
-  circuitAlerts:   [],
-  circuitWatchlist: [], // full proximity list from last poll
+  radar:            [],
+  orderBook:        [],
+  sectors:          [],
+  opportunities:    [],
+  megaOrders:       [],
+  guidance:         [],
+  credibility:      [],
+  deliverySpikes:   [],
+  circuitAlerts:    [],
+  circuitWatchlist: [],
 };
 
 function loadFromDisk() {
@@ -100,6 +106,9 @@ function persistSector(sectorData) {
 
 function persistOpportunity(opp) {
   if (!opp) return;
+  // Wire into composite engine before persisting
+  ingestOpportunity(opp);
+
   const existing       = stored.opportunities.filter((o) => o.company !== opp.company);
   stored.opportunities = [opp, ...existing].slice(0, 20);
   saveToDisk();
@@ -158,8 +167,15 @@ function persistCircuitAlerts(alerts) {
 
 function persistCircuitWatchlist(watchlist) {
   if (!watchlist || watchlist.length === 0) return;
-  stored.circuitWatchlist = watchlist; // always replace — it's the latest snapshot
-  // don't call saveToDisk() here — too frequent (every 30s), let the interval handle it
+  stored.circuitWatchlist = watchlist; // always replace — latest snapshot
+  // saveToDisk() intentionally skipped — too frequent (every 30s), interval handles it
+}
+
+// ── Smart money passthrough — called from nseDealsListener / bseListener ─────
+// Export this so listeners can call it directly.
+function handleSmartMoneyEvent(event) {
+  if (!event) return;
+  ingestSmartMoney(event);
 }
 
 // ── Send stored data to newly connected client ────────────────────────────────
@@ -198,6 +214,13 @@ function sendStoredToClient(socket) {
     socket.emit("circuit-watchlist", stored.circuitWatchlist);
     console.log(`📤 Sent ${stored.circuitWatchlist.length} watchlist stocks to client`);
   }
+
+  // Send composite leaderboard on connect
+  const leaderboard = getLeaderboard(100);
+  if (leaderboard.length > 0) {
+    socket.emit("composite-scores", leaderboard);
+    console.log(`📤 Sent ${leaderboard.length} composite scores to client`);
+  }
 }
 
 function getStored() {
@@ -209,8 +232,24 @@ function getStored() {
 function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   console.log("🚀 Coordinator Running");
 
+  // Start composite engine — wires into circuit watcher auto-recompute
+  startCompositeEngine(io, { getCredibilityForScrip });
+  console.log("⚡ Composite Score Engine started");
+
   io.on("connection", (socket) => {
     sendStoredToClient(socket);
+
+    // Client can request leaderboard on demand
+    socket.on("get-composite-scores", () => {
+      socket.emit("composite-scores", getLeaderboard(100));
+    });
+
+    // Client can request a single stock score
+    socket.on("get-composite-score", (symbol) => {
+      if (!symbol) return;
+      const score = getCompositeForScrip(symbol);
+      if (score) socket.emit("composite-update", score);
+    });
   });
 
   setInterval(() => {
@@ -232,6 +271,7 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
 
   onCircuitWatchlist((watchlist) => {
     persistCircuitWatchlist(watchlist);
+    // Circuit poll triggers composite recompute automatically inside compositeScoreEngine
   });
 }
 
@@ -248,5 +288,6 @@ module.exports = {
   persistCircuitAlerts,
   persistCircuitWatchlist,
   sendStoredToClient,
+  handleSmartMoneyEvent,
   getStored,
 };
