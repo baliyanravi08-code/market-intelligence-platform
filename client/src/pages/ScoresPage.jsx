@@ -385,7 +385,7 @@ function LeaderboardView({ scores }) {
       </div>
 
       {/* Table */}
-      <div style={{ overflowX: "auto" }}>
+      <div style={{ overflowX: "auto", overflowY: "visible" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
@@ -570,7 +570,6 @@ export default function ScoresPage({ socket }) {
 
   return (
     <div style={{
-      minHeight: "100vh",
       background: "#060a0f",
       color: "#e8eaed",
       fontFamily: "'JetBrains Mono', monospace",

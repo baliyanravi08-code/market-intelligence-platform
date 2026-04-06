@@ -1261,24 +1261,30 @@ export default function App() {
   );
 
   // ── Options page ───────────────────────────────────────────────────────────
+  // ── Options page ────────────────────────────────────────────── AFTER
   if (currentPage === "options") {
     return (
-      <div className="terminal">
+      <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
         {sharedHeader}
         {sharedTicker}
-        <OptionChain onBack={() => setCurrentPage("dashboard")} />
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          <OptionChain onBack={() => setCurrentPage("dashboard")} />
+        </div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
     );
   }
 
   // ── Scores page ────────────────────────────────────────────────────────────
+  // ── Scores page ────────────────────────────────────────────── AFTER
   if (currentPage === "scores") {
     return (
-      <div className="terminal">
+      <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
         {sharedHeader}
         {sharedTicker}
-        <ScoresPage socket={socket} compositeScores={compositeScores} />
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          <ScoresPage socket={socket} compositeScores={compositeScores} />
+        </div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
     );
