@@ -2,29 +2,35 @@
  * coordinator.js
  * Location: server/coordinator.js
  *
- * UPDATED: 06 Apr 2026 (Session 2 patch)
- * - circuitWatcher now receives Upstox token getter → works on Render
- * - deliveryAnalyzer unchanged (NSE-only, blocked on cloud — graceful fallback)
+ * UPDATED: 06 Apr 2026 (Session 3 patch)
+ * - circuit-watchlist event added: full 167-stock proximity list every 30s
+ * - sendStoredToClient replays both circuitAlerts + circuitWatchlist on connect
+ * - WATCH threshold widened to 15% in circuitWatcher
  */
 
 const fs   = require("fs");
 const path = require("path");
 
 const { startDeliveryAnalyzer, onDeliverySpike } = require("./services/intelligence/deliveryAnalyzer");
-const { startCircuitWatcher,   onCircuitAlert  } = require("./services/intelligence/circuitWatcher");
+const {
+  startCircuitWatcher,
+  onCircuitAlert,
+  onCircuitWatchlist,
+} = require("./services/intelligence/circuitWatcher");
 
 const DATA_FILE = path.join(__dirname, "data/coordinator.json");
 
 let stored = {
-  radar:          [],
-  orderBook:      [],
-  sectors:        [],
-  opportunities:  [],
-  megaOrders:     [],
-  guidance:       [],
-  credibility:    [],
-  deliverySpikes: [],
-  circuitAlerts:  [],
+  radar:           [],
+  orderBook:       [],
+  sectors:         [],
+  opportunities:   [],
+  megaOrders:      [],
+  guidance:        [],
+  credibility:     [],
+  deliverySpikes:  [],
+  circuitAlerts:   [],
+  circuitWatchlist: [], // full proximity list from last poll
 };
 
 function loadFromDisk() {
@@ -33,15 +39,16 @@ function loadFromDisk() {
       const raw    = fs.readFileSync(DATA_FILE, "utf8");
       const parsed = JSON.parse(raw);
       stored = {
-        radar:          parsed.radar          || [],
-        orderBook:      parsed.orderBook      || [],
-        sectors:        parsed.sectors        || [],
-        opportunities:  parsed.opportunities  || [],
-        megaOrders:     parsed.megaOrders     || [],
-        guidance:       parsed.guidance       || [],
-        credibility:    parsed.credibility    || [],
-        deliverySpikes: parsed.deliverySpikes || [],
-        circuitAlerts:  parsed.circuitAlerts  || [],
+        radar:            parsed.radar            || [],
+        orderBook:        parsed.orderBook        || [],
+        sectors:          parsed.sectors          || [],
+        opportunities:    parsed.opportunities    || [],
+        megaOrders:       parsed.megaOrders       || [],
+        guidance:         parsed.guidance         || [],
+        credibility:      parsed.credibility      || [],
+        deliverySpikes:   parsed.deliverySpikes   || [],
+        circuitAlerts:    parsed.circuitAlerts    || [],
+        circuitWatchlist: parsed.circuitWatchlist || [],
       };
       console.log(
         `📦 Coordinator loaded: ${stored.orderBook.length} orders, ` +
@@ -49,7 +56,8 @@ function loadFromDisk() {
         `${stored.guidance.length} guidance, ` +
         `${stored.credibility.length} credibility, ` +
         `${stored.deliverySpikes.length} delivery spikes, ` +
-        `${stored.circuitAlerts.length} circuit alerts`
+        `${stored.circuitAlerts.length} circuit alerts, ` +
+        `${stored.circuitWatchlist.length} watchlist stocks`
       );
     }
   } catch (e) {
@@ -148,6 +156,12 @@ function persistCircuitAlerts(alerts) {
   saveToDisk();
 }
 
+function persistCircuitWatchlist(watchlist) {
+  if (!watchlist || watchlist.length === 0) return;
+  stored.circuitWatchlist = watchlist; // always replace — it's the latest snapshot
+  // don't call saveToDisk() here — too frequent (every 30s), let the interval handle it
+}
+
 // ── Send stored data to newly connected client ────────────────────────────────
 
 function sendStoredToClient(socket) {
@@ -180,6 +194,10 @@ function sendStoredToClient(socket) {
     socket.emit("circuit-alerts", stored.circuitAlerts);
     console.log(`📤 Sent ${stored.circuitAlerts.length} circuit alerts to client`);
   }
+  if (stored.circuitWatchlist.length > 0) {
+    socket.emit("circuit-watchlist", stored.circuitWatchlist);
+    console.log(`📤 Sent ${stored.circuitWatchlist.length} watchlist stocks to client`);
+  }
 }
 
 function getStored() {
@@ -188,14 +206,9 @@ function getStored() {
 
 // ── Start coordinator + all intelligence services ─────────────────────────────
 
-/**
- * tokenGetter: function that returns current upstoxAccessToken from server.js
- * Pass as: () => upstoxAccessToken
- */
 function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   console.log("🚀 Coordinator Running");
 
-  // ← ADD THIS: replay stored data to every new client
   io.on("connection", (socket) => {
     sendStoredToClient(socket);
   });
@@ -211,11 +224,17 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   });
 
   startCircuitWatcher(io, tokenGetter, instrumentMapGetter);
+
   onCircuitAlert((alerts) => {
     persistCircuitAlerts(alerts);
     console.log(`💾 Persisted ${alerts.length} circuit alert(s) to disk`);
   });
+
+  onCircuitWatchlist((watchlist) => {
+    persistCircuitWatchlist(watchlist);
+  });
 }
+
 module.exports = {
   startCoordinator,
   persistRadar,
@@ -227,6 +246,7 @@ module.exports = {
   persistCredibility,
   persistDeliverySpike,
   persistCircuitAlerts,
+  persistCircuitWatchlist,
   sendStoredToClient,
   getStored,
 };

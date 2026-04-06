@@ -54,7 +54,15 @@ const FNO_SYMBOLS = [
 ];
 
 const NARROW_BAND_SYMBOLS = new Set(["YESBANK", "RBLBANK", "BANDHANBNK"]);
-const TIER_THRESHOLDS     = { LOCKED: 0, CRITICAL: 1, WARNING: 2, WATCH: 5 };
+
+// TIER_THRESHOLDS: how many % away from circuit limit to trigger each tier
+// These are % of LTP distance to the circuit limit
+const TIER_THRESHOLDS = {
+  LOCKED:   0,   // AT the circuit
+  CRITICAL: 1,   // within 1%
+  WARNING:  3,   // within 3%
+  WATCH:    15,  // within 15% — wide net, catches meaningful moves
+};
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const cooldownMap   = new Map();
@@ -65,6 +73,10 @@ let pollTimer  = null;
 let isRunning  = false;
 let getToken   = () => null;
 let getInstMap = () => ({});
+
+// Store last poll's full stock data for diagnostic + last alerts for replay
+let lastPollStocks = [];
+let lastAlerts     = [];
 
 const emitter = new EventEmitter();
 
@@ -162,6 +174,8 @@ async function runPoll() {
         const symbol    = keyToSymbol[key] || key.split(/[|:]/).pop();
         const ltp       = parseFloat(quote.last_price || 0);
         const prevClose = parseFloat(quote.ohlc?.close || 0);
+        const volume    = parseInt(quote.volume || 0, 10);
+        const value     = parseFloat(quote.average_price || 0) * volume; // traded value estimate
         if (ltp > 0 && prevClose > 0) {
           const change    = ltp - prevClose;
           const changePct = (change / prevClose) * 100;
@@ -171,6 +185,8 @@ async function runPoll() {
             prevClose,
             change:        +change.toFixed(2),
             changePercent: +changePct.toFixed(2),
+            tradedValue:   +value.toFixed(0),
+            volume,
           });
         }
       }
@@ -186,10 +202,11 @@ async function runPoll() {
   }
 
   console.log(`🔔 Circuit watcher: checked ${stocks.length} stocks via Upstox`);
+  lastPollStocks = stocks; // store for diagnostics
 
   const alerts = [];
   for (const stock of stocks) {
-    const { symbol, ltp, prevClose, change, changePercent } = stock;
+    const { symbol, ltp, prevClose, change, changePercent, tradedValue, volume } = stock;
     if (isOnCooldown(symbol)) continue;
 
     const { upper, lower, bandPct } = getCircuitLimits(symbol, prevClose);
@@ -204,7 +221,8 @@ async function runPoll() {
       circuitLimit: limit, bandPct, distPct, side, tier,
       action:        getActionTag(side, tier),
       change, changePercent,
-      tradedValue:   0,
+      tradedValue,
+      volume,
       timestamp:     new Date().toISOString(),
       _ts:           Date.now(),
     });
@@ -214,8 +232,23 @@ async function runPoll() {
     else lockedSymbols.delete(symbol);
   }
 
+  // Always emit the full watch list (all stocks with their proximity data)
+  // so the UI can show a live dashboard even with no alerts
+  const watchList = stocks.map((stock) => {
+    const { symbol, ltp, prevClose, change, changePercent, tradedValue, volume } = stock;
+    const { upper, lower, bandPct } = getCircuitLimits(symbol, prevClose);
+    const { side, distPct, limit }  = circuitProximity(ltp, upper, lower);
+    const tier = getTier(distPct) || "SAFE";
+    return { symbol, ltp, prevClose, change, changePercent, tradedValue, volume, circuitLimit: limit, bandPct, distPct, side, tier, _ts: Date.now() };
+  }).sort((a, b) => a.distPct - b.distPct); // closest to circuit first
+
+  if (ioRef) ioRef.emit("circuit-watchlist", watchList);
+  emitter.emit("circuit-watchlist", watchList);
+
   if (!alerts.length) return;
+
   console.log(`⚡ ${alerts.length} circuit alert(s) fired`);
+  lastAlerts = alerts;
   if (ioRef) ioRef.emit("circuit-alerts", alerts);
   emitter.emit("circuit-alerts", alerts);
 }
@@ -238,6 +271,17 @@ function stopCircuitWatcher() {
 }
 
 function onCircuitAlert(cb)              { emitter.on("circuit-alerts", cb); }
+function onCircuitWatchlist(cb)          { emitter.on("circuit-watchlist", cb); }
+function getLastAlerts()                 { return lastAlerts; }
+function getLastPollStocks()             { return lastPollStocks; }
 function registerNarrowBandSymbols(syms) { syms.forEach((s) => NARROW_BAND_SYMBOLS.add(s)); }
 
-module.exports = { startCircuitWatcher, stopCircuitWatcher, onCircuitAlert, registerNarrowBandSymbols };
+module.exports = {
+  startCircuitWatcher,
+  stopCircuitWatcher,
+  onCircuitAlert,
+  onCircuitWatchlist,
+  getLastAlerts,
+  getLastPollStocks,
+  registerNarrowBandSymbols,
+};
