@@ -14,8 +14,9 @@ const cors    = require("cors");
 const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
-const { startStreamer, stopStreamer } = require("./services/upstoxStream");
+const { startStreamer, stopStreamer, setOITickHandler } = require("./services/upstoxStream");
 const { commoditiesRoute }  = require("./api/commodities");
+const { startNSEOIListener, handleOITick, getChain, getExpiries, getAllCached, addUnderlying } = require("./services/intelligence/nseOIListener");
 
 const {
   getEvents,
@@ -49,11 +50,9 @@ let upstoxAccessToken = null;
 let upstoxTokenExpiry = null;
 
 // ── Instrument master cache ──────────────────────────────────────────────────
-// Maps NSE symbol → Upstox instrument_key (e.g. RELIANCE → NSE_EQ|INE002A01018)
 let instrumentMap = {};
 
 async function loadInstrumentMaster() {
-  // Try disk cache first (refreshed daily)
   try {
     if (fs.existsSync(INSTRUMENT_FILE)) {
       const cached = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
@@ -65,38 +64,28 @@ async function loadInstrumentMaster() {
     }
   } catch (e) { /* rebuild */ }
 
-  // Fetch from Upstox instrument master CSV
   try {
     console.log("📥 Fetching Upstox instrument master...");
     const res = await axios.get(
       "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
       { timeout: 30_000, responseType: "arraybuffer" }
     );
-
-    // It's gzipped JSON
     const zlib = require("zlib");
     const decompressed = zlib.gunzipSync(Buffer.from(res.data));
     const instruments  = JSON.parse(decompressed.toString("utf8"));
-
-    // Build symbol → instrument_key map for EQ segment only
     const map = {};
     for (const inst of instruments) {
       if (inst.segment === "NSE_EQ" && inst.instrument_type === "EQ") {
         map[inst.trading_symbol] = inst.instrument_key;
       }
     }
-
     instrumentMap = map;
-
-    // Save to disk
     const dir = path.dirname(INSTRUMENT_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(INSTRUMENT_FILE, JSON.stringify({ _ts: Date.now(), map }), "utf8");
     console.log(`✅ Instrument master fetched & cached: ${Object.keys(map).length} NSE EQ symbols`);
-
   } catch (e) {
     console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
-    // Fall back to a minimal hardcoded map so circuit watcher still works partially
     instrumentMap = {
       "RELIANCE":    "NSE_EQ|INE002A01018",
       "TCS":         "NSE_EQ|INE467B01029",
@@ -154,7 +143,6 @@ async function loadInstrumentMaster() {
   }
 }
 
-// Expose instrument map for circuit watcher
 function getInstrumentMap() { return instrumentMap; }
 
 function loadToken() {
@@ -198,20 +186,23 @@ function clearToken() {
 }
 
 loadToken();
-
-// Load instrument master on startup (async, non-blocking)
 loadInstrumentMaster().catch(() => {});
+
+// ── Wire OI tick handler BEFORE startStreamer ────────────────────────────────
+setOITickHandler(handleOITick);
 
 if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
   setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
 }
+
+// ── Start OI Listener ────────────────────────────────────────────────────────
+startNSEOIListener(io, () => upstoxAccessToken);
 
 const UPSTOX_INSTRUMENTS = {
   "NIFTY 50":   "NSE_INDEX|Nifty 50",
   "SENSEX":     "BSE_INDEX|SENSEX",
   "BANK NIFTY": "NSE_INDEX|Nifty Bank"
 };
-
 const INDEX_NAMES = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
 
 // ── Step 1: Redirect to Upstox login ────────────────────────────────────────
@@ -231,7 +222,6 @@ app.get("/auth/upstox", (req, res) => {
 app.get("/auth/upstox/callback", async (req, res) => {
   const { code } = req.query;
   if (!code) return res.send("ERR: No auth code received.");
-
   try {
     const response = await axios.post(
       "https://api.upstox.com/v2/login/authorization/token",
@@ -244,14 +234,11 @@ app.get("/auth/upstox/callback", async (req, res) => {
       }),
       { headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" } }
     );
-
     upstoxAccessToken = response.data.access_token;
     upstoxTokenExpiry = Date.now() + (response.data.expires_in || 86400) * 1000;
     saveToken(upstoxAccessToken, upstoxTokenExpiry);
     console.log("Upstox token saved, expires:", new Date(upstoxTokenExpiry).toISOString());
-
     startStreamer(upstoxAccessToken, io);
-
     res.send(
       "<html><body style='background:#010812;color:#00ff9c;font-family:monospace;padding:40px;text-align:center'>" +
       "<h2>Upstox Connected!</h2>" +
@@ -309,21 +296,13 @@ async function fetchUpstoxMarket() {
 app.get("/api/market", async (req, res) => {
   const blank = INDEX_NAMES.map(name => ({ name, price: "—", change: "—", pct: "—", up: null }));
   const upstoxReady = upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0);
-
-  if (!upstoxReady) {
-    return res.json([...blank, { _source: "disconnected" }]);
-  }
-
+  if (!upstoxReady) return res.json([...blank, { _source: "disconnected" }]);
   try {
     const data = await fetchUpstoxMarket();
     return res.json([...data, { _source: "upstox" }]);
   } catch (e) {
     console.error("Upstox market fetch failed:", e.message);
-    if (e.response?.status === 401) {
-      clearToken();
-      stopStreamer();
-      return res.json([...blank, { _source: "disconnected" }]);
-    }
+    if (e.response?.status === 401) { clearToken(); stopStreamer(); return res.json([...blank, { _source: "disconnected" }]); }
     return res.json([...blank, { _source: "error" }]);
   }
 });
@@ -339,46 +318,72 @@ app.get("/health", (req, res) => {
   });
 });
 
-// ── /api/test-circuit ── DIAGNOSTIC: test Upstox equity quote access ─────────
+// ── /api/test-circuit ────────────────────────────────────────────────────────
 app.get("/api/test-circuit", async (req, res) => {
   const symbol = req.query.symbol || "RELIANCE";
   const ikey   = instrumentMap[symbol];
-
-  if (!ikey) {
-    return res.json({
-      error: `Symbol ${symbol} not in instrument map`,
-      mapSize: Object.keys(instrumentMap).length,
-      sample: Object.entries(instrumentMap).slice(0, 5),
-    });
-  }
-
+  if (!ikey) return res.json({ error: `Symbol ${symbol} not in instrument map`, mapSize: Object.keys(instrumentMap).length, sample: Object.entries(instrumentMap).slice(0, 5) });
   try {
-    const r = await axios.get(
-      "https://api.upstox.com/v2/market-quote/quotes",
-      {
-        params:  { instrument_key: ikey },
-        headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
-        timeout: 10_000,
-      }
-    );
+    const r = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
+      params: { instrument_key: ikey },
+      headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
+      timeout: 10_000,
+    });
     res.json({ symbol, instrument_key: ikey, response: r.data });
   } catch (e) {
-    res.json({
-      symbol,
-      instrument_key: ikey,
-      error:  e.message,
-      status: e.response?.status,
-      body:   e.response?.data,
-    });
+    res.json({ symbol, instrument_key: ikey, error: e.message, status: e.response?.status, body: e.response?.data });
   }
 });
 
-// ── /api/test-instrument-map ── check map loaded correctly ───────────────────
+// ── /api/test-instrument-map ─────────────────────────────────────────────────
 app.get("/api/test-instrument-map", (req, res) => {
-  res.json({
-    total: Object.keys(instrumentMap).length,
-    sample: Object.entries(instrumentMap).slice(0, 10),
-  });
+  res.json({ total: Object.keys(instrumentMap).length, sample: Object.entries(instrumentMap).slice(0, 10) });
+});
+
+// ── /api/option-chain/expiries ───────────────────────────────────────────────
+app.get("/api/option-chain/expiries", (req, res) => {
+  const underlying = req.query.underlying || "NIFTY";
+  res.json({ underlying, expiries: getExpiries(underlying) });
+});
+
+// ── /api/option-chain ────────────────────────────────────────────────────────
+app.get("/api/option-chain", (req, res) => {
+  const underlying = req.query.underlying || "NIFTY";
+  const expiry     = req.query.expiry;
+  if (!expiry) {
+    const expiries = getExpiries(underlying);
+    if (!expiries.length) return res.json({ error: "No expiry data yet — polling in progress" });
+    return res.json({ underlying, expiries });
+  }
+  const chain = getChain(underlying, expiry);
+  if (!chain) return res.json({ error: "No data for this expiry yet — try again in 60s" });
+  res.json(chain);
+});
+
+// ── /api/option-chain/all ────────────────────────────────────────────────────
+app.get("/api/option-chain/all", (req, res) => {
+  const all = getAllCached();
+  const summary = {};
+  for (const [name, data] of Object.entries(all)) {
+    summary[name] = {
+      spotPrice: data.spotPrice || 0,
+      updatedAt: data.updatedAt || 0,
+      expiries:  (data.expiries || []).slice(0, 4),
+      chains: Object.entries(data.chains || {}).reduce((acc, [exp, chain]) => {
+        acc[exp] = { pcr: chain.pcr, maxPainStrike: chain.maxPainStrike, support: chain.support, resistance: chain.resistance, totalCEOI: chain.totalCEOI, totalPEOI: chain.totalPEOI };
+        return acc;
+      }, {}),
+    };
+  }
+  res.json(summary);
+});
+
+// ── /api/option-chain/subscribe ──────────────────────────────────────────────
+app.post("/api/option-chain/subscribe", (req, res) => {
+  const { name, instrumentKey } = req.body;
+  if (!name || !instrumentKey) return res.status(400).json({ error: "name and instrumentKey required" });
+  addUnderlying(name, instrumentKey);
+  res.json({ ok: true, message: `Added ${name} to OI tracking` });
 });
 
 // ── /api/events ──────────────────────────────────────────────────────────────
@@ -386,32 +391,15 @@ app.get("/api/events", (req, res) => {
   try {
     const { getStored } = require("./coordinator");
     const stored = getStored();
-
     let mcapDb = [];
     try {
       const mcapPath = path.join(__dirname, "data/marketCapDB.json");
       if (fs.existsSync(mcapPath)) {
         const raw = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
-        if (Array.isArray(raw)) {
-          mcapDb = raw;
-        } else {
-          mcapDb = Object.entries(raw).map(([code, d]) => ({
-            code, company: d.name || "", mcap: d.mcap || 0
-          }));
-        }
+        mcapDb = Array.isArray(raw) ? raw : Object.entries(raw).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
       }
     } catch (e) { console.warn("mcapDb load failed:", e.message); }
-
-    res.json({
-      bse:         getEvents("bse")  || [],
-      nse:         getEvents("nse")  || [],
-      orderBook:   stored.orderBook  || [],
-      sectors:     stored.sectors    || [],
-      megaOrders:  stored.megaOrders || [],
-      mcapDb,
-      windowHours: getRetentionHours(),
-      windowLabel: getWindowLabel()
-    });
+    res.json({ bse: getEvents("bse") || [], nse: getEvents("nse") || [], orderBook: stored.orderBook || [], sectors: stored.sectors || [], megaOrders: stored.megaOrders || [], mcapDb, windowHours: getRetentionHours(), windowLabel: getWindowLabel() });
   } catch (e) {
     res.json({ bse: [], nse: [], orderBook: [], sectors: [], megaOrders: [], mcapDb: [], windowHours: 24, windowLabel: "24h" });
   }
@@ -423,13 +411,9 @@ app.get("/api/mcap", (req, res) => {
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     if (!fs.existsSync(mcapPath)) return res.json([]);
     const data = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
-    const arr = Array.isArray(data) ? data :
-      Object.entries(data).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
+    const arr = Array.isArray(data) ? data : Object.entries(data).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
     res.json(arr);
-  } catch (e) {
-    console.log("MCap load failed:", e.message);
-    res.json([]);
-  }
+  } catch (e) { res.json([]); }
 });
 
 // ── /api/orderbook ───────────────────────────────────────────────────────────
@@ -437,38 +421,21 @@ app.get("/api/orderbook", async (req, res) => {
   try {
     const orderBookDB = require("./data/orderBookDB");
     const mongoData = await orderBookDB.getAllOrderBooks();
-
-    if (mongoData && mongoData.length > 0) {
-      return res.json({ orderBook: mongoData, count: mongoData.length });
-    }
-
+    if (mongoData && mongoData.length > 0) return res.json({ orderBook: mongoData, count: mongoData.length });
     const result = [];
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     const obPath   = path.join(__dirname, "data/orderBookHistory.json");
-
     let mcapDB = {}, obHistory = {};
     try { mcapDB    = JSON.parse(fs.readFileSync(mcapPath, "utf8").trim()); } catch { /* ok */ }
     try { obHistory = JSON.parse(fs.readFileSync(obPath,   "utf8").trim()); } catch { /* ok */ }
-
     for (const [code, obData] of Object.entries(obHistory)) {
       const quarters = obData.quarters || [];
       if (!quarters.length) continue;
       const sorted = [...quarters].sort((a, b) => (b.quarter || "").localeCompare(a.quarter || ""));
       const latest = sorted[0];
       if (!latest?.confirmedOrderBook) continue;
-      result.push({
-        code,
-        company:          obData.company || mcapDB[code]?.name || code,
-        mcap:             mcapDB[code]?.mcap || 0,
-        confirmed:        latest.confirmedOrderBook,
-        confirmedQuarter: latest.quarter,
-        newOrders:        obData.newOrders || 0,
-        currentOrderBook: (obData.currentOrderBook || latest.confirmedOrderBook) + (obData.newOrders || 0),
-        obToRevRatio:     null,
-        quarterHistory:   quarters,
-      });
+      result.push({ code, company: obData.company || mcapDB[code]?.name || code, mcap: mcapDB[code]?.mcap || 0, confirmed: latest.confirmedOrderBook, confirmedQuarter: latest.quarter, newOrders: obData.newOrders || 0, currentOrderBook: (obData.currentOrderBook || latest.confirmedOrderBook) + (obData.newOrders || 0), obToRevRatio: null, quarterHistory: quarters });
     }
-
     try {
       const { getCompaniesByMcap, getEstimatedOrderBook } = require("./data/marketCap");
       const companies = getCompaniesByMcap(0);
@@ -476,23 +443,11 @@ app.get("/api/orderbook", async (req, res) => {
         if (result.find(r => r.code === code)) continue;
         const ob = getEstimatedOrderBook(code);
         if (!ob || !ob.confirmed) continue;
-        result.push({
-          code,
-          company:          data.name || code,
-          mcap:             data.mcap || 0,
-          confirmed:        ob.confirmed,
-          confirmedQuarter: ob.confirmedQuarter,
-          newOrders:        ob.newOrders || 0,
-          currentOrderBook: ob.currentOrderBook,
-          obToRevRatio:     ob.obToRevRatio,
-          quarterHistory:   ob.quarterHistory || [],
-        });
+        result.push({ code, company: data.name || code, mcap: data.mcap || 0, confirmed: ob.confirmed, confirmedQuarter: ob.confirmedQuarter, newOrders: ob.newOrders || 0, currentOrderBook: ob.currentOrderBook, obToRevRatio: ob.obToRevRatio, quarterHistory: ob.quarterHistory || [] });
       }
     } catch { /* ok */ }
-
     result.sort((a, b) => (b.currentOrderBook || 0) - (a.currentOrderBook || 0));
     res.json({ orderBook: result, count: result.length });
-
   } catch (e) {
     console.log("⚠️ /api/orderbook error:", e.message);
     res.json({ orderBook: [], count: 0 });
@@ -508,9 +463,7 @@ app.get("/api/orderbook/:code", (req, res) => {
     const data = getCompanyData(code);
     if (!ob) return res.json({ error: "No order book data for this company" });
     res.json({ code, company: data.name || code, mcap: data.mcap || 0, ...ob });
-  } catch (e) {
-    res.json({ error: e.message });
-  }
+  } catch (e) { res.json({ error: e.message }); }
 });
 
 // ── /api/company/:code ───────────────────────────────────────────────────────
@@ -518,71 +471,28 @@ app.get("/api/company/:code", async (req, res) => {
   try {
     const code   = req.params.code;
     const nsySym = req.query.nse || null;
-
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     const obPath   = path.join(__dirname, "data/orderBookHistory.json");
-
     let localCompany = null, localOB = null;
-    try {
-      if (fs.existsSync(mcapPath)) {
-        const db = JSON.parse(fs.readFileSync(mcapPath, "utf8").trim() || "{}");
-        if (db[code]) localCompany = db[code];
-      }
-    } catch { /* ok */ }
-    try {
-      if (fs.existsSync(obPath)) {
-        const ob = JSON.parse(fs.readFileSync(obPath, "utf8").trim() || "{}");
-        if (ob[code]) localOB = ob[code];
-      }
-    } catch { /* ok */ }
-
+    try { if (fs.existsSync(mcapPath)) { const db = JSON.parse(fs.readFileSync(mcapPath, "utf8").trim() || "{}"); if (db[code]) localCompany = db[code]; } } catch { /* ok */ }
+    try { if (fs.existsSync(obPath)) { const ob = JSON.parse(fs.readFileSync(obPath, "utf8").trim() || "{}"); if (ob[code]) localOB = ob[code]; } } catch { /* ok */ }
     let obSummary = null;
     try {
       const orderBookDB = require("./data/orderBookDB");
       const mongoOB = await orderBookDB.getOrderBook(code);
-      if (mongoOB) {
-        obSummary = {
-          confirmed:        mongoOB.confirmed || 0,
-          confirmedQuarter: mongoOB.confirmedQuarter || null,
-          currentOrderBook: mongoOB.currentOrderBook || 0,
-          newOrders:        mongoOB.newOrders || 0,
-          quarterHistory:   mongoOB.quarterHistory || [],
-          obToRevRatio:     mongoOB.obToRevRatio || null,
-          lastOrderTitle:   mongoOB.lastOrderTitle || null,
-        };
-      }
+      if (mongoOB) obSummary = { confirmed: mongoOB.confirmed || 0, confirmedQuarter: mongoOB.confirmedQuarter || null, currentOrderBook: mongoOB.currentOrderBook || 0, newOrders: mongoOB.newOrders || 0, quarterHistory: mongoOB.quarterHistory || [], obToRevRatio: mongoOB.obToRevRatio || null, lastOrderTitle: mongoOB.lastOrderTitle || null };
     } catch { /* ok */ }
-
     if (!obSummary && localOB) {
       const quarters = localOB.quarters || [];
-      const latest   = [...quarters].sort((a, b) => (b.quarter || "").localeCompare(a.quarter || ""))[0] || null;
-      obSummary = {
-        confirmed:        latest?.confirmedOrderBook || 0,
-        confirmedQuarter: latest?.quarter || null,
-        currentOrderBook: localOB.currentOrderBook || latest?.confirmedOrderBook || 0,
-        newOrders:        0,
-        quarterHistory:   quarters,
-        obToRevRatio:     null,
-      };
+      const latest = [...quarters].sort((a, b) => (b.quarter || "").localeCompare(a.quarter || ""))[0] || null;
+      obSummary = { confirmed: latest?.confirmedOrderBook || 0, confirmedQuarter: latest?.quarter || null, currentOrderBook: localOB.currentOrderBook || latest?.confirmedOrderBook || 0, newOrders: 0, quarterHistory: quarters, obToRevRatio: null };
     }
-
     const { getFullScreenerData } = require("./services/data/liveMcap");
     const screener = await getFullScreenerData(code, nsySym);
-
-    const profile = {
-      ...(screener?.profile || {}),
-      name:   screener?.profile?.name   || localCompany?.name   || code,
-      sector: screener?.profile?.sector || localCompany?.sector || localCompany?.industry || "",
-      mcap:   screener?.profile?.mcap   || localCompany?.mcap   || null,
-      price:  screener?.profile?.price  || localCompany?.lastPrice || null,
-    };
-
+    const profile = { ...(screener?.profile || {}), name: screener?.profile?.name || localCompany?.name || code, sector: screener?.profile?.sector || localCompany?.sector || localCompany?.industry || "", mcap: screener?.profile?.mcap || localCompany?.mcap || null, price: screener?.profile?.price || localCompany?.lastPrice || null };
     const bseEvts = (getEvents("bse") || []).filter(e => String(e.code) === String(code));
     const nseEvts = (getEvents("nse") || []).filter(e => String(e.code) === String(code));
-    const filings = [...bseEvts, ...nseEvts]
-      .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
-      .slice(0, 15);
-
+    const filings = [...bseEvts, ...nseEvts].sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0)).slice(0, 15);
     res.json({ profile, financials: screener?.financials || {}, shareholding: screener?.shareholding || null, orderBook: obSummary, recentFilings: filings });
   } catch (e) {
     console.log("Company profile error:", e.message);
@@ -600,61 +510,26 @@ app.get("/api/search/:query", async (req, res) => {
       const raw = fs.readFileSync(mcapPath, "utf8").trim();
       if (raw) {
         const db = JSON.parse(raw);
-        localResults = Object.entries(db)
-          .filter(([code, d]) =>
-            (d.name || "").toLowerCase().includes(q) ||
-            code.includes(q) ||
-            (d.symbol || "").toLowerCase().includes(q)
-          )
-          .slice(0, 10)
-          .map(([code, d]) => ({
-            code,
-            name:      d.name     || code,
-            sector:    d.sector   || d.industry || "",
-            nseSymbol: d.symbol   || d.nseSymbol || null,
-            mcap:      d.mcap     || null,
-          }));
+        localResults = Object.entries(db).filter(([code, d]) => (d.name || "").toLowerCase().includes(q) || code.includes(q) || (d.symbol || "").toLowerCase().includes(q)).slice(0, 10).map(([code, d]) => ({ code, name: d.name || code, sector: d.sector || d.industry || "", nseSymbol: d.symbol || d.nseSymbol || null, mcap: d.mcap || null }));
       }
     }
     if (localResults.length > 0) return res.json({ results: localResults });
     const results = await searchBSE(q);
     res.json({ results });
-  } catch (e) {
-    res.json({ results: [] });
-  }
+  } catch (e) { res.json({ results: [] }); }
 });
 
 async function searchBSE(q) {
-  const BSE_HEADERS = {
-    "Referer": "https://www.bseindia.com", "Origin": "https://www.bseindia.com",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json, text/plain, */*"
-  };
+  const BSE_HEADERS = { "Referer": "https://www.bseindia.com", "Origin": "https://www.bseindia.com", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept": "application/json, text/plain, */*" };
   try {
-    const r = await axios.get(
-      "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&shname=" + encodeURIComponent(q) + "&industry=&segment=Equity&status=Active",
-      { headers: BSE_HEADERS, timeout: 8000 }
-    );
+    const r = await axios.get("https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&shname=" + encodeURIComponent(q) + "&industry=&segment=Equity&status=Active", { headers: BSE_HEADERS, timeout: 8000 });
     const rows = r.data?.Table || r.data?.Table1 || r.data?.data || (Array.isArray(r.data) ? r.data : []);
-    if (rows.length > 0) return rows.slice(0, 10).map(s => ({
-      code: s.SCRIP_CD || s.scripCd || s.Scrip_Cd,
-      name: s.Scrip_Name || s.LONG_NAME || s.CompanyName,
-      sector: s.SECTOR || s.sector || null,
-      nseSymbol: s.NSE_Symbol || s.NSESymbol || null,
-    })).filter(s => s.code && s.name);
+    if (rows.length > 0) return rows.slice(0, 10).map(s => ({ code: s.SCRIP_CD || s.scripCd || s.Scrip_Cd, name: s.Scrip_Name || s.LONG_NAME || s.CompanyName, sector: s.SECTOR || s.sector || null, nseSymbol: s.NSE_Symbol || s.NSESymbol || null })).filter(s => s.code && s.name);
   } catch { /* ok */ }
   try {
-    const r = await axios.get(
-      "https://api.bseindia.com/BseIndiaAPI/api/getScripSearchData/w?strSearch=" + encodeURIComponent(q),
-      { headers: { "Referer": "https://www.bseindia.com", "User-Agent": "Mozilla/5.0", "Accept": "application/json" }, timeout: 6000 }
-    );
+    const r = await axios.get("https://api.bseindia.com/BseIndiaAPI/api/getScripSearchData/w?strSearch=" + encodeURIComponent(q), { headers: { "Referer": "https://www.bseindia.com", "User-Agent": "Mozilla/5.0", "Accept": "application/json" }, timeout: 6000 });
     const rows = r.data?.Table || r.data?.data || (Array.isArray(r.data) ? r.data : []);
-    if (rows.length > 0) return rows.slice(0, 10).map(s => ({
-      code: s.SCRIP_CD || s.scripcode,
-      name: s.Scrip_Name || s.scripname || s.LONG_NAME,
-      sector: s.SECTOR || null,
-      nseSymbol: s.NSE_Symbol || s.symbol || null,
-    })).filter(s => s.code && s.name);
+    if (rows.length > 0) return rows.slice(0, 10).map(s => ({ code: s.SCRIP_CD || s.scripcode, name: s.Scrip_Name || s.scripname || s.LONG_NAME, sector: s.SECTOR || null, nseSymbol: s.NSE_Symbol || s.symbol || null })).filter(s => s.code && s.name);
   } catch { /* ok */ }
   return [];
 }
@@ -662,57 +537,36 @@ async function searchBSE(q) {
 // ── /api/admin/backfill ──────────────────────────────────────────────────────
 app.get("/api/admin/backfill", async (req, res) => {
   const secret = process.env.ADMIN_SECRET || "backfill2026";
-  if (req.query.token !== secret) {
-    return res.status(401).json({ error: "Unauthorized — pass ?token=YOUR_ADMIN_SECRET" });
-  }
-
+  if (req.query.token !== secret) return res.status(401).json({ error: "Unauthorized — pass ?token=YOUR_ADMIN_SECRET" });
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.setHeader("Transfer-Encoding", "chunked");
-
   const log = (msg) => { console.log(msg); res.write(msg + "\n"); };
-
   log("=== BSE ORDER BOOK BACKFILL ===");
   log("Started: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + " IST");
-
   try {
     const { updateFromResult, getCompaniesByMcap } = require("./data/marketCap");
     const { extractOrderValueFromPDF } = require("./services/data/pdfReader");
     const { setConfirmedOrderBook, updateQuarterSeries } = require("./intelligence/orderBookEngine");
-
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const fmt   = d => String(d.getDate()).padStart(2,"0") + "%2F" +
-                       String(d.getMonth()+1).padStart(2,"0") + "%2F" + d.getFullYear();
-
+    const fmt   = d => String(d.getDate()).padStart(2,"0") + "%2F" + String(d.getMonth()+1).padStart(2,"0") + "%2F" + d.getFullYear();
     log("\n[1] Getting BSE cookie...");
     let bseCookie = "";
     try {
-      const w = await axios.get("https://www.bseindia.com/corporates/ann.html", {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9", "Connection": "keep-alive" },
-        timeout: 20000, maxRedirects: 5
-      });
+      const w = await axios.get("https://www.bseindia.com/corporates/ann.html", { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9", "Connection": "keep-alive" }, timeout: 20000, maxRedirects: 5 });
       const ck = w.headers["set-cookie"];
-      if (ck?.length) {
-        bseCookie = ck.map(c => c.split(";")[0]).join("; ");
-        log("Cookie: " + bseCookie.substring(0, 60) + "...");
-      } else { log("No Set-Cookie header — continuing without"); }
+      if (ck?.length) { bseCookie = ck.map(c => c.split(";")[0]).join("; "); log("Cookie: " + bseCookie.substring(0, 60) + "..."); } else { log("No Set-Cookie header — continuing without"); }
     } catch(e) { log("Warmup failed: " + e.message); }
-
     const apiH = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36", "Accept": "application/json, text/plain, */*", "Referer": "https://www.bseindia.com/corporates/ann.html", "Origin": "https://www.bseindia.com", "X-Requested-With": "XMLHttpRequest", ...(bseCookie ? { "Cookie": bseCookie } : {}) };
-
     const OB_KW = ["infra","epc","engineer","construct","railway","defense","defence","solar","renewable","power","water","wabag","rites","rvnl","irfc","hal ","bel ","ntpc","l&t","larsen","kec ","kalpataru","thermax","bhel","suzlon","tata power","inox wind","jsw energy","nhpc","abb india","siemens","garden reach","cochin ship","mazagon","data pattern","mtar","ncc ","hg infra","pnc infra","dilip","j kumar","titagarh","jupiter wagon","cg power","va tech"];
     const isOB = n => OB_KW.some(k => (n||"").toLowerCase().includes(k.trim()));
-
     const quarters = [
       { name: "Q3FY26", from: new Date("2026-01-01"), to: new Date("2026-03-28") },
       { name: "Q2FY26", from: new Date("2025-10-01"), to: new Date("2025-11-30") },
       { name: "Q1FY26", from: new Date("2025-07-01"), to: new Date("2025-08-31") },
     ];
-
     const cos = Object.entries(getCompaniesByMcap(0)).filter(([,d]) => isOB(d.name)).slice(0,120);
     log("\n[2] Companies: " + cos.length);
-
     let totalPDFs = 0, totalFound = 0;
-
     for (const q of quarters) {
       log("\n--- " + q.name + " ---");
       await sleep(1000);
@@ -742,14 +596,10 @@ app.get("/api/admin/backfill", async (req, res) => {
       }
       await sleep(2000);
     }
-
     log("\n=== DONE: scanned=" + totalPDFs + " found=" + totalFound + " ===");
-    if (totalFound === 0) { log("BSE may be rate-limiting. Try again in 30 mins."); }
+    if (totalFound === 0) log("BSE may be rate-limiting. Try again in 30 mins.");
     res.end();
-  } catch(e) {
-    log("FATAL: " + e.message);
-    res.end();
-  }
+  } catch(e) { log("FATAL: " + e.message); res.end(); }
 });
 
 // ── SPA fallback ─────────────────────────────────────────────────────────────
@@ -767,11 +617,8 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log("Server running on port", PORT);
   console.log("Retention: " + getRetentionHours() + "h (" + getWindowLabel() + ")");
-  if (UPSTOX_API_KEY) {
-    console.log("Upstox configured — visit /auth/upstox to connect");
-  } else {
-    console.log("WARNING: UPSTOX_API_KEY not set");
-  }
+  if (UPSTOX_API_KEY) console.log("Upstox configured — visit /auth/upstox to connect");
+  else console.log("WARNING: UPSTOX_API_KEY not set");
 });
 
 module.exports = { getInstrumentMap };

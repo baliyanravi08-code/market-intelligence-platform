@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { io as socketIO } from "socket.io-client";
 import "./App.css";
 import CircuitAlerts from "./components/CircuitAlerts";
+import OptionChain from "./pages/OptionChain";
 
 const SIGNAL_COLOR = {
   ORDER_ALERT:         { bg: "#00ff9c", fg: "#000" },
@@ -304,186 +305,52 @@ function TickerModal({ item, onClose }) {
   return (
     <div
       onClick={onClose}
-      style={{
-        position: "fixed", inset: 0,
-        background: "rgba(0,0,0,0.82)",
-        backdropFilter: "blur(4px)",
-        zIndex: 1000,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 16,
-      }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", backdropFilter: "blur(4px)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={{
-          background: "#030e1e",
-          border: "1px solid #0d3560",
-          borderRadius: 10,
-          width: "94vw", maxWidth: 760, maxHeight: "88vh",
-          display: "flex", flexDirection: "column",
-          boxShadow: "0 0 60px rgba(0,150,255,0.18)",
-          overflow: "hidden",
-        }}
+        style={{ background: "#030e1e", border: "1px solid #0d3560", borderRadius: 10, width: "94vw", maxWidth: 760, maxHeight: "88vh", display: "flex", flexDirection: "column", boxShadow: "0 0 60px rgba(0,150,255,0.18)", overflow: "hidden" }}
       >
-        {/* Header */}
-        <div style={{
-          display: "flex", justifyContent: "space-between", alignItems: "flex-start",
-          padding: "14px 16px 12px", borderBottom: "1px solid #0a2540",
-          background: "linear-gradient(90deg, #020d1f, #041828)", flexShrink: 0,
-        }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "14px 16px 12px", borderBottom: "1px solid #0a2540", background: "linear-gradient(90deg, #020d1f, #041828)", flexShrink: 0 }}>
           <div>
-            <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, fontWeight: 700, color: "#00cfff" }}>
-              {item.name}
-            </div>
+            <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, fontWeight: 700, color: "#00cfff" }}>{item.name}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
-              <span style={{ fontSize: 20, fontWeight: 700, color, fontFamily: "IBM Plex Mono, monospace" }}>
-                {item.price}
-              </span>
-              {changeTxt && (
-                <span style={{ fontSize: 11, color, fontFamily: "IBM Plex Mono, monospace" }}>
-                  {arrow} {changeTxt}
-                </span>
-              )}
+              <span style={{ fontSize: 20, fontWeight: 700, color, fontFamily: "IBM Plex Mono, monospace" }}>{item.price}</span>
+              {changeTxt && <span style={{ fontSize: 11, color, fontFamily: "IBM Plex Mono, monospace" }}>{arrow} {changeTxt}</span>}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: "none", border: "none", color: "#2a5070",
-              fontSize: 18, cursor: "pointer", padding: "0 0 0 12px", flexShrink: 0,
-            }}
-          >✕</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#2a5070", fontSize: 18, cursor: "pointer", padding: "0 0 0 12px", flexShrink: 0 }}>✕</button>
         </div>
-
-        {/* Chart area */}
         <div style={{ flex: 1, minHeight: 420, flexShrink: 0 }}>
-
-          {/* Indian indices — Upstox */}
           {config?.type === "upstox" && (
-            <div style={{
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              height: 420, gap: 16,
-              background: "linear-gradient(145deg, #020c1a, #041828)",
-            }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 420, gap: 16, background: "linear-gradient(145deg, #020c1a, #041828)" }}>
               <div style={{ fontSize: 40 }}>📈</div>
-              <div style={{
-                fontFamily: "IBM Plex Mono, monospace", fontSize: 13,
-                color: "#d8eeff", fontWeight: 700, textAlign: "center",
-              }}>
-                {item.name}
-              </div>
-              <div style={{
-                fontFamily: "IBM Plex Mono, monospace", fontSize: 10,
-                color: "#2a6070", textAlign: "center", maxWidth: 340, lineHeight: 1.6,
-              }}>
-                Indian index charts are available in real-time on Upstox.<br />
-                Your ticker bar already shows live data via Upstox WebSocket.
-              </div>
+              <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, color: "#d8eeff", fontWeight: 700, textAlign: "center" }}>{item.name}</div>
+              <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 10, color: "#2a6070", textAlign: "center", maxWidth: 340, lineHeight: 1.6 }}>Indian index charts are available in real-time on Upstox.<br />Your ticker bar already shows live data via Upstox WebSocket.</div>
               <div style={{ display: "flex", gap: 10 }}>
-                <a
-                  href={config.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={e => e.stopPropagation()}
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    padding: "8px 18px", borderRadius: 5,
-                    background: "#00cfff", color: "#000",
-                    fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700,
-                    textDecoration: "none", cursor: "pointer",
-                  }}
-                >
-                  📊 Open Live Chart on Upstox ↗
-                </a>
-                {tvIndexSymbol && (
-                  <a
-                    href={"https://www.tradingview.com/chart/?symbol=" + tvIndexSymbol}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 6,
-                      padding: "8px 18px", borderRadius: 5,
-                      background: "#0a2040", color: "#4a9abb",
-                      border: "1px solid #0d3560",
-                      fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700,
-                      textDecoration: "none", cursor: "pointer",
-                    }}
-                  >
-                    TradingView ↗
-                  </a>
-                )}
+                <a href={config.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 18px", borderRadius: 5, background: "#00cfff", color: "#000", fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700, textDecoration: "none" }}>📊 Open Live Chart on Upstox ↗</a>
+                {tvIndexSymbol && <a href={"https://www.tradingview.com/chart/?symbol=" + tvIndexSymbol} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 18px", borderRadius: 5, background: "#0a2040", color: "#4a9abb", border: "1px solid #0d3560", fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700, textDecoration: "none" }}>TradingView ↗</a>}
               </div>
-              <div style={{
-                fontSize: 9, color: "#1a4060",
-                fontFamily: "IBM Plex Mono, monospace", marginTop: 4,
-              }}>
-                TradingView shows 15-min delayed data for NSE/BSE without a subscription
-              </div>
+              <div style={{ fontSize: 9, color: "#1a4060", fontFamily: "IBM Plex Mono, monospace", marginTop: 4 }}>TradingView shows 15-min delayed data for NSE/BSE without a subscription</div>
             </div>
           )}
-
-          {/* Crypto / Commodities — TradingView embed */}
           {config?.type === "tv" && (
-            <iframe
-              key={config.symbol}
-              src={
-                "https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=" +
-                config.symbol +
-                "&interval=D&hidesidetoolbar=0&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=020c1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&showpopupbutton=1&locale=en"
-              }
-              style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }}
-              allowFullScreen
-              title={item.name + " Chart"}
-            />
+            <iframe key={config.symbol} src={"https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=" + config.symbol + "&interval=D&hidesidetoolbar=0&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=020c1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&showpopupbutton=1&locale=en"} style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }} allowFullScreen title={item.name + " Chart"} />
           )}
-
-          {/* PI or unknown */}
           {!config && (
-            <div style={{
-              display: "flex", flexDirection: "column", alignItems: "center",
-              justifyContent: "center", height: 420,
-              color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8,
-            }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 420, color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8 }}>
               <span style={{ fontSize: 32 }}>π</span>
               <span>Chart not available for {item.name}</span>
-              <a
-                href="https://coinmarketcap.com/currencies/pi-network/"
-                target="_blank"
-                rel="noreferrer"
-                onClick={e => e.stopPropagation()}
-                style={{ color: "#00cfff", fontSize: 10 }}
-              >
-                View on CoinMarketCap ↗
-              </a>
+              <a href="https://coinmarketcap.com/currencies/pi-network/" target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: "#00cfff", fontSize: 10 }}>View on CoinMarketCap ↗</a>
             </div>
           )}
         </div>
-
-        {/* Footer */}
-        <div style={{
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-          padding: "10px 16px", borderTop: "1px solid #0a2540",
-          background: "#020b18", flexShrink: 0,
-        }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid #0a2540", background: "#020b18", flexShrink: 0 }}>
           <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#1a4060" }}>
-            {config?.type === "upstox"
-              ? "⚡ Real-time via Upstox · 15-min delay on TradingView"
-              : config?.type === "tv"
-              ? "TradingView · Real-time crypto & commodities"
-              : "π PI Network · CoinMarketCap"}
+            {config?.type === "upstox" ? "⚡ Real-time via Upstox · 15-min delay on TradingView" : config?.type === "tv" ? "TradingView · Real-time crypto & commodities" : "π PI Network · CoinMarketCap"}
           </span>
           {config?.type === "tv" && (
-            <a
-              href={"https://www.tradingview.com/chart/?symbol=" + config.symbol}
-              target="_blank"
-              rel="noreferrer"
-              onClick={e => e.stopPropagation()}
-              style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#00cfff", textDecoration: "none", opacity: 0.8 }}
-            >
-              Open Full Chart ↗
-            </a>
+            <a href={"https://www.tradingview.com/chart/?symbol=" + config.symbol} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#00cfff", textDecoration: "none", opacity: 0.8 }}>Open Full Chart ↗</a>
           )}
         </div>
       </div>
@@ -503,20 +370,10 @@ function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) 
         const cls    = isUp ? "up" : isDown ? "down" : "flat";
         const isDash = m.price === "—";
         return (
-          <div
-            className="ticker-item ticker-clickable"
-            key={`idx-${i}`}
-            style={isDash ? { opacity: 0.4 } : {}}
-            onClick={() => !isDash && onTickerClick(m)}
-            title={`Click to view ${m.name} chart`}
-          >
+          <div className="ticker-item ticker-clickable" key={`idx-${i}`} style={isDash ? { opacity: 0.4 } : {}} onClick={() => !isDash && onTickerClick(m)} title={`Click to view ${m.name} chart`}>
             <span className="ticker-name">{m.name}</span>
-            <span key={m._ts || m.price} className={`ticker-price${m._ts ? " blink" : ""}`}>
-              {m.price}
-            </span>
-            <span className={`ticker-change ${cls}`}>
-              {isUp ? "▲" : isDown ? "▼" : "●"} {m.change} ({m.pct})
-            </span>
+            <span key={m._ts || m.price} className={`ticker-price${m._ts ? " blink" : ""}`}>{m.price}</span>
+            <span className={`ticker-change ${cls}`}>{isUp ? "▲" : isDown ? "▼" : "●"} {m.change} ({m.pct})</span>
           </div>
         );
       })}
@@ -527,35 +384,17 @@ function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) 
         const cls    = isUp ? "up" : isDown ? "down" : "flat";
         const isDash = !a.price || a.price === "—" || a.price === "$0.0000";
         return (
-          <div
-            className={`ticker-item secondary${isDash ? "" : " ticker-clickable"}`}
-            key={`asset-${i}`}
-            style={isDash ? { opacity: 0.4, cursor: "default" } : { cursor: "pointer" }}
-            onClick={() => !isDash && onTickerClick(a)}
-            title={isDash ? `${a.name} — loading...` : `Click to view ${a.name} chart`}
-          >
+          <div className={`ticker-item secondary${isDash ? "" : " ticker-clickable"}`} key={`asset-${i}`} style={isDash ? { opacity: 0.4, cursor: "default" } : { cursor: "pointer" }} onClick={() => !isDash && onTickerClick(a)} title={isDash ? `${a.name} — loading...` : `Click to view ${a.name} chart`}>
             <span className={`ticker-asset-icon ${a.type}`}>{a.icon}</span>
             <span className="ticker-name">{a.name}</span>
-            <span key={a._ts || a.price} className={`ticker-price${a._ts ? " blink" : ""}`}>
-              {isDash ? "—" : a.price}
-            </span>
-            {!isDash && (
-              <span className={`ticker-change ${cls}`}>
-                {isUp ? "▲" : isDown ? "▼" : "●"} {Math.abs(a.change24h).toFixed(2)}%
-              </span>
-            )}
+            <span key={a._ts || a.price} className={`ticker-price${a._ts ? " blink" : ""}`}>{isDash ? "—" : a.price}</span>
+            {!isDash && <span className={`ticker-change ${cls}`}>{isUp ? "▲" : isDown ? "▼" : "●"} {Math.abs(a.change24h).toFixed(2)}%</span>}
           </div>
         );
       })}
       <div className="ticker-right">
         {tickerStale && (
-          <span style={{
-            fontSize: "9px", color: "#ff5c5c", fontFamily: "IBM Plex Mono, monospace",
-            background: "#1a0000", border: "1px solid #ff5c5c33",
-            borderRadius: "3px", padding: "1px 6px", marginRight: 4
-          }}>
-            ⚠ STALE
-          </span>
+          <span style={{ fontSize: "9px", color: "#ff5c5c", fontFamily: "IBM Plex Mono, monospace", background: "#1a0000", border: "1px solid #ff5c5c33", borderRadius: "3px", padding: "1px 6px", marginRight: 4 }}>⚠ STALE</span>
         )}
         <DataSourceBadge source={dataSource} />
         <LiveClock />
@@ -569,71 +408,27 @@ function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) 
 
 function ConflictBadge({ risk }) {
   if (!risk) return null;
-  return (
-    <span style={{
-      fontSize: "8px", fontWeight: 700, fontFamily: "IBM Plex Mono, monospace",
-      padding: "1px 5px", borderRadius: "3px", letterSpacing: 0.4,
-      background: "#1a0008", color: "#ff5c5c",
-      border: "1px solid #ff5c5c44", whiteSpace: "nowrap",
-    }}>
-      ⚠ {risk.type}
-    </span>
-  );
+  return <span style={{ fontSize: "8px", fontWeight: 700, fontFamily: "IBM Plex Mono, monospace", padding: "1px 5px", borderRadius: "3px", letterSpacing: 0.4, background: "#1a0008", color: "#ff5c5c", border: "1px solid #ff5c5c44", whiteSpace: "nowrap" }}>⚠ {risk.type}</span>;
 }
 
 function CautionBadge({ risk }) {
   if (!risk) return null;
-  return (
-    <span style={{
-      fontSize: "8px", fontWeight: 700, fontFamily: "IBM Plex Mono, monospace",
-      padding: "1px 5px", borderRadius: "3px", letterSpacing: 0.4,
-      background: "#1a1000", color: "#ffaa00",
-      border: "1px solid #ffaa0044", whiteSpace: "nowrap",
-    }}>
-      ⚡ {risk.type}
-    </span>
-  );
+  return <span style={{ fontSize: "8px", fontWeight: 700, fontFamily: "IBM Plex Mono, monospace", padding: "1px 5px", borderRadius: "3px", letterSpacing: 0.4, background: "#1a1000", color: "#ffaa00", border: "1px solid #ffaa0044", whiteSpace: "nowrap" }}>⚡ {risk.type}</span>;
 }
 
 function PriceImpactBadge({ impact }) {
   if (!impact) return null;
   const pos = impact > 0;
-  return (
-    <span style={{
-      fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700,
-      color: pos ? "#00ff9c" : "#ff5c5c",
-      background: pos ? "#002210" : "#1a0008",
-      border: `1px solid ${pos ? "#00ff9c33" : "#ff5c5c33"}`,
-      padding: "1px 5px", borderRadius: "3px",
-    }}>
-      {pos ? "+" : ""}{impact.toFixed(1)}% est.
-    </span>
-  );
+  return <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700, color: pos ? "#00ff9c" : "#ff5c5c", background: pos ? "#002210" : "#1a0008", border: `1px solid ${pos ? "#00ff9c33" : "#ff5c5c33"}`, padding: "1px 5px", borderRadius: "3px" }}>{pos ? "+" : ""}{impact.toFixed(1)}% est.</span>;
 }
 
 function IntelSummaryBar({ blocked, clean, cautioned }) {
   return (
-    <div style={{
-      display: "flex", gap: 6, padding: "5px 8px",
-      background: "#010a18", border: "1px solid #0c2240",
-      borderRadius: 4, marginBottom: 8, flexWrap: "wrap", alignItems: "center",
-    }}>
-      <span style={{ fontSize: "8px", fontFamily: "IBM Plex Mono, monospace", color: "#1a5070", letterSpacing: 1 }}>
-        INTEL ENGINE
-      </span>
-      <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#00ff9c" }}>
-        ✓ {clean} clean
-      </span>
-      {cautioned > 0 && (
-        <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00" }}>
-          ⚡ {cautioned} caution
-        </span>
-      )}
-      {blocked > 0 && (
-        <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ff5c5c" }}>
-          ✗ {blocked} blocked
-        </span>
-      )}
+    <div style={{ display: "flex", gap: 6, padding: "5px 8px", background: "#010a18", border: "1px solid #0c2240", borderRadius: 4, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <span style={{ fontSize: "8px", fontFamily: "IBM Plex Mono, monospace", color: "#1a5070", letterSpacing: 1 }}>INTEL ENGINE</span>
+      <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#00ff9c" }}>✓ {clean} clean</span>
+      {cautioned > 0 && <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00" }}>⚡ {cautioned} caution</span>}
+      {blocked > 0 && <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ff5c5c" }}>✗ {blocked} blocked</span>}
     </div>
   );
 }
@@ -649,9 +444,7 @@ function GlobalSearch({ onSelectCompany }) {
   const wrapRef     = useRef(null);
 
   useEffect(() => {
-    const handleClick = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
-    };
+    const handleClick = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
@@ -673,19 +466,12 @@ function GlobalSearch({ onSelectCompany }) {
     }, 280);
   };
 
-  const handleSelect = (company) => {
-    setQuery(""); setResults([]); setOpen(false);
-    onSelectCompany(company);
-  };
+  const handleSelect = (company) => { setQuery(""); setResults([]); setOpen(false); onSelectCompany(company); };
 
   return (
     <div className="gs-wrap" ref={wrapRef}>
       <span className="gs-icon">⌕</span>
-      <input
-        className="gs-input" type="text" placeholder="Search company..."
-        value={query} onChange={handleChange}
-        onFocus={() => results.length > 0 && setOpen(true)}
-      />
+      <input className="gs-input" type="text" placeholder="Search company..." value={query} onChange={handleChange} onFocus={() => results.length > 0 && setOpen(true)} />
       {loading && <span className="gs-spinner" />}
       {query && <button className="gs-clear" onClick={() => { setQuery(""); setResults([]); setOpen(false); }}>✕</button>}
       {open && results.length > 0 && (
@@ -717,9 +503,7 @@ function OBBarChart({ history }) {
         return (
           <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
             <div style={{ width: "100%", height: `${pct}%`, background: "linear-gradient(180deg, #00cfff, #004a6a)", borderRadius: "2px 2px 0 0", minHeight: 2 }} />
-            <span style={{ fontSize: "7px", color: "#2a5070", fontFamily: "IBM Plex Mono", whiteSpace: "nowrap" }}>
-              {q.quarter?.replace("FY", "")?.slice(-4) || ""}
-            </span>
+            <span style={{ fontSize: "7px", color: "#2a5070", fontFamily: "IBM Plex Mono", whiteSpace: "nowrap" }}>{q.quarter?.replace("FY", "")?.slice(-4) || ""}</span>
           </div>
         );
       })}
@@ -756,46 +540,18 @@ function CompanyPanel({ company, onClose }) {
         <div className="cp-header">
           <div>
             <div className="cp-company">{company.name}</div>
-            <div className="cp-meta">
-              BSE: {company.code}
-              {company.nseSymbol ? ` · NSE: ${company.nseSymbol}` : ""}
-              {company.sector   ? ` · ${company.sector}` : ""}
-            </div>
+            <div className="cp-meta">BSE: {company.code}{company.nseSymbol ? ` · NSE: ${company.nseSymbol}` : ""}{company.sector ? ` · ${company.sector}` : ""}</div>
           </div>
           <button className="cp-close" onClick={onClose}>✕</button>
         </div>
         <div className="cp-body">
-          {loading && (
-            <div className="cp-loading">
-              <div className="ai-spinner" />
-              <span>Loading company data...</span>
-            </div>
-          )}
+          {loading && <div className="cp-loading"><div className="ai-spinner" /><span>Loading company data...</span></div>}
           {!loading && (
             <>
               <div className="cp-stats-grid">
-                {(p.price || p.lastPrice) && (
-                  <div className="cp-stat">
-                    <div className="cp-stat-val" style={{ color: "#00ff9c" }}>₹{p.price || p.lastPrice}</div>
-                    <div className="cp-stat-label">Price</div>
-                  </div>
-                )}
-                {(p.mcap || p.marketCap) && (
-                  <div className="cp-stat">
-                    <div className="cp-stat-val">
-                      ₹{((p.mcap || p.marketCap) >= 1000
-                        ? ((p.mcap || p.marketCap)/1000).toFixed(1) + "K"
-                        : (p.mcap || p.marketCap))}Cr
-                    </div>
-                    <div className="cp-stat-label">Market Cap</div>
-                  </div>
-                )}
-                {p.high52 && (
-                  <div className="cp-stat">
-                    <div className="cp-stat-val" style={{ fontSize: "10px" }}>₹{p.high52} / ₹{p.low52}</div>
-                    <div className="cp-stat-label">52W High / Low</div>
-                  </div>
-                )}
+                {(p.price || p.lastPrice) && <div className="cp-stat"><div className="cp-stat-val" style={{ color: "#00ff9c" }}>₹{p.price || p.lastPrice}</div><div className="cp-stat-label">Price</div></div>}
+                {(p.mcap || p.marketCap) && <div className="cp-stat"><div className="cp-stat-val">₹{((p.mcap || p.marketCap) >= 1000 ? ((p.mcap || p.marketCap)/1000).toFixed(1) + "K" : (p.mcap || p.marketCap))}Cr</div><div className="cp-stat-label">Market Cap</div></div>}
+                {p.high52 && <div className="cp-stat"><div className="cp-stat-val" style={{ fontSize: "10px" }}>₹{p.high52} / ₹{p.low52}</div><div className="cp-stat-label">52W High / Low</div></div>}
                 {f.pe && <div className="cp-stat"><div className="cp-stat-val">{f.pe}</div><div className="cp-stat-label">P/E</div></div>}
                 {f.bookValue && <div className="cp-stat"><div className="cp-stat-val">₹{f.bookValue}</div><div className="cp-stat-label">Book Value</div></div>}
                 {f.roe && <div className="cp-stat"><div className="cp-stat-val">{f.roe}%</div><div className="cp-stat-label">ROE</div></div>}
@@ -807,10 +563,7 @@ function CompanyPanel({ company, onClose }) {
                     <span style={{ color: "#d8eeff", fontWeight: 700 }}>₹{(ob_.currentOrderBook || 0).toLocaleString("en-IN")}Cr</span>
                     {ob_.obToRevRatio && <span style={{ fontSize: "10px", color: "#00cfff", fontFamily: "IBM Plex Mono" }}>{ob_.obToRevRatio}x OB/Rev</span>}
                   </div>
-                  <div style={{ fontSize: "9px", color: "#4a9abb", marginTop: 4 }}>
-                    Confirmed: ₹{(ob_.confirmed || 0).toLocaleString("en-IN")}Cr ({ob_.confirmedQuarter || "—"})
-                    {ob_.newOrders > 0 && ` · +₹${ob_.newOrders.toLocaleString("en-IN")}Cr new`}
-                  </div>
+                  <div style={{ fontSize: "9px", color: "#4a9abb", marginTop: 4 }}>Confirmed: ₹{(ob_.confirmed || 0).toLocaleString("en-IN")}Cr ({ob_.confirmedQuarter || "—"}){ob_.newOrders > 0 && ` · +₹${ob_.newOrders.toLocaleString("en-IN")}Cr new`}</div>
                   {ob_.quarterHistory && <OBBarChart history={ob_.quarterHistory} />}
                   {ob_.lastOrderTitle && <div style={{ fontSize: "9px", color: "#2a5070", marginTop: 6, fontStyle: "italic" }}>Latest: {ob_.lastOrderTitle}</div>}
                 </div>
@@ -823,10 +576,7 @@ function CompanyPanel({ company, onClose }) {
                   {filings.slice(0, 8).map((f_, i) => {
                     const url = f_.pdfUrl || f_.attachment || f_.url || null;
                     return (
-                      <div key={i} className="cp-filing"
-                        onClick={() => url && window.open(url, "_blank", "noopener")}
-                        style={{ cursor: url ? "pointer" : "default" }}
-                      >
+                      <div key={i} className="cp-filing" onClick={() => url && window.open(url, "_blank", "noopener")} style={{ cursor: url ? "pointer" : "default" }}>
                         <span className="cp-filing-title">{f_.title || "Filing"}</span>
                         <span className="cp-filing-time">{formatTime(f_.time) || "—"}</span>
                       </div>
@@ -846,49 +596,31 @@ function CompanyPanel({ company, onClose }) {
 
 function PanelHeaderBar({ children }) {
   return (
-    <div style={{
-      margin: "-10px -10px 10px -10px", padding: "7px 10px",
-      background: "linear-gradient(90deg, #020d1f 0%, #031428 100%)",
-      borderBottom: "1px solid #0d3560", borderRadius: "5px 5px 0 0",
-      flexShrink: 0, display: "flex", alignItems: "center", gap: 6,
-    }}>
+    <div style={{ margin: "-10px -10px 10px -10px", padding: "7px 10px", background: "linear-gradient(90deg, #020d1f 0%, #031428 100%)", borderBottom: "1px solid #0d3560", borderRadius: "5px 5px 0 0", flexShrink: 0, display: "flex", alignItems: "center", gap: 6 }}>
       {children}
     </div>
   );
 }
 
 function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSource, intelStats, socket }) {
-  const srcLabel =
-    tickerSource === "upstox"       ? "⚡ Upstox Live"  :
-    tickerSource === "disconnected" ? "○ Disconnected"  :
-    tickerSource === "error"        ? "⚠ Error"         : "◌ Connecting...";
-  const srcColor =
-    tickerSource === "upstox" ? "#00ff9c" :
-    tickerSource === "error"  ? "#ff5c5c" : "#ffaa00";
+  const srcLabel = tickerSource === "upstox" ? "⚡ Upstox Live" : tickerSource === "disconnected" ? "○ Disconnected" : tickerSource === "error" ? "⚠ Error" : "◌ Connecting...";
+  const srcColor = tickerSource === "upstox" ? "#00ff9c" : tickerSource === "error" ? "#ff5c5c" : "#ffaa00";
 
   return (
     <div className="panel intelligence-panel">
       <PanelHeaderBar>
         <span style={{ color: "#ffaa00", fontSize: "12px" }}>🔔</span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "10px", fontWeight: 700, color: "#00cfff", textTransform: "uppercase", letterSpacing: "1px" }}>Alerts</span>
-        {computedRadar.filter(e => e.conflict || e.score >= 80).length > 0 && (
-          <span className="count">{computedRadar.filter(e => e.conflict || e.score >= 80).length}</span>
-        )}
+        {computedRadar.filter(e => e.conflict || e.score >= 80).length > 0 && <span className="count">{computedRadar.filter(e => e.conflict || e.score >= 80).length}</span>}
       </PanelHeaderBar>
       <div className="section">
         {computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).length === 0
           ? <div className="empty">No active alerts</div>
           : computedRadar.filter(e => e.conflict || e.score >= 80).slice(0, 6).map((e, i) => (
-          <div key={i} className="mini-card" style={{
-            borderLeft: e.conflict ? "3px solid #ff5c5c" : e.score >= 80 ? "3px solid #ff9c00" : undefined,
-            background: e.conflict ? "#0c0208" : undefined
-          }}>
+          <div key={i} className="mini-card" style={{ borderLeft: e.conflict ? "3px solid #ff5c5c" : e.score >= 80 ? "3px solid #ff9c00" : undefined, background: e.conflict ? "#0c0208" : undefined }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span className="mini-card-name" style={{ color: e.conflict ? "#ff7070" : undefined }}>{e.company}</span>
-              {e.conflict
-                ? <span className="mini-card-blocked">BLOCKED</span>
-                : <span className="mini-card-score">{e.score}</span>
-              }
+              {e.conflict ? <span className="mini-card-blocked">BLOCKED</span> : <span className="mini-card-score">{e.score}</span>}
             </div>
             <div style={{ display: "flex", gap: 5, marginTop: 3, alignItems: "center" }}>
               <span className={`type type-${e.type}`} style={{ fontSize: "8px" }}>{e.type}</span>
@@ -917,7 +649,6 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
         <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#1a5070" }}>Cautioned (MED risk)</span><span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.cautioned}</span></div>
         <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#1a5070" }}>Risk registry</span><span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono,monospace" }}>{RISK_REGISTRY.length} entities</span></div>
       </div>
-  
     </div>
   );
 }
@@ -930,29 +661,15 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
       </div>
       <div className="search-wrap">
         <span className="search-icon">⌕</span>
-        <input
-          type="text" className="radar-search"
-          placeholder="Search company, type..."
-          value={radarQuery}
-          onChange={e => setRadarQuery(e.target.value)}
-        />
+        <input type="text" className="radar-search" placeholder="Search company, type..." value={radarQuery} onChange={e => setRadarQuery(e.target.value)} />
         {radarQuery && <button className="clear-btn" onClick={() => setRadarQuery("")}>✕</button>}
       </div>
       {filteredRadar.length === 0 ? (
         <div className="empty">No matches for "{radarQuery}"</div>
       ) : filteredRadar.map((r, i) => (
-        <div
-          className="radar-card"
-          key={i}
-          style={{
-            borderLeft: r.conflict ? "3px solid #ff5c5c" : r.caution ? "3px solid #ffaa00" : "3px solid #0c3060",
-            background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined,
-          }}
-        >
+        <div className="radar-card" key={i} style={{ borderLeft: r.conflict ? "3px solid #ff5c5c" : r.caution ? "3px solid #ffaa00" : "3px solid #0c3060", background: r.conflict ? "linear-gradient(145deg,#0d0208,#020c1a)" : undefined }}>
           <div className="rc-top">
-            <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>
-              {r.company}
-            </span>
+            <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>{r.company}</span>
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
               {r.conflict && <ConflictBadge risk={r.conflict} />}
               {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
@@ -960,24 +677,9 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery }) {
             </div>
           </div>
           <div className="tag-row">
-            <span style={{
-              fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px",
-              background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a",
-              color: r.exchange === "BSE" ? "#4a9eff" : "#00ff9c",
-              border: r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44",
-              flexShrink: 0
-            }}>{r.exchange}</span>
-            {r.orderValue > 0 && (
-              <span className="order-val" style={{ flexShrink: 0 }}>₹{r.orderValue}Cr</span>
-            )}
-            {r.pdfUrl && (
-              <a
-                href={r.pdfUrl} target="_blank" rel="noreferrer"
-                className="filing-link"
-                onClick={ev => ev.stopPropagation()}
-                style={{ flexShrink: 0 }}
-              >📄</a>
-            )}
+            <span style={{ fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px", background: r.exchange === "BSE" ? "#1a2a4a" : "#1a3a2a", color: r.exchange === "BSE" ? "#4a9eff" : "#00ff9c", border: r.exchange === "BSE" ? "1px solid #4a9eff44" : "1px solid #00ff9c44", flexShrink: 0 }}>{r.exchange}</span>
+            {r.orderValue > 0 && <span className="order-val" style={{ flexShrink: 0 }}>₹{r.orderValue}Cr</span>}
+            {r.pdfUrl && <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="filing-link" onClick={ev => ev.stopPropagation()} style={{ flexShrink: 0 }}>📄</a>}
             <LiveAgo exchangeTime={r.time} receivedAt={r.receivedAt} />
           </div>
         </div>
@@ -1003,25 +705,13 @@ function FeedPanel({ filteredFeed, activeTab, setActiveTab, feedFilter, setFeedF
       {filteredFeed.length === 0 ? (
         <div className="empty">No signals match filter</div>
       ) : filteredFeed.map((e, i) => {
-        const cardClass = ["feed-card",
-          e.type?.includes("ORDER")   ? "fc-order"   :
-          e.type?.includes("MERGER")  ? "fc-merger"  :
-          e.type?.includes("RESULT")  ? "fc-result"  :
-          e.type?.includes("INSIDER") ? "fc-insider" :
-          e.type?.includes("CAPEX")   ? "fc-capex"   : "fc-news"
-        ].join(" ");
+        const cardClass = ["feed-card", e.type?.includes("ORDER") ? "fc-order" : e.type?.includes("MERGER") ? "fc-merger" : e.type?.includes("RESULT") ? "fc-result" : e.type?.includes("INSIDER") ? "fc-insider" : e.type?.includes("CAPEX") ? "fc-capex" : "fc-news"].join(" ");
         const hotWords = ["crore","cr","lakh","order","contract","merger","acquisition","fraud","penalty","rs"];
         const pdfUrl = e.pdfUrl || e.attachment || e.url || null;
         return (
-          <div className={cardClass} key={i}
-            onClick={() => pdfUrl && window.open(pdfUrl, "_blank", "noopener")}
-            style={{ cursor: pdfUrl ? "pointer" : "default" }}
-          >
+          <div className={cardClass} key={i} onClick={() => pdfUrl && window.open(pdfUrl, "_blank", "noopener")} style={{ cursor: pdfUrl ? "pointer" : "default" }}>
             <div className="fc-head">
-              <span className="fc-company">
-                {e.company}
-                {e.type === "NEWS" && <span className="fc-tag-news">NEWS</span>}
-              </span>
+              <span className="fc-company">{e.company}{e.type === "NEWS" && <span className="fc-tag-news">NEWS</span>}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                 {e.type !== "NEWS" && <Tag type={e.type} crores={e._orderInfo?.crores || extractAmount(e.title)} />}
                 {pdfUrl && <a href={pdfUrl} target="_blank" rel="noreferrer" className="filing-link" onClick={ev => ev.stopPropagation()}>📄 Filing</a>}
@@ -1100,46 +790,29 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
         <div className="section-divider">
           📦 Order Book Tracker
           <span className="count" style={{ marginLeft: 6 }}>{liveOrderBook.length}</span>
-          <span style={{ fontSize: "8px", color: "#1a5070", marginLeft: 6 }}>
-            {getCurrentQuarter().label} {getCurrentQuarter().range}
-          </span>
+          <span style={{ fontSize: "8px", color: "#1a5070", marginLeft: 6 }}>{getCurrentQuarter().label} {getCurrentQuarter().range}</span>
         </div>
         <div style={{ position: "relative", marginBottom: 6 }}>
           <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "#1a5070", fontSize: "11px", pointerEvents: "none" }}>⌕</span>
-          <input
-            type="text" placeholder="Search order book..." value={obSearch}
-            onChange={e => setObSearch(e.target.value)}
-            style={{ width: "100%", background: "#010a18", border: "1px solid #0c2240", borderRadius: 4, padding: "5px 8px 5px 24px", color: "#d8eeff", fontSize: "10px", fontFamily: "IBM Plex Mono, monospace", outline: "none", boxSizing: "border-box" }}
-          />
-          {obSearch && (
-            <button onClick={() => setObSearch("")} style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#1a5070", cursor: "pointer", fontSize: "12px" }}>✕</button>
-          )}
+          <input type="text" placeholder="Search order book..." value={obSearch} onChange={e => setObSearch(e.target.value)} style={{ width: "100%", background: "#010a18", border: "1px solid #0c2240", borderRadius: 4, padding: "5px 8px 5px 24px", color: "#d8eeff", fontSize: "10px", fontFamily: "IBM Plex Mono, monospace", outline: "none", boxSizing: "border-box" }} />
+          {obSearch && <button onClick={() => setObSearch("")} style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#1a5070", cursor: "pointer", fontSize: "12px" }}>✕</button>}
         </div>
-        {liveOrderBook.length === 0 ? (
-          <div className="empty">No order book data yet</div>
-        ) : liveOrderBook.filter(o => !obSearch || (o.company || "").toLowerCase().includes(obSearch.toLowerCase())).map((o, i) => {
+        {liveOrderBook.length === 0 ? <div className="empty">No order book data yet</div>
+          : liveOrderBook.filter(o => !obSearch || (o.company || "").toLowerCase().includes(obSearch.toLowerCase())).map((o, i) => {
           const isOpen  = obExpanded === o.code;
           const obToRev = o.obToRevRatio ? parseFloat(o.obToRevRatio) : null;
           const obColor = obToRev === null ? "#4a9abb" : obToRev >= 3 ? "#00ff9c" : obToRev >= 1.5 ? "#ffaa00" : "#ff5c5c";
           const maxOB   = Math.max(...liveOrderBook.map(x => x.currentOrderBook || 0), 1);
           const barPct  = Math.round(((o.currentOrderBook || 0) / maxOB) * 100);
           return (
-            <div key={i} className="ord-card" style={{ cursor: "pointer", borderLeft: `3px solid ${obColor}` }}
-              onClick={() => setObExpanded(isOpen ? null : o.code)}
-            >
+            <div key={i} className="ord-card" style={{ cursor: "pointer", borderLeft: `3px solid ${obColor}` }} onClick={() => setObExpanded(isOpen ? null : o.code)}>
               <div className="ord-top">
                 <span className="co-name">{o.company}</span>
                 <span className="ord-val">₹{(o.currentOrderBook || 0).toLocaleString("en-IN")}Cr</span>
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 3, flexWrap: "wrap" }}>
-                <span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono, monospace" }}>
-                  Base: ₹{(o.confirmed || 0).toLocaleString("en-IN")}Cr ({o.confirmedQuarter || "—"})
-                </span>
-                {o.newOrders > 0 && (
-                  <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono, monospace" }}>
-                    +₹{o.newOrders.toLocaleString("en-IN")}Cr new
-                  </span>
-                )}
+                <span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono, monospace" }}>Base: ₹{(o.confirmed || 0).toLocaleString("en-IN")}Cr ({o.confirmedQuarter || "—"})</span>
+                {o.newOrders > 0 && <span style={{ fontSize: "9px", color: "#00ff9c", fontFamily: "IBM Plex Mono, monospace" }}>+₹{o.newOrders.toLocaleString("en-IN")}Cr new</span>}
                 {obToRev && <span style={{ fontSize: "9px", color: obColor, fontFamily: "IBM Plex Mono, monospace" }}>{o.obToRevRatio}x rev</span>}
               </div>
               <div className="ob-bar"><div className="ob-bar-fill" style={{ width: `${barPct}%` }} /></div>
@@ -1166,6 +839,9 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  // ── Page routing ───────────────────────────────────────────────────────────
+  const [currentPage, setCurrentPage] = useState("dashboard"); // "dashboard" | "options"
+
   const [marketIndices,  setMarketIndices]  = useState([
     { name: "NIFTY 50",   price: "—", change: "—", pct: "—", up: null },
     { name: "SENSEX",     price: "—", change: "—", pct: "—", up: null },
@@ -1188,7 +864,7 @@ export default function App() {
   const [obSearch,       setObSearch]       = useState("");
   const [selectedCompany,  setSelectedCompany]  = useState(null);
   const [selectedTicker,   setSelectedTicker]   = useState(null);
-  const [socket,           setSocket]           = useState(null); // ← NEW
+  const [socket,           setSocket]           = useState(null);
 
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem("mi-theme");
@@ -1203,60 +879,45 @@ export default function App() {
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e) => {
-      if (!localStorage.getItem("mi-theme")) setDarkMode(e.matches);
-    };
+    const handler = (e) => { if (!localStorage.getItem("mi-theme")) setDarkMode(e.matches); };
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, []);
 
   useEffect(() => {
     const sock = socketIO({ transports: ["websocket", "polling"] });
-    setSocket(sock); // ← NEW: expose socket for CircuitAlerts
+    setSocket(sock);
     sock.on("connect", () => { console.log("Socket.io connected"); });
     sock.on("market-tick", (updates) => {
       if (!Array.isArray(updates)) return;
-      setMarketIndices(prev =>
-        prev.map(idx => {
-          const update = updates.find(u => u.name === idx.name);
-          if (!update) return idx;
-          return { ...update, _ts: Date.now() };
-        })
-      );
+      setMarketIndices(prev => prev.map(idx => { const update = updates.find(u => u.name === idx.name); if (!update) return idx; return { ...update, _ts: Date.now() }; }));
       setTickerSource("upstox");
       setTickerLastOk(Date.now());
       setTickerStale(false);
     });
-    sock.on("upstox-status", ({ connected }) => {
-      if (!connected) setTickerSource("connecting");
-    });
+    sock.on("upstox-status", ({ connected }) => { if (!connected) setTickerSource("connecting"); });
     sock.on("disconnect", () => { setTickerSource("error"); });
     return () => sock.disconnect();
   }, []);
 
   useEffect(() => {
-    fetch("/api/market")
-      .then(r => r.json())
-      .then(data => {
-        if (!Array.isArray(data)) return;
-        const indices    = data.filter(d => d.name && !d._source);
-        const sourceMeta = data.find(d => d._source);
-        const src        = sourceMeta?._source || "disconnected";
-        if (indices.length) setMarketIndices(indices);
-        if (src !== "upstox") setTickerSource(src);
-        else { setTickerSource("upstox"); setTickerLastOk(Date.now()); }
-      })
-      .catch(() => setTickerSource("disconnected"));
+    fetch("/api/market").then(r => r.json()).then(data => {
+      if (!Array.isArray(data)) return;
+      const indices    = data.filter(d => d.name && !d._source);
+      const sourceMeta = data.find(d => d._source);
+      const src        = sourceMeta?._source || "disconnected";
+      if (indices.length) setMarketIndices(indices);
+      if (src !== "upstox") setTickerSource(src);
+      else { setTickerSource("upstox"); setTickerLastOk(Date.now()); }
+    }).catch(() => setTickerSource("disconnected"));
   }, []);
 
   useEffect(() => {
-    const t = setInterval(() => {
-      if (tickerLastOk && Date.now() - tickerLastOk > 90000) setTickerStale(true);
-    }, 10000);
+    const t = setInterval(() => { if (tickerLastOk && Date.now() - tickerLastOk > 90000) setTickerStale(true); }, 10000);
     return () => clearInterval(t);
   }, [tickerLastOk]);
 
-  // ── BTC WebSocket (Binance) ───────────────────────────────────────────────
+  // ── BTC WebSocket ─────────────────────────────────────────────────────────
   const btcWsRef    = useRef(null);
   const btcReconRef = useRef(null);
   const btc24hRef   = useRef(0);
@@ -1314,31 +975,19 @@ export default function App() {
       if (n >= 1)    return prefix + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
       return prefix + n.toFixed(4);
     };
-
     const fetchCommodities = async () => {
       const updates = {};
       try {
         const res  = await fetch("/api/commodities");
         const data = await res.json();
-        if (data?.GOLD?.price) {
-          updates["GOLD"] = { name: "GOLD", icon: "Au", type: "gold", price: fmt(data.GOLD.price), change24h: data.GOLD.change24h || 0, _ts: Date.now() };
-        }
-        if (data?.SILVER?.price) {
-          updates["SILVER"] = { name: "SILVER", icon: "Ag", type: "silver", price: fmt(data.SILVER.price), change24h: data.SILVER.change24h || 0, _ts: Date.now() };
-        }
+        if (data?.GOLD?.price)   updates["GOLD"]   = { name: "GOLD",   icon: "Au", type: "gold",   price: fmt(data.GOLD.price),   change24h: data.GOLD.change24h   || 0, _ts: Date.now() };
+        if (data?.SILVER?.price) updates["SILVER"] = { name: "SILVER", icon: "Ag", type: "silver", price: fmt(data.SILVER.price), change24h: data.SILVER.change24h || 0, _ts: Date.now() };
       } catch (e) { console.warn("Commodities fetch failed:", e.message); }
-
       try {
-        const cgRes = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=pi-network&vs_currencies=usd&include_24hr_change=true",
-          { headers: { "Accept": "application/json" } }
-        );
+        const cgRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pi-network&vs_currencies=usd&include_24hr_change=true", { headers: { "Accept": "application/json" } });
         const cg = await cgRes.json();
-        if (cg?.["pi-network"]?.usd) {
-          updates["PI"] = { name: "PI", icon: "π", type: "crypto", price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0, _ts: Date.now() };
-        }
+        if (cg?.["pi-network"]?.usd) updates["PI"] = { name: "PI", icon: "π", type: "crypto", price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0, _ts: Date.now() };
       } catch (e) { console.warn("PI fetch failed:", e.message); }
-
       if (Object.keys(updates).length > 0) {
         setCryptoAssets(prev => {
           const map = {};
@@ -1348,16 +997,13 @@ export default function App() {
         });
       }
     };
-
     fetchCommodities();
     const interval = setInterval(fetchCommodities, 60000);
     return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
-    const fetchOB = () => {
-      fetch("/api/orderbook").then(r => r.json()).then(data => setLiveOrderBook(data.orderBook || [])).catch(e => console.log("OB fetch error:", e));
-    };
+    const fetchOB = () => { fetch("/api/orderbook").then(r => r.json()).then(data => setLiveOrderBook(data.orderBook || [])).catch(e => console.log("OB fetch error:", e)); };
     fetchOB();
     const iv = setInterval(fetchOB, 60000);
     return () => clearInterval(iv);
@@ -1416,7 +1062,7 @@ export default function App() {
       else if (t.includes("solar") || t.includes("renewable") || t.includes("capex") || t.includes("greenfield") || t.includes("brownfield") || t.includes("expansion") || t.includes("power purchase") || t.includes("spv") || (t.includes("equity stake") || (t.includes("subscribe") && t.includes("equity"))) || (t.includes("invest") && !t.includes("investor") && !t.includes("investment in"))) { type = "CAPEX"; score = 75; }
       else if (t.includes("purchase order") || t.includes("work order") || t.includes("supply order") || t.includes("receipt of order") || t.includes("order received") || t.includes("order secured") || t.includes("major order") || t.includes("letter of acceptance") || t.includes("rate contract") || t.includes("bagged") || t.includes("contract awarded") || t.includes("loa") || (t.includes("order") && (t.includes("crore") || t.includes("lakh") || t.includes("₹") || t.includes("rs.")) && !isNonOrder)) { type = "ORDER"; score = 90; }
       else if (t.includes("merger") || t.includes("amalgamation") || (t.includes("acquisition") && !t.includes("solar") && !t.includes("invest") && !t.includes("subscribe") && !t.includes("equity shares of") && !t.includes("spv") && !t.includes("stake") && !t.includes("power"))) { type = "MERGER"; score = 80; }
-      else if (t.includes("buyback"))   { type = "BUYBACK";     score = 78; }
+      else if (t.includes("buyback"))   { type = "BUYBACK"; score = 78; }
       else if (t.includes("result") || t.includes("quarterly")) { type = "RESULT"; score = 65; }
       else if (t.includes("insider") || t.includes("promoter") || t.includes("bulk deal")) { type = "INSIDER"; score = 70; }
       else if (t.includes("dividend")) { type = "DIVIDEND"; score = 60; }
@@ -1468,6 +1114,42 @@ export default function App() {
 
   const needsConnect = tickerSource === "disconnected" || tickerSource === "error";
 
+  // ── If on options page, render it full-screen below the header ────────────
+  if (currentPage === "options") {
+    return (
+      <div className="terminal">
+        <div className="header">
+          <div className="header-left">
+            <span className="star">★</span>
+            <span className="title">Market Intelligence</span>
+            <MarketStatus />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              className="nav-page-btn active"
+              onClick={() => setCurrentPage("options")}
+            >
+              ⚡ Options
+            </button>
+            <button
+              className="nav-page-btn"
+              onClick={() => setCurrentPage("dashboard")}
+            >
+              ← Dashboard
+            </button>
+          </div>
+          <button className="mode-toggle" onClick={() => setDarkMode(d => !d)} title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
+            {darkMode ? "☀ Light" : "🌙 Dark"}
+          </button>
+        </div>
+        <TickerBar indices={marketIndices} assets={cryptoAssets} dataSource={tickerSource} tickerStale={tickerStale} onTickerClick={setSelectedTicker} />
+        <OptionChain />
+        <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
+      </div>
+    );
+  }
+
+  // ── Dashboard ─────────────────────────────────────────────────────────────
   return (
     <div className="terminal">
       <div className="header">
@@ -1476,31 +1158,27 @@ export default function App() {
           <span className="title">Market Intelligence</span>
           <MarketStatus />
           {needsConnect && (
-            <span
-              style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }}
-              onClick={() => window.open("/auth/upstox", "_blank")}
-            >
+            <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }} onClick={() => window.open("/auth/upstox", "_blank")}>
               Connect Upstox →
             </span>
           )}
         </div>
-        <GlobalSearch onSelectCompany={setSelectedCompany} />
-        <button
-          className="mode-toggle"
-          onClick={() => setDarkMode(d => !d)}
-          title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-        >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            className="nav-page-btn"
+            onClick={() => setCurrentPage("options")}
+            title="Open Option Chain OI Heatmap"
+          >
+            ⚡ Options
+          </button>
+          <GlobalSearch onSelectCompany={setSelectedCompany} />
+        </div>
+        <button className="mode-toggle" onClick={() => setDarkMode(d => !d)} title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
           {darkMode ? "☀ Light" : "🌙 Dark"}
         </button>
       </div>
 
-      <TickerBar
-        indices={marketIndices}
-        assets={cryptoAssets}
-        dataSource={tickerSource}
-        tickerStale={tickerStale}
-        onTickerClick={setSelectedTicker}
-      />
+      <TickerBar indices={marketIndices} assets={cryptoAssets} dataSource={tickerSource} tickerStale={tickerStale} onTickerClick={setSelectedTicker} />
 
       {/* ── Desktop layout ── */}
       <div className="layout desktop-layout">
@@ -1514,10 +1192,9 @@ export default function App() {
       <div className="mobile-layout">
         <div className="mobile-tab-bar">
           {MOBILE_TABS.map(t => (
-            <button key={t.key} className={`mobile-tab-btn ${mobilePanelTab === t.key ? "active" : ""}`} onClick={() => setMobilePanelTab(t.key)}>
-              {t.label}
-            </button>
+            <button key={t.key} className={`mobile-tab-btn ${mobilePanelTab === t.key ? "active" : ""}`} onClick={() => setMobilePanelTab(t.key)}>{t.label}</button>
           ))}
+          <button className="mobile-tab-btn" onClick={() => setCurrentPage("options")}>⚡ OI</button>
         </div>
         <div className="mobile-panel-wrap">
           {mobilePanelTab === "intel"   && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />}

@@ -1,10 +1,6 @@
 /**
  * CircuitAlerts.jsx
  * Location: client/src/components/CircuitAlerts.jsx
- *
- * Wire into App.jsx:
- *   import CircuitAlerts from './components/CircuitAlerts';
- *   <CircuitAlerts socket={socket} />
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -119,10 +115,10 @@ function AlertCard({ alert }) {
 }
 
 export default function CircuitAlerts({ socket }) {
-  const [alerts,    setAlerts]  = useState([]);
-  const [filter,    setFilter]  = useState("ALL");
+  const [alerts,     setAlerts] = useState([]);
+  const [filter,     setFilter] = useState("ALL");
   const [sideFilter, setSide]   = useState("ALL");
-  const [connected, setConn]    = useState(false);
+  const [connected,  setConn]   = useState(false);
 
   const addAlerts = useCallback((incoming) => {
     setAlerts((prev) => {
@@ -135,15 +131,21 @@ export default function CircuitAlerts({ socket }) {
 
   useEffect(() => {
     if (!socket) return;
-    socket.on("connect",       () => setConn(true));
-    socket.on("disconnect",    () => setConn(false));
-    socket.on("circuit-alerts", addAlerts);
     setConn(socket.connected);
-    return () => { socket.off("circuit-alerts", addAlerts); };
+    const onConnect    = () => setConn(true);
+    const onDisconnect = () => setConn(false);
+    socket.on("connect",        onConnect);
+    socket.on("disconnect",     onDisconnect);
+    socket.on("circuit-alerts", addAlerts);
+    return () => {
+      socket.off("connect",        onConnect);
+      socket.off("disconnect",     onDisconnect);
+      socket.off("circuit-alerts", addAlerts);
+    };
   }, [socket, addAlerts]);
 
   const visible = alerts.filter((a) => {
-    if (filter    !== "ALL" && a.tier  !== filter)    return false;
+    if (filter     !== "ALL" && a.tier !== filter)    return false;
     if (sideFilter !== "ALL" && a.side !== sideFilter) return false;
     return true;
   });
@@ -200,16 +202,28 @@ export default function CircuitAlerts({ socket }) {
         </div>
       )}
 
-      {/* Cards */}
+      {/* Cards or empty state */}
       {visible.length === 0 ? (
-        <div style={{ padding: "28px 0", textAlign: "center", fontSize: 13, color: "var(--color-text-tertiary)" }}>
-          {alerts.length === 0 ? "Watching for circuit proximity…" : "No alerts match current filters"}
+        <div style={{ padding: "16px 0", textAlign: "center" }}>
+          <div style={{ fontSize: 13, color: "var(--color-text-tertiary)" }}>
+            {alerts.length === 0
+              ? "Watching for circuit proximity…"
+              : "No alerts match current filters"}
+          </div>
+          {alerts.length === 0 && (
+            <div style={{ marginTop: 6, fontSize: 11, color: "var(--color-text-tertiary)", opacity: 0.6 }}>
+              {connected
+                ? "Socket connected · No stocks near circuit limits"
+                : "Socket disconnected · Reconnecting…"}
+            </div>
+          )}
         </div>
       ) : (
         visible.map((alert, i) => (
           <AlertCard key={`${alert.symbol}:${alert.timestamp}:${i}`} alert={alert} />
         ))
       )}
-    </div>
+
+    </div>  
   );
 }

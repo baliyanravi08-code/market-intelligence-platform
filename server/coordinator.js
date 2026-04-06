@@ -195,25 +195,27 @@ function getStored() {
 function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   console.log("🚀 Coordinator Running");
 
+  // ← ADD THIS: replay stored data to every new client
+  io.on("connection", (socket) => {
+    sendStoredToClient(socket);
+  });
+
   setInterval(() => {
     io.emit("system_event", { type: "heartbeat", time: new Date().toISOString() });
   }, 30000);
 
-  // Delivery analyzer — NSE source, graceful fallback when blocked on cloud
   startDeliveryAnalyzer(io);
   onDeliverySpike((spikes) => {
     persistDeliverySpike(spikes);
     console.log(`💾 Persisted ${spikes.length} delivery spike(s) to disk`);
   });
 
-  // Circuit watcher — Upstox source, works everywhere
   startCircuitWatcher(io, tokenGetter, instrumentMapGetter);
   onCircuitAlert((alerts) => {
     persistCircuitAlerts(alerts);
     console.log(`💾 Persisted ${alerts.length} circuit alert(s) to disk`);
   });
 }
-
 module.exports = {
   startCoordinator,
   persistRadar,
