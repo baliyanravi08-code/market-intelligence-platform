@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { io as socketIO } from "socket.io-client";
 import "./App.css";
+import CircuitAlerts from "./components/CircuitAlerts";
 
 const SIGNAL_COLOR = {
   ORDER_ALERT:         { bg: "#00ff9c", fg: "#000" },
@@ -524,7 +525,6 @@ function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) 
         const isUp   = a.change24h > 0;
         const isDown = a.change24h < 0;
         const cls    = isUp ? "up" : isDown ? "down" : "flat";
-        // ── FIX: show dash if price not yet loaded, make non-clickable ──────
         const isDash = !a.price || a.price === "—" || a.price === "$0.0000";
         return (
           <div
@@ -857,7 +857,7 @@ function PanelHeaderBar({ children }) {
   );
 }
 
-function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSource, intelStats }) {
+function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSource, intelStats, socket }) {
   const srcLabel =
     tickerSource === "upstox"       ? "⚡ Upstox Live"  :
     tickerSource === "disconnected" ? "○ Disconnected"  :
@@ -898,6 +898,10 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
         ))}
       </div>
       <div className="section">
+        <div className="section-divider">🔔 Circuit Alerts</div>
+        <CircuitAlerts socket={socket} />
+      </div>
+      <div className="section">
         <div className="section-divider">⚡ Pulse</div>
         <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
         <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
@@ -913,6 +917,7 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
         <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#1a5070" }}>Cautioned (MED risk)</span><span style={{ fontSize: "9px", color: "#ffaa00", fontFamily: "IBM Plex Mono,monospace" }}>{intelStats.cautioned}</span></div>
         <div className="mini-card" style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#1a5070" }}>Risk registry</span><span style={{ fontSize: "9px", color: "#4a9abb", fontFamily: "IBM Plex Mono,monospace" }}>{RISK_REGISTRY.length} entities</span></div>
       </div>
+  
     </div>
   );
 }
@@ -1183,6 +1188,7 @@ export default function App() {
   const [obSearch,       setObSearch]       = useState("");
   const [selectedCompany,  setSelectedCompany]  = useState(null);
   const [selectedTicker,   setSelectedTicker]   = useState(null);
+  const [socket,           setSocket]           = useState(null); // ← NEW
 
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem("mi-theme");
@@ -1205,9 +1211,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const socket = socketIO({ transports: ["websocket", "polling"] });
-    socket.on("connect", () => { console.log("Socket.io connected"); });
-    socket.on("market-tick", (updates) => {
+    const sock = socketIO({ transports: ["websocket", "polling"] });
+    setSocket(sock); // ← NEW: expose socket for CircuitAlerts
+    sock.on("connect", () => { console.log("Socket.io connected"); });
+    sock.on("market-tick", (updates) => {
       if (!Array.isArray(updates)) return;
       setMarketIndices(prev =>
         prev.map(idx => {
@@ -1220,11 +1227,11 @@ export default function App() {
       setTickerLastOk(Date.now());
       setTickerStale(false);
     });
-    socket.on("upstox-status", ({ connected }) => {
+    sock.on("upstox-status", ({ connected }) => {
       if (!connected) setTickerSource("connecting");
     });
-    socket.on("disconnect", () => { setTickerSource("error"); });
-    return () => socket.disconnect();
+    sock.on("disconnect", () => { setTickerSource("error"); });
+    return () => sock.disconnect();
   }, []);
 
   useEffect(() => {
@@ -1299,11 +1306,7 @@ export default function App() {
     };
   }, []);
 
-  // ── FIXED: Gold + Silver + PI via your own server proxy ──────────────────
-  // Root cause: CoinGecko IDs "gold" and "silver" don't exist on free tier.
-  // Fix: fetch from /api/commodities (your Express server fetches metals.live
-  // server-side — no CORS, no rate limits hitting the browser).
-  // PI still fetched from CoinGecko directly (correct ID: "pi-network").
+  // ── Gold + Silver + PI ────────────────────────────────────────────────────
   useEffect(() => {
     const fmt = (n, prefix = "$") => {
       if (!n && n !== 0) return "—";
@@ -1314,34 +1317,17 @@ export default function App() {
 
     const fetchCommodities = async () => {
       const updates = {};
-
-      // ── Gold + Silver via your own server (no CORS, reliable) ────────────
       try {
         const res  = await fetch("/api/commodities");
         const data = await res.json();
-
         if (data?.GOLD?.price) {
-          updates["GOLD"] = {
-            name: "GOLD", icon: "Au", type: "gold",
-            price:     fmt(data.GOLD.price),
-            change24h: data.GOLD.change24h || 0,
-            _ts: Date.now()
-          };
+          updates["GOLD"] = { name: "GOLD", icon: "Au", type: "gold", price: fmt(data.GOLD.price), change24h: data.GOLD.change24h || 0, _ts: Date.now() };
         }
-
         if (data?.SILVER?.price) {
-          updates["SILVER"] = {
-            name: "SILVER", icon: "Ag", type: "silver",
-            price:     fmt(data.SILVER.price),
-            change24h: data.SILVER.change24h || 0,
-            _ts: Date.now()
-          };
+          updates["SILVER"] = { name: "SILVER", icon: "Ag", type: "silver", price: fmt(data.SILVER.price), change24h: data.SILVER.change24h || 0, _ts: Date.now() };
         }
-      } catch (e) {
-        console.warn("Commodities fetch failed:", e.message);
-      }
+      } catch (e) { console.warn("Commodities fetch failed:", e.message); }
 
-      // ── PI via CoinGecko (correct ID is "pi-network") ────────────────────
       try {
         const cgRes = await fetch(
           "https://api.coingecko.com/api/v3/simple/price?ids=pi-network&vs_currencies=usd&include_24hr_change=true",
@@ -1349,30 +1335,21 @@ export default function App() {
         );
         const cg = await cgRes.json();
         if (cg?.["pi-network"]?.usd) {
-          updates["PI"] = {
-            name: "PI", icon: "π", type: "crypto",
-            price:     fmt(cg["pi-network"].usd),
-            change24h: cg["pi-network"].usd_24h_change || 0,
-            _ts: Date.now()
-          };
+          updates["PI"] = { name: "PI", icon: "π", type: "crypto", price: fmt(cg["pi-network"].usd), change24h: cg["pi-network"].usd_24h_change || 0, _ts: Date.now() };
         }
-      } catch (e) {
-        console.warn("PI fetch failed:", e.message);
-      }
+      } catch (e) { console.warn("PI fetch failed:", e.message); }
 
       if (Object.keys(updates).length > 0) {
         setCryptoAssets(prev => {
           const map = {};
           prev.forEach(a => { map[a.name] = a; });
           Object.assign(map, updates);
-          // Maintain display order: BTC first, then PI, GOLD, SILVER
           return ["BTC", "PI", "GOLD", "SILVER"].map(n => map[n]).filter(Boolean);
         });
       }
     };
 
     fetchCommodities();
-    // Refresh every 60s
     const interval = setInterval(fetchCommodities, 60000);
     return () => clearInterval(interval);
   }, []);
@@ -1525,13 +1502,15 @@ export default function App() {
         onTickerClick={setSelectedTicker}
       />
 
+      {/* ── Desktop layout ── */}
       <div className="layout desktop-layout">
-        <IntelPanel  computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />
+        <IntelPanel  computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />
         <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />
         <FeedPanel   filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
         <RightPanel  computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
       </div>
 
+      {/* ── Mobile layout ── */}
       <div className="mobile-layout">
         <div className="mobile-tab-bar">
           {MOBILE_TABS.map(t => (
@@ -1541,10 +1520,10 @@ export default function App() {
           ))}
         </div>
         <div className="mobile-panel-wrap">
-          {mobilePanelTab === "intel" && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} />}
-          {mobilePanelTab === "radar" && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />}
-          {mobilePanelTab === "feed"  && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
-          {mobilePanelTab === "data"  && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
+          {mobilePanelTab === "intel"   && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />}
+          {mobilePanelTab === "radar"   && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} />}
+          {mobilePanelTab === "feed"    && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
+          {mobilePanelTab === "data"    && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
         </div>
       </div>
 
