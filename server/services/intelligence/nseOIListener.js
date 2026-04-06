@@ -2,16 +2,15 @@
 
 /**
  * nseOIListener.js
- * Polls option chain data every 60s.
  * Place at: server/services/intelligence/nseOIListener.js
  *
  * FIXED 06 Apr 2026:
- * - Upstox /v2/option/chain returns 400/404 for index options — requires
- *   a specific F&O API subscription scope on the token.
- * - Switched expiry source to NSE website (works on Render via public endpoint)
- * - Option chain data fetched from Upstox only for individual stock F&O
- *   (which works with standard token); index OI now from NSE directly.
- * - Falls back gracefully if both blocked — no crashes, just silent skip.
+ * - Upstox /v2/option/chain needs paid F&O subscription scope → not available
+ * - NSE direct API blocked on Render cloud IP → not available
+ * - NEW APPROACH: Use Upstox /v2/market-quote/quotes for index spot prices
+ *   + fetch option chain from NSE via a public CORS proxy as fallback
+ * - If both fail, OI listener silently disables itself (no crashes, no spam)
+ * - When market is closed (weekends/after hours), skips polling entirely
  */
 
 const axios = require("axios");
@@ -22,7 +21,7 @@ let optionChainEngine = null;
 try {
   optionChainEngine = require("./optionChainEngine");
 } catch (e) {
-  console.warn("⚠️ OI: optionChainEngine not found — chain processing disabled");
+  // optionChainEngine is optional
 }
 
 const CACHE_FILE = path.join(__dirname, "../../data/optionChainCache.json");
@@ -30,12 +29,15 @@ const CACHE_FILE = path.join(__dirname, "../../data/optionChainCache.json");
 let ioRef        = null;
 let tokenGetter  = null;
 let pollTimer    = null;
+let disabled     = false; // set true if all sources fail repeatedly
+let failCount    = 0;
+const MAX_FAILS  = 5; // disable after 5 consecutive total failures
 
 const cache = {};
 
 const DEFAULT_UNDERLYINGS = [
-  { name: "NIFTY",     key: "NSE_INDEX|Nifty 50",   nseSymbol: "NIFTY"     },
-  { name: "BANKNIFTY", key: "NSE_INDEX|Nifty Bank",  nseSymbol: "BANKNIFTY" },
+  { name: "NIFTY",     upstoxKey: "NSE_INDEX|Nifty 50",  nseSymbol: "NIFTY"     },
+  { name: "BANKNIFTY", upstoxKey: "NSE_INDEX|Nifty Bank", nseSymbol: "BANKNIFTY" },
 ];
 
 const activeUnderlyings = [...DEFAULT_UNDERLYINGS];
@@ -44,239 +46,177 @@ function getAuthHeaders(token) {
   return { "Authorization": `Bearer ${token}`, "Accept": "application/json" };
 }
 
-// ── Expiry fetcher: try Upstox first, fall back to NSE ───────────────────────
-
-async function fetchExpiriesUpstox(instrumentKey, token) {
-  // Try v2 instruments endpoint
-  const endpoints = [
-    "https://api.upstox.com/v2/option/chain/instruments",
-    "https://api.upstox.com/v2/option/chain/expiry-dates",
-  ];
-  for (const url of endpoints) {
-    try {
-      const res = await axios.get(url, {
-        params:  { instrument_key: instrumentKey },
-        headers: getAuthHeaders(token),
-        timeout: 8000,
-      });
-      const d = res.data?.data;
-      if (!d) continue;
-      const expiries = Array.isArray(d) ? d : (d.expiry_dates || []);
-      if (expiries.length) return expiries;
-    } catch (e) {
-      // silent — try next
-    }
-  }
-  return [];
-}
-
-async function fetchExpiriesNSE(nseSymbol) {
-  // NSE public option chain endpoint — works on cloud without cookies
-  try {
-    const res = await axios.get(
-      `https://www.nseindia.com/api/option-chain-indices?symbol=${nseSymbol}`,
-      {
-        timeout: 10000,
-        headers: {
-          "User-Agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          "Accept":      "application/json",
-          "Referer":     "https://www.nseindia.com/option-chain",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-      }
-    );
-    const expiries = res.data?.records?.expiryDates || [];
-    return expiries;
-  } catch (e) {
-    return [];
-  }
-}
-
-async function fetchExpiries(underlying, token) {
-  // 1. Try Upstox
-  const upstoxExpiries = await fetchExpiriesUpstox(underlying.key, token);
-  if (upstoxExpiries.length) return { source: "upstox", expiries: upstoxExpiries };
-
-  // 2. Try NSE directly
-  if (underlying.nseSymbol) {
-    const nseExpiries = await fetchExpiriesNSE(underlying.nseSymbol);
-    if (nseExpiries.length) return { source: "nse", expiries: nseExpiries };
-  }
-
-  return { source: null, expiries: [] };
-}
-
-// ── Option chain fetcher ──────────────────────────────────────────────────────
-
-async function fetchChainUpstox(instrumentKey, expiry, token) {
-  try {
-    const res = await axios.get("https://api.upstox.com/v2/option/chain", {
-      params:  { instrument_key: instrumentKey, expiry_date: expiry },
-      headers: getAuthHeaders(token),
-      timeout: 15000,
-    });
-    return { source: "upstox", data: res.data?.data || [] };
-  } catch (e) {
-    return { source: null, data: [] };
-  }
-}
-
-async function fetchChainNSE(nseSymbol, expiry) {
-  try {
-    const res = await axios.get(
-      `https://www.nseindia.com/api/option-chain-indices?symbol=${nseSymbol}`,
-      {
-        timeout: 12000,
-        headers: {
-          "User-Agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          "Accept":      "application/json",
-          "Referer":     "https://www.nseindia.com/option-chain",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-      }
-    );
-    const records = res.data?.records;
-    if (!records) return { source: null, data: [] };
-
-    // Filter by expiry
-    const filtered = (records.data || []).filter(r =>
-      !expiry || r.expiryDate === expiry
-    );
-    return { source: "nse", data: filtered, spotPrice: records.underlyingValue };
-  } catch (e) {
-    return { source: null, data: [] };
-  }
-}
-
-// ── Market hours ──────────────────────────────────────────────────────────────
-
 function checkMarketOpen() {
   const now = new Date();
   const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const h = ist.getHours(), m = ist.getMinutes(), day = ist.getDay();
   if (day === 0 || day === 6) return false;
   const mins = h * 60 + m;
-  return mins >= 555 && mins <= 930;
+  return mins >= 555 && mins <= 930; // 9:15–15:30
+}
+
+// ── Spot price from Upstox market quote (works with standard token) ───────────
+async function fetchSpotPrice(upstoxKey, token) {
+  try {
+    const res = await axios.get(
+      "https://api.upstox.com/v2/market-quote/quotes",
+      {
+        params:  { instrument_key: upstoxKey },
+        headers: getAuthHeaders(token),
+        timeout: 8000,
+      }
+    );
+    const quote = res.data?.data?.[upstoxKey] || res.data?.data?.[upstoxKey.replace("|", ":")];
+    return quote?.last_price || quote?.ohlc?.close || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+// ── Option chain from NSE via AllOrigins CORS proxy ───────────────────────────
+// AllOrigins proxies any public URL — works from Render cloud IPs
+async function fetchChainViaCorsProxy(nseSymbol) {
+  const nseUrl = `https://www.nseindia.com/api/option-chain-indices?symbol=${nseSymbol}`;
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(nseUrl)}`;
+
+  const res = await axios.get(proxyUrl, {
+    timeout: 15000,
+    headers: { "Accept": "application/json" },
+  });
+
+  const contents = res.data?.contents;
+  if (!contents) throw new Error("No contents from allorigins proxy");
+
+  const parsed = JSON.parse(contents);
+  const records = parsed?.records;
+  if (!records?.data?.length) throw new Error("No option chain data in proxy response");
+
+  return {
+    data:       records.data,
+    expiries:   records.expiryDates || [],
+    spotPrice:  records.underlyingValue || 0,
+  };
 }
 
 // ── Poll ──────────────────────────────────────────────────────────────────────
-
 async function pollAll() {
+  if (disabled) return;
+  if (!checkMarketOpen()) return; // skip outside market hours entirely
+
   const token = tokenGetter?.();
   if (!token) return;
 
+  let anySuccess = false;
+
   for (const u of activeUnderlyings) {
     try {
-      await pollUnderlying(u, token);
+      const success = await pollUnderlying(u, token);
+      if (success) anySuccess = true;
       await sleep(1500);
     } catch (e) {
-      console.warn(`⚠️ OI: poll failed for ${u.name}:`, e.message);
+      console.warn(`⚠️ OI: poll error for ${u.name}:`, e.message);
     }
   }
 
-  persistCache();
+  if (anySuccess) {
+    failCount = 0;
+    persistCache();
+  } else {
+    failCount++;
+    if (failCount >= MAX_FAILS) {
+      disabled = true;
+      console.warn(`⚠️ OI: disabled after ${MAX_FAILS} consecutive failures — option chain unavailable on this deployment`);
+    }
+  }
 }
 
 async function pollUnderlying(underlying, token) {
-  const { name } = underlying;
+  const { name, upstoxKey, nseSymbol } = underlying;
 
-  // Get expiries
-  let expiries    = cache[name]?.expiries;
-  const cacheAge  = cache[name]?.expiriesFetchedAt || 0;
+  // Get spot price from Upstox (works with standard token)
+  const spotPrice = await fetchSpotPrice(upstoxKey, token);
 
-  if (!expiries?.length || Date.now() - cacheAge > 60 * 60 * 1000) {
-    const result = await fetchExpiries(underlying, token);
-    if (!result.expiries.length) {
-      console.warn(`⚠️ OI: no expiries for ${name} — skipping`);
-      return;
-    }
+  // Get option chain via CORS proxy → NSE
+  let chainData = null;
+  let expiries  = [];
+
+  try {
+    const result = await fetchChainViaCorsProxy(nseSymbol);
+    chainData = result.data;
+    expiries  = result.expiries;
+    const spot = result.spotPrice || spotPrice;
+
+    // Update cache
     if (!cache[name]) cache[name] = {};
-    cache[name].expiries          = result.expiries;
-    cache[name].expiriesSource    = result.source;
+    cache[name].expiries          = expiries;
     cache[name].expiriesFetchedAt = Date.now();
-    expiries = result.expiries;
-  }
+    cache[name].spotPrice         = spot;
+    cache[name].updatedAt         = Date.now();
 
-  const nearExpiries = expiries.slice(0, 2);
-
-  for (const expiry of nearExpiries) {
-    let rawData = null;
-    let spotPrice = 0;
-
-    // Try Upstox first
-    const upstoxResult = await fetchChainUpstox(underlying.key, expiry, token);
-    if (upstoxResult.data.length) {
-      rawData   = upstoxResult.data;
-      spotPrice = rawData[0]?.underlying_spot_price || 0;
-    }
-
-    // Fall back to NSE
-    if (!rawData?.length && underlying.nseSymbol) {
-      const nseResult = await fetchChainNSE(underlying.nseSymbol, expiry);
-      if (nseResult.data.length) {
-        rawData   = nseResult.data;
-        spotPrice = nseResult.spotPrice || 0;
-      }
-    }
-
-    if (!rawData?.length) {
-      console.warn(`⚠️ OI: no chain data for ${name} ${expiry}`);
-      continue;
-    }
-
-    // Process if engine available
-    let processed = { raw: rawData, expiry, spotPrice, updatedAt: Date.now() };
-    if (optionChainEngine?.processOptionChain) {
-      try {
-        processed = optionChainEngine.processOptionChain(name, expiry, rawData, spotPrice);
-      } catch (e) {
-        console.warn(`⚠️ OI: processOptionChain failed for ${name}:`, e.message);
-      }
-    }
-
+    // Process nearest 2 expiries
+    const nearExpiries = expiries.slice(0, 2);
     if (!cache[name].chains) cache[name].chains = {};
-    cache[name].chains[expiry] = processed;
-    cache[name].spotPrice      = spotPrice;
-    cache[name].updatedAt      = Date.now();
 
-    if (ioRef) {
-      ioRef.emit("option-chain-update", { underlying: name, expiry, data: processed });
+    for (const expiry of nearExpiries) {
+      const strikes = chainData.filter(r => r.expiryDate === expiry);
+      if (!strikes.length) continue;
+
+      let processed = { raw: strikes, expiry, spotPrice: spot, updatedAt: Date.now() };
+      if (optionChainEngine?.processOptionChain) {
+        try {
+          processed = optionChainEngine.processOptionChain(name, expiry, strikes, spot);
+        } catch (e) { /* use raw */ }
+      }
+
+      cache[name].chains[expiry] = processed;
+
+      if (ioRef) {
+        ioRef.emit("option-chain-update", { underlying: name, expiry, data: processed });
+      }
+
+      const pcrStr = processed.pcr != null ? `PCR=${processed.pcr}` : `${strikes.length} strikes`;
+      console.log(`📊 OI: ${name} ${expiry} — ${pcrStr} Spot=₹${spot}`);
     }
 
-    const pcrStr = processed.pcr ? `PCR=${processed.pcr}` : `${rawData.length} strikes`;
-    console.log(`📊 OI: ${name} ${expiry} — ${pcrStr} Spot=${spotPrice}`);
-
-    await sleep(800);
+    return true;
+  } catch (e) {
+    // Proxy failed — still emit spot price update if we have it
+    if (spotPrice > 0) {
+      if (!cache[name]) cache[name] = {};
+      cache[name].spotPrice  = spotPrice;
+      cache[name].updatedAt  = Date.now();
+      if (ioRef) {
+        ioRef.emit("option-spot-update", { underlying: name, spotPrice });
+      }
+    }
+    return false;
   }
 }
 
-// ── WebSocket tick handler ────────────────────────────────────────────────────
-
+// ── WebSocket tick handler (called from upstoxStream.js) ─────────────────────
 function handleOITick(instrumentKey, feedData) {
   const mFF = feedData?.marketFF;
   if (!mFF || !ioRef) return;
   ioRef.emit("option-oi-tick", {
     instrKey: instrumentKey,
-    oi:       mFF.oi  || 0,
+    oi:       mFF.oi || 0,
     ltp:      mFF.ltpc?.ltp || 0,
     ts:       Date.now(),
   });
 }
 
 // ── Public accessors ──────────────────────────────────────────────────────────
-
 function getExpiries(underlying)      { return cache[underlying]?.expiries || []; }
 function getChain(underlying, expiry) { return cache[underlying]?.chains?.[expiry] || null; }
 function getAllCached()                { return cache; }
 
-function addUnderlying(name, instrumentKey, nseSymbol) {
-  if (activeUnderlyings.find(u => u.key === instrumentKey)) return;
-  activeUnderlyings.push({ name, key: instrumentKey, nseSymbol: nseSymbol || name });
+function addUnderlying(name, upstoxKey, nseSymbol) {
+  if (activeUnderlyings.find(u => u.upstoxKey === upstoxKey)) return;
+  activeUnderlyings.push({ name, upstoxKey, nseSymbol: nseSymbol || name });
   console.log(`➕ OI: added underlying ${name}`);
 }
 
 // ── Persist ───────────────────────────────────────────────────────────────────
-
 function persistCache() {
   try {
     const dir = path.dirname(CACHE_FILE);
@@ -288,7 +228,6 @@ function persistCache() {
         spotPrice:         data.spotPrice || 0,
         updatedAt:         data.updatedAt || 0,
         expiriesFetchedAt: data.expiriesFetchedAt || 0,
-        expiriesSource:    data.expiriesSource || null,
         chainSummary: Object.entries(data.chains || {}).reduce((acc, [exp, chain]) => {
           acc[exp] = {
             pcr:           chain.pcr,
@@ -310,14 +249,14 @@ function persistCache() {
 }
 
 // ── Start / stop ──────────────────────────────────────────────────────────────
-
 function startNSEOIListener(io, tGetter) {
   ioRef       = io;
   tokenGetter = tGetter;
 
   console.log("🔭 NSE OI Listener starting...");
 
-  setTimeout(() => pollAll(), 5000);
+  // First poll after 8s
+  setTimeout(() => pollAll(), 8000);
   pollTimer = setInterval(() => pollAll(), 60 * 1000);
 
   io.on("connection", socket => {
@@ -327,8 +266,8 @@ function startNSEOIListener(io, tGetter) {
       socket.emit("option-expiries", { underlying, expiries: getExpiries(underlying) });
     });
 
-    socket.on("add-oi-underlying", ({ name, instrumentKey, nseSymbol }) => {
-      addUnderlying(name, instrumentKey, nseSymbol);
+    socket.on("add-oi-underlying", ({ name, upstoxKey, nseSymbol }) => {
+      addUnderlying(name, upstoxKey, nseSymbol);
     });
 
     for (const name of Object.keys(cache)) {
