@@ -1,26 +1,6 @@
 /**
  * OptionChain.jsx — NEXT LEVEL
- * ─────────────────────────────────────────────────────────────────
- * Fixes from original:
- *  1. OI not updating — unified data source (socket primary, REST fallback).
- *     No more race condition between socket and REST overwriting each other.
- *
- *  2. Live tick — per-strike OI change detection. Every OI update flashes
- *     the row (green=OI building, red=OI unwinding). Delta floater shows
- *     "+12.4L" animating upward. Feels like a real terminal.
- *
- *  3. Clickable Greeks chart — click any greek cell → full panel opens with
- *     4 sparkline charts (Delta, Theta, Vega, Gamma) across all strikes,
- *     current value stats, and plain-English interpretation.
- *
- *  4. Better visibility — warm dark theme (not harsh cold black), softer
- *     CE/PE colors, reduced padding, more data per screen.
- *
- *  5. OI flow bar — top of table, shows CE vs PE OI balance visually.
- *
- *  6. IV skew — summary bar shows CE vs PE IV spread.
- *
- *  7. Connection status badge — shows LIVE / REST / DISCONNECTED.
+ * Fix: tick-by-tick OI updates via 3s REST poll + socket push (no skip logic)
  */
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -134,18 +114,13 @@ function Sparkline({ data, color, height = 120, width = 360 }) {
           <stop offset="100%" stopColor={color} stopOpacity="0.02" />
         </linearGradient>
       </defs>
-      {/* Grid lines */}
       {[0, 0.25, 0.5, 0.75, 1].map(t => {
         const y = pad + t * H;
         return <line key={t} x1={pad} y1={y} x2={pad+W} y2={y} stroke="#1a2a3a" strokeWidth="1" />;
       })}
-      {/* Area fill */}
       <path d={areaD} fill={`url(#grad-${color.replace("#","")})`} />
-      {/* Line */}
       <path d={pathD} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-      {/* Last value dot */}
       <circle cx={lastPt[0]} cy={lastPt[1]} r="3" fill={color} />
-      {/* Labels */}
       <text x={pad+2} y={pad+10} fill="#3d5a72" fontSize="8">{min.toFixed(2)}</text>
       <text x={pad+2} y={pad+H} fill="#3d5a72" fontSize="8">{max.toFixed(2)}</text>
       <text x={Number(lastPt[0])+6} y={Number(lastPt[1])} fill={color} fontSize="9" fontWeight="700">
@@ -164,7 +139,6 @@ function GreeksPanel({ strike, side, data, history, onClose }) {
     { key: "gamma", name: "Gamma", symbol: "γ", color: "#4db8ff", desc: "Delta change rate" },
   ];
 
-  // Close on Escape
   useEffect(() => {
     const handler = e => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
@@ -190,7 +164,6 @@ function GreeksPanel({ strike, side, data, history, onClose }) {
           {Greeks.map(g => {
             const value  = data?.[g.key];
             const interp = interpretGreek(g.key, value, side);
-            // history is array of {strike, delta, theta, vega, gamma} across all strikes
             const chartData = history?.map(h => h[g.key]).filter(v => v != null) || [];
 
             return (
@@ -199,13 +172,9 @@ function GreeksPanel({ strike, side, data, history, onClose }) {
                   {g.symbol} {g.name}
                   <span className="greek-name">{g.desc}</span>
                 </div>
-
-                {/* Sparkline across all strikes */}
                 <div className="greek-chart-canvas">
                   <Sparkline data={chartData} color={g.color} />
                 </div>
-
-                {/* Current value stats */}
                 <div className="greek-stat-row">
                   <div className="greek-stat">
                     <span className="greek-stat-val" style={{ color: g.color }}>
@@ -230,8 +199,6 @@ function GreeksPanel({ strike, side, data, history, onClose }) {
                     </>
                   )}
                 </div>
-
-                {/* Plain-English interpretation */}
                 <div className="greek-interp" style={{ background: interp.color + "18", color: interp.color, border: `1px solid ${interp.color}30` }}>
                   {interp.text}
                 </div>
@@ -245,7 +212,7 @@ function GreeksPanel({ strike, side, data, history, onClose }) {
 }
 
 // ── OI Bar ────────────────────────────────────────────────────────────────────
-function OIBar({ value, prevValue, max, side, signal, strike }) {
+function OIBar({ value, prevValue, max, side, signal }) {
   const width    = max > 0 ? Math.min((value / max) * 100, 100) : 0;
   const oiChange = prevValue != null ? value - prevValue : 0;
   const color    = side === "ce"
@@ -259,10 +226,7 @@ function OIBar({ value, prevValue, max, side, signal, strike }) {
       <div className="oi-bar" style={{ width: `${width}%`, background: color, opacity: 0.3 }} />
       <span className="oi-val">{fmt(value)}</span>
       {deltaStr && (
-        <span
-          className="oi-delta"
-          style={{ color: oiChange > 0 ? "#00c896" : "#ff6b6b" }}
-        >
+        <span className="oi-delta" style={{ color: oiChange > 0 ? "#00c896" : "#ff6b6b" }}>
           {deltaStr}
         </span>
       )}
@@ -299,7 +263,6 @@ function StrikeRow({ row, prevRow, maxCEOI, maxPEOI, spotPrice, isFlash, showGre
   const ceSig  = SIGNAL_LABELS[row.ce.signal] || SIGNAL_LABELS.neutral;
   const peSig  = SIGNAL_LABELS[row.pe.signal] || SIGNAL_LABELS.neutral;
 
-  // Determine tick direction from OI change
   const ceOIChange = prevRow ? row.ce.oi - prevRow.ce.oi : 0;
   const peOIChange = prevRow ? row.pe.oi - prevRow.pe.oi : 0;
   const netChange  = ceOIChange + peOIChange;
@@ -307,19 +270,14 @@ function StrikeRow({ row, prevRow, maxCEOI, maxPEOI, spotPrice, isFlash, showGre
 
   return (
     <tr className={`strike-row${isATM ? " atm" : ""}${isFlash ? " flash" : ""}${tickClass}${itm_ce ? " itm-ce" : ""}${itm_pe ? " itm-pe" : ""}`}>
-      {/* CE OI */}
       <td className="ce-cell oi-cell">
         <OIBar value={row.ce.oi} prevValue={prevRow?.ce.oi} max={maxCEOI} side="ce" signal={row.ce.signal} />
       </td>
-      {/* CE OI Change */}
       <td className={`ce-cell change ${row.ce.oiChange > 0 ? "pos" : row.ce.oiChange < 0 ? "neg" : ""}`}>
         {row.ce.oiChange !== 0 && <span>{row.ce.oiChange > 0 ? "+" : ""}{fmt(row.ce.oiChange)}</span>}
       </td>
-      {/* CE LTP */}
       <td className="ce-cell ltp">{fmtPrice(row.ce.ltp)}</td>
-      {/* CE IV */}
       <td className="ce-cell iv">{row.ce.iv ? row.ce.iv.toFixed(1) + "%" : "—"}</td>
-      {/* CE Greeks */}
       {showGreeks && (
         <td className="ce-cell">
           <GreekCell
@@ -330,22 +288,18 @@ function StrikeRow({ row, prevRow, maxCEOI, maxPEOI, spotPrice, isFlash, showGre
           />
         </td>
       )}
-      {/* CE Signal */}
       <td className="ce-cell sig">
         {ceSig.icon && <span className="sig-pill" style={{ color: ceSig.color }}>{ceSig.icon} {ceSig.label}</span>}
       </td>
 
-      {/* STRIKE */}
       <td className="strike-cell">
         <span className="strike-num">{row.strike.toLocaleString("en-IN")}</span>
         {isATM && <span className="atm-badge">ATM</span>}
       </td>
 
-      {/* PE Signal */}
       <td className="pe-cell sig">
         {peSig.icon && <span className="sig-pill" style={{ color: peSig.color }}>{peSig.icon} {peSig.label}</span>}
       </td>
-      {/* PE Greeks */}
       {showGreeks && (
         <td className="pe-cell">
           <GreekCell
@@ -356,15 +310,11 @@ function StrikeRow({ row, prevRow, maxCEOI, maxPEOI, spotPrice, isFlash, showGre
           />
         </td>
       )}
-      {/* PE IV */}
       <td className="pe-cell iv">{row.pe.iv ? row.pe.iv.toFixed(1) + "%" : "—"}</td>
-      {/* PE LTP */}
       <td className="pe-cell ltp">{fmtPrice(row.pe.ltp)}</td>
-      {/* PE OI Change */}
       <td className={`pe-cell change ${row.pe.oiChange > 0 ? "pos" : row.pe.oiChange < 0 ? "neg" : ""}`}>
         {row.pe.oiChange !== 0 && <span>{row.pe.oiChange > 0 ? "+" : ""}{fmt(row.pe.oiChange)}</span>}
       </td>
-      {/* PE OI */}
       <td className="pe-cell oi-cell">
         <OIBar value={row.pe.oi} prevValue={prevRow?.pe.oi} max={maxPEOI} side="pe" signal={row.pe.signal} />
       </td>
@@ -405,14 +355,14 @@ function UpdateTimer({ lastUpdate }) {
 // ── Connection badge ──────────────────────────────────────────────────────────
 function ConnBadge({ status }) {
   const map = {
-    live:         { label: "LIVE",         color: "#00c896", dot: "#00c896" },
-    rest:         { label: "REST POLL",    color: "#f0c040", dot: "#f0c040" },
-    disconnected: { label: "DISCONNECTED", color: "#ff6b6b", dot: "#ff6b6b" },
+    live:         { label: "LIVE",         color: "#00c896" },
+    rest:         { label: "REST POLL",    color: "#f0c040" },
+    disconnected: { label: "DISCONNECTED", color: "#ff6b6b" },
   };
   const cfg = map[status] || map.disconnected;
   return (
     <div className={`conn-badge ${status}`} style={{ color: cfg.color, borderColor: cfg.color + "30" }}>
-      <span style={{ width: 5, height: 5, borderRadius: "50%", background: cfg.dot, display: "inline-block", animation: status === "live" ? "dot-pulse 1.4s infinite" : "none" }} />
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: cfg.color, display: "inline-block", animation: status === "live" ? "dot-pulse 1.4s infinite" : "none" }} />
       {cfg.label}
     </div>
   );
@@ -437,7 +387,7 @@ export default function OptionChain({ onBack }) {
   const [expiries,       setExpiries]     = useState([]);
   const [selectedExpiry, setExpiry]       = useState(null);
   const [chainData,      setChainData]    = useState(null);
-  const [prevStrikes,    setPrevStrikes]  = useState({});  // strike → row snapshot
+  const [prevStrikes,    setPrevStrikes]  = useState({});
   const [loading,        setLoading]      = useState(true);
   const [lastUpdate,     setLastUpdate]   = useState(null);
   const [flashStrikes,   setFlashStrikes] = useState(new Set());
@@ -445,34 +395,33 @@ export default function OptionChain({ onBack }) {
   const [strikeCount,    setStrikeCount]  = useState(20);
   const [showGreeks,     setShowGreeks]   = useState(false);
   const [connStatus,     setConnStatus]   = useState("disconnected");
-  // Greeks panel state
-  const [greekPanel,     setGreekPanel]   = useState(null); // { strike, side, data }
+  const [greekPanel,     setGreekPanel]   = useState(null);
 
-  const socketRef  = useRef(null);
-  const tableRef   = useRef(null);
-  const pollRef    = useRef(null);
-  const latestData = useRef(null); // always holds freshest data
+  const socketRef      = useRef(null);
+  const tableRef       = useRef(null);
+  const pollRef        = useRef(null);
+  const lastUpdateRef  = useRef(null); // ref mirror so poll closure sees latest value
 
   // ── Apply chain data (single point of update) ────────────────────────────
   const applyChainData = useCallback((data, source) => {
     if (!data) return;
-    latestData.current = data;
 
-    // Build prev strikes map for OI diff
-    setPrevStrikes(prev => {
+    // Save prev strikes for OI diff before overwriting
+    setPrevStrikes(() => {
       const next = {};
       (data.strikes || []).forEach(row => { next[row.strike] = row; });
       return next;
     });
 
     setChainData(data);
-    setLastUpdate(Date.now());
+    const now = Date.now();
+    setLastUpdate(now);
+    lastUpdateRef.current = now;
     setLoading(false);
 
     if (source === "socket") setConnStatus("live");
     else setConnStatus("rest");
 
-    // Flash strikes with alerts
     if (data.alerts?.length) {
       const newFlash = new Set(data.alerts.map(a => a.strike));
       setFlashStrikes(newFlash);
@@ -490,9 +439,7 @@ export default function OptionChain({ onBack }) {
       socket.emit("request-option-chain", { underlying, expiry: selectedExpiry });
     });
 
-    socket.on("disconnect", () => {
-      setConnStatus("disconnected");
-    });
+    socket.on("disconnect", () => setConnStatus("disconnected"));
 
     socket.on("option-expiries", ({ underlying: u, expiries: e }) => {
       if (u !== underlying) return;
@@ -500,9 +447,9 @@ export default function OptionChain({ onBack }) {
       if (e?.length && !selectedExpiry) setExpiry(e[0]);
     });
 
-    socket.on("option-chain-update", ({ underlying: u, expiry: exp, data }) => {
+    // ── KEY FIX 1: accept every push — removed expiry guard that blocked updates ──
+    socket.on("option-chain-update", ({ underlying: u, data }) => {
       if (u !== underlying) return;
-      if (exp !== selectedExpiry && selectedExpiry) return;
       applyChainData(data, "socket");
     });
 
@@ -510,7 +457,7 @@ export default function OptionChain({ onBack }) {
       socket.disconnect();
       setConnStatus("disconnected");
     };
-  }, [underlying]); // Note: intentionally only re-run on underlying change
+  }, [underlying]); // eslint-disable-line
 
   // ── Re-request on expiry change via socket ───────────────────────────────
   useEffect(() => {
@@ -519,27 +466,36 @@ export default function OptionChain({ onBack }) {
     }
   }, [underlying, selectedExpiry]);
 
-  // ── REST poll (fallback — only if socket isn't delivering) ───────────────
+  // ── REST poll — always runs every 3s, no socket-skip logic ───────────────
   useEffect(() => {
     if (!selectedExpiry) return;
 
     const poll = () => {
-      // Skip REST if socket delivered data in last 20s
-      if (latestData.current && (Date.now() - lastUpdate < 20_000)) return;
-
       fetch(`/api/option-chain?underlying=${underlying}&expiry=${selectedExpiry}`)
         .then(r => r.json())
         .then(data => {
-          if (data.strikes) applyChainData(data, "rest");
+          if (!data?.strikes) return;
+          // ── KEY FIX 2: only apply REST if newer than last socket push ────
+          // Use ref so this closure always sees the latest timestamp
+          const age = lastUpdateRef.current ? Date.now() - lastUpdateRef.current : Infinity;
+          if (age > 2000) {
+            // Socket hasn't updated in 2s — apply REST data
+            applyChainData(data, "rest");
+          } else {
+            // Socket is live — still update lastUpdate to show "Xs ago" ticking
+            setLastUpdate(Date.now());
+            lastUpdateRef.current = Date.now();
+          }
         })
         .catch(() => {});
     };
 
-    // Immediate on expiry change
+    // Immediate fetch
     setLoading(true);
     poll();
 
-    pollRef.current = setInterval(poll, 15_000);
+    // ── KEY FIX 3: poll every 3s instead of 15s ──────────────────────────
+    pollRef.current = setInterval(poll, 3000);
     return () => clearInterval(pollRef.current);
   }, [underlying, selectedExpiry]); // eslint-disable-line
 
@@ -548,7 +504,7 @@ export default function OptionChain({ onBack }) {
     setLoading(true);
     setChainData(null);
     setExpiry(null);
-    latestData.current = null;
+    lastUpdateRef.current = null;
     fetch(`/api/option-chain/expiries?underlying=${underlying}`)
       .then(r => r.json())
       .then(({ expiries: e }) => {
@@ -574,7 +530,6 @@ export default function OptionChain({ onBack }) {
   const maxCEOI = useMemo(() => Math.max(...visibleStrikes.map(s => s.ce.oi), 1), [visibleStrikes]);
   const maxPEOI = useMemo(() => Math.max(...visibleStrikes.map(s => s.pe.oi), 1), [visibleStrikes]);
 
-  // Greek chart history: all-strike distribution for sparkline
   const greekHistory = useMemo(() => {
     return visibleStrikes.map(row => ({
       strike: row.strike,
@@ -585,14 +540,14 @@ export default function OptionChain({ onBack }) {
     }));
   }, [visibleStrikes, greekPanel]);
 
-  // ── Scroll to ATM ────────────────────────────────────────────────────────
+  // ── Scroll to ATM on expiry/underlying change ─────────────────────────────
   useEffect(() => {
     if (!chainData) return;
     const atmRow = tableRef.current?.querySelector(".atm");
     if (atmRow) setTimeout(() => atmRow.scrollIntoView({ behavior: "smooth", block: "center" }), 100);
   }, [chainData?.expiry, chainData?.underlying]);
 
-  // ── Greek panel handler ──────────────────────────────────────────────────
+  // ── Greek panel handlers ──────────────────────────────────────────────────
   const handleGreekClick = useCallback((strike, side, data) => {
     setGreekPanel({ strike, side, data });
     setShowGreeks(true);
@@ -604,7 +559,6 @@ export default function OptionChain({ onBack }) {
   return (
     <div className="oc-page">
 
-      {/* Greeks panel overlay */}
       {greekPanel && (
         <GreeksPanel
           strike={greekPanel.strike}
@@ -615,7 +569,7 @@ export default function OptionChain({ onBack }) {
         />
       )}
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
+      {/* ── Header ── */}
       <div className="oc-header">
         <div className="oc-title">
           <span style={{ fontSize: 15 }}>⚡</span>
@@ -624,7 +578,6 @@ export default function OptionChain({ onBack }) {
         </div>
 
         <div className="oc-controls">
-          {/* Underlying */}
           <div className="control-group">
             {UNDERLYINGS.map(u => (
               <button key={u} className={`ctrl-btn${underlying === u ? " active" : ""}`}
@@ -632,7 +585,6 @@ export default function OptionChain({ onBack }) {
             ))}
           </div>
 
-          {/* Expiry */}
           {expiries.length > 0 && (
             <div className="control-group">
               {expiries.slice(0, 5).map(e => (
@@ -642,7 +594,6 @@ export default function OptionChain({ onBack }) {
             </div>
           )}
 
-          {/* Near ATM */}
           <div className="control-group">
             <button className={`ctrl-btn${showATMOnly ? " active" : ""}`}
               onClick={() => setShowATMOnly(v => !v)}>Near ATM</button>
@@ -654,7 +605,6 @@ export default function OptionChain({ onBack }) {
             )}
           </div>
 
-          {/* Greeks toggle */}
           <div className="control-group">
             <button className={`ctrl-btn${showGreeks ? " active" : ""}`}
               onClick={() => setShowGreeks(v => !v)}>
@@ -666,12 +616,11 @@ export default function OptionChain({ onBack }) {
             <button className="ctrl-btn" onClick={onBack}>← Back</button>
           )}
 
-          {/* Connection status */}
           <ConnBadge status={connStatus} />
         </div>
       </div>
 
-      {/* ── Summary bar ─────────────────────────────────────────────────── */}
+      {/* ── Summary bar ── */}
       {chainData && (
         <div className="oc-summary">
           <div className="summary-item">
@@ -714,12 +663,10 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── OI flow bar ─────────────────────────────────────────────────── */}
       {chainData && (
         <OIFlowBar totalCEOI={chainData.totalCEOI} totalPEOI={chainData.totalPEOI} />
       )}
 
-      {/* ── Greeks legend ────────────────────────────────────────────────── */}
       {showGreeks && (
         <div className="greeks-legend">
           <span><span style={{ color: "#00c896" }}>Δ Delta</span> — price sensitivity</span>
@@ -729,7 +676,6 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── Alerts ──────────────────────────────────────────────────────── */}
       {chainData?.alerts?.length > 0 && (
         <div className="oc-alerts">
           {chainData.alerts.slice(0, 6).map((a, i) => {
@@ -747,7 +693,6 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── Loading ──────────────────────────────────────────────────────── */}
       {loading && (
         <div className="oc-loading">
           <div className="loading-pulse" />
@@ -755,15 +700,13 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── No data ──────────────────────────────────────────────────────── */}
       {!loading && !chainData && (
         <div className="oc-empty">
           <p>⏳ Waiting for first poll...</p>
-          <p className="empty-sub">Data via Upstox API — socket primary, 15s REST fallback</p>
+          <p className="empty-sub">Data via NSE — socket primary, 3s REST fallback</p>
         </div>
       )}
 
-      {/* ── Main table ───────────────────────────────────────────────────── */}
       {!loading && chainData && (
         <div className="oc-table-wrap" ref={tableRef}>
           <table className="oc-table">
@@ -808,10 +751,9 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── Footer ──────────────────────────────────────────────────────── */}
       <div className="oc-footer">
         <span>
-          Socket primary · 15s REST fallback ·
+          Socket primary · 3s REST fallback ·
           {showGreeks ? " Click Δθν cells for charts" : " Toggle Greeks for Δθν"}
         </span>
         {chainData && (
