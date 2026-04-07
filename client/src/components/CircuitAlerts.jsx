@@ -1,413 +1,812 @@
 /**
- * CircuitAlerts.jsx
- * Location: client/src/components/CircuitAlerts.jsx
+ * CircuitAlerts.jsx — HYBRID FINAL
+ * ─────────────────────────────────────────────────────────────────
+ * Intelligence upgrades over both V1 + V2:
+ *  • Velocity score  — acceleration-aware, not just momentum direction
+ *  • Pre-circuit radar — 3–5% zone w/ building momentum flagged
+ *  • Smart sort engine — by tier rank → distPct → velocity
+ *  • Flash animation  — new alerts pulse on arrival
+ *  • Tier change badge — shows when a stock escalates
+ *  • Velocity badge   — EXPLODING / BUILDING / SLOW / FADING
+ *  • Pre-Circuit tab  — dedicated radar for stocks about to move
  *
- * UPDATED: Session 3 patch
- * - Listens to both "circuit-alerts" (threshold breaches) and "circuit-watchlist" (full 167-stock snapshot)
- * - Shows watchlist table sorted by closest-to-circuit when no threshold alerts exist
- * - ProximityBar now uses actual WATCH threshold (15%) not hardcoded 5
- * - tradedValue shows volume instead when value is 0
- * - Staleness badge on alerts older than 5 min
+ * Visual identity: V1 dark theme (#010812, #d8eeff, #3a6888)
+ * Architecture:    V2 structured TIERS with rank, scalable layout
+ *
+ * Props: { socket }   (same as before, zero breaking changes)
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
-// Must match TIER_THRESHOLDS.WATCH in circuitWatcher.js
-const WATCH_THRESHOLD_PCT = 15;
-
-const TIER_CONFIG = {
-  LOCKED:   { label: "Locked",   color: "#E24B4A", bg: "rgba(226,75,74,0.10)",   border: "rgba(226,75,74,0.35)",   text: "#E24B4A" },
-  CRITICAL: { label: "Critical", color: "#EF9F27", bg: "rgba(239,159,39,0.10)",  border: "rgba(239,159,39,0.35)",  text: "#EF9F27" },
-  WARNING:  { label: "Warning",  color: "#F2C94C", bg: "rgba(242,201,76,0.08)",  border: "rgba(242,201,76,0.30)",  text: "#C9A800" },
-  WATCH:    { label: "Watch",    color: "#378ADD", bg: "rgba(55,138,221,0.08)",   border: "rgba(55,138,221,0.25)",  text: "#378ADD" },
-  SAFE:     { label: "Safe",     color: "#4CAF7D", bg: "transparent",             border: "transparent",            text: "#4CAF7D" },
+// ── Theme ──────────────────────────────────────────────────────────────────────
+const C = {
+  bg:        "#010812",
+  panel:     "#020d1c",
+  row:       "#030f20",
+  border:    "#0c2240",
+  borderFaint:"#071828",
+  text:      "#d8eeff",
+  textMid:   "#7ab0d0",
+  textDim:   "#3a6888",
+  textGhost: "#1e4060",
+  green:     "#00ff9c",
+  red:       "#ff5c5c",
+  blue:      "#00cfff",
+  accent:    "#4a9abb",
 };
 
-const ACTION_LABELS = {
-  UPPER_CIRCUIT_LOCKED: "🔒 Upper locked",
-  LOWER_CIRCUIT_LOCKED: "🔒 Lower locked",
-  UPPER_CIRCUIT_NEAR:   "↑ Upper near",
-  LOWER_CIRCUIT_NEAR:   "↓ Lower near",
+// ── Tiers ──────────────────────────────────────────────────────────────────────
+const TIERS = {
+  LOCKED:   { label: "LOCKED",   color: "#ff5c5c", dim: "rgba(255,92,92,0.10)",   border: "rgba(255,92,92,0.30)",   rank: 5 },
+  CRITICAL: { label: "CRITICAL", color: "#ff9c00", dim: "rgba(255,156,0,0.10)",   border: "rgba(255,156,0,0.28)",   rank: 4 },
+  WARNING:  { label: "WARNING",  color: "#ffd60a", dim: "rgba(255,214,10,0.08)",  border: "rgba(255,214,10,0.25)",  rank: 3 },
+  WATCH:    { label: "WATCH",    color: "#4a9abb", dim: "rgba(74,154,187,0.08)",  border: "rgba(74,154,187,0.22)", rank: 2 },
+  SAFE:     { label: "SAFE",     color: "#00ff9c", dim: "transparent",             border: "transparent",            rank: 1 },
 };
 
-const MAX_ALERTS    = 25;
-const STALE_MS      = 5 * 60 * 1000; // 5 min
+const SIDE_COLOR = { UPPER: C.green, LOWER: C.red };
+const SIDE_ICON  = { UPPER: "▲", LOWER: "▼" };
+const MAX_ALERTS = 60;
+const STALE_MS   = 5 * 60 * 1000;
+const WATCH_PCT  = 10;
+const PRE_CIRCUIT_MIN = 3;   // 3–5% = pre-circuit radar zone
+const PRE_CIRCUIT_MAX = 5;
 
-function fmt(n, dec = 2) {
-  if (n == null || isNaN(n)) return "—";
-  return Number(n).toLocaleString("en-IN", {
-    minimumFractionDigits: dec,
-    maximumFractionDigits: dec,
-  });
+// ── Formatters ─────────────────────────────────────────────────────────────────
+const f2 = n => (n == null || isNaN(n)) ? "—" : Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const f1 = n => (n == null || isNaN(n)) ? "—" : Number(n).toLocaleString("en-IN", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const f0 = n => (n == null || isNaN(n)) ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+
+function fmtVol(v) {
+  if (!v || v === 0) return null;
+  if (v >= 1_00_00_000) return `${(v / 1_00_00_000).toFixed(1)}Cr`;
+  if (v >= 1_00_000)    return `${(v / 1_00_000).toFixed(1)}L`;
+  if (v >= 1_000)       return `${(v / 1_000).toFixed(1)}K`;
+  return String(v);
 }
-
-function fmtVol(volume) {
-  if (!volume || volume === 0) return null;
-  if (volume >= 1_00_00_000) return `${(volume / 1_00_00_000).toFixed(1)}Cr`;
-  if (volume >= 1_00_000)    return `${(volume / 1_00_000).toFixed(1)}L`;
-  if (volume >= 1_000)       return `${(volume / 1_000).toFixed(1)}K`;
-  return String(volume);
+function fmtVal(v) {
+  if (!v || v === 0) return null;
+  const cr = v / 1_00_00_000;
+  if (cr >= 100) return `₹${(cr / 100).toFixed(1)}KCr`;
+  if (cr >= 1)   return `₹${cr.toFixed(1)}Cr`;
+  const l = v / 1_00_000;
+  if (l >= 1)    return `₹${l.toFixed(1)}L`;
+  return null;
 }
-
 function timeStr(iso) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("en-IN", {
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-  });
+  return new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 }
-
 function isStale(iso) {
   if (!iso) return false;
   return Date.now() - new Date(iso).getTime() > STALE_MS;
 }
 
-// ProximityBar — uses WATCH_THRESHOLD_PCT so fill is meaningful
-function ProximityBar({ distPct, side, tier }) {
-  const cap     = WATCH_THRESHOLD_PCT;
-  const fillPct = tier === "LOCKED" ? 100 : Math.max(0, Math.min(100, ((cap - distPct) / cap) * 100));
-  const cfg     = TIER_CONFIG[tier] || TIER_CONFIG.SAFE;
+// ── Velocity engine ────────────────────────────────────────────────────────────
+// momentum < 0 = moving TOWARD circuit
+// velocity score = urgency level 0–100
+function velocityScore(momentum, distPct, tier) {
+  if (tier === "LOCKED") return 100;
+  if (!momentum) return 0;
+  const toward  = momentum < 0;
+  const abs     = Math.abs(momentum);
+  const proximity = Math.max(0, 1 - (distPct / WATCH_PCT)); // 0=far, 1=at circuit
+  const base    = toward ? abs * 60 : abs * 10;
+  return Math.min(100, Math.round(base * (1 + proximity * 2)));
+}
+
+function velocityLabel(score, toward) {
+  if (!toward) return { label: "FADING", color: C.textDim, icon: "↗" };
+  if (score >= 70) return { label: "EXPLODING", color: C.red,    icon: "🔥" };
+  if (score >= 40) return { label: "BUILDING",  color: "#ff9c00", icon: "⚡" };
+  if (score >= 15) return { label: "DRIFTING",  color: "#ffd60a", icon: "→" };
+  return             { label: "SLOW",      color: C.textDim, icon: "·" };
+}
+
+// ── Atoms ──────────────────────────────────────────────────────────────────────
+function TierBadge({ tier, small }) {
+  const t = TIERS[tier] || TIERS.SAFE;
   return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--color-text-secondary)", marginBottom: 3 }}>
-        <span>{side === "UPPER" ? "Upper circuit proximity" : "Lower circuit proximity"}</span>
-        <span style={{ color: cfg.text, fontWeight: 500 }}>
-          {tier === "LOCKED" ? "AT LIMIT" : `${fmt(distPct, 2)}% away`}
-        </span>
-      </div>
-      <div style={{ height: 5, borderRadius: 3, background: "var(--color-border-tertiary)", overflow: "hidden" }}>
-        <div style={{
-          height: "100%",
-          width: `${fillPct}%`,
-          background: cfg.color,
-          borderRadius: 3,
-          float: side === "UPPER" ? "right" : "left",
-          transition: "width 0.4s ease",
-        }} />
-      </div>
+    <span style={{
+      fontFamily: "'IBM Plex Mono', monospace",
+      fontSize: small ? 8 : 9, fontWeight: 700,
+      letterSpacing: "0.5px", padding: small ? "1px 4px" : "1px 6px",
+      borderRadius: 3,
+      background: t.dim, border: `1px solid ${t.border}`, color: t.color,
+      whiteSpace: "nowrap",
+    }}>{t.label}</span>
+  );
+}
+
+function ProxBar({ distPct, side, tier, height = 4 }) {
+  const t    = TIERS[tier] || TIERS.SAFE;
+  const fill = tier === "LOCKED" ? 100 : Math.max(0, Math.min(100, ((WATCH_PCT - Math.min(distPct, WATCH_PCT)) / WATCH_PCT) * 100));
+  return (
+    <div style={{ height, borderRadius: 2, background: "#0a1828", overflow: "hidden", position: "relative", width: "100%" }}>
+      <div style={{
+        position: "absolute", top: 0, bottom: 0,
+        width: `${fill}%`,
+        [side === "UPPER" ? "right" : "left"]: 0,
+        background: t.color, borderRadius: 2,
+        opacity: tier === "SAFE" ? 0.2 : 0.88,
+        transition: "width 0.5s ease",
+      }} />
     </div>
   );
 }
 
-function AlertCard({ alert }) {
-  const cfg    = TIER_CONFIG[alert.tier] || TIER_CONFIG.WATCH;
-  const isUp   = (alert.changePercent || 0) >= 0;
-  const stale  = isStale(alert.timestamp);
-  const volStr = fmtVol(alert.volume);
+function VelocityBadge({ momentum, distPct, tier }) {
+  const score  = velocityScore(momentum, distPct, tier);
+  const toward = momentum != null && momentum < 0;
+  const { label, color, icon } = velocityLabel(score, toward);
+  if (!momentum && tier !== "LOCKED") return <span style={{ color: C.textGhost, fontSize: 9 }}>—</span>;
+  return (
+    <span style={{
+      fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, fontWeight: 700, color,
+      display: "inline-flex", alignItems: "center", gap: 2,
+    }}>
+      <span>{icon}</span>
+      <span style={{ opacity: 0.8 }}>{label}</span>
+    </span>
+  );
+}
+
+// ── CSS keyframes injected once ────────────────────────────────────────────────
+const STYLE_ID = "__ca_styles__";
+function injectStyles() {
+  if (document.getElementById(STYLE_ID)) return;
+  const s = document.createElement("style");
+  s.id = STYLE_ID;
+  s.textContent = `
+    @keyframes ca-flash {
+      0%   { box-shadow: 0 0 0 0 rgba(0,207,255,0.55); background: rgba(0,207,255,0.12); }
+      60%  { box-shadow: 0 0 0 6px rgba(0,207,255,0); }
+      100% { box-shadow: none; background: transparent; }
+    }
+    @keyframes ca-pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.7); }
+    }
+    @keyframes ca-tier-up {
+      0%   { background: rgba(255,214,10,0.25); }
+      100% { background: transparent; }
+    }
+    .ca-new-alert { animation: ca-flash 1.6s ease-out forwards; }
+    .ca-tier-escalate { animation: ca-tier-up 2s ease-out forwards; }
+    .ca-dot-pulse { animation: ca-pulse-dot 1.4s ease-in-out infinite; }
+    .ca-scroll::-webkit-scrollbar { width: 3px; }
+    .ca-scroll::-webkit-scrollbar-track { background: transparent; }
+    .ca-scroll::-webkit-scrollbar-thumb { background: #1a4060; border-radius: 2px; }
+    .ca-row:hover { background: rgba(255,255,255,0.025) !important; }
+    .ca-input::placeholder { color: #1e4060; }
+    .ca-input:focus { border-color: #1a4a80 !important; outline: none; }
+  `;
+  document.head.appendChild(s);
+}
+
+// ── Summary Strip ──────────────────────────────────────────────────────────────
+function SummaryStrip({ watchlist, alerts, tab, onTierClick, tierFilter }) {
+  const counts = { LOCKED: 0, CRITICAL: 0, WARNING: 0, WATCH: 0, SAFE: 0 };
+  const src = tab === "ALERTS" ? alerts : watchlist;
+  for (const s of src) counts[s.tier] = (counts[s.tier] || 0) + 1;
 
   return (
-    <div style={{
-      padding: "12px 14px", borderRadius: 10,
-      background: cfg.bg, border: `1px solid ${cfg.border}`,
-      marginBottom: 8,
-      opacity: stale ? 0.65 : 1,
-    }}>
+    <div style={{ display: "flex", borderRadius: 4, overflow: "hidden", border: `1px solid ${C.border}`, marginBottom: 8 }}>
+      {["LOCKED","CRITICAL","WARNING","WATCH","SAFE"].map((tier, i, arr) => {
+        const t   = TIERS[tier];
+        const n   = counts[tier];
+        const active = tierFilter === tier;
+        return (
+          <div key={tier}
+            onClick={() => onTierClick(tier)}
+            style={{
+              flex: 1, textAlign: "center", padding: "5px 2px", cursor: "pointer",
+              background: active ? t.dim : (n > 0 ? `${t.dim.slice(0,-1)}, 0.05)` : "#020c1a"),
+              borderRight: i < arr.length - 1 ? `1px solid ${C.border}` : "none",
+              transition: "background 0.15s",
+              outline: active ? `1px solid ${t.border}` : "none",
+            }}>
+            <div style={{
+              fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 800,
+              color: n > 0 ? t.color : C.textGhost, lineHeight: 1,
+            }}>{n}</div>
+            <div style={{ fontSize: 7, color: C.textDim, marginTop: 2, letterSpacing: "0.04em" }}>{tier}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontWeight: 600, fontSize: 14, color: "var(--color-text-primary)", letterSpacing: "0.02em" }}>
-            {alert.symbol}
+// ── Alert Card ─────────────────────────────────────────────────────────────────
+function AlertCard({ alert, onDismiss, isNew }) {
+  const t    = TIERS[alert.tier] || TIERS.WATCH;
+  const isUp = (alert.changePercent || 0) >= 0;
+  const stale = isStale(alert.timestamp);
+  const vol  = fmtVol(alert.volume);
+  const val  = fmtVal(alert.tradedValue);
+  const score  = velocityScore(alert.momentum, alert.distPct, alert.tier);
+  const toward = alert.momentum != null && alert.momentum < 0;
+  const vel  = velocityLabel(score, toward);
+
+  return (
+    <div className={isNew ? "ca-new-alert" : ""}
+      style={{
+        padding: "8px 10px", borderRadius: 4,
+        background: t.dim, border: `1px solid ${t.border}`,
+        borderLeft: `3px solid ${t.color}`,
+        marginBottom: 5, opacity: stale ? 0.5 : 1,
+        transition: "opacity 0.3s",
+      }}>
+
+      {/* Row 1: symbol + badges + time */}
+      <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 12, color: C.text, letterSpacing: "0.04em" }}>
+          {alert.symbol}
+        </span>
+        {alert.sector && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 8, color: C.accent, background: "#041020", padding: "1px 5px", borderRadius: 3, border: `1px solid ${C.borderFaint}` }}>
+            {alert.sector}
           </span>
-          <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 4, background: cfg.color, color: "#fff", letterSpacing: "0.05em" }}>
-            {cfg.label.toUpperCase()}
+        )}
+        <TierBadge tier={alert.tier} />
+        <span style={{ fontSize: 10, color: SIDE_COLOR[alert.side], fontWeight: 700 }}>
+          {SIDE_ICON[alert.side]} {alert.side}
+        </span>
+        {/* Velocity badge inline */}
+        {score >= 15 && (
+          <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, color: vel.color }}>
+            {vel.icon} {vel.label}
           </span>
-          <span style={{ fontSize: 11, color: cfg.text, background: cfg.bg, border: `1px solid ${cfg.border}`, borderRadius: 4, padding: "1px 6px" }}>
-            {ACTION_LABELS[alert.action] || alert.action}
+        )}
+        {stale && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 8, color: C.textDim, background: "#041020", padding: "1px 5px", borderRadius: 3, border: `1px solid ${C.borderFaint}` }}>
+            STALE
           </span>
-          {stale && (
-            <span style={{ fontSize: 10, color: "var(--color-text-tertiary)", background: "rgba(255,255,255,0.05)", border: "1px solid var(--color-border-tertiary)", borderRadius: 4, padding: "1px 5px" }}>
-              stale
-            </span>
-          )}
-        </div>
-        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}>
+        )}
+        <span style={{ marginLeft: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.textDim }}>
           {timeStr(alert.timestamp)}
         </span>
+        {onDismiss && (
+          <button onClick={() => onDismiss(alert)}
+            style={{ background: "none", border: "none", color: C.textDim, cursor: "pointer", fontSize: 14, padding: 0, lineHeight: 1 }}>
+            ×
+          </button>
+        )}
       </div>
 
-      {/* Price */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 18, fontWeight: 600, color: "var(--color-text-primary)" }}>
-          ₹{fmt(alert.ltp)}
+      {/* Row 2: price */}
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 18, fontWeight: 700, color: "#e8f4ff" }}>
+          ₹{f2(alert.ltp)}
         </span>
-        <span style={{ fontSize: 12, fontWeight: 500, color: isUp ? "var(--color-text-success)" : "var(--color-text-danger)" }}>
-          {isUp ? "+" : ""}{fmt(alert.changePercent, 2)}%
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: isUp ? C.green : C.red }}>
+          {isUp ? "+" : ""}{f2(alert.changePercent)}%
         </span>
-        <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
-          Prev ₹{fmt(alert.prevClose)} · Circuit ₹{fmt(alert.circuitLimit)} (±{alert.bandPct}%)
+        <span style={{ fontSize: 10, color: C.textMid }}>Prev ₹{f2(alert.prevClose)}</span>
+        <span style={{ fontSize: 10, color: C.textDim }}>
+          Circuit ₹{f2(alert.circuitLimit)}{" "}
+          {alert.fromExchange
+            ? <span style={{ color: C.green }}>⚡live</span>
+            : `(±${alert.bandPct}%)`}
         </span>
       </div>
 
-      {/* Bar */}
-      <ProximityBar distPct={alert.distPct} side={alert.side} tier={alert.tier} />
+      {/* Row 3: prox bar */}
+      <div style={{ marginTop: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.textMid, fontFamily: "'IBM Plex Mono', monospace", marginBottom: 3 }}>
+          <span>{alert.side === "UPPER" ? "↑ Upper" : "↓ Lower"} circuit proximity</span>
+          <span style={{ color: t.color, fontWeight: 700 }}>
+            {alert.tier === "LOCKED" ? "AT LIMIT" : `${f2(alert.distPct)}% away`}
+          </span>
+        </div>
+        <ProxBar distPct={alert.distPct} side={alert.side} tier={alert.tier} height={4} />
+      </div>
 
-      {/* Footer */}
-      <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 11, color: "var(--color-text-secondary)", flexWrap: "wrap" }}>
-        {volStr && <span>Vol: {volStr}</span>}
-        <span>{alert.side === "UPPER" ? "↑ Upper" : "↓ Lower"} band · ±{alert.bandPct}%</span>
+      {/* Row 4: stats */}
+      <div style={{ display: "flex", gap: 10, marginTop: 5, fontSize: 9, color: C.textDim, fontFamily: "'IBM Plex Mono', monospace", flexWrap: "wrap", alignItems: "center" }}>
+        {vol && <span>Vol <span style={{ color: C.textMid }}>{vol}</span></span>}
+        {val && <span>Val <span style={{ color: C.textMid }}>{val}</span></span>}
+        <VelocityBadge momentum={alert.momentum} distPct={alert.distPct} tier={alert.tier} />
       </div>
     </div>
   );
 }
 
-// Compact watchlist row — shown when no threshold alerts, sorted by proximity
-function WatchRow({ stock, rank }) {
+// ── Watch Row ──────────────────────────────────────────────────────────────────
+function WatchRow({ stock, rank, expanded, prevTier }) {
+  const t     = TIERS[stock.tier] || TIERS.SAFE;
   const isUp  = (stock.changePercent || 0) >= 0;
-  const cfg   = TIER_CONFIG[stock.tier] || TIER_CONFIG.SAFE;
-  const isSafe = stock.tier === "SAFE";
+  const vol   = fmtVol(stock.volume);
+  const tierUp = prevTier && TIERS[stock.tier]?.rank > TIERS[prevTier]?.rank;
+  const tpl   = expanded
+    ? "22px 80px 72px 60px 50px 1fr 90px 42px"
+    : "22px 80px 72px 60px 1fr 90px";
 
   return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: "24px 90px 80px 70px 1fr 70px",
-      alignItems: "center",
-      gap: 6,
-      padding: "6px 10px",
-      borderRadius: 7,
-      background: isSafe ? "transparent" : cfg.bg,
-      borderBottom: "1px solid var(--color-border-tertiary)",
-      fontSize: 12,
-    }}>
-      <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{rank}</span>
-      <span style={{ fontWeight: 600, color: "var(--color-text-primary)", fontSize: 13 }}>{stock.symbol}</span>
-      <span style={{ color: isUp ? "var(--color-text-success)" : "var(--color-text-danger)", fontWeight: 500 }}>
-        ₹{fmt(stock.ltp, 1)}
-        <span style={{ marginLeft: 4, fontSize: 11 }}>{isUp ? "+" : ""}{fmt(stock.changePercent, 1)}%</span>
-      </span>
-      <span style={{ color: cfg.text, fontWeight: 500, fontSize: 11 }}>
-        {stock.tier === "LOCKED" ? "AT LIMIT" : `${fmt(stock.distPct, 1)}% away`}
-      </span>
-      {/* proximity bar inline */}
-      <div style={{ height: 4, borderRadius: 2, background: "var(--color-border-tertiary)", overflow: "hidden", position: "relative" }}>
-        {(() => {
-          const fillPct = stock.tier === "LOCKED" ? 100 : Math.max(0, Math.min(100, ((WATCH_THRESHOLD_PCT - stock.distPct) / WATCH_THRESHOLD_PCT) * 100));
-          return (
-            <div style={{
-              position: "absolute",
-              height: "100%",
-              width: `${fillPct}%`,
-              background: cfg.color,
-              borderRadius: 2,
-              [stock.side === "UPPER" ? "right" : "left"]: 0,
-            }} />
-          );
-        })()}
+    <div className={`ca-row${tierUp ? " ca-tier-escalate" : ""}`}
+      style={{
+        display: "grid", gridTemplateColumns: tpl,
+        alignItems: "center", gap: 5,
+        padding: "4px 8px", borderRadius: 3,
+        background: stock.tier !== "SAFE" ? t.dim : "transparent",
+        borderBottom: `1px solid ${C.borderFaint}`,
+        transition: "background 0.2s",
+      }}>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.textGhost, fontWeight: 700 }}>{rank}</span>
+
+      <div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, color: C.text, fontSize: 11 }}>
+          {stock.symbol}
+        </div>
+        {stock.sector && stock.tier !== "SAFE" && (
+          <div style={{ fontSize: 7, color: C.textDim, marginTop: 1 }}>{stock.sector}</div>
+        )}
       </div>
-      <span style={{ color: "var(--color-text-tertiary)", fontSize: 11, textAlign: "right" }}>
-        {stock.side === "UPPER" ? "↑" : "↓"} {stock.bandPct}%
+
+      <div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: C.textMid, fontSize: 11 }}>
+          ₹{f1(stock.ltp)}
+        </div>
+        <div style={{ fontSize: 9, color: isUp ? C.green : C.red, fontWeight: 700 }}>
+          {isUp ? "+" : ""}{f1(stock.changePercent)}%
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, color: t.color, fontSize: 11 }}>
+          {stock.tier === "LOCKED" ? "LOCK" : `${f1(stock.distPct)}%`}
+        </div>
+        <div style={{ fontSize: 9, color: SIDE_COLOR[stock.side], fontWeight: 700 }}>
+          {SIDE_ICON[stock.side]} {stock.side}
+        </div>
+      </div>
+
+      {expanded && <TierBadge tier={stock.tier} small />}
+
+      <ProxBar distPct={stock.distPct} side={stock.side} tier={stock.tier} height={4} />
+
+      <VelocityBadge momentum={stock.momentum} distPct={stock.distPct} tier={stock.tier} />
+
+      {expanded && (
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.textDim, textAlign: "right" }}>
+          {vol || "—"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function WatchHeader({ expanded }) {
+  const cols = expanded
+    ? ["#", "SYMBOL", "LTP/CHG", "DIST", "TIER", "PROXIMITY", "VELOCITY", "VOL"]
+    : ["#", "SYMBOL", "LTP/CHG", "DIST", "PROXIMITY", "VELOCITY"];
+  const tpl  = expanded
+    ? "22px 80px 72px 60px 50px 1fr 90px 42px"
+    : "22px 80px 72px 60px 1fr 90px";
+  return (
+    <div style={{
+      display: "grid", gridTemplateColumns: tpl, gap: 5,
+      padding: "3px 8px 5px",
+      fontSize: 8, fontWeight: 700, color: C.textGhost,
+      letterSpacing: "0.07em", fontFamily: "'IBM Plex Mono', monospace",
+      borderBottom: `1px solid ${C.border}`, marginBottom: 2,
+    }}>
+      {cols.map(c => <span key={c}>{c}</span>)}
+    </div>
+  );
+}
+
+// ── Pre-Circuit Radar ──────────────────────────────────────────────────────────
+function RadarRow({ stock, rank }) {
+  const isUp  = (stock.changePercent || 0) >= 0;
+  const score = velocityScore(stock.momentum, stock.distPct, stock.tier);
+  const toward = stock.momentum != null && stock.momentum < 0;
+  const vel   = velocityLabel(score, toward);
+  const urgency = score >= 40 ? C.red : score >= 15 ? "#ff9c00" : "#ffd60a";
+
+  return (
+    <div className="ca-row" style={{
+      display: "grid", gridTemplateColumns: "22px 80px 55px 55px 1fr 90px",
+      alignItems: "center", gap: 5,
+      padding: "5px 8px", borderRadius: 3,
+      background: "rgba(255,214,10,0.04)",
+      borderBottom: `1px solid ${C.borderFaint}`,
+      borderLeft: `2px solid ${urgency}`,
+    }}>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: C.textGhost }}>{rank}</span>
+
+      <div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, color: C.text, fontSize: 11 }}>{stock.symbol}</div>
+        {stock.sector && <div style={{ fontSize: 7, color: C.textDim }}>{stock.sector}</div>}
+      </div>
+
+      <div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: C.textMid, fontSize: 10 }}>₹{f1(stock.ltp)}</div>
+        <div style={{ fontSize: 9, color: isUp ? C.green : C.red, fontWeight: 700 }}>{isUp ? "+" : ""}{f1(stock.changePercent)}%</div>
+      </div>
+
+      <div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, color: urgency, fontSize: 10 }}>{f1(stock.distPct)}%</div>
+        <div style={{ fontSize: 9, color: SIDE_COLOR[stock.side], fontWeight: 700 }}>{SIDE_ICON[stock.side]} {stock.side}</div>
+      </div>
+
+      <ProxBar distPct={stock.distPct} side={stock.side} tier="WATCH" height={3} />
+
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, fontWeight: 700, color: vel.color }}>
+        {vel.icon} {vel.label}
       </span>
     </div>
   );
 }
 
+function RadarHeader() {
+  return (
+    <div style={{
+      display: "grid", gridTemplateColumns: "22px 80px 55px 55px 1fr 90px", gap: 5,
+      padding: "3px 8px 5px",
+      fontSize: 8, fontWeight: 700, color: C.textGhost,
+      letterSpacing: "0.07em", fontFamily: "'IBM Plex Mono', monospace",
+      borderBottom: `1px solid ${C.border}`, marginBottom: 2,
+    }}>
+      {["#","SYMBOL","LTP/CHG","DIST","PROXIMITY","VELOCITY"].map(c => <span key={c}>{c}</span>)}
+    </div>
+  );
+}
+
+// ── Pill / Tab buttons ─────────────────────────────────────────────────────────
+function PillBtn({ active, color, onClick, children, style: xStyle }) {
+  return (
+    <button onClick={onClick} style={{
+      fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, fontWeight: 700,
+      letterSpacing: "0.04em", padding: "2px 7px", borderRadius: 3, cursor: "pointer",
+      background: active ? (color ? color + "22" : "#0d3060") : "#041020",
+      border: `1px solid ${active ? (color || "#1a4a80") : C.borderFaint}`,
+      color:  active ? (color || C.text) : C.textDim,
+      transition: "all 0.12s", whiteSpace: "nowrap",
+      ...xStyle,
+    }}>{children}</button>
+  );
+}
+function TabBtn({ active, onClick, children }) {
+  return (
+    <button onClick={onClick} style={{
+      fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, fontWeight: 700,
+      letterSpacing: "0.05em", padding: "3px 10px", borderRadius: 3, cursor: "pointer",
+      background: active ? "#0d3060" : "#041020",
+      border: `1px solid ${active ? "#1a4a80" : C.borderFaint}`,
+      color:  active ? C.text : C.textDim,
+      transition: "all 0.12s",
+    }}>{children}</button>
+  );
+}
+
+// ── Sort watchlist: rank DESC → distPct ASC → velocityScore DESC ──────────────
+function sortWatchlist(list) {
+  return [...list].sort((a, b) => {
+    const rankA = TIERS[a.tier]?.rank ?? 0;
+    const rankB = TIERS[b.tier]?.rank ?? 0;
+    if (rankB !== rankA) return rankB - rankA;
+    if (a.distPct !== b.distPct) return a.distPct - b.distPct;
+    const va = velocityScore(a.momentum, a.distPct, a.tier);
+    const vb = velocityScore(b.momentum, b.distPct, b.tier);
+    return vb - va;
+  });
+}
+
+// ── Main Component ──────────────────────────────────────────────────────────────
 export default function CircuitAlerts({ socket }) {
-  const [alerts,     setAlerts]    = useState([]);
-  const [watchlist,  setWatchlist] = useState([]);
-  const [filter,     setFilter]    = useState("ALL");
-  const [sideFilter, setSide]      = useState("ALL");
-  const [connected,  setConn]      = useState(false);
-  const [tab,        setTab]       = useState("ALERTS"); // "ALERTS" | "WATCHLIST"
-  const [watchLimit, setWatchLimit] = useState(20);
+  const [alerts,       setAlerts]     = useState([]);
+  const [watchlist,    setWatchlist]  = useState([]);
+  const [connected,    setConn]       = useState(false);
+  const [tab,          setTab]        = useState("WATCHLIST");
+  const [tierFilter,   setTierFilter] = useState("ALL");
+  const [sideFilter,   setSideFilter] = useState("ALL");
+  const [sectorFilter, setSector]     = useState("ALL");
+  const [search,       setSearch]     = useState("");
+  const [expanded,     setExpanded]   = useState(false);
+  const [showSafe,     setShowSafe]   = useState(false);
+  const [watchPage,    setWatchPage]  = useState(30);
+  const [newAlertIds,  setNewIds]     = useState(new Set());
+  const prevTiersRef   = useRef({});  // symbol → last tier (for escalation highlight)
+
+  useEffect(() => { injectStyles(); }, []);
+
+  const sectors = useMemo(() => {
+    const s = new Set(watchlist.map(w => w.sector).filter(Boolean));
+    return ["ALL", ...Array.from(s).sort()];
+  }, [watchlist]);
+
+  // Pre-circuit radar: 3–5% away, toward circuit, has momentum
+  const radarList = useMemo(() => {
+    return sortWatchlist(
+      watchlist.filter(s => {
+        if (s.tier === "LOCKED" || s.tier === "CRITICAL") return false;
+        const inZone  = s.distPct >= PRE_CIRCUIT_MIN && s.distPct <= PRE_CIRCUIT_MAX;
+        const moving  = s.momentum != null && s.momentum < 0;
+        const hasVol  = s.volume > 0;
+        return inZone && moving && hasVol;
+      })
+    );
+  }, [watchlist]);
 
   const addAlerts = useCallback((incoming) => {
-    setAlerts((prev) => {
-      const seen  = new Set(prev.map((a) => `${a.symbol}:${a.timestamp}`));
-      const fresh = incoming.filter((a) => !seen.has(`${a.symbol}:${a.timestamp}`));
+    const freshIds = new Set();
+    setAlerts(prev => {
+      const seen  = new Set(prev.map(a => `${a.symbol}:${a.timestamp}`));
+      const fresh = incoming.filter(a => !seen.has(`${a.symbol}:${a.timestamp}`));
       if (!fresh.length) return prev;
+      fresh.forEach(a => freshIds.add(`${a.symbol}:${a.timestamp}`));
       return [...fresh, ...prev].slice(0, MAX_ALERTS);
     });
-    // Auto-switch to alerts tab when new ones arrive
-    setTab("ALERTS");
+    if (freshIds.size) {
+      setNewIds(prev => new Set([...prev, ...freshIds]));
+      setTimeout(() => setNewIds(prev => {
+        const n = new Set(prev);
+        freshIds.forEach(id => n.delete(id));
+        return n;
+      }), 2500);
+      setTab("ALERTS");
+    }
   }, []);
 
   const updateWatchlist = useCallback((list) => {
-    setWatchlist(list || []);
+    if (!list) return;
+    // Track tier changes for escalation animation
+    const prev = prevTiersRef.current;
+    const next = {};
+    list.forEach(s => { next[s.symbol] = s.tier; });
+    prevTiersRef.current = next;
+    setWatchlist(sortWatchlist(list));
+  }, []);
+
+  const dismissAlert = useCallback((alert) => {
+    setAlerts(prev => prev.filter(a => !(a.symbol === alert.symbol && a.timestamp === alert.timestamp)));
   }, []);
 
   useEffect(() => {
     if (!socket) return;
     setConn(socket.connected);
-    const onConnect    = () => setConn(true);
-    const onDisconnect = () => setConn(false);
-    socket.on("connect",           onConnect);
-    socket.on("disconnect",        onDisconnect);
+    const onConn = () => setConn(true);
+    const onDisc = () => setConn(false);
+    socket.on("connect",           onConn);
+    socket.on("disconnect",        onDisc);
     socket.on("circuit-alerts",    addAlerts);
     socket.on("circuit-watchlist", updateWatchlist);
     return () => {
-      socket.off("connect",           onConnect);
-      socket.off("disconnect",        onDisconnect);
+      socket.off("connect",           onConn);
+      socket.off("disconnect",        onDisc);
       socket.off("circuit-alerts",    addAlerts);
       socket.off("circuit-watchlist", updateWatchlist);
     };
   }, [socket, addAlerts, updateWatchlist]);
 
-  const visible = alerts.filter((a) => {
-    if (filter     !== "ALL" && a.tier !== filter)     return false;
-    if (sideFilter !== "ALL" && a.side !== sideFilter) return false;
-    return true;
-  });
+  // ── Filtered views ──────────────────────────────────────────────────────────
+  const filteredWatch = useMemo(() => {
+    return watchlist.filter(s => {
+      if (!showSafe && s.tier === "SAFE") return false;
+      if (tierFilter   !== "ALL" && s.tier   !== tierFilter)   return false;
+      if (sideFilter   !== "ALL" && s.side   !== sideFilter)   return false;
+      if (sectorFilter !== "ALL" && s.sector !== sectorFilter) return false;
+      if (search && !s.symbol.toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    });
+  }, [watchlist, tierFilter, sideFilter, sectorFilter, search, showSafe]);
 
-  const tierCounts = {
-    LOCKED:   alerts.filter((a) => a.tier === "LOCKED").length,
-    CRITICAL: alerts.filter((a) => a.tier === "CRITICAL").length,
-    WARNING:  alerts.filter((a) => a.tier === "WARNING").length,
-    WATCH:    alerts.filter((a) => a.tier === "WATCH").length,
+  const filteredAlerts = useMemo(() => {
+    return alerts.filter(a => {
+      if (tierFilter !== "ALL" && a.tier !== tierFilter) return false;
+      if (sideFilter !== "ALL" && a.side !== sideFilter) return false;
+      if (search && !a.symbol.toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    });
+  }, [alerts, tierFilter, sideFilter, search]);
+
+  const tierCounts = useMemo(() => {
+    const src = tab === "ALERTS" ? alerts : watchlist;
+    return Object.fromEntries(
+      ["LOCKED","CRITICAL","WARNING","WATCH","SAFE"].map(t => [t, src.filter(s => s.tier === t).length])
+    );
+  }, [tab, watchlist, alerts]);
+
+  const alertCount  = alerts.filter(a => a.tier !== "SAFE").length;
+  const radarCount  = radarList.length;
+
+  const handleTierClick = (tier) => {
+    setTierFilter(prev => prev === tier ? "ALL" : tier);
   };
 
-  // watchlist: show only stocks within WATCH threshold by default, sorted closest first
-  const watchVisible = watchlist
-    .filter((s) => s.tier !== "SAFE")
-    .slice(0, watchLimit);
-
-  const pill = (active, color) => ({
-    padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 500,
-    cursor: "pointer", border: "1px solid",
-    borderColor: active ? (color || "var(--color-border-primary)") : "var(--color-border-tertiary)",
-    background:  active ? (color ? color + "22" : "var(--color-background-secondary)") : "transparent",
-    color:       active ? (color || "var(--color-text-primary)") : "var(--color-text-secondary)",
-    transition:  "all 0.15s ease",
-  });
-
-  const tabBtn = (active) => ({
-    padding: "4px 14px", borderRadius: 6, fontSize: 12, fontWeight: 500,
-    cursor: "pointer", border: "1px solid",
-    borderColor: active ? "var(--color-border-primary)" : "var(--color-border-tertiary)",
-    background:  active ? "var(--color-background-secondary)" : "transparent",
-    color:       active ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-  });
-
   return (
-    <div style={{ padding: "0 0 16px" }}>
+    <div style={{ paddingBottom: 10, fontFamily: "'IBM Plex Mono', monospace" }}>
 
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text-primary)" }}>Circuit Alerts</span>
-          <span style={{
-            width: 7, height: 7, borderRadius: "50%",
-            background: connected ? "var(--color-text-success)" : "var(--color-text-danger)",
-            display: "inline-block",
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 9, fontWeight: 700, color: C.blue, letterSpacing: "1.5px" }}>
+            CIRCUIT MONITOR
+          </span>
+          <span className={connected ? "ca-dot-pulse" : ""} style={{
+            width: 6, height: 6, borderRadius: "50%",
+            background: connected ? C.green : C.red, display: "inline-block",
+            boxShadow: connected ? `0 0 6px ${C.green}80` : "none",
           }} />
-          {alerts.length > 0 && (
-            <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
-              {alerts.length} alert{alerts.length !== 1 ? "s" : ""}
-            </span>
+          <span style={{ fontSize: 9, color: C.textDim }}>{watchlist.length} stocks</span>
+        </div>
+        <div style={{ display: "flex", gap: 4 }}>
+          <PillBtn active={expanded} onClick={() => setExpanded(e => !e)}>
+            {expanded ? "COMPACT" : "EXPAND"}
+          </PillBtn>
+          {alertCount > 0 && (
+            <PillBtn active={false} onClick={() => setAlerts([])}>
+              CLEAR {alertCount}
+            </PillBtn>
           )}
         </div>
-        {alerts.length > 0 && (
-          <button
-            onClick={() => setAlerts([])}
-            style={{ fontSize: 11, color: "var(--color-text-secondary)", background: "none", border: "none", cursor: "pointer", padding: "2px 6px" }}
-          >
-            Clear
-          </button>
+      </div>
+
+      {/* ── Summary strip (clickable) ────────────────────────────────────────── */}
+      <SummaryStrip
+        watchlist={watchlist} alerts={alerts}
+        tab={tab} onTierClick={handleTierClick} tierFilter={tierFilter}
+      />
+
+      {/* ── Tabs ──────────────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+        <TabBtn active={tab === "WATCHLIST"} onClick={() => setTab("WATCHLIST")}>
+          📊 WATCHLIST ({watchlist.length})
+        </TabBtn>
+        <TabBtn active={tab === "ALERTS"} onClick={() => setTab("ALERTS")}>
+          🔔 ALERTS{alertCount > 0 ? ` (${alertCount})` : ""}
+        </TabBtn>
+        <TabBtn active={tab === "RADAR"} onClick={() => setTab("RADAR")}>
+          ⚡ RADAR{radarCount > 0 ? ` (${radarCount})` : ""}
+        </TabBtn>
+      </div>
+
+      {/* ── Filters ───────────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", gap: 3, marginBottom: 5, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative" }}>
+          <span style={{ position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: C.textDim, pointerEvents: "none" }}>⌕</span>
+          <input type="text" className="ca-input" placeholder="symbol..."
+            value={search} onChange={e => setSearch(e.target.value)}
+            style={{
+              width: 78, paddingLeft: 18, paddingRight: 5, paddingTop: 3, paddingBottom: 3,
+              background: "#041020", border: `1px solid ${C.borderFaint}`, borderRadius: 3,
+              color: C.text, fontSize: 9, fontFamily: "'IBM Plex Mono', monospace",
+            }} />
+        </div>
+
+        <PillBtn active={tierFilter === "ALL"} onClick={() => setTierFilter("ALL")}>ALL</PillBtn>
+        {["LOCKED","CRITICAL","WARNING","WATCH"].map(t =>
+          tierCounts[t] > 0 && (
+            <PillBtn key={t} active={tierFilter === t} color={TIERS[t].color}
+              onClick={() => handleTierClick(t)}>
+              {t} {tierCounts[t]}
+            </PillBtn>
+          )
+        )}
+
+        <span style={{ width: 1, height: 11, background: C.border, flexShrink: 0 }} />
+
+        <PillBtn active={sideFilter === "ALL"}   onClick={() => setSideFilter("ALL")}>BOTH</PillBtn>
+        <PillBtn active={sideFilter === "UPPER"} color={C.green}
+          onClick={() => setSideFilter(s => s === "UPPER" ? "ALL" : "UPPER")}>↑ UPR</PillBtn>
+        <PillBtn active={sideFilter === "LOWER"} color={C.red}
+          onClick={() => setSideFilter(s => s === "LOWER" ? "ALL" : "LOWER")}>↓ LWR</PillBtn>
+
+        {tab === "WATCHLIST" && (
+          <PillBtn active={showSafe} onClick={() => setShowSafe(s => !s)}>
+            {showSafe ? "HIDE SAFE" : "+ SAFE"}
+          </PillBtn>
         )}
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-        <button style={tabBtn(tab === "ALERTS")}    onClick={() => setTab("ALERTS")}>
-          🔔 Alerts {alerts.length > 0 ? `(${alerts.length})` : ""}
-        </button>
-        <button style={tabBtn(tab === "WATCHLIST")} onClick={() => setTab("WATCHLIST")}>
-          📊 Watchlist {watchlist.length > 0 ? `(${watchlist.length})` : ""}
-        </button>
-      </div>
-
-      {/* ── ALERTS TAB ── */}
-      {tab === "ALERTS" && (
-        <>
-          {/* Filter pills */}
-          {alerts.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-              <button style={pill(filter === "ALL")} onClick={() => setFilter("ALL")}>All ({alerts.length})</button>
-              {Object.entries(tierCounts).map(([tier, count]) =>
-                count > 0 ? (
-                  <button key={tier} style={pill(filter === tier, TIER_CONFIG[tier]?.color)} onClick={() => setFilter(filter === tier ? "ALL" : tier)}>
-                    {TIER_CONFIG[tier].label} ({count})
-                  </button>
-                ) : null
-              )}
-              <span style={{ width: 1, background: "var(--color-border-tertiary)", margin: "0 4px" }} />
-              <button style={pill(sideFilter === "ALL")}   onClick={() => setSide("ALL")}>Both</button>
-              <button style={pill(sideFilter === "UPPER")} onClick={() => setSide((s) => s === "UPPER" ? "ALL" : "UPPER")}>↑ Upper</button>
-              <button style={pill(sideFilter === "LOWER")} onClick={() => setSide((s) => s === "LOWER" ? "ALL" : "LOWER")}>↓ Lower</button>
-            </div>
-          )}
-
-          {visible.length === 0 ? (
-            <div style={{ padding: "16px 0", textAlign: "center" }}>
-              <div style={{ fontSize: 13, color: "var(--color-text-tertiary)" }}>
-                {alerts.length === 0
-                  ? "No stocks have breached alert thresholds"
-                  : "No alerts match current filters"}
-              </div>
-              <div style={{ marginTop: 6, fontSize: 11, color: "var(--color-text-tertiary)", opacity: 0.6 }}>
-                {connected
-                  ? watchlist.length > 0
-                    ? `Watching ${watchlist.length} stocks · Switch to Watchlist tab to see proximity`
-                    : "Polling every 30s · Thresholds: Critical ≤1% · Warning ≤3% · Watch ≤15%"
-                  : "Socket disconnected · Reconnecting…"}
-              </div>
-            </div>
-          ) : (
-            visible.map((alert, i) => (
-              <AlertCard key={`${alert.symbol}:${alert.timestamp}:${i}`} alert={alert} />
-            ))
-          )}
-        </>
+      {/* Sector row */}
+      {tab === "WATCHLIST" && sectors.length > 2 && (
+        <div style={{ display: "flex", gap: 3, marginBottom: 5, flexWrap: "wrap" }}>
+          {sectors.slice(0, 14).map(s => (
+            <PillBtn key={s} active={sectorFilter === s}
+              onClick={() => setSector(sectorFilter === s && s !== "ALL" ? "ALL" : s)}
+              style={{ fontSize: 8, padding: "1px 5px" }}>
+              {s}
+            </PillBtn>
+          ))}
+        </div>
       )}
 
-      {/* ── WATCHLIST TAB ── */}
+      {/* ── WATCHLIST TAB ─────────────────────────────────────────────────────── */}
       {tab === "WATCHLIST" && (
-        <>
-          {watchlist.length === 0 ? (
-            <div style={{ padding: "16px 0", textAlign: "center" }}>
-              <div style={{ fontSize: 13, color: "var(--color-text-tertiary)" }}>
-                {connected ? "Waiting for first poll (every 30s)…" : "Socket disconnected · Reconnecting…"}
-              </div>
+        watchlist.length === 0
+          ? (
+            <div style={{ padding: "18px 0", textAlign: "center", fontSize: 11, color: C.textDim }}>
+              {connected ? "Waiting for first poll (every 30s)…" : "⚠ Socket disconnected"}
             </div>
           ) : (
             <>
-              {/* Column headers */}
-              <div style={{
-                display: "grid",
-                gridTemplateColumns: "24px 90px 80px 70px 1fr 70px",
-                gap: 6, padding: "4px 10px", marginBottom: 2,
-                fontSize: 10, color: "var(--color-text-tertiary)", fontWeight: 600, letterSpacing: "0.05em",
-              }}>
-                <span>#</span>
-                <span>SYMBOL</span>
-                <span>LTP / CHG</span>
-                <span>DISTANCE</span>
-                <span>PROXIMITY</span>
-                <span style={{ textAlign: "right" }}>BAND</span>
-              </div>
-
-              {watchVisible.length === 0 ? (
-                <div style={{ padding: "12px 10px", fontSize: 12, color: "var(--color-text-tertiary)", textAlign: "center" }}>
-                  All {watchlist.length} stocks are &gt;{WATCH_THRESHOLD_PCT}% from circuit limits — market is calm
-                </div>
-              ) : (
-                watchVisible.map((stock, i) => (
-                  <WatchRow key={stock.symbol} stock={stock} rank={i + 1} />
-                ))
-              )}
-
-              {watchlist.filter((s) => s.tier !== "SAFE").length > watchLimit && (
-                <button
-                  onClick={() => setWatchLimit((l) => l + 20)}
-                  style={{ marginTop: 8, width: "100%", padding: "6px", fontSize: 12, color: "var(--color-text-secondary)", background: "none", border: "1px solid var(--color-border-tertiary)", borderRadius: 6, cursor: "pointer" }}
-                >
-                  Show more
+              <WatchHeader expanded={expanded} />
+              {filteredWatch.length === 0
+                ? <div style={{ padding: "10px 8px", fontSize: 10, color: C.textDim, textAlign: "center" }}>No stocks match filters</div>
+                : filteredWatch.slice(0, watchPage).map((stock, i) => (
+                    <WatchRow
+                      key={stock.symbol} stock={stock} rank={i + 1}
+                      expanded={expanded}
+                      prevTier={prevTiersRef.current[stock.symbol]}
+                    />
+                  ))
+              }
+              {filteredWatch.length > watchPage && (
+                <button onClick={() => setWatchPage(p => p + 30)} style={{
+                  marginTop: 6, width: "100%", padding: "5px",
+                  fontSize: 10, color: C.textMid,
+                  background: "#041020", border: `1px solid ${C.borderFaint}`,
+                  borderRadius: 4, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace",
+                }}>
+                  Show more ({filteredWatch.length - watchPage} remaining)
                 </button>
               )}
-
-              <div style={{ marginTop: 8, fontSize: 11, color: "var(--color-text-tertiary)", textAlign: "right" }}>
-                {watchlist.filter((s) => s.tier !== "SAFE").length} of {watchlist.length} stocks within {WATCH_THRESHOLD_PCT}% of circuit
+              <div style={{ marginTop: 4, fontSize: 8, color: C.textGhost, textAlign: "right" }}>
+                {Math.min(watchPage, filteredWatch.length)} / {filteredWatch.length} · sorted by urgency · polls every 30s
               </div>
             </>
-          )}
+          )
+      )}
+
+      {/* ── ALERTS TAB ────────────────────────────────────────────────────────── */}
+      {tab === "ALERTS" && (
+        filteredAlerts.length === 0
+          ? (
+            <div style={{ padding: "18px 0", textAlign: "center" }}>
+              <div style={{ fontSize: 12, color: C.textDim }}>
+                {alerts.length === 0 ? "No threshold breaches detected" : "No alerts match filters"}
+              </div>
+              <div style={{ marginTop: 5, fontSize: 9, color: C.textGhost }}>
+                {connected
+                  ? `${watchlist.length} stocks · Critical ≤1% · Warning ≤3% · Watch ≤${WATCH_PCT}%`
+                  : "⚠ Socket disconnected"}
+              </div>
+            </div>
+          ) : (
+            filteredAlerts.map((alert, i) => (
+              <AlertCard
+                key={`${alert.symbol}:${alert.timestamp}:${i}`}
+                alert={alert}
+                onDismiss={dismissAlert}
+                isNew={newAlertIds.has(`${alert.symbol}:${alert.timestamp}`)}
+              />
+            ))
+          )
+      )}
+
+      {/* ── RADAR TAB ─────────────────────────────────────────────────────────── */}
+      {tab === "RADAR" && (
+        <>
+          <div style={{ marginBottom: 8, padding: "5px 8px", borderRadius: 3, background: "rgba(255,214,10,0.04)", border: `1px solid rgba(255,214,10,0.15)` }}>
+            <span style={{ fontSize: 9, color: "#ffd60a", fontWeight: 700 }}>⚡ PRE-CIRCUIT RADAR</span>
+            <span style={{ fontSize: 8, color: C.textDim, marginLeft: 8 }}>
+              Stocks 3–5% from circuit, moving toward limit with volume
+            </span>
+          </div>
+
+          {radarList.length === 0
+            ? (
+              <div style={{ padding: "18px 0", textAlign: "center", fontSize: 11, color: C.textDim }}>
+                No stocks in pre-circuit zone right now
+                <div style={{ marginTop: 4, fontSize: 9, color: C.textGhost }}>
+                  Zone: {PRE_CIRCUIT_MIN}–{PRE_CIRCUIT_MAX}% from circuit · toward limit · with volume
+                </div>
+              </div>
+            ) : (
+              <>
+                <RadarHeader />
+                {radarList.map((stock, i) => (
+                  <RadarRow key={stock.symbol} stock={stock} rank={i + 1} />
+                ))}
+                <div style={{ marginTop: 4, fontSize: 8, color: C.textGhost, textAlign: "right" }}>
+                  {radarList.length} stocks in zone · sorted by urgency
+                </div>
+              </>
+            )
+          }
         </>
       )}
 

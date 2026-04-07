@@ -1359,3 +1359,12 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
   .heatmap-score { font-size: 13px; }
   .scores-table th, .scores-table td { padding: 5px 7px; }
 }
+/* ===== OPTION CHAIN PAGE FIX =====
+   Prevents oc-page from double-scrolling inside terminal wrapper.
+   The terminal wrapper in App.jsx uses overflowY: auto + flex: 1,
+   so oc-page must NOT set its own height:100vh — override it here. */
+
+.oc-page {
+  height: auto !important;
+  min-height: 100%;
+}
