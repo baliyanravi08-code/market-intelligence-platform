@@ -74,7 +74,7 @@ function blackScholesGreeks(S, K, T, r, sigma, type = "ce") {
 
 // ── Deep Greek Interpretation (Bloomberg-style) ────────────────────────────
 function interpretGreekDeep(type, value, strike, spotPrice, dte) {
-  if (value == null || isNaN(value)) return { text: "Insufficient data — Greeks not returned by server. Will compute via Black-Scholes if IV is available.", color: "#3d5a72", badge: "N/A", risk: 0 };
+  if (value == null || isNaN(value)) return { text: "Insufficient data — Greeks not returned by server. Will compute via Black-Scholes if IV is available.", color: "#5a8aaa", badge: "N/A", risk: 0 };
   switch (type) {
     case "delta": {
       const abs = Math.abs(value);
@@ -180,11 +180,11 @@ function BloombergSparkline({ data, color, height = 165, animKey }) {
 
   if (!computed) return (
     <svg width={W} height={height} style={{ width: "100%", height }}>
-      <text x={W/2} y={height/2} textAnchor="middle" fill="#2a4060" fontSize="10"
+      <text x={W/2} y={height/2} textAnchor="middle" fill="#5a8aaa" fontSize="10"
         fontFamily="JetBrains Mono, monospace">
         No data — server not returning this Greek
       </text>
-      <text x={W/2} y={height/2+16} textAnchor="middle" fill="#1a3050" fontSize="8"
+      <text x={W/2} y={height/2+16} textAnchor="middle" fill="#4a7a9a" fontSize="8"
         fontFamily="JetBrains Mono, monospace">
         Will be computed via Black-Scholes if IV is available
       </text>
@@ -221,7 +221,7 @@ function BloombergSparkline({ data, color, height = 165, animKey }) {
           <line x1={pad.l} y1={tick.y} x2={pad.l+IW} y2={tick.y}
             stroke={i === 2 ? "#243545" : "#141e2a"} strokeWidth={i === 2 ? 1.2 : 0.7}
             strokeDasharray={i === 2 ? "none" : "4,5"} />
-          <text x={pad.l-7} y={tick.y+4} textAnchor="end" fill="#2e4a5e" fontSize="8.5"
+          <text x={pad.l-7} y={tick.y+4} textAnchor="end" fill="#6a9ab8" fontSize="8.5"
             fontFamily="JetBrains Mono, monospace">{fmtTick(tick.val)}</text>
         </g>
       ))}
@@ -229,7 +229,7 @@ function BloombergSparkline({ data, color, height = 165, animKey }) {
       {/* X labels (strike index) */}
       {xLabels.map(([x], i) => (
         <text key={i} x={x} y={pad.t+IH+16} textAnchor="middle"
-          fill="#1e3a50" fontSize="8" fontFamily="JetBrains Mono, monospace">
+          fill="#5a8aaa" fontSize="8" fontFamily="JetBrains Mono, monospace">
           S{i * Math.max(1, Math.floor(pts.length/5))}
         </text>
       ))}
@@ -385,7 +385,7 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
             }}>{dte}d DTE{dte <= 3 ? " ⚠" : ""}</span>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 8, color: "#1e3a50", fontFamily: "JetBrains Mono,monospace" }}>
+            <span style={{ fontSize: 8, color: "#5a8aaa", fontFamily: "JetBrains Mono,monospace" }}>
               ESC / click outside · Black-Scholes augmented · Hull 10th ed.
             </span>
             <button onClick={onClose} style={{
@@ -410,7 +410,7 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
           ].map((item, i) => (
             <div key={i} style={{ padding: "8px 18px", borderRight: "1px solid #0d1e30",
               display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
-              <span style={{ fontSize: 8, color: "#1e3a52", fontFamily: "JetBrains Mono,monospace", letterSpacing: 0.8 }}>{item.lbl}</span>
+              <span style={{ fontSize: 8, color: "#5a8aaa", fontFamily: "JetBrains Mono,monospace", letterSpacing: 0.8 }}>{item.lbl}</span>
               <span style={{ fontSize: 13, fontWeight: 800, color: item.col, fontFamily: "JetBrains Mono,monospace" }}>{item.val}</span>
             </div>
           ))}
@@ -439,7 +439,7 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
                     <div>
                       <div style={{ fontSize: 11, fontWeight: 800, color: g.color, letterSpacing: 1.5,
                         fontFamily: "JetBrains Mono,monospace" }}>{g.name}</div>
-                      <div style={{ fontSize: 8, color: "#2a4a60", fontFamily: "JetBrains Mono,monospace" }}>{g.desc}</div>
+                      <div style={{ fontSize: 8, color: "#6a9ab8", fontFamily: "JetBrains Mono,monospace" }}>{g.desc}</div>
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
@@ -449,7 +449,7 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
                         ? (g.key === "gamma" ? val.toFixed(5) : g.key === "theta" || g.key === "vega" ? val.toFixed(3) : val.toFixed(4))
                         : "—"}
                     </div>
-                    <div style={{ fontSize: 8, color: "#2a4a60", fontFamily: "JetBrains Mono,monospace" }}>current</div>
+                    <div style={{ fontSize: 8, color: "#6a9ab8", fontFamily: "JetBrains Mono,monospace" }}>current</div>
                   </div>
                 </div>
 
@@ -472,12 +472,12 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
                 <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
                   {[
                     { lbl: "CURRENT",   val: val != null && !isNaN(val) ? (g.key === "gamma" ? val.toFixed(5) : val.toFixed(3)) : "—", col: g.color },
-                    { lbl: "CHAIN MIN", val: hasData ? Math.min(...valid).toFixed(g.key === "gamma" ? 5 : 3) : "—", col: "#2a4a60" },
-                    { lbl: "CHAIN MAX", val: hasData ? Math.max(...valid).toFixed(g.key === "gamma" ? 5 : 3) : "—", col: "#2a4a60" },
-                    { lbl: "STRIKES",   val: hasData ? valid.length : "—", col: "#1a3050" },
+                    { lbl: "CHAIN MIN", val: hasData ? Math.min(...valid).toFixed(g.key === "gamma" ? 5 : 3) : "—", col: "#6a9ab8" },
+                    { lbl: "CHAIN MAX", val: hasData ? Math.max(...valid).toFixed(g.key === "gamma" ? 5 : 3) : "—", col: "#6a9ab8" },
+                    { lbl: "STRIKES",   val: hasData ? valid.length : "—", col: "#5a8aaa" },
                   ].map((s, i) => (
                     <div key={i}>
-                      <div style={{ fontSize: 7, color: "#1a3a50", fontFamily: "JetBrains Mono,monospace", letterSpacing: 0.8 }}>{s.lbl}</div>
+                      <div style={{ fontSize: 7, color: "#5a8aaa", fontFamily: "JetBrains Mono,monospace", letterSpacing: 0.8 }}>{s.lbl}</div>
                       <div style={{ fontSize: 12, fontWeight: 700, color: s.col, fontFamily: "JetBrains Mono,monospace" }}>{s.val}</div>
                     </div>
                   ))}
@@ -510,10 +510,10 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
           background: "#03080f", borderRadius: "0 0 12px 12px",
           display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6
         }}>
-          <span style={{ fontSize: 8, color: "#152a3a", fontFamily: "JetBrains Mono,monospace" }}>
+          <span style={{ fontSize: 8, color: "#4a7a9a", fontFamily: "JetBrains Mono,monospace" }}>
             Model: Black-Scholes-Merton · r = 6.5% (RBI repo) · σ from server IV · Γ/ν computed if missing · Ref: Hull "Options, Futures & Other Derivatives" 10th ed.
           </span>
-          <span style={{ fontSize: 8, color: "#152a3a", fontFamily: "JetBrains Mono,monospace" }}>
+          <span style={{ fontSize: 8, color: "#4a7a9a", fontFamily: "JetBrains Mono,monospace" }}>
             {greekSeries.delta?.filter(v => v != null).length || 0} strikes · {side?.toUpperCase()} · cross-strike distribution
           </span>
         </div>
@@ -813,7 +813,7 @@ export default function OptionChain({ onBack }) {
           <span><span style={{color:"#ff8c42"}}>θ Theta</span> — daily decay ₹</span>
           <span><span style={{color:"#a78bfa"}}>ν Vega</span> — IV sensitivity</span>
           <span><span style={{color:"#4db8ff"}}>Γ Gamma</span> — delta curvature</span>
-          <span style={{color:"#3d5a72",marginLeft:"auto"}}>Click any cell → Bloomberg chart →</span>
+          <span style={{color:"#4a7a9a",marginLeft:"auto"}}>Click any cell → Bloomberg chart →</span>
         </div>
       )}
 
