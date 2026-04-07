@@ -1,7 +1,7 @@
 /**
  * OptionChain.jsx — BLOOMBERG TERMINAL LEVEL
- * Greeks panel: animated SVG charts, Black-Scholes formulas,
- * tick-by-tick sparklines, gamma computed if missing, full interpretation engine
+ * FIXED: Greeks panel sidebars (left = Δ+Γ, right = θ+ν), all 4 charts fit without scroll.
+ * FIXED: Summary bar sticky. FIXED: Color visibility throughout.
  */
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -20,7 +20,7 @@ const SIGNAL_LABELS = {
   neutral:        { label: "",               color: "transparent", icon: "" },
 };
 
-// ── Formatters ─────────────────────────────────────────────────────────────
+// ── Formatters ──────────────────────────────────────────────────────────────
 function fmt(n) {
   if (!n && n !== 0) return "—";
   if (n >= 10000000) return (n / 10000000).toFixed(1) + "Cr";
@@ -45,7 +45,7 @@ function fmtGreek(n, dec = 3) {
   return n.toFixed(dec);
 }
 
-// ── Black-Scholes Greeks Engine (Hull 10th ed.) ────────────────────────────
+// ── Black-Scholes Greeks Engine (Hull 10th ed.) ─────────────────────────────
 function normCDF(x) {
   const t = 1 / (1 + 0.2316419 * Math.abs(x));
   const d = 0.3989422820 * Math.exp(-0.5 * x * x);
@@ -72,66 +72,67 @@ function blackScholesGreeks(S, K, T, r, sigma, type = "ce") {
   return { delta, gamma, vega, theta, rho };
 }
 
-// ── Deep Greek Interpretation (Bloomberg-style) ────────────────────────────
+// ── Deep Greek Interpretation ───────────────────────────────────────────────
 function interpretGreekDeep(type, value, strike, spotPrice, dte) {
   if (value == null || isNaN(value)) return { text: "Insufficient data — Greeks not returned by server. Will compute via Black-Scholes if IV is available.", color: "#5a8aaa", badge: "N/A", risk: 0 };
   switch (type) {
     case "delta": {
       const abs = Math.abs(value);
       const mono = spotPrice && strike ? ((spotPrice - strike) / spotPrice * 100).toFixed(2) : null;
-      if (abs > 0.80) return { text: `Deep ITM Δ${value.toFixed(4)}${mono ? ` · ${mono}% moneyness` : ""}. Behaves like underlying. High assignment risk near expiry. Gamma near zero — delta stable.`, color: "#00c896", badge: "DEEP ITM", risk: 3 };
-      if (abs > 0.60) return { text: `ITM Δ${value.toFixed(4)} — strong directional exposure. Gamma acceleration risk. Suitable for positional delta plays.`, color: "#4db8ff", badge: "ITM", risk: 2 };
-      if (abs > 0.40) return { text: `Near ATM Δ${value.toFixed(4)} — balanced sensitivity. Peak gamma zone.${dte != null ? ` ${dte}d DTE — gamma spikes exponentially near expiry.` : ""} Max pain territory.`, color: "#f0c040", badge: "ATM ZONE", risk: 2 };
-      if (abs > 0.20) return { text: `OTM Δ${value.toFixed(4)} — low directional bias.${dte != null && dte < 5 ? " ⚠ Expiry week — theta crush accelerating." : " Premium decay dominant."}`, color: "#ff8c42", badge: "OTM", risk: 1 };
-      return { text: `Deep OTM Δ${value.toFixed(4)} — lottery ticket. Intrinsic ≈ 0. Avoid buying; sell if IV elevated.`, color: "#ff6b6b", badge: "DEEP OTM", risk: 1 };
+      if (abs > 0.80) return { text: `Deep ITM Δ${value.toFixed(4)}${mono ? ` · ${mono}% moneyness` : ""}. Behaves like underlying. High assignment risk near expiry.`, color: "#00c896", badge: "DEEP ITM", risk: 3 };
+      if (abs > 0.60) return { text: `ITM Δ${value.toFixed(4)} — strong directional exposure. Gamma acceleration risk.`, color: "#4db8ff", badge: "ITM", risk: 2 };
+      if (abs > 0.40) return { text: `Near ATM Δ${value.toFixed(4)} — balanced sensitivity. Peak gamma zone.${dte != null ? ` ${dte}d DTE.` : ""}`, color: "#f0c040", badge: "ATM ZONE", risk: 2 };
+      if (abs > 0.20) return { text: `OTM Δ${value.toFixed(4)} — low directional bias.${dte != null && dte < 5 ? " ⚠ Expiry week — theta crush." : " Premium decay dominant."}`, color: "#ff8c42", badge: "OTM", risk: 1 };
+      return { text: `Deep OTM Δ${value.toFixed(4)} — lottery ticket. Intrinsic ≈ 0. Sell if IV elevated.`, color: "#ff6b6b", badge: "DEEP OTM", risk: 1 };
     }
     case "gamma": {
-      if (value > 0.08) return { text: `Explosive Γ ${value.toFixed(5)} — delta shifts ~${(value*100).toFixed(1)} per ₹100 move. Pin risk near expiry. Market makers aggressively delta-hedging.`, color: "#ff6b6b", badge: "EXPLOSIVE Γ", risk: 3 };
-      if (value > 0.04) return { text: `High Γ ${value.toFixed(5)} — rapid delta changes. Scalpers paradise. ${dte != null && dte < 3 ? "⚠ Expiry gamma spike — extreme caution." : "Directional bets amplified."}`, color: "#f0c040", badge: "HIGH Γ", risk: 2 };
-      if (value > 0.01) return { text: `Moderate Γ ${value.toFixed(5)} — delta shifts ~${(value*100).toFixed(2)} per ₹100. Spreads and calendars work well here.`, color: "#00c896", badge: "MODERATE Γ", risk: 1 };
-      return { text: `Low Γ ${value.toFixed(5)} — delta nearly linear. Deep ITM/OTM or long-dated. Gamma risk minimal.`, color: "#5a7a9a", badge: "STABLE Γ", risk: 0 };
+      if (value > 0.08) return { text: `Explosive Γ ${value.toFixed(5)} — delta shifts ~${(value*100).toFixed(1)} per ₹100. Pin risk near expiry.`, color: "#ff6b6b", badge: "EXPLOSIVE Γ", risk: 3 };
+      if (value > 0.04) return { text: `High Γ ${value.toFixed(5)} — rapid delta changes. ${dte != null && dte < 3 ? "⚠ Expiry gamma spike." : "Directional bets amplified."}`, color: "#f0c040", badge: "HIGH Γ", risk: 2 };
+      if (value > 0.01) return { text: `Moderate Γ ${value.toFixed(5)} — delta shifts ~${(value*100).toFixed(2)} per ₹100.`, color: "#00c896", badge: "MODERATE Γ", risk: 1 };
+      return { text: `Low Γ ${value.toFixed(5)} — delta nearly linear. Deep ITM/OTM or long-dated.`, color: "#5a7a9a", badge: "STABLE Γ", risk: 0 };
     }
     case "theta": {
       const daily = Math.abs(value);
-      if (daily > 50) return { text: `Severe θ ₹${daily.toFixed(1)}/day.${dte != null && dte < 5 ? " ⚠ Expiry week — theta accelerates exponentially (T-effect)." : ""} Weekend = 3× decay. Sellers collecting ₹${(daily*7).toFixed(0)}/week.`, color: "#ff6b6b", badge: "SEVERE DECAY", risk: 3 };
-      if (daily > 10) return { text: `High θ ₹${daily.toFixed(1)}/day — time rapidly working against buyers. Break-even requires significant daily move.`, color: "#ff8c42", badge: "HIGH DECAY", risk: 2 };
-      if (daily > 2)  return { text: `Moderate θ ₹${daily.toFixed(1)}/day — balanced carry. Suitable for debit spreads to reduce theta drag.`, color: "#f0c040", badge: "MODERATE", risk: 1 };
-      return { text: `Low θ ₹${daily.toFixed(2)}/day — minimal erosion. Long-dated or deep ITM. Directional play viable without rush.`, color: "#00c896", badge: "LOW DECAY", risk: 0 };
+      if (daily > 50) return { text: `Severe θ ₹${daily.toFixed(1)}/day.${dte != null && dte < 5 ? " ⚠ Expiry week." : ""} Weekend = 3× decay.`, color: "#ff6b6b", badge: "SEVERE DECAY", risk: 3 };
+      if (daily > 10) return { text: `High θ ₹${daily.toFixed(1)}/day — time rapidly working against buyers.`, color: "#ff8c42", badge: "HIGH DECAY", risk: 2 };
+      if (daily > 2)  return { text: `Moderate θ ₹${daily.toFixed(1)}/day — balanced carry. Use debit spreads.`, color: "#f0c040", badge: "MODERATE", risk: 1 };
+      return { text: `Low θ ₹${daily.toFixed(2)}/day — minimal erosion. Directional play viable.`, color: "#00c896", badge: "LOW DECAY", risk: 0 };
     }
     case "vega": {
-      if (value > 80) return { text: `Extreme ν ${value.toFixed(2)} — ₹${value.toFixed(0)} P&L per 1% IV change. IV crush post-event destroys 40-60% of premium instantly. Avoid buying pre-event.`, color: "#ff6b6b", badge: "IV TRAP", risk: 3 };
-      if (value > 40) return { text: `High ν ${value.toFixed(2)} — heavily IV-sensitive. Buy before events, sell after IV expansion. Monitor India VIX regime.`, color: "#a78bfa", badge: "HIGH ν", risk: 2 };
-      if (value > 15) return { text: `Moderate ν ${value.toFixed(2)} — ₹${value.toFixed(0)} per 1% IV move. India VIX changes matter here.`, color: "#4db8ff", badge: "MODERATE ν", risk: 1 };
-      return { text: `Low ν ${value.toFixed(2)} — IV-insensitive. Near expiry or deep moneyness. Delta dominates P&L.`, color: "#5a7a9a", badge: "LOW ν", risk: 0 };
+      if (value > 80) return { text: `Extreme ν ${value.toFixed(2)} — ₹${value.toFixed(0)} per 1% IV. IV crush destroys 40-60% premium instantly.`, color: "#ff6b6b", badge: "IV TRAP", risk: 3 };
+      if (value > 40) return { text: `High ν ${value.toFixed(2)} — heavily IV-sensitive. Buy pre-event, sell after expansion.`, color: "#a78bfa", badge: "HIGH ν", risk: 2 };
+      if (value > 15) return { text: `Moderate ν ${value.toFixed(2)} — ₹${value.toFixed(0)} per 1% IV. India VIX matters.`, color: "#4db8ff", badge: "MODERATE ν", risk: 1 };
+      return { text: `Low ν ${value.toFixed(2)} — IV-insensitive. Near expiry or deep moneyness.`, color: "#5a7a9a", badge: "LOW ν", risk: 0 };
     }
     default: return { text: "", color: "#5a7a9a", badge: "", risk: 0 };
   }
 }
 
-// ── Risk Meter ─────────────────────────────────────────────────────────────
+// ── Risk Meter ──────────────────────────────────────────────────────────────
 function RiskMeter({ risk = 0 }) {
   const colors = ["#00c896", "#f0c040", "#ff8c42", "#ff6b6b"];
-  const labels = ["LOW", "MODERATE", "HIGH", "EXTREME"];
+  const labels = ["LOW", "MOD", "HIGH", "EXT"];
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 3, marginTop: 5 }}>
       {[0,1,2,3].map(i => (
         <div key={i} style={{
-          width: 20, height: 4, borderRadius: 2,
+          width: 16, height: 3, borderRadius: 2,
           background: i <= risk ? colors[risk] : "#1a2a3a",
-          boxShadow: i <= risk ? `0 0 5px ${colors[risk]}80` : "none",
+          boxShadow: i <= risk ? `0 0 4px ${colors[risk]}80` : "none",
           transition: "all 0.3s"
         }} />
       ))}
-      <span style={{ fontSize: 8, fontFamily: "JetBrains Mono, monospace", fontWeight: 800,
-        color: colors[risk], marginLeft: 6, letterSpacing: 0.5 }}>{labels[risk]} RISK</span>
+      <span style={{ fontSize: 7, fontFamily: "JetBrains Mono, monospace", fontWeight: 800,
+        color: colors[risk], marginLeft: 4, letterSpacing: 0.5 }}>{labels[risk]}</span>
     </div>
   );
 }
 
-// ── Animated Bloomberg Sparkline ───────────────────────────────────────────
-function BloombergSparkline({ data, color, height = 165, animKey }) {
+// ── Compact Sparkline (fits in smaller cells) ───────────────────────────────
+function BloombergSparkline({ data, color, height = 110, animKey }) {
   const pathRef = useRef(null);
-  const W = 440, pad = { t: 22, r: 56, b: 26, l: 52 };
+  const W = 340;
+  const pad = { t: 16, r: 44, b: 20, l: 42 };
   const IW = W - pad.l - pad.r;
   const IH = height - pad.t - pad.b;
 
@@ -144,28 +145,20 @@ function BloombergSparkline({ data, color, height = 165, animKey }) {
     const range = (max - min) || Math.abs(min) * 0.2 || 1;
     const pad2 = range * 0.15;
     const yMin = min - pad2, yMax = max + pad2, yRange = yMax - yMin;
-
     const pts = validData.map((v, i) => [
       pad.l + (i / (validData.length - 1)) * IW,
       pad.t + IH - ((v - yMin) / yRange) * IH
     ]);
-
     const pathD = `M ${pts.map(p => p.join(",")).join(" L ")}`;
     const areaD = `M ${pts[0].join(",")} L ${pts.map(p => p.join(",")).join(" L ")} L ${pts[pts.length-1][0]},${pad.t+IH} L ${pts[0][0]},${pad.t+IH} Z`;
-    const yTicks = [0, 0.25, 0.5, 0.75, 1].map(t => ({
-      y: pad.t + (1-t) * IH,
-      val: yMin + t * yRange
-    }));
-    const xStep = Math.max(1, Math.floor(pts.length / 5));
-    const xLabels = pts.filter((_, i) => i % xStep === 0 || i === pts.length - 1);
-    return { pts, pathD, areaD, yTicks, xLabels, last: pts[pts.length-1], lastVal: validData[validData.length-1], min, max };
+    const yTicks = [0, 0.5, 1].map(t => ({ y: pad.t + (1-t) * IH, val: yMin + t * yRange }));
+    return { pts, pathD, areaD, yTicks, last: pts[pts.length-1], lastVal: validData[validData.length-1], min, max };
   }, [validData, IW, IH, pad]);
 
-  // Animate draw on change
   useEffect(() => {
     if (!pathRef.current || !computed) return;
     const el = pathRef.current;
-    const len = el.getTotalLength?.() || 700;
+    const len = el.getTotalLength?.() || 500;
     el.style.transition = "none";
     el.style.strokeDasharray = `${len}`;
     el.style.strokeDashoffset = `${len}`;
@@ -179,104 +172,140 @@ function BloombergSparkline({ data, color, height = 165, animKey }) {
   const fId = `f${color.replace(/[^a-z0-9]/gi, "")}`;
 
   if (!computed) return (
-    <svg width={W} height={height} style={{ width: "100%", height }}>
-      <text x={W/2} y={height/2} textAnchor="middle" fill="#5a8aaa" fontSize="10"
-        fontFamily="JetBrains Mono, monospace">
-        No data — server not returning this Greek
-      </text>
-      <text x={W/2} y={height/2+16} textAnchor="middle" fill="#4a7a9a" fontSize="8"
-        fontFamily="JetBrains Mono, monospace">
-        Will be computed via Black-Scholes if IV is available
-      </text>
+    <svg width={W} height={height} style={{ width: "100%", height, display: "block" }}>
+      <text x={W/2} y={height/2 - 6} textAnchor="middle" fill="#4a7a9a" fontSize="9" fontFamily="JetBrains Mono, monospace">No data from server</text>
+      <text x={W/2} y={height/2 + 8} textAnchor="middle" fill="#3a6a8a" fontSize="7.5" fontFamily="JetBrains Mono, monospace">BS-computed if IV available</text>
     </svg>
   );
 
-  const { pts, pathD, areaD, yTicks, xLabels, last, lastVal, min, max } = computed;
-
+  const { pts, pathD, areaD, yTicks, last, lastVal } = computed;
   const fmtTick = v => {
     const a = Math.abs(v);
     if (a >= 100) return v.toFixed(0);
     if (a >= 1)   return v.toFixed(2);
     if (a >= 0.001) return v.toFixed(4);
-    return v.toFixed(6);
+    return v.toFixed(5);
   };
 
   return (
     <svg width={W} height={height} style={{ width: "100%", height, display: "block" }}>
       <defs>
         <linearGradient id={gId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor={color} stopOpacity="0.4" />
-          <stop offset="60%"  stopColor={color} stopOpacity="0.08" />
+          <stop offset="0%"   stopColor={color} stopOpacity="0.35" />
           <stop offset="100%" stopColor={color} stopOpacity="0" />
         </linearGradient>
         <filter id={fId}>
-          <feGaussianBlur stdDeviation="2" result="blur"/>
+          <feGaussianBlur stdDeviation="1.5" result="blur"/>
           <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
         </filter>
       </defs>
-
-      {/* Y grid + labels */}
       {yTicks.map((tick, i) => (
         <g key={i}>
           <line x1={pad.l} y1={tick.y} x2={pad.l+IW} y2={tick.y}
-            stroke={i === 2 ? "#243545" : "#141e2a"} strokeWidth={i === 2 ? 1.2 : 0.7}
-            strokeDasharray={i === 2 ? "none" : "4,5"} />
-          <text x={pad.l-7} y={tick.y+4} textAnchor="end" fill="#6a9ab8" fontSize="8.5"
+            stroke={i === 1 ? "#1e3040" : "#111e2a"} strokeWidth={i === 1 ? 1 : 0.6}
+            strokeDasharray={i === 1 ? "none" : "3,4"} />
+          <text x={pad.l-5} y={tick.y+3.5} textAnchor="end" fill="#4a7a9a" fontSize="7.5"
             fontFamily="JetBrains Mono, monospace">{fmtTick(tick.val)}</text>
         </g>
       ))}
-
-      {/* X labels (strike index) */}
-      {xLabels.map(([x], i) => (
-        <text key={i} x={x} y={pad.t+IH+16} textAnchor="middle"
-          fill="#5a8aaa" fontSize="8" fontFamily="JetBrains Mono, monospace">
-          S{i * Math.max(1, Math.floor(pts.length/5))}
-        </text>
-      ))}
-
-      {/* Zero line */}
-      {min < 0 && max > 0 && (() => {
-        const r2 = max - min || 1;
+      {computed.min < 0 && computed.max > 0 && (() => {
+        const r2 = computed.max - computed.min || 1;
         const p2 = r2 * 0.15;
-        const yR = (max + p2) - (min - p2);
-        const zY = pad.t + IH - ((0 - (min - r2*0.15)) / yR) * IH;
+        const yR = (computed.max + p2) - (computed.min - p2);
+        const zY = pad.t + IH - ((0 - (computed.min - r2*0.15)) / yR) * IH;
         return <line x1={pad.l} y1={zY} x2={pad.l+IW} y2={zY}
-          stroke={color} strokeWidth="1" strokeOpacity="0.25" strokeDasharray="6,4" />;
+          stroke={color} strokeWidth="0.8" strokeOpacity="0.22" strokeDasharray="5,4" />;
       })()}
-
-      {/* Area */}
       <path d={areaD} fill={`url(#${gId})`} />
-
-      {/* Main line */}
       <path ref={pathRef} d={pathD} fill="none" stroke={color}
-        strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round"
+        strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"
         filter={`url(#${fId})`} />
-
-      {/* Dots on every 10th point for "tick" feel */}
-      {pts.filter((_, i) => i % Math.max(1, Math.floor(pts.length/12)) === 0).map(([x,y], i) => (
-        <circle key={i} cx={x} cy={y} r="2" fill={color} opacity="0.5" />
+      {pts.filter((_, i) => i % Math.max(1, Math.floor(pts.length/10)) === 0).map(([x,y], i) => (
+        <circle key={i} cx={x} cy={y} r="1.8" fill={color} opacity="0.45" />
       ))}
-
-      {/* Last value callout */}
       <line x1={last[0]} y1={pad.t} x2={last[0]} y2={pad.t+IH}
-        stroke={color} strokeWidth="0.8" strokeOpacity="0.35" strokeDasharray="3,3" />
-      <circle cx={last[0]} cy={last[1]} r="5" fill={color}
-        style={{ filter: `drop-shadow(0 0 5px ${color})` }} />
-      <rect x={last[0]+8} y={last[1]-11} width={48} height={20} rx="4"
-        fill="#06101e" stroke={color} strokeWidth="0.8" strokeOpacity="0.7" />
-      <text x={last[0]+32} y={last[1]+4} textAnchor="middle"
-        fill={color} fontSize="9" fontWeight="800" fontFamily="JetBrains Mono, monospace">
+        stroke={color} strokeWidth="0.7" strokeOpacity="0.3" strokeDasharray="3,3" />
+      <circle cx={last[0]} cy={last[1]} r="4" fill={color}
+        style={{ filter: `drop-shadow(0 0 4px ${color})` }} />
+      <rect x={last[0]+6} y={last[1]-9} width={38} height={16} rx="3"
+        fill="#06101e" stroke={color} strokeWidth="0.7" strokeOpacity="0.6" />
+      <text x={last[0]+25} y={last[1]+3} textAnchor="middle"
+        fill={color} fontSize="8" fontWeight="800" fontFamily="JetBrains Mono, monospace">
         {fmtTick(lastVal)}
       </text>
     </svg>
   );
 }
 
-// ── Greeks Chart Panel — Bloomberg Level ──────────────────────────────────
+// ── Sidebar stat block ──────────────────────────────────────────────────────
+function SidebarStatBlock({ greek, greeks, greekSeries, strike, spotPrice, dte }) {
+  const val   = greeks[greek.key];
+  const series = greekSeries[greek.key] || [];
+  const valid  = series.filter(v => v != null && !isNaN(v) && isFinite(v));
+  const interp = interpretGreekDeep(greek.key, val, strike, spotPrice, dte);
+
+  const fmtVal = v => {
+    if (v == null || isNaN(v)) return "—";
+    if (greek.key === "gamma") return v.toFixed(5);
+    if (greek.key === "theta" || greek.key === "vega") return v.toFixed(3);
+    return v.toFixed(4);
+  };
+
+  return (
+    <div style={{ marginBottom: 10, paddingBottom: 10, borderBottom: `1px solid #0d1e30` }}>
+      {/* Greek header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 16, fontWeight: 900, color: greek.color,
+            fontFamily: "JetBrains Mono, monospace", textShadow: `0 0 10px ${greek.color}60` }}>
+            {greek.sym}
+          </span>
+          <div>
+            <div style={{ fontSize: 9, fontWeight: 800, color: greek.color, letterSpacing: 1.2,
+              fontFamily: "JetBrains Mono, monospace" }}>{greek.name}</div>
+            <div style={{ fontSize: 7, color: "#4a6a84", fontFamily: "JetBrains Mono, monospace" }}>{greek.desc}</div>
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 14, fontWeight: 900, color: greek.color,
+            fontFamily: "JetBrains Mono, monospace" }}>{fmtVal(val)}</div>
+          <div style={{ fontSize: 7, color: "#3a5a72", fontFamily: "JetBrains Mono, monospace" }}>current</div>
+        </div>
+      </div>
+      {/* Stats row */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 6 }}>
+        {[
+          { lbl: "MIN",     val: valid.length >= 2 ? Math.min(...valid).toFixed(greek.key === "gamma" ? 5 : 3) : "—" },
+          { lbl: "MAX",     val: valid.length >= 2 ? Math.max(...valid).toFixed(greek.key === "gamma" ? 5 : 3) : "—" },
+          { lbl: "STRIKES", val: valid.length || "—" },
+        ].map((s, i) => (
+          <div key={i}>
+            <div style={{ fontSize: 6.5, color: "#2a4a60", fontFamily: "JetBrains Mono, monospace", letterSpacing: 0.6 }}>{s.lbl}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#7a9ab8", fontFamily: "JetBrains Mono, monospace" }}>{s.val}</div>
+          </div>
+        ))}
+      </div>
+      {/* Badge + interp */}
+      <div style={{ display: "flex", gap: 5, alignItems: "flex-start", marginBottom: 3 }}>
+        <span style={{
+          fontSize: 7, fontWeight: 800, fontFamily: "JetBrains Mono, monospace",
+          color: interp.color, background: `${interp.color}18`,
+          border: `1px solid ${interp.color}35`, padding: "1px 5px", borderRadius: 3,
+          whiteSpace: "nowrap", flexShrink: 0, letterSpacing: 0.4
+        }}>{interp.badge}</span>
+        <span style={{ fontSize: 8, color: `${interp.color}bb`, lineHeight: 1.4,
+          fontFamily: "JetBrains Mono, monospace" }}>{interp.text}</span>
+      </div>
+      <RiskMeter risk={interp.risk} />
+    </div>
+  );
+}
+
+// ── Greeks Chart Panel — FIXED LAYOUT ──────────────────────────────────────
+// Left sidebar: Δ + Γ stats | Center: 2×2 chart grid | Right sidebar: θ + ν stats
 function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }) {
   const [animKey, setAnimKey] = useState(0);
 
-  // Re-trigger animation every 3s (simulates tick-by-tick)
   useEffect(() => {
     const t = setInterval(() => setAnimKey(k => k + 1), 3000);
     return () => clearInterval(t);
@@ -288,14 +317,12 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
     return () => window.removeEventListener("keydown", h);
   }, [onClose]);
 
-  // Build cross-strike series — use server value OR compute via BS
   const greekSeries = useMemo(() => {
     if (!allStrikes?.length) return { delta: [], gamma: [], theta: [], vega: [] };
     const series = { delta: [], gamma: [], theta: [], vega: [] };
     allStrikes.forEach(row => {
       const opt = side === "ce" ? row.ce : row.pe;
       let { delta: d, gamma: g, theta: t, vega: v } = opt || {};
-      // Augment missing values via BS if IV is present
       if ((g == null || isNaN(g) || d == null || isNaN(d)) && spotPrice && row.strike && opt?.iv && dte > 0) {
         const T = dte / 365;
         const sigma = Math.max(0.01, (opt.iv || 15) / 100);
@@ -315,7 +342,6 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
     return series;
   }, [allStrikes, side, spotPrice, dte]);
 
-  // Current strike's greeks — BS-augmented
   const greeks = useMemo(() => {
     let { delta: d, gamma: g, theta: t, vega: v, rho: r, iv, ltp, oi } = data || {};
     if (spotPrice && strike && iv && dte > 0) {
@@ -334,27 +360,36 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
   }, [data, spotPrice, strike, dte, side]);
 
   const Greeks = [
-    { key: "delta", sym: "Δ", name: "DELTA",  color: "#00c896", desc: "₹ move per ₹1 in underlying" },
-    { key: "gamma", sym: "Γ", name: "GAMMA",  color: "#4db8ff", desc: "delta change per ₹1 move" },
-    { key: "theta", sym: "θ", name: "THETA",  color: "#ff8c42", desc: "daily time decay in ₹" },
-    { key: "vega",  sym: "ν", name: "VEGA",   color: "#a78bfa", desc: "₹ P&L per 1% IV change" },
+    { key: "delta", sym: "Δ", name: "DELTA", color: "#00c896", desc: "₹/₹1 spot move" },
+    { key: "gamma", sym: "Γ", name: "GAMMA", color: "#4db8ff", desc: "delta/₹1 move" },
+    { key: "theta", sym: "θ", name: "THETA", color: "#ff8c42", desc: "₹ daily decay" },
+    { key: "vega",  sym: "ν", name: "VEGA",  color: "#a78bfa", desc: "₹/1% IV change" },
   ];
 
+  // Left sidebar = Delta + Gamma, Right sidebar = Theta + Vega
+  const leftGreeks  = [Greeks[0], Greeks[1]];
+  const rightGreeks = [Greeks[2], Greeks[3]];
+
   return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 500,
-      background: "rgba(2,6,14,0.94)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      backdropFilter: "blur(8px)",
-      animation: "overlay-in 0.18s ease-out"
-    }} onClick={e => e.target === e.currentTarget && onClose()}>
+    <div
+      style={{
+        position: "fixed", inset: 0, zIndex: 500,
+        background: "rgba(2,6,14,0.92)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        backdropFilter: "blur(6px)",
+        animation: "overlay-in 0.18s ease-out"
+      }}
+      onClick={e => e.target === e.currentTarget && onClose()}
+    >
       <div style={{
         background: "linear-gradient(160deg, #070d1b 0%, #080f1f 100%)",
         border: "1px solid #182840",
-        borderRadius: 12,
-        width: "min(980px, 96vw)",
-        maxHeight: "94vh",
-        overflowY: "auto",
+        borderRadius: 10,
+        width: "min(1200px, 98vw)",
+        height: "min(680px, 96vh)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
         boxShadow: "0 40px 100px rgba(0,0,0,0.9), 0 0 0 1px #0d2035",
         animation: "panel-in 0.22s ease-out",
       }}>
@@ -362,159 +397,174 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
         {/* ── Header ── */}
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "14px 22px", borderBottom: "1px solid #0d1e30",
-          background: "linear-gradient(90deg,#050c1a,#080f20)",
-          position: "sticky", top: 0, zIndex: 2, borderRadius: "12px 12px 0 0"
+          padding: "10px 18px",
+          borderBottom: "1px solid #0d1e30",
+          background: "linear-gradient(90deg, #050c1a, #080f20)",
+          flexShrink: 0
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <span style={{ fontFamily: "JetBrains Mono,monospace", fontSize: 14, fontWeight: 900,
-              color: "#d4e8f8", letterSpacing: 2 }}>GREEKS</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 13, fontWeight: 900,
+              color: "#c8dff0", letterSpacing: 2 }}>GREEKS</span>
             <span style={{
-              fontFamily: "JetBrains Mono,monospace", fontSize: 13, fontWeight: 700,
+              fontFamily: "JetBrains Mono, monospace", fontSize: 12, fontWeight: 700,
               color: side === "ce" ? "#00c896" : "#ff6b6b",
               background: side === "ce" ? "rgba(0,200,150,0.1)" : "rgba(255,107,107,0.1)",
               border: `1px solid ${side === "ce" ? "#00c89640" : "#ff6b6b40"}`,
-              padding: "3px 12px", borderRadius: 5
+              padding: "2px 10px", borderRadius: 4
             }}>{strike?.toLocaleString("en-IN")} {side?.toUpperCase()}</span>
-            {spotPrice && <span style={{ fontSize: 10, color: "#4db8ff", fontFamily: "JetBrains Mono,monospace" }}>
+            {spotPrice && <span style={{ fontSize: 10, color: "#4db8ff", fontFamily: "JetBrains Mono, monospace" }}>
               SPOT ₹{fmtPrice(spotPrice)}</span>}
             {dte != null && <span style={{
               fontSize: 10, fontWeight: 800,
-              color: dte <= 3 ? "#ff6b6b" : dte <= 7 ? "#f0c040" : "#5a7a9a",
-              fontFamily: "JetBrains Mono,monospace"
+              color: dte <= 3 ? "#ff6b6b" : dte <= 7 ? "#f0c040" : "#6a8aaa",
+              fontFamily: "JetBrains Mono, monospace"
             }}>{dte}d DTE{dte <= 3 ? " ⚠" : ""}</span>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 8, color: "#5a8aaa", fontFamily: "JetBrains Mono,monospace" }}>
-              ESC / click outside · Black-Scholes augmented · Hull 10th ed.
+            {/* Quick summary chips */}
+            {[
+              { lbl: "IV",  val: greeks.iv != null ? `${greeks.iv.toFixed(1)}%` : "—",   col: "#f0c040" },
+              { lbl: "LTP", val: greeks.ltp != null ? `₹${fmtPrice(greeks.ltp)}` : "—",  col: "#c8dff0" },
+              { lbl: "OI",  val: fmt(greeks.oi),                                          col: "#6a8aaa" },
+            ].map((c, i) => (
+              <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center",
+                padding: "2px 8px", borderRight: "1px solid #0d1e30" }}>
+                <span style={{ fontSize: 7, color: "#3a5a72", fontFamily: "JetBrains Mono, monospace" }}>{c.lbl}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: c.col, fontFamily: "JetBrains Mono, monospace" }}>{c.val}</span>
+              </div>
+            ))}
+            <span style={{ fontSize: 8, color: "#3a5a72", fontFamily: "JetBrains Mono, monospace", marginLeft: 4 }}>
+              ESC · BS · Hull 10th
             </span>
             <button onClick={onClose} style={{
-              background: "none", border: "1px solid #1a3050", color: "#4a7a9a",
-              width: 28, height: 28, borderRadius: 5, cursor: "pointer", fontSize: 16,
+              background: "none", border: "1px solid #1a3050", color: "#6a8aaa",
+              width: 26, height: 26, borderRadius: 4, cursor: "pointer", fontSize: 15,
               display: "flex", alignItems: "center", justifyContent: "center"
             }}>×</button>
           </div>
         </div>
 
-        {/* ── Summary strip ── */}
-        <div style={{ display: "flex", background: "#03080f", borderBottom: "1px solid #0d1e30", overflowX: "auto" }}>
-          {[
-            { lbl: "Δ DELTA",  val: greeks.delta != null ? greeks.delta.toFixed(4) : "—",  col: "#00c896" },
-            { lbl: "Γ GAMMA",  val: greeks.gamma != null ? greeks.gamma.toFixed(5) : "—",  col: "#4db8ff" },
-            { lbl: "θ THETA",  val: greeks.theta != null ? `₹${greeks.theta.toFixed(2)}/d` : "—", col: "#ff8c42" },
-            { lbl: "ν VEGA",   val: greeks.vega  != null ? `₹${greeks.vega.toFixed(2)}/%` : "—",  col: "#a78bfa" },
-            { lbl: "IV",       val: greeks.iv    != null ? `${greeks.iv.toFixed(1)}%` : "—",        col: "#f0c040" },
-            { lbl: "LTP",      val: greeks.ltp   != null ? `₹${fmtPrice(greeks.ltp)}` : "—",       col: "#d4e8f8" },
-            { lbl: "OI",       val: fmt(greeks.oi),  col: "#5a7a9a" },
-            { lbl: "DTE",      val: dte != null ? `${dte}d` : "—", col: dte <= 3 ? "#ff6b6b" : "#5a7a9a" },
-          ].map((item, i) => (
-            <div key={i} style={{ padding: "8px 18px", borderRight: "1px solid #0d1e30",
-              display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
-              <span style={{ fontSize: 8, color: "#5a8aaa", fontFamily: "JetBrains Mono,monospace", letterSpacing: 0.8 }}>{item.lbl}</span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: item.col, fontFamily: "JetBrains Mono,monospace" }}>{item.val}</span>
+        {/* ── Body: LEFT SIDEBAR | 2×2 CHARTS | RIGHT SIDEBAR ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "200px 1fr 200px", flex: 1, overflow: "hidden" }}>
+
+          {/* LEFT SIDEBAR — Delta + Gamma */}
+          <div style={{
+            background: "#040912",
+            borderRight: "1px solid #0d1e30",
+            padding: "12px 10px",
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+          }}>
+            <div style={{ fontSize: 7, fontWeight: 800, color: "#1a3050", letterSpacing: 1.5,
+              fontFamily: "JetBrains Mono, monospace", marginBottom: 10, textTransform: "uppercase" }}>
+              Δ / Γ — Direction
             </div>
-          ))}
-        </div>
+            {leftGreeks.map(g => (
+              <SidebarStatBlock key={g.key} greek={g} greeks={greeks}
+                greekSeries={greekSeries} strike={strike} spotPrice={spotPrice} dte={dte} />
+            ))}
+          </div>
 
-        {/* ── 2×2 Charts ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1px", background: "#060c18" }}>
-          {Greeks.map(g => {
-            const val    = greeks[g.key];
-            const series = greekSeries[g.key] || [];
-            const interp = interpretGreekDeep(g.key, val, strike, spotPrice, dte);
-            const valid  = series.filter(v => v != null && !isNaN(v) && isFinite(v));
-            const hasData = valid.length >= 2;
-
-            return (
-              <div key={g.key} style={{
-                background: "linear-gradient(145deg,#060c1a,#070d1c)",
-                padding: "18px 20px",
-                borderBottom: "1px solid #060c18", borderRight: "1px solid #060c18"
-              }}>
-                {/* Chart header */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 22, fontWeight: 900, color: g.color,
-                      fontFamily: "JetBrains Mono,monospace", textShadow: `0 0 14px ${g.color}70` }}>{g.sym}</span>
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 800, color: g.color, letterSpacing: 1.5,
-                        fontFamily: "JetBrains Mono,monospace" }}>{g.name}</div>
-                      <div style={{ fontSize: 8, color: "#6a9ab8", fontFamily: "JetBrains Mono,monospace" }}>{g.desc}</div>
-                    </div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 18, fontWeight: 900, color: g.color,
-                      fontFamily: "JetBrains Mono,monospace", textShadow: `0 0 10px ${g.color}60` }}>
-                      {val != null && !isNaN(val)
-                        ? (g.key === "gamma" ? val.toFixed(5) : g.key === "theta" || g.key === "vega" ? val.toFixed(3) : val.toFixed(4))
-                        : "—"}
-                    </div>
-                    <div style={{ fontSize: 8, color: "#6a9ab8", fontFamily: "JetBrains Mono,monospace" }}>current</div>
-                  </div>
-                </div>
-
-                {/* Chart area */}
-                <div style={{
-                  background: "rgba(0,0,0,0.3)", borderRadius: 8,
-                  border: `1px solid ${g.color}18`, overflow: "hidden", position: "relative"
+          {/* CENTER — 2×2 chart grid (no scroll) */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gridTemplateRows: "1fr 1fr",
+            gap: "1px",
+            background: "#060c18",
+            overflow: "hidden",
+          }}>
+            {Greeks.map(g => {
+              const series = greekSeries[g.key] || [];
+              const valid  = series.filter(v => v != null && !isNaN(v) && isFinite(v));
+              const hasData = valid.length >= 2;
+              return (
+                <div key={g.key} style={{
+                  background: "linear-gradient(145deg, #060c1a, #070d1c)",
+                  padding: "10px 12px",
+                  display: "flex",
+                  flexDirection: "column",
+                  overflow: "hidden",
                 }}>
-                  <BloombergSparkline data={series} color={g.color} height={165} animKey={animKey} />
+                  {/* Chart header — compact */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexShrink: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 17, fontWeight: 900, color: g.color,
+                        fontFamily: "JetBrains Mono, monospace", textShadow: `0 0 10px ${g.color}60` }}>{g.sym}</span>
+                      <div>
+                        <div style={{ fontSize: 9, fontWeight: 800, color: g.color, letterSpacing: 1.2,
+                          fontFamily: "JetBrains Mono, monospace" }}>{g.name}</div>
+                        <div style={{ fontSize: 7, color: "#4a6a84", fontFamily: "JetBrains Mono, monospace" }}>{g.desc}</div>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 15, fontWeight: 900, color: g.color,
+                        fontFamily: "JetBrains Mono, monospace", textShadow: `0 0 8px ${g.color}50` }}>
+                        {(() => {
+                          const v = greeks[g.key];
+                          if (v == null || isNaN(v)) return "—";
+                          if (g.key === "gamma") return v.toFixed(5);
+                          if (g.key === "theta" || g.key === "vega") return v.toFixed(3);
+                          return v.toFixed(4);
+                        })()}
+                      </div>
+                      <div style={{ fontSize: 6.5, color: "#3a5a72", fontFamily: "JetBrains Mono, monospace" }}>current</div>
+                    </div>
+                  </div>
+
+                  {/* SVG chart — fills remaining space */}
                   <div style={{
-                    position: "absolute", top: 7, right: 10,
-                    fontSize: 7, fontFamily: "JetBrains Mono,monospace",
-                    color: g.color, background: `${g.color}12`,
-                    border: `1px solid ${g.color}25`, borderRadius: 3, padding: "1px 6px",
-                    letterSpacing: 0.5
-                  }}>CROSS-STRIKE {hasData ? `${valid.length}pts` : "BS-COMPUTED"}</div>
+                    flex: 1,
+                    background: "rgba(0,0,0,0.3)", borderRadius: 6,
+                    border: `1px solid ${g.color}15`, overflow: "hidden", position: "relative",
+                    minHeight: 0,
+                  }}>
+                    <BloombergSparkline data={series} color={g.color} height={110} animKey={animKey} />
+                    <div style={{
+                      position: "absolute", top: 5, right: 7,
+                      fontSize: 6, fontFamily: "JetBrains Mono, monospace",
+                      color: g.color, background: `${g.color}10`,
+                      border: `1px solid ${g.color}22`, borderRadius: 2, padding: "1px 5px", letterSpacing: 0.4
+                    }}>{hasData ? `${valid.length}pts` : "BS"}</div>
+                  </div>
                 </div>
+              );
+            })}
+          </div>
 
-                {/* Stats */}
-                <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
-                  {[
-                    { lbl: "CURRENT",   val: val != null && !isNaN(val) ? (g.key === "gamma" ? val.toFixed(5) : val.toFixed(3)) : "—", col: g.color },
-                    { lbl: "CHAIN MIN", val: hasData ? Math.min(...valid).toFixed(g.key === "gamma" ? 5 : 3) : "—", col: "#6a9ab8" },
-                    { lbl: "CHAIN MAX", val: hasData ? Math.max(...valid).toFixed(g.key === "gamma" ? 5 : 3) : "—", col: "#6a9ab8" },
-                    { lbl: "STRIKES",   val: hasData ? valid.length : "—", col: "#5a8aaa" },
-                  ].map((s, i) => (
-                    <div key={i}>
-                      <div style={{ fontSize: 7, color: "#5a8aaa", fontFamily: "JetBrains Mono,monospace", letterSpacing: 0.8 }}>{s.lbl}</div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: s.col, fontFamily: "JetBrains Mono,monospace" }}>{s.val}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Interpretation */}
-                <div style={{
-                  marginTop: 10, padding: "8px 12px", borderRadius: 6,
-                  background: `${interp.color}0c`, border: `1px solid ${interp.color}22`,
-                  display: "flex", gap: 10, alignItems: "flex-start"
-                }}>
-                  <span style={{
-                    fontSize: 8, fontWeight: 800, fontFamily: "JetBrains Mono,monospace",
-                    color: interp.color, background: `${interp.color}1e`,
-                    border: `1px solid ${interp.color}40`, padding: "2px 7px", borderRadius: 4,
-                    whiteSpace: "nowrap", flexShrink: 0, letterSpacing: 0.5
-                  }}>{interp.badge}</span>
-                  <span style={{ fontSize: 10, color: `${interp.color}cc`, lineHeight: 1.6,
-                    fontFamily: "JetBrains Mono,monospace" }}>{interp.text}</span>
-                </div>
-                <RiskMeter risk={interp.risk} />
-              </div>
-            );
-          })}
+          {/* RIGHT SIDEBAR — Theta + Vega */}
+          <div style={{
+            background: "#040912",
+            borderLeft: "1px solid #0d1e30",
+            padding: "12px 10px",
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+          }}>
+            <div style={{ fontSize: 7, fontWeight: 800, color: "#1a3050", letterSpacing: 1.5,
+              fontFamily: "JetBrains Mono, monospace", marginBottom: 10, textTransform: "uppercase" }}>
+              θ / ν — Time & Vol
+            </div>
+            {rightGreeks.map(g => (
+              <SidebarStatBlock key={g.key} greek={g} greeks={greeks}
+                greekSeries={greekSeries} strike={strike} spotPrice={spotPrice} dte={dte} />
+            ))}
+          </div>
         </div>
 
         {/* ── Footer ── */}
         <div style={{
-          padding: "10px 22px", borderTop: "1px solid #0a1828",
-          background: "#03080f", borderRadius: "0 0 12px 12px",
-          display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6
+          padding: "7px 18px", borderTop: "1px solid #0a1828",
+          background: "#03080f",
+          display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 4,
+          flexShrink: 0
         }}>
-          <span style={{ fontSize: 8, color: "#4a7a9a", fontFamily: "JetBrains Mono,monospace" }}>
-            Model: Black-Scholes-Merton · r = 6.5% (RBI repo) · σ from server IV · Γ/ν computed if missing · Ref: Hull "Options, Futures & Other Derivatives" 10th ed.
+          <span style={{ fontSize: 7.5, color: "#2a4a60", fontFamily: "JetBrains Mono, monospace" }}>
+            Black-Scholes-Merton · r=6.5% RBI repo · σ from server IV · Hull "Options, Futures & Other Derivatives" 10th ed.
           </span>
-          <span style={{ fontSize: 8, color: "#4a7a9a", fontFamily: "JetBrains Mono,monospace" }}>
-            {greekSeries.delta?.filter(v => v != null).length || 0} strikes · {side?.toUpperCase()} · cross-strike distribution
+          <span style={{ fontSize: 7.5, color: "#2a4a60", fontFamily: "JetBrains Mono, monospace" }}>
+            {greekSeries.delta?.filter(v => v != null).length || 0} strikes · {side?.toUpperCase()} · cross-strike
           </span>
         </div>
       </div>
@@ -522,7 +572,7 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
   );
 }
 
-// ── OI Bar ─────────────────────────────────────────────────────────────────
+// ── OI Bar ──────────────────────────────────────────────────────────────────
 function OIBar({ value, prevValue, max, side, signal }) {
   const width    = max > 0 ? Math.min((value / max) * 100, 100) : 0;
   const oiChange = prevValue != null ? value - prevValue : 0;
@@ -539,9 +589,9 @@ function OIBar({ value, prevValue, max, side, signal }) {
   );
 }
 
-// ── Greek Cell ─────────────────────────────────────────────────────────────
+// ── Greek Cell ───────────────────────────────────────────────────────────────
 function GreekCell({ delta, theta, vega, gamma, side, onGreekClick }) {
-  const dColor = side === "ce" ? (delta > 0.5 ? "#00c896" : "#5a7a9a") : (delta < -0.5 ? "#ff6b6b" : "#5a7a9a");
+  const dColor = side === "ce" ? (delta > 0.5 ? "#00c896" : "#6a8aaa") : (delta < -0.5 ? "#ff6b6b" : "#6a8aaa");
   return (
     <div className="greek-cell" onClick={onGreekClick} title="Click for Bloomberg Greeks chart">
       <span className="greek-item" style={{ color: dColor }}><span className="greek-label">Δ</span>{fmtGreek(delta, 2)}</span>
@@ -551,7 +601,7 @@ function GreekCell({ delta, theta, vega, gamma, side, onGreekClick }) {
   );
 }
 
-// ── Strike Row ─────────────────────────────────────────────────────────────
+// ── Strike Row ───────────────────────────────────────────────────────────────
 function StrikeRow({ row, prevRow, maxCEOI, maxPEOI, spotPrice, isFlash, showGreeks, onGreekClick }) {
   const isATM  = row.isATM;
   const itm_ce = spotPrice > 0 && row.strike < spotPrice;
@@ -579,7 +629,7 @@ function StrikeRow({ row, prevRow, maxCEOI, maxPEOI, spotPrice, isFlash, showGre
   );
 }
 
-// ── PCR / Timer / Badge / FlowBar ──────────────────────────────────────────
+// ── PCR / Timer / Badge / FlowBar ───────────────────────────────────────────
 function PCRGauge({ pcr }) {
   if (!pcr) return null;
   const level  = pcr > 1.2 ? "bullish" : pcr < 0.8 ? "bearish" : "neutral";
@@ -593,6 +643,7 @@ function PCRGauge({ pcr }) {
     </div>
   );
 }
+
 function UpdateTimer({ lastUpdate }) {
   const [secs, setSecs] = useState(0);
   useEffect(() => {
@@ -604,20 +655,27 @@ function UpdateTimer({ lastUpdate }) {
   const color = secs<20?"#00c896":secs<60?"#f0c040":"#ff6b6b";
   return <span className="s-val updated" style={{color}}>{secs}s ago</span>;
 }
+
 function ConnBadge({ status }) {
-  const map = { live:{label:"LIVE",color:"#00c896"}, rest:{label:"REST POLL",color:"#f0c040"}, disconnected:{label:"DISCONNECTED",color:"#ff6b6b"} };
-  const cfg = map[status]||map.disconnected;
+  const map = {
+    live:         { label: "LIVE",         color: "#00c896" },
+    rest:         { label: "REST POLL",    color: "#f0c040" },
+    disconnected: { label: "DISCONNECTED", color: "#ff6b6b" },
+  };
+  const cfg = map[status] || map.disconnected;
   return (
     <div className={`conn-badge ${status}`} style={{color:cfg.color,borderColor:cfg.color+"30"}}>
-      <span style={{width:5,height:5,borderRadius:"50%",background:cfg.color,display:"inline-block",animation:status==="live"?"dot-pulse 1.4s infinite":"none"}}/>
+      <span style={{width:5,height:5,borderRadius:"50%",background:cfg.color,display:"inline-block",
+        animation:status==="live"?"dot-pulse 1.4s infinite":"none"}}/>
       {cfg.label}
     </div>
   );
 }
+
 function OIFlowBar({ totalCEOI, totalPEOI }) {
-  const total=(totalCEOI||0)+(totalPEOI||0);
-  const cePct=total>0?((totalCEOI/total)*100).toFixed(1):50;
-  const pePct=total>0?((totalPEOI/total)*100).toFixed(1):50;
+  const total = (totalCEOI||0)+(totalPEOI||0);
+  const cePct = total>0 ? ((totalCEOI/total)*100).toFixed(1) : 50;
+  const pePct = total>0 ? ((totalPEOI/total)*100).toFixed(1) : 50;
   return (
     <div className="oi-flow-bar" title={`CE: ${cePct}%  PE: ${pePct}%`}>
       <div className="oi-flow-ce" style={{width:`${cePct}%`}}/>
@@ -625,13 +683,14 @@ function OIFlowBar({ totalCEOI, totalPEOI }) {
     </div>
   );
 }
+
 function calcDTE(expiryStr) {
   if (!expiryStr) return null;
   try { return Math.max(0, Math.ceil((new Date(expiryStr) - new Date()) / 86400000)); }
   catch { return null; }
 }
 
-// ── Main ───────────────────────────────────────────────────────────────────
+// ── Main ─────────────────────────────────────────────────────────────────────
 export default function OptionChain({ onBack }) {
   const [underlying,     setUnderlying]  = useState("NIFTY");
   const [expiries,       setExpiries]    = useState([]);
@@ -723,7 +782,7 @@ export default function OptionChain({ onBack }) {
     if (atm) setTimeout(()=>atm.scrollIntoView({behavior:"smooth",block:"center"}),100);
   }, [chainData?.expiry, chainData?.underlying]);
 
-  const handleGreekClick = useCallback((strike, side, data) => { setGreekPanel({strike,side,data}); setShowGreeks(true); }, []);
+  const handleGreekClick = useCallback((strike, side, data) => { setGreekPanel({strike,side,data}); }, []);
   const closeGreekPanel  = useCallback(() => setGreekPanel(null), []);
 
   return (
@@ -740,6 +799,7 @@ export default function OptionChain({ onBack }) {
         />
       )}
 
+      {/* ── HEADER (sticky via CSS) ── */}
       <div className="oc-header">
         <div className="oc-title">
           <span style={{fontSize:15}}>⚡</span>
@@ -774,7 +834,7 @@ export default function OptionChain({ onBack }) {
           </div>
           {dte!=null&&(
             <div style={{fontSize:9,fontFamily:"JetBrains Mono,monospace",fontWeight:700,
-              color:dte<=3?"#ff6b6b":dte<=7?"#f0c040":"#5a7a9a",
+              color:dte<=3?"#ff6b6b":dte<=7?"#f0c040":"#6a8aaa",
               padding:"3px 8px",background:"rgba(0,0,0,0.3)",borderRadius:4,
               border:`1px solid ${dte<=3?"#ff6b6b30":"#1c2b3a"}`}}>
               {dte}d DTE
@@ -785,6 +845,7 @@ export default function OptionChain({ onBack }) {
         </div>
       </div>
 
+      {/* ── SUMMARY BAR (sticky via CSS .oc-summary) ── */}
       {chainData&&(
         <div className="oc-summary">
           <div className="summary-item"><span className="s-label">Spot</span><span className="s-val spot">{fmtPrice(chainData.spotPrice)}</span></div>
@@ -805,18 +866,21 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
+      {/* OI Flow bar */}
       {chainData&&<OIFlowBar totalCEOI={chainData.totalCEOI} totalPEOI={chainData.totalPEOI}/>}
 
+      {/* Greeks legend */}
       {showGreeks&&(
         <div className="greeks-legend">
           <span><span style={{color:"#00c896"}}>Δ Delta</span> — price sensitivity</span>
           <span><span style={{color:"#ff8c42"}}>θ Theta</span> — daily decay ₹</span>
           <span><span style={{color:"#a78bfa"}}>ν Vega</span> — IV sensitivity</span>
           <span><span style={{color:"#4db8ff"}}>Γ Gamma</span> — delta curvature</span>
-          <span style={{color:"#4a7a9a",marginLeft:"auto"}}>Click any cell → Bloomberg chart →</span>
+          <span style={{color:"#3a5a72",marginLeft:"auto"}}>Click any cell → Bloomberg chart</span>
         </div>
       )}
 
+      {/* Alerts */}
       {chainData?.alerts?.length>0&&(
         <div className="oc-alerts">
           {chainData.alerts.slice(0,6).map((a,i)=>{
@@ -834,9 +898,11 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
+      {/* Loading / Empty */}
       {loading&&<div className="oc-loading"><div className="loading-pulse"/><span>Fetching option chain data...</span></div>}
       {!loading&&!chainData&&<div className="oc-empty"><p>⏳ Waiting for first poll...</p><p className="empty-sub">NSE · socket primary · 3s REST fallback</p></div>}
 
+      {/* ── TABLE (only this scrolls) ── */}
       {!loading&&chainData&&(
         <div className="oc-table-wrap" ref={tableRef}>
           <table className="oc-table">
@@ -847,11 +913,15 @@ export default function OptionChain({ onBack }) {
                 <th className="pe-side-label" colSpan={showGreeks?6:5}>PUT — PE</th>
               </tr>
               <tr>
-                <th className="ce-th">OI</th><th className="ce-th">Chg OI</th><th className="ce-th">LTP</th><th className="ce-th">IV</th>
+                <th className="ce-th">OI</th><th className="ce-th">Chg OI</th>
+                <th className="ce-th">LTP</th><th className="ce-th">IV</th>
                 {showGreeks&&<th className="ce-th">Greeks ↗</th>}
-                <th className="ce-th">Signal</th><th className="strike-th">Strike</th><th className="pe-th">Signal</th>
+                <th className="ce-th">Signal</th>
+                <th className="strike-th">Strike</th>
+                <th className="pe-th">Signal</th>
                 {showGreeks&&<th className="pe-th">Greeks ↗</th>}
-                <th className="pe-th">IV</th><th className="pe-th">LTP</th><th className="pe-th">Chg OI</th><th className="pe-th">OI</th>
+                <th className="pe-th">IV</th><th className="pe-th">LTP</th>
+                <th className="pe-th">Chg OI</th><th className="pe-th">OI</th>
               </tr>
             </thead>
             <tbody>
@@ -865,6 +935,7 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
+      {/* Footer */}
       <div className="oc-footer">
         <span>Socket · 3s REST · BS-augmented Greeks · Hull 10th ed. · {showGreeks?"Click Δθν → Bloomberg chart":"Toggle Greeks for Δθν"}</span>
         {chainData&&<span>{visibleStrikes.length}/{strikes.length} strikes · {underlying} · {selectedExpiry}{dte!=null?` · ${dte}d DTE`:""}</span>}

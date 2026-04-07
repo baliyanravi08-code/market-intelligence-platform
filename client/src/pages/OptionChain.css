@@ -1,59 +1,51 @@
-/* OptionChain.css — NEXT LEVEL
- * Design: Warm-dark terminal. Not cold black — warm #0d1117 base.
- * CE = teal-green (easier on eyes than neon). PE = coral-red (softer).
- * ATM = amber. Greeks chart panel = deep navy overlay.
- * Reduced padding, max data density, zero eye strain.
+/* OptionChain.css — BLOOMBERG TERMINAL
+ * Warm-dark terminal. CE = teal-green. PE = coral-red. ATM = amber.
+ * Summary bar sticky. Greeks panel no-scroll 2x2. Full color visibility.
  */
 
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
 :root {
-  /* ── Base palette — warm dark, not cold black ── */
-  --bg-base:    #0b0f14;       /* warmest dark — main bg */
-  --bg-panel:   #0f1620;       /* panel bg */
-  --bg-row:     #111820;       /* table row */
-  --bg-row-alt: #0e1519;       /* alternating row */
-  --bg-atm:     #0f1e10;       /* ATM row — very subtle green tint */
-  --bg-overlay: rgba(7,12,20,0.97); /* chart overlay */
+  --bg-base:    #0b0f14;
+  --bg-panel:   #0f1620;
+  --bg-row:     #111820;
+  --bg-row-alt: #0e1519;
+  --bg-atm:     #0f1e10;
+  --bg-overlay: rgba(7,12,20,0.97);
 
   --border:     #1c2b3a;
   --border-dim: #141f2d;
   --border-atm: rgba(255,200,50,0.25);
 
-  /* ── Text — warm whites, not cold ── */
-  --text-pri:   #d4e8f8;       /* primary — slightly warm blue-white */
-  --text-sec:   #7a9bb8;       /* secondary */
-  --text-dim:   #3d5a72;       /* dim */
-  --text-muted: #1e3347;       /* ghost */
+  --text-pri:   #c8dff0;
+  --text-sec:   #7a9bb8;
+  --text-dim:   #3d5a72;
+  --text-muted: #1e3347;
 
-  /* ── Signal colors — reduced saturation for long sessions ── */
-  --ce-color:   #00c896;       /* CE green — teal, easier than #00ff9c */
+  --ce-color:   #00c896;
   --ce-dim:     rgba(0,200,150,0.08);
   --ce-mid:     rgba(0,200,150,0.18);
-  --pe-color:   #ff6b6b;       /* PE red — coral, not harsh red */
+  --pe-color:   #ff6b6b;
   --pe-dim:     rgba(255,107,107,0.08);
   --pe-mid:     rgba(255,107,107,0.18);
 
-  /* ── Special ── */
-  --atm-color:  #f0c040;       /* amber ATM — easier than pure yellow */
-  --spot-color: #4db8ff;       /* spot price blue */
+  --atm-color:  #f0c040;
+  --spot-color: #4db8ff;
   --neutral:    #5a7a9a;
   --accent:     #1a6aff;
 
-  /* ── Greeks chart colors ── */
   --delta-color: #00c896;
   --theta-color: #ff8c42;
   --vega-color:  #a78bfa;
   --gamma-color: #4db8ff;
 
-  /* ── Live tick colors ── */
   --tick-up:   rgba(0,200,150,0.30);
   --tick-down: rgba(255,107,107,0.30);
 }
 
 * { box-sizing: border-box; }
 
-/* ── Page ──────────────────────────────────────────────────────────────────── */
+/* ── Page ── */
 .oc-page {
   display: flex;
   flex-direction: column;
@@ -66,7 +58,7 @@
   line-height: 1.3;
 }
 
-/* ── Header ─────────────────────────────────────────────────────────────────── */
+/* ── Header ── */
 .oc-header {
   display: flex;
   align-items: center;
@@ -106,7 +98,6 @@
   letter-spacing: 0;
 }
 
-/* Live dot — pulse animation */
 .live-dot {
   width: 6px; height: 6px;
   border-radius: 50%;
@@ -121,7 +112,7 @@
   50%       { opacity: 0.35; transform: scale(0.65); }
 }
 
-/* ── Controls ───────────────────────────────────────────────────────────────── */
+/* ── Controls ── */
 .oc-controls {
   display: flex;
   align-items: center;
@@ -143,7 +134,7 @@
 .ctrl-btn {
   background: transparent;
   border: none;
-  color: var(--text-dim);
+  color: #8aaccc;
   font-family: inherit;
   font-size: 10px;
   font-weight: 600;
@@ -156,14 +147,14 @@
   white-space: nowrap;
 }
 
-.ctrl-btn:hover { background: var(--border); color: var(--text-pri); }
+.ctrl-btn:hover { background: var(--border); color: #c8dff0; }
 .ctrl-btn.active { background: var(--accent); color: #fff; }
 .ctrl-btn.expiry { font-size: 9px; letter-spacing: 0.3px; }
 
 .ctrl-select {
   background: var(--bg-base);
   border: none;
-  color: var(--text-dim);
+  color: #8aaccc;
   font-family: inherit;
   font-size: 10px;
   padding: 3px 4px;
@@ -171,13 +162,12 @@
   outline: none;
 }
 
-/* Connection badge */
 .conn-badge {
   display: flex;
   align-items: center;
   gap: 4px;
   font-size: 9px;
-  color: var(--text-dim);
+  color: #8aaccc;
   border: 1px solid var(--border-dim);
   border-radius: 3px;
   padding: 2px 7px;
@@ -187,14 +177,18 @@
 .conn-badge.connected { color: var(--ce-color); border-color: rgba(0,200,150,0.2); }
 .conn-badge.disconnected { color: var(--pe-color); border-color: rgba(255,107,107,0.2); }
 
-/* ── Summary bar ─────────────────────────────────────────────────────────────── */
+/* ── Summary bar — STICKY ── */
 .oc-summary {
   display: flex;
   align-items: stretch;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border-dim);
+  background: #090e17;
+  border-bottom: 1px solid var(--border);
   overflow-x: auto;
   flex-shrink: 0;
+  /* STICKY: stays fixed when table scrolls */
+  position: sticky;
+  top: 0;        /* sits directly below header which is also sticky */
+  z-index: 100;
 }
 
 .oc-summary::-webkit-scrollbar { height: 2px; }
@@ -214,7 +208,7 @@
 
 .s-label {
   font-size: 8px;
-  color: var(--text-muted);
+  color: #4a6a84;
   text-transform: uppercase;
   letter-spacing: 0.8px;
 }
@@ -223,17 +217,17 @@
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
+  color: #c8dff0;
 }
 
-.s-val.spot       { color: var(--spot-color); }
-.s-val.maxpain    { color: var(--atm-color); }
-.s-val.support    { color: var(--ce-color); }
-.s-val.resistance { color: var(--pe-color); }
-.s-val.ce-oi      { color: var(--ce-color); }
-.s-val.pe-oi      { color: var(--pe-color); }
-.s-val.updated    { color: var(--text-sec); font-size: 11px; }
+.s-val.spot       { color: #4db8ff; }
+.s-val.maxpain    { color: #f0c040; }
+.s-val.support    { color: #00c896; }
+.s-val.resistance { color: #ff6b6b; }
+.s-val.ce-oi      { color: #00c896; }
+.s-val.pe-oi      { color: #ff6b6b; }
+.s-val.updated    { color: #7a9bb8; font-size: 11px; }
 
-/* PCR gauge */
 .pcr-gauge {
   display: flex;
   flex-direction: column;
@@ -248,7 +242,7 @@
 
 .pcr-label {
   font-size: 8px;
-  color: var(--text-muted);
+  color: #4a6a84;
   text-transform: uppercase;
   letter-spacing: 0.8px;
 }
@@ -256,22 +250,15 @@
 .pcr-val   { font-size: 14px; font-weight: 800; line-height: 1; }
 .pcr-level { font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
 
-/* IV Skew indicator in summary */
-.skew-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 14px;
-  border-right: 1px solid var(--border-dim);
-  flex-shrink: 0;
-}
-
-/* ── OI Flow bar (top of table) ──────────────────────────────────────────────── */
+/* ── OI Flow bar — also sticky, just below summary ── */
 .oi-flow-bar {
   display: flex;
   height: 4px;
   flex-shrink: 0;
   overflow: hidden;
+  position: sticky;
+  top: 0;   /* summary will push this down naturally since it's next in flex */
+  z-index: 99;
 }
 
 .oi-flow-ce {
@@ -287,7 +274,7 @@
   margin-left: auto;
 }
 
-/* ── Alerts strip ───────────────────────────────────────────────────────────── */
+/* ── Alerts ── */
 .oc-alerts {
   display: flex;
   gap: 5px;
@@ -311,11 +298,11 @@
   flex-shrink: 0;
 }
 
-.alert-strike { font-weight: 700; color: var(--text-pri); }
-.alert-side   { background: var(--border); padding: 1px 4px; border-radius: 2px; font-size: 8px; font-weight: 700; }
-.alert-pct    { color: var(--text-dim); }
+.alert-strike { font-weight: 700; color: #c8dff0; }
+.alert-side   { background: var(--border); padding: 1px 4px; border-radius: 2px; font-size: 8px; font-weight: 700; color: #8aaccc; }
+.alert-pct    { color: #6a8aaa; }
 
-/* ── Table wrap ─────────────────────────────────────────────────────────────── */
+/* ── Table wrap — this is the ONLY scrolling element ── */
 .oc-table-wrap {
   flex: 1;
   overflow: auto;
@@ -326,7 +313,7 @@
 .oc-table-wrap::-webkit-scrollbar-track { background: var(--bg-base); }
 .oc-table-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-/* ── Main table ─────────────────────────────────────────────────────────────── */
+/* ── Main table ── */
 .oc-table {
   width: 100%;
   border-collapse: collapse;
@@ -348,10 +335,11 @@
   text-transform: uppercase;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  color: #7a9bb8;
 }
 
-.ce-th    { color: rgba(0,200,150,0.55);  text-align: right; }
-.pe-th    { color: rgba(255,107,107,0.55); text-align: left; }
+.ce-th    { color: rgba(0,200,150,0.70);  text-align: right; }
+.pe-th    { color: rgba(255,107,107,0.70); text-align: left; }
 .strike-th {
   color: var(--atm-color);
   text-align: center;
@@ -378,9 +366,8 @@
   background: rgba(255,107,107,0.03);
 }
 
-/* ── Strike rows ─────────────────────────────────────────────────────────────── */
+/* ── Strike rows ── */
 .strike-row { transition: background 0.15s; }
-
 .strike-row:hover { background: #131e2c !important; }
 
 .strike-row.atm {
@@ -392,7 +379,6 @@
 .strike-row.itm-ce td.ce-cell { background: rgba(0,200,150,0.025); }
 .strike-row.itm-pe td.pe-cell { background: rgba(255,107,107,0.025); }
 
-/* OI tick flash — fires on every OI change */
 .strike-row.tick-up   { animation: tick-up-flash 0.45s ease-out; }
 .strike-row.tick-down { animation: tick-dn-flash 0.45s ease-out; }
 
@@ -400,21 +386,18 @@
   0%   { background: var(--tick-up); }
   100% { background: transparent; }
 }
-
 @keyframes tick-dn-flash {
   0%   { background: var(--tick-down); }
   100% { background: transparent; }
 }
 
-/* Alert flash */
 .strike-row.flash { animation: alert-flash 0.8s ease-out; }
-
 @keyframes alert-flash {
   0%   { background: rgba(255,200,50,0.20); }
   100% { background: transparent; }
 }
 
-/* ── Cells ──────────────────────────────────────────────────────────────────── */
+/* ── Cells ── */
 .oc-table td {
   padding: 4px 6px;
   border-bottom: 1px solid var(--border-dim);
@@ -426,22 +409,22 @@
 
 .ltp {
   font-weight: 600;
-  color: var(--text-pri);
+  color: #c8dff0;
   min-width: 48px;
   font-size: 11px;
 }
 
 .iv {
-  color: var(--text-sec);
+  color: #8aaccc;
   font-size: 9px;
   min-width: 38px;
 }
 
-.change { font-size: 9px; min-width: 46px; }
+.change { font-size: 9px; min-width: 46px; color: #7a9bb8; }
 .change.pos { color: var(--ce-color); }
 .change.neg { color: var(--pe-color); }
 
-/* ── OI bar cell ─────────────────────────────────────────────────────────────── */
+/* ── OI bar ── */
 .oi-cell { min-width: 100px; padding: 3px 5px; }
 
 .oi-bar-wrap {
@@ -455,7 +438,7 @@
 .oi-val {
   font-size: 10px;
   font-weight: 600;
-  color: var(--text-pri);
+  color: #c8dff0;
   white-space: nowrap;
   min-width: 40px;
   z-index: 1;
@@ -476,7 +459,6 @@
 .ce-cell .oi-bar { right: 0; left: auto; }
 .pe-cell .oi-bar { left: 0; right: auto; }
 
-/* OI change delta — small inline flash */
 .oi-delta {
   font-size: 8px;
   font-weight: 700;
@@ -498,7 +480,7 @@
   100% { opacity: 0; transform: translateY(-8px); }
 }
 
-/* ── Signal ──────────────────────────────────────────────────────────────────── */
+/* ── Signal ── */
 .sig { min-width: 88px; }
 
 .sig-pill {
@@ -512,7 +494,7 @@
   gap: 3px;
 }
 
-/* ── Greeks cell — clickable ─────────────────────────────────────────────────── */
+/* ── Greeks cell ── */
 .greek-cell {
   display: flex;
   gap: 6px;
@@ -541,15 +523,14 @@
 
 .greek-label {
   font-size: 9px;
-  opacity: 0.6;
+  opacity: 0.7;
   margin-right: 1px;
 }
 
-/* "Click for chart" tooltip on hover */
 .greek-cell::after {
   content: "📈 chart";
   font-size: 7px;
-  color: var(--text-dim);
+  color: #4a6a84;
   opacity: 0;
   transition: opacity 0.15s;
   margin-left: 4px;
@@ -557,7 +538,7 @@
 
 .greek-cell:hover::after { opacity: 1; }
 
-/* ── Strike cell ─────────────────────────────────────────────────────────────── */
+/* ── Strike cell ── */
 .strike-cell {
   text-align: center;
   background: var(--bg-panel);
@@ -584,7 +565,7 @@
   letter-spacing: 0.5px;
 }
 
-/* ── Greeks Chart Overlay ────────────────────────────────────────────────────── */
+/* ── Greeks Chart Overlay ── */
 .greeks-overlay {
   position: fixed;
   inset: 0;
@@ -602,173 +583,19 @@
   to   { opacity: 1; }
 }
 
-.greeks-panel {
-  background: #0c1520;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  width: min(820px, 95vw);
-  max-height: 90vh;
-  overflow-y: auto;
-  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
-  animation: panel-in 0.2s ease-out;
-}
-
 @keyframes panel-in {
   from { transform: translateY(12px) scale(0.98); opacity: 0; }
   to   { transform: translateY(0) scale(1); opacity: 1; }
 }
 
-.greeks-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-dim);
-  position: sticky;
-  top: 0;
-  background: #0c1520;
-  z-index: 2;
-}
-
-.greeks-panel-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text-pri);
-  letter-spacing: 0.5px;
-}
-
-.greeks-panel-sub {
-  font-size: 9px;
-  color: var(--text-dim);
-  margin-left: 8px;
-}
-
-.close-btn {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--text-sec);
-  font-size: 14px;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-}
-
-.close-btn:hover { background: var(--border); color: var(--text-pri); }
-
-.greeks-charts-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  background: var(--border-dim);
-}
-
-.greek-chart-box {
-  background: #0c1520;
-  padding: 14px 16px;
-}
-
-.greek-chart-label {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.greek-chart-label .greek-name { opacity: 0.5; font-weight: 400; margin-left: 4px; }
-
-.greek-chart-canvas {
-  width: 100%;
-  height: 120px;
-  border-radius: 4px;
-  overflow: hidden;
-  position: relative;
-  background: rgba(0,0,0,0.2);
-}
-
-/* Inline SVG chart in each box */
-.greek-svg {
-  width: 100%;
-  height: 120px;
-  display: block;
-}
-
-.greek-stat-row {
-  display: flex;
-  gap: 12px;
-  margin-top: 8px;
-  font-size: 9px;
-  color: var(--text-dim);
-}
-
-.greek-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.greek-stat-val {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-pri);
-  line-height: 1;
-}
-
-.greek-stat-lbl {
-  font-size: 7px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-/* Interpretation badge */
-.greek-interp {
-  margin-top: 8px;
-  padding: 4px 8px;
-  border-radius: 3px;
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  display: inline-block;
-}
-
-/* ── Live tick indicator ─────────────────────────────────────────────────────── */
-.tick-indicator {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  pointer-events: none;
-  opacity: 0;
-}
-
-.tick-indicator.up   { background: var(--ce-color); animation: tick-dot 0.5s ease-out; }
-.tick-indicator.down { background: var(--pe-color); animation: tick-dot 0.5s ease-out; }
-
-@keyframes tick-dot {
-  0%   { opacity: 1; transform: translateY(-50%) scale(1.5); }
-  100% { opacity: 0; transform: translateY(-50%) scale(0.5); }
-}
-
-/* ── Loading ─────────────────────────────────────────────────────────────────── */
+/* ── Loading / Empty ── */
 .oc-loading {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   padding: 60px 20px;
-  color: var(--text-dim);
+  color: #5a7a9a;
   flex: 1;
 }
 
@@ -786,14 +613,14 @@
   justify-content: center;
   padding: 80px 20px;
   gap: 8px;
-  color: var(--text-dim);
+  color: #5a7a9a;
   font-size: 12px;
   flex: 1;
 }
 
-.empty-sub { font-size: 10px; color: var(--text-muted); }
+.empty-sub { font-size: 10px; color: #2a4a60; }
 
-/* ── Footer ─────────────────────────────────────────────────────────────────── */
+/* ── Footer ── */
 .oc-footer {
   display: flex;
   justify-content: space-between;
@@ -801,13 +628,13 @@
   padding: 5px 14px;
   border-top: 1px solid var(--border-dim);
   font-size: 8px;
-  color: var(--text-muted);
+  color: #3a5a72;
   letter-spacing: 0.5px;
   background: var(--bg-panel);
   flex-shrink: 0;
 }
 
-/* ── Greeks legend bar ──────────────────────────────────────────────────────── */
+/* ── Greeks legend ── */
 .greeks-legend {
   display: flex;
   gap: 16px;
@@ -816,12 +643,10 @@
   background: #090e16;
   border-bottom: 1px solid var(--border-dim);
   flex-shrink: 0;
+  color: #6a8aaa;
 }
 
-.greeks-legend span { color: var(--text-dim); }
-
-/* ── Responsive ─────────────────────────────────────────────────────────────── */
+/* ── Responsive ── */
 @media (max-width: 900px) {
   .oc-table { min-width: 860px; }
-  .greeks-charts-grid { grid-template-columns: 1fr; }
 }
