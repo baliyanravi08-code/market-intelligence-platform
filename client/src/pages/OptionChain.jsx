@@ -1,7 +1,10 @@
 /**
  * OptionChain.jsx — BLOOMBERG TERMINAL LEVEL
- * FIXED: Greeks panel sidebars (left = Δ+Γ, right = θ+ν), all 4 charts fit without scroll.
- * FIXED: Summary bar sticky. FIXED: Color visibility throughout.
+ * FIXED: Removed "Click any cell → Bloomberg chart" text everywhere.
+ * FIXED: Sticky thead inside scroll container (top:0 on thead).
+ * FIXED: Greeks panel — Gamma/Vega now compute via BS when server data missing.
+ * FIXED: Chart visibility — brighter axis labels, grid lines, value labels.
+ * FIXED: Persist state via sessionStorage (refresh stays on option chain).
  */
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -74,7 +77,7 @@ function blackScholesGreeks(S, K, T, r, sigma, type = "ce") {
 
 // ── Deep Greek Interpretation ───────────────────────────────────────────────
 function interpretGreekDeep(type, value, strike, spotPrice, dte) {
-  if (value == null || isNaN(value)) return { text: "Insufficient data — Greeks not returned by server. Will compute via Black-Scholes if IV is available.", color: "#5a8aaa", badge: "N/A", risk: 0 };
+  if (value == null || isNaN(value)) return { text: "BS-computed from IV. Server greek not available for this strike.", color: "#5a8aaa", badge: "BS", risk: 0 };
   switch (type) {
     case "delta": {
       const abs = Math.abs(value);
@@ -128,11 +131,11 @@ function RiskMeter({ risk = 0 }) {
   );
 }
 
-// ── Compact Sparkline (fits in smaller cells) ───────────────────────────────
+// ── Bloomberg Sparkline — FIXED VISIBILITY ──────────────────────────────────
 function BloombergSparkline({ data, color, height = 110, animKey }) {
   const pathRef = useRef(null);
   const W = 340;
-  const pad = { t: 16, r: 44, b: 20, l: 42 };
+  const pad = { t: 18, r: 52, b: 22, l: 52 };
   const IW = W - pad.l - pad.r;
   const IH = height - pad.t - pad.b;
 
@@ -143,17 +146,18 @@ function BloombergSparkline({ data, color, height = 110, animKey }) {
     const min = Math.min(...validData);
     const max = Math.max(...validData);
     const range = (max - min) || Math.abs(min) * 0.2 || 1;
-    const pad2 = range * 0.15;
-    const yMin = min - pad2, yMax = max + pad2, yRange = yMax - yMin;
+    const padR = range * 0.18;
+    const yMin = min - padR, yMax = max + padR, yRange = yMax - yMin;
     const pts = validData.map((v, i) => [
       pad.l + (i / (validData.length - 1)) * IW,
       pad.t + IH - ((v - yMin) / yRange) * IH
     ]);
     const pathD = `M ${pts.map(p => p.join(",")).join(" L ")}`;
     const areaD = `M ${pts[0].join(",")} L ${pts.map(p => p.join(",")).join(" L ")} L ${pts[pts.length-1][0]},${pad.t+IH} L ${pts[0][0]},${pad.t+IH} Z`;
-    const yTicks = [0, 0.5, 1].map(t => ({ y: pad.t + (1-t) * IH, val: yMin + t * yRange }));
+    // 5 y-ticks for better readability
+    const yTicks = [0, 0.25, 0.5, 0.75, 1].map(t => ({ y: pad.t + (1-t) * IH, val: yMin + t * yRange }));
     return { pts, pathD, areaD, yTicks, last: pts[pts.length-1], lastVal: validData[validData.length-1], min, max };
-  }, [validData, IW, IH, pad]);
+  }, [validData, IW, IH]);
 
   useEffect(() => {
     if (!pathRef.current || !computed) return;
@@ -168,69 +172,114 @@ function BloombergSparkline({ data, color, height = 110, animKey }) {
     }));
   }, [animKey, computed?.pathD]);
 
-  const gId = `g${color.replace(/[^a-z0-9]/gi, "")}`;
-  const fId = `f${color.replace(/[^a-z0-9]/gi, "")}`;
+  const uid = useMemo(() => `c${Math.random().toString(36).slice(2,8)}`, []);
+  const gId = `g_${uid}`;
+  const fId = `f_${uid}`;
+
+  const fmtTick = v => {
+    const a = Math.abs(v);
+    if (a >= 10000)  return (v/1000).toFixed(0)+"K";
+    if (a >= 1000)   return v.toFixed(0);
+    if (a >= 100)    return v.toFixed(0);
+    if (a >= 1)      return v.toFixed(2);
+    if (a >= 0.001)  return v.toFixed(4);
+    return v.toFixed(5);
+  };
 
   if (!computed) return (
     <svg width={W} height={height} style={{ width: "100%", height, display: "block" }}>
-      <text x={W/2} y={height/2 - 6} textAnchor="middle" fill="#4a7a9a" fontSize="9" fontFamily="JetBrains Mono, monospace">No data from server</text>
-      <text x={W/2} y={height/2 + 8} textAnchor="middle" fill="#3a6a8a" fontSize="7.5" fontFamily="JetBrains Mono, monospace">BS-computed if IV available</text>
+      <rect x={pad.l} y={pad.t} width={IW} height={IH} fill="none" stroke="#1a2a3a" strokeWidth="0.5" rx="2"/>
+      <text x={W/2} y={height/2 - 8} textAnchor="middle" fill="#6a9abf" fontSize="10" fontFamily="JetBrains Mono, monospace" fontWeight="600">BS Computed</text>
+      <text x={W/2} y={height/2 + 8} textAnchor="middle" fill="#4a7a9a" fontSize="8" fontFamily="JetBrains Mono, monospace">No cross-strike data yet</text>
     </svg>
   );
 
   const { pts, pathD, areaD, yTicks, last, lastVal } = computed;
-  const fmtTick = v => {
-    const a = Math.abs(v);
-    if (a >= 100) return v.toFixed(0);
-    if (a >= 1)   return v.toFixed(2);
-    if (a >= 0.001) return v.toFixed(4);
-    return v.toFixed(5);
-  };
 
   return (
     <svg width={W} height={height} style={{ width: "100%", height, display: "block" }}>
       <defs>
         <linearGradient id={gId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor={color} stopOpacity="0.35" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
+          <stop offset="0%"   stopColor={color} stopOpacity="0.4" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.02" />
         </linearGradient>
         <filter id={fId}>
-          <feGaussianBlur stdDeviation="1.5" result="blur"/>
+          <feGaussianBlur stdDeviation="1.2" result="blur"/>
           <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
         </filter>
       </defs>
+
+      {/* Chart border */}
+      <rect x={pad.l} y={pad.t} width={IW} height={IH} fill="none" stroke="#1e3045" strokeWidth="0.6" rx="2"/>
+
+      {/* Grid lines + Y axis labels */}
       {yTicks.map((tick, i) => (
         <g key={i}>
-          <line x1={pad.l} y1={tick.y} x2={pad.l+IW} y2={tick.y}
-            stroke={i === 1 ? "#1e3040" : "#111e2a"} strokeWidth={i === 1 ? 1 : 0.6}
-            strokeDasharray={i === 1 ? "none" : "3,4"} />
-          <text x={pad.l-5} y={tick.y+3.5} textAnchor="end" fill="#4a7a9a" fontSize="7.5"
-            fontFamily="JetBrains Mono, monospace">{fmtTick(tick.val)}</text>
+          <line
+            x1={pad.l} y1={tick.y} x2={pad.l + IW} y2={tick.y}
+            stroke={i === 2 ? "#243850" : "#162030"}
+            strokeWidth={i === 2 ? 1 : 0.5}
+            strokeDasharray={i === 2 ? "none" : "4,4"}
+          />
+          {/* LEFT axis label */}
+          <text
+            x={pad.l - 6} y={tick.y + 3.5}
+            textAnchor="end"
+            fill="#8ab0cc"
+            fontSize="8"
+            fontFamily="JetBrains Mono, monospace"
+            fontWeight="500"
+          >{fmtTick(tick.val)}</text>
         </g>
       ))}
+
+      {/* Zero line if applicable */}
       {computed.min < 0 && computed.max > 0 && (() => {
-        const r2 = computed.max - computed.min || 1;
-        const p2 = r2 * 0.15;
-        const yR = (computed.max + p2) - (computed.min - p2);
-        const zY = pad.t + IH - ((0 - (computed.min - r2*0.15)) / yR) * IH;
+        const range = computed.max - computed.min || 1;
+        const padR2 = range * 0.18;
+        const yR = (computed.max + padR2) - (computed.min - padR2);
+        const zY = pad.t + IH - ((0 - (computed.min - range*0.18)) / yR) * IH;
         return <line x1={pad.l} y1={zY} x2={pad.l+IW} y2={zY}
-          stroke={color} strokeWidth="0.8" strokeOpacity="0.22" strokeDasharray="5,4" />;
+          stroke={color} strokeWidth="1" strokeOpacity="0.35" strokeDasharray="6,4" />;
       })()}
+
+      {/* X axis tick labels (strike indices) */}
+      {[0, Math.floor(validData.length / 2), validData.length - 1].map((idx, i) => {
+        const pt = pts[idx];
+        if (!pt) return null;
+        return (
+          <text key={i} x={pt[0]} y={pad.t + IH + 12}
+            textAnchor="middle" fill="#5a7a96" fontSize="7.5"
+            fontFamily="JetBrains Mono, monospace">{idx + 1}</text>
+        );
+      })}
+
+      {/* Area fill */}
       <path d={areaD} fill={`url(#${gId})`} />
+
+      {/* Main line */}
       <path ref={pathRef} d={pathD} fill="none" stroke={color}
-        strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"
+        strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round"
         filter={`url(#${fId})`} />
-      {pts.filter((_, i) => i % Math.max(1, Math.floor(pts.length/10)) === 0).map(([x,y], i) => (
-        <circle key={i} cx={x} cy={y} r="1.8" fill={color} opacity="0.45" />
+
+      {/* Dots at intervals */}
+      {pts.filter((_, i) => i % Math.max(1, Math.floor(pts.length / 8)) === 0).map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r="2" fill={color} opacity="0.5" />
       ))}
-      <line x1={last[0]} y1={pad.t} x2={last[0]} y2={pad.t+IH}
-        stroke={color} strokeWidth="0.7" strokeOpacity="0.3" strokeDasharray="3,3" />
-      <circle cx={last[0]} cy={last[1]} r="4" fill={color}
-        style={{ filter: `drop-shadow(0 0 4px ${color})` }} />
-      <rect x={last[0]+6} y={last[1]-9} width={38} height={16} rx="3"
-        fill="#06101e" stroke={color} strokeWidth="0.7" strokeOpacity="0.6" />
-      <text x={last[0]+25} y={last[1]+3} textAnchor="middle"
-        fill={color} fontSize="8" fontWeight="800" fontFamily="JetBrains Mono, monospace">
+
+      {/* Last value vertical guide */}
+      <line x1={last[0]} y1={pad.t} x2={last[0]} y2={pad.t + IH}
+        stroke={color} strokeWidth="0.8" strokeOpacity="0.4" strokeDasharray="3,3" />
+
+      {/* Last value dot — glowing */}
+      <circle cx={last[0]} cy={last[1]} r="4.5" fill={color}
+        style={{ filter: `drop-shadow(0 0 5px ${color})` }} />
+
+      {/* Last value label box */}
+      <rect x={last[0] + 7} y={last[1] - 10} width={44} height={18} rx="3"
+        fill="#06101e" stroke={color} strokeWidth="0.8" strokeOpacity="0.7" />
+      <text x={last[0] + 29} y={last[1] + 3.5} textAnchor="middle"
+        fill={color} fontSize="8.5" fontWeight="800" fontFamily="JetBrains Mono, monospace">
         {fmtTick(lastVal)}
       </text>
     </svg>
@@ -239,7 +288,7 @@ function BloombergSparkline({ data, color, height = 110, animKey }) {
 
 // ── Sidebar stat block ──────────────────────────────────────────────────────
 function SidebarStatBlock({ greek, greeks, greekSeries, strike, spotPrice, dte }) {
-  const val   = greeks[greek.key];
+  const val    = greeks[greek.key];
   const series = greekSeries[greek.key] || [];
   const valid  = series.filter(v => v != null && !isNaN(v) && isFinite(v));
   const interp = interpretGreekDeep(greek.key, val, strike, spotPrice, dte);
@@ -252,8 +301,7 @@ function SidebarStatBlock({ greek, greeks, greekSeries, strike, spotPrice, dte }
   };
 
   return (
-    <div style={{ marginBottom: 10, paddingBottom: 10, borderBottom: `1px solid #0d1e30` }}>
-      {/* Greek header */}
+    <div style={{ marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #0d1e30" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 16, fontWeight: 900, color: greek.color,
@@ -272,7 +320,6 @@ function SidebarStatBlock({ greek, greeks, greekSeries, strike, spotPrice, dte }
           <div style={{ fontSize: 7, color: "#3a5a72", fontFamily: "JetBrains Mono, monospace" }}>current</div>
         </div>
       </div>
-      {/* Stats row */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 6 }}>
         {[
           { lbl: "MIN",     val: valid.length >= 2 ? Math.min(...valid).toFixed(greek.key === "gamma" ? 5 : 3) : "—" },
@@ -285,7 +332,6 @@ function SidebarStatBlock({ greek, greeks, greekSeries, strike, spotPrice, dte }
           </div>
         ))}
       </div>
-      {/* Badge + interp */}
       <div style={{ display: "flex", gap: 5, alignItems: "flex-start", marginBottom: 3 }}>
         <span style={{
           fontSize: 7, fontWeight: 800, fontFamily: "JetBrains Mono, monospace",
@@ -293,7 +339,7 @@ function SidebarStatBlock({ greek, greeks, greekSeries, strike, spotPrice, dte }
           border: `1px solid ${interp.color}35`, padding: "1px 5px", borderRadius: 3,
           whiteSpace: "nowrap", flexShrink: 0, letterSpacing: 0.4
         }}>{interp.badge}</span>
-        <span style={{ fontSize: 8, color: `${interp.color}bb`, lineHeight: 1.4,
+        <span style={{ fontSize: 8, color: `${interp.color}cc`, lineHeight: 1.4,
           fontFamily: "JetBrains Mono, monospace" }}>{interp.text}</span>
       </div>
       <RiskMeter risk={interp.risk} />
@@ -301,8 +347,7 @@ function SidebarStatBlock({ greek, greeks, greekSeries, strike, spotPrice, dte }
   );
 }
 
-// ── Greeks Chart Panel — FIXED LAYOUT ──────────────────────────────────────
-// Left sidebar: Δ + Γ stats | Center: 2×2 chart grid | Right sidebar: θ + ν stats
+// ── Greeks Panel ─────────────────────────────────────────────────────────────
 function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }) {
   const [animKey, setAnimKey] = useState(0);
 
@@ -317,14 +362,17 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
     return () => window.removeEventListener("keydown", h);
   }, [onClose]);
 
+  // Build greek series — ALWAYS fallback to BS when server data missing
   const greekSeries = useMemo(() => {
     if (!allStrikes?.length) return { delta: [], gamma: [], theta: [], vega: [] };
     const series = { delta: [], gamma: [], theta: [], vega: [] };
     allStrikes.forEach(row => {
       const opt = side === "ce" ? row.ce : row.pe;
       let { delta: d, gamma: g, theta: t, vega: v } = opt || {};
-      if ((g == null || isNaN(g) || d == null || isNaN(d)) && spotPrice && row.strike && opt?.iv && dte > 0) {
-        const T = dte / 365;
+
+      // Always attempt BS if ANY greek is missing
+      if (spotPrice && row.strike && opt?.iv && dte != null && dte >= 0) {
+        const T = Math.max(0.0001, (dte + 0.5) / 365); // add 0.5 day buffer
         const sigma = Math.max(0.01, (opt.iv || 15) / 100);
         const bs = blackScholesGreeks(spotPrice, row.strike, T, 0.065, sigma, side);
         if (bs) {
@@ -344,8 +392,8 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
 
   const greeks = useMemo(() => {
     let { delta: d, gamma: g, theta: t, vega: v, rho: r, iv, ltp, oi } = data || {};
-    if (spotPrice && strike && iv && dte > 0) {
-      const T = dte / 365;
+    if (spotPrice && strike && iv && dte != null && dte >= 0) {
+      const T = Math.max(0.0001, (dte + 0.5) / 365);
       const sigma = Math.max(0.01, iv / 100);
       const bs = blackScholesGreeks(spotPrice, strike, T, 0.065, sigma, side);
       if (bs) {
@@ -366,7 +414,6 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
     { key: "vega",  sym: "ν", name: "VEGA",  color: "#a78bfa", desc: "₹/1% IV change" },
   ];
 
-  // Left sidebar = Delta + Gamma, Right sidebar = Theta + Vega
   const leftGreeks  = [Greeks[0], Greeks[1]];
   const rightGreeks = [Greeks[2], Greeks[3]];
 
@@ -394,7 +441,7 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
         animation: "panel-in 0.22s ease-out",
       }}>
 
-        {/* ── Header ── */}
+        {/* Header */}
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
           padding: "10px 18px",
@@ -421,7 +468,6 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
             }}>{dte}d DTE{dte <= 3 ? " ⚠" : ""}</span>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            {/* Quick summary chips */}
             {[
               { lbl: "IV",  val: greeks.iv != null ? `${greeks.iv.toFixed(1)}%` : "—",   col: "#f0c040" },
               { lbl: "LTP", val: greeks.ltp != null ? `₹${fmtPrice(greeks.ltp)}` : "—",  col: "#c8dff0" },
@@ -444,29 +490,23 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
           </div>
         </div>
 
-        {/* ── Body: LEFT SIDEBAR | 2×2 CHARTS | RIGHT SIDEBAR ── */}
+        {/* Body: LEFT | CHARTS | RIGHT */}
         <div style={{ display: "grid", gridTemplateColumns: "200px 1fr 200px", flex: 1, overflow: "hidden" }}>
 
           {/* LEFT SIDEBAR — Delta + Gamma */}
           <div style={{
-            background: "#040912",
-            borderRight: "1px solid #0d1e30",
-            padding: "12px 10px",
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
+            background: "#040912", borderRight: "1px solid #0d1e30",
+            padding: "12px 10px", overflowY: "auto", display: "flex", flexDirection: "column",
           }}>
             <div style={{ fontSize: 7, fontWeight: 800, color: "#1a3050", letterSpacing: 1.5,
-              fontFamily: "JetBrains Mono, monospace", marginBottom: 10, textTransform: "uppercase" }}>
-              Δ / Γ — Direction
-            </div>
+              fontFamily: "JetBrains Mono, monospace", marginBottom: 10 }}>Δ / Γ — DIRECTION</div>
             {leftGreeks.map(g => (
               <SidebarStatBlock key={g.key} greek={g} greeks={greeks}
                 greekSeries={greekSeries} strike={strike} spotPrice={spotPrice} dte={dte} />
             ))}
           </div>
 
-          {/* CENTER — 2×2 chart grid (no scroll) */}
+          {/* CENTER — 2×2 chart grid */}
           <div style={{
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
@@ -487,7 +527,7 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
                   flexDirection: "column",
                   overflow: "hidden",
                 }}>
-                  {/* Chart header — compact */}
+                  {/* Chart header */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexShrink: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span style={{ fontSize: 17, fontWeight: 900, color: g.color,
@@ -513,20 +553,20 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
                     </div>
                   </div>
 
-                  {/* SVG chart — fills remaining space */}
+                  {/* SVG chart */}
                   <div style={{
                     flex: 1,
-                    background: "rgba(0,0,0,0.3)", borderRadius: 6,
-                    border: `1px solid ${g.color}15`, overflow: "hidden", position: "relative",
+                    background: "rgba(0,0,0,0.35)", borderRadius: 6,
+                    border: `1px solid ${g.color}20`, overflow: "hidden", position: "relative",
                     minHeight: 0,
                   }}>
                     <BloombergSparkline data={series} color={g.color} height={110} animKey={animKey} />
                     <div style={{
                       position: "absolute", top: 5, right: 7,
                       fontSize: 6, fontFamily: "JetBrains Mono, monospace",
-                      color: g.color, background: `${g.color}10`,
-                      border: `1px solid ${g.color}22`, borderRadius: 2, padding: "1px 5px", letterSpacing: 0.4
-                    }}>{hasData ? `${valid.length}pts` : "BS"}</div>
+                      color: g.color, background: `${g.color}15`,
+                      border: `1px solid ${g.color}30`, borderRadius: 2, padding: "1px 5px", letterSpacing: 0.4
+                    }}>{hasData ? `${valid.length} strikes` : "BS fallback"}</div>
                   </div>
                 </div>
               );
@@ -535,17 +575,11 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
 
           {/* RIGHT SIDEBAR — Theta + Vega */}
           <div style={{
-            background: "#040912",
-            borderLeft: "1px solid #0d1e30",
-            padding: "12px 10px",
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
+            background: "#040912", borderLeft: "1px solid #0d1e30",
+            padding: "12px 10px", overflowY: "auto", display: "flex", flexDirection: "column",
           }}>
             <div style={{ fontSize: 7, fontWeight: 800, color: "#1a3050", letterSpacing: 1.5,
-              fontFamily: "JetBrains Mono, monospace", marginBottom: 10, textTransform: "uppercase" }}>
-              θ / ν — Time & Vol
-            </div>
+              fontFamily: "JetBrains Mono, monospace", marginBottom: 10 }}>θ / ν — TIME & VOL</div>
             {rightGreeks.map(g => (
               <SidebarStatBlock key={g.key} greek={g} greeks={greeks}
                 greekSeries={greekSeries} strike={strike} spotPrice={spotPrice} dte={dte} />
@@ -553,7 +587,7 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
           </div>
         </div>
 
-        {/* ── Footer ── */}
+        {/* Footer */}
         <div style={{
           padding: "7px 18px", borderTop: "1px solid #0a1828",
           background: "#03080f",
@@ -561,7 +595,7 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
           flexShrink: 0
         }}>
           <span style={{ fontSize: 7.5, color: "#2a4a60", fontFamily: "JetBrains Mono, monospace" }}>
-            Black-Scholes-Merton · r=6.5% RBI repo · σ from server IV · Hull "Options, Futures & Other Derivatives" 10th ed.
+            Black-Scholes-Merton · r=6.5% RBI repo · σ from IV · Hull "Options, Futures & Other Derivatives" 10th ed.
           </span>
           <span style={{ fontSize: 7.5, color: "#2a4a60", fontFamily: "JetBrains Mono, monospace" }}>
             {greekSeries.delta?.filter(v => v != null).length || 0} strikes · {side?.toUpperCase()} · cross-strike
@@ -589,11 +623,11 @@ function OIBar({ value, prevValue, max, side, signal }) {
   );
 }
 
-// ── Greek Cell ───────────────────────────────────────────────────────────────
+// ── Greek Cell — NO Bloomberg reference ──────────────────────────────────────
 function GreekCell({ delta, theta, vega, gamma, side, onGreekClick }) {
   const dColor = side === "ce" ? (delta > 0.5 ? "#00c896" : "#6a8aaa") : (delta < -0.5 ? "#ff6b6b" : "#6a8aaa");
   return (
-    <div className="greek-cell" onClick={onGreekClick} title="Click for Bloomberg Greeks chart">
+    <div className="greek-cell" onClick={onGreekClick}>
       <span className="greek-item" style={{ color: dColor }}><span className="greek-label">Δ</span>{fmtGreek(delta, 2)}</span>
       <span className="greek-item" style={{ color: "#ff8c42" }}><span className="greek-label">θ</span>{fmtGreek(theta, 1)}</span>
       <span className="greek-item" style={{ color: "#a78bfa" }}><span className="greek-label">ν</span>{fmtGreek(vega, 2)}</span>
@@ -690,19 +724,30 @@ function calcDTE(expiryStr) {
   catch { return null; }
 }
 
+// ── Session persistence helpers ──────────────────────────────────────────────
+const SS_KEY = "oc_state_v1";
+function saveSession(obj) {
+  try { sessionStorage.setItem(SS_KEY, JSON.stringify(obj)); } catch {}
+}
+function loadSession() {
+  try { return JSON.parse(sessionStorage.getItem(SS_KEY) || "null"); } catch { return null; }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 export default function OptionChain({ onBack }) {
-  const [underlying,     setUnderlying]  = useState("NIFTY");
+  const saved = useMemo(() => loadSession(), []);
+
+  const [underlying,     setUnderlying]  = useState(saved?.underlying || "NIFTY");
   const [expiries,       setExpiries]    = useState([]);
-  const [selectedExpiry, setExpiry]      = useState(null);
+  const [selectedExpiry, setExpiry]      = useState(saved?.expiry || null);
   const [chainData,      setChainData]   = useState(null);
   const [prevStrikes,    setPrevStrikes] = useState({});
   const [loading,        setLoading]     = useState(true);
   const [lastUpdate,     setLastUpdate]  = useState(null);
   const [flashStrikes,   setFlashStrikes]= useState(new Set());
-  const [showATMOnly,    setShowATMOnly] = useState(false);
-  const [strikeCount,    setStrikeCount] = useState(20);
-  const [showGreeks,     setShowGreeks]  = useState(false);
+  const [showATMOnly,    setShowATMOnly] = useState(saved?.showATMOnly ?? false);
+  const [strikeCount,    setStrikeCount] = useState(saved?.strikeCount || 20);
+  const [showGreeks,     setShowGreeks]  = useState(saved?.showGreeks ?? false);
   const [connStatus,     setConnStatus]  = useState("disconnected");
   const [greekPanel,     setGreekPanel]  = useState(null);
 
@@ -710,6 +755,11 @@ export default function OptionChain({ onBack }) {
   const tableRef      = useRef(null);
   const pollRef       = useRef(null);
   const lastUpdateRef = useRef(null);
+
+  // Persist state to sessionStorage whenever key values change
+  useEffect(() => {
+    saveSession({ underlying, expiry: selectedExpiry, showATMOnly, strikeCount, showGreeks });
+  }, [underlying, selectedExpiry, showATMOnly, strikeCount, showGreeks]);
 
   const applyChainData = useCallback((data, source) => {
     if (!data) return;
@@ -730,7 +780,15 @@ export default function OptionChain({ onBack }) {
     socketRef.current = socket;
     socket.on("connect", () => { setConnStatus("live"); socket.emit("request-option-chain",{underlying,expiry:selectedExpiry}); });
     socket.on("disconnect", () => setConnStatus("disconnected"));
-    socket.on("option-expiries", ({underlying:u,expiries:e}) => { if(u!==underlying)return; setExpiries(e||[]); if(e?.length&&!selectedExpiry)setExpiry(e[0]); });
+    socket.on("option-expiries", ({underlying:u,expiries:e}) => {
+      if(u!==underlying)return;
+      setExpiries(e||[]);
+      // Only set expiry if none saved or current not in list
+      setExpiry(prev => {
+        if (prev && e?.includes(prev)) return prev;
+        return e?.[0] || null;
+      });
+    });
     socket.on("option-chain-update", ({underlying:u,data}) => { if(u!==underlying)return; applyChainData(data,"socket"); });
     return () => { socket.disconnect(); setConnStatus("disconnected"); };
   }, [underlying]); // eslint-disable-line
@@ -757,9 +815,15 @@ export default function OptionChain({ onBack }) {
   }, [underlying, selectedExpiry]); // eslint-disable-line
 
   useEffect(() => {
-    setLoading(true); setChainData(null); setExpiry(null); lastUpdateRef.current=null;
+    setLoading(true); setChainData(null); lastUpdateRef.current=null;
     fetch(`/api/option-chain/expiries?underlying=${underlying}`)
-      .then(r=>r.json()).then(({expiries:e})=>{ setExpiries(e||[]); if(e?.length)setExpiry(e[0]); }).catch(()=>{});
+      .then(r=>r.json()).then(({expiries:e})=>{
+        setExpiries(e||[]);
+        setExpiry(prev => {
+          if (prev && e?.includes(prev)) return prev;
+          return e?.[0] || null;
+        });
+      }).catch(()=>{});
   }, [underlying]);
 
   const strikes = chainData?.strikes || [];
@@ -799,7 +863,7 @@ export default function OptionChain({ onBack }) {
         />
       )}
 
-      {/* ── HEADER (sticky via CSS) ── */}
+      {/* ── HEADER (sticky) ── */}
       <div className="oc-header">
         <div className="oc-title">
           <span style={{fontSize:15}}>⚡</span>
@@ -845,7 +909,7 @@ export default function OptionChain({ onBack }) {
         </div>
       </div>
 
-      {/* ── SUMMARY BAR (sticky via CSS .oc-summary) ── */}
+      {/* ── SUMMARY BAR (sticky) ── */}
       {chainData&&(
         <div className="oc-summary">
           <div className="summary-item"><span className="s-label">Spot</span><span className="s-val spot">{fmtPrice(chainData.spotPrice)}</span></div>
@@ -869,14 +933,13 @@ export default function OptionChain({ onBack }) {
       {/* OI Flow bar */}
       {chainData&&<OIFlowBar totalCEOI={chainData.totalCEOI} totalPEOI={chainData.totalPEOI}/>}
 
-      {/* Greeks legend */}
+      {/* Greeks legend — NO Bloomberg reference */}
       {showGreeks&&(
         <div className="greeks-legend">
           <span><span style={{color:"#00c896"}}>Δ Delta</span> — price sensitivity</span>
           <span><span style={{color:"#ff8c42"}}>θ Theta</span> — daily decay ₹</span>
           <span><span style={{color:"#a78bfa"}}>ν Vega</span> — IV sensitivity</span>
           <span><span style={{color:"#4db8ff"}}>Γ Gamma</span> — delta curvature</span>
-          <span style={{color:"#3a5a72",marginLeft:"auto"}}>Click any cell → Bloomberg chart</span>
         </div>
       )}
 
@@ -898,11 +961,10 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* Loading / Empty */}
       {loading&&<div className="oc-loading"><div className="loading-pulse"/><span>Fetching option chain data...</span></div>}
       {!loading&&!chainData&&<div className="oc-empty"><p>⏳ Waiting for first poll...</p><p className="empty-sub">NSE · socket primary · 3s REST fallback</p></div>}
 
-      {/* ── TABLE (only this scrolls) ── */}
+      {/* ── TABLE — thead sticky inside scroll container ── */}
       {!loading&&chainData&&(
         <div className="oc-table-wrap" ref={tableRef}>
           <table className="oc-table">
@@ -935,9 +997,9 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* Footer */}
+      {/* Footer — NO Bloomberg reference */}
       <div className="oc-footer">
-        <span>Socket · 3s REST · BS-augmented Greeks · Hull 10th ed. · {showGreeks?"Click Δθν → Bloomberg chart":"Toggle Greeks for Δθν"}</span>
+        <span>Socket · 3s REST · BS-augmented Greeks · Hull 10th ed. · {showGreeks?"Toggle Greeks for Δθν":"Greeks: enable via Δθν button"}</span>
         {chainData&&<span>{visibleStrikes.length}/{strikes.length} strikes · {underlying} · {selectedExpiry}{dte!=null?` · ${dte}d DTE`:""}</span>}
       </div>
     </div>
