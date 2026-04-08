@@ -2,10 +2,9 @@
  * coordinator.js
  * Location: server/coordinator.js
  *
- * UPDATED: 08 Apr 2026 (Session 5 patch)
- * - Gann integration fixed: removed undefined onNewLTP/setGannSignal references
- * - gannDataFetcher wired: auto-pulls 52w high/low + swing pivots for 200 NSE stocks
- * - All prior patches preserved (composite engine, circuit watcher, delivery analyzer, etc.)
+ * UPDATED: 09 Apr 2026 (Session 6 patch)
+ * - Options Intelligence Engine wired in: startOptionsIntegration called on startup
+ * - All prior patches preserved (composite engine, gann, circuit watcher, delivery analyzer, etc.)
  */
 
 const fs   = require("fs");
@@ -25,6 +24,9 @@ const {
 } = require("./services/intelligence/compositeScoreEngine");
 
 const { getCredibilityForScrip } = require("./services/intelligence/credibilityEngine");
+
+// ── Options Intelligence Engine ───────────────────────────────────────────────
+const { startOptionsIntegration } = require("./services/intelligence/optionsIntegration");
 
 const DATA_FILE = path.join(__dirname, "data/coordinator.json");
 
@@ -233,6 +235,10 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   // Composite score engine
   startCompositeEngine(io, { getCredibilityForScrip });
   console.log("⚡ Composite Score Engine started");
+
+  // Options Intelligence Engine — wired to composite via ingestOpportunity
+  startOptionsIntegration(io, { ingestOptionsSignal: ingestOpportunity });
+  console.log("📊 Options Intelligence Engine started");
 
   // Gann: wire socket handlers (no live tick feed needed)
   startGannIntegration(io, {

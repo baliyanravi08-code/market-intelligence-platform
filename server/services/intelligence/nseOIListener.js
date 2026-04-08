@@ -11,11 +11,18 @@
  * - Processes: PCR, max pain, support/resistance, OI signals, IV
  * - Emits: option-chain-update, option-expiries, option-oi-tick
  * - Replays cached data to newly connected clients immediately
+ *
+ * UPDATED: 09 Apr 2026 — Session 6:
+ * - Wired ingestChainData from optionsIntegration after each successful chain poll
+ * - Feeds Options Intelligence Engine with live chain data automatically
  */
 
 const axios = require("axios");
 const fs    = require("fs");
 const path  = require("path");
+
+// ── Options Intelligence Engine integration ───────────────────────────────────
+const { ingestChainData } = require("./optionsIntegration");
 
 const CACHE_FILE = path.join(__dirname, "../../data/optionChainCache.json");
 
@@ -27,15 +34,15 @@ let disabled    = false;
 let failCount   = 0;
 
 const MAX_FAILS          = 5;
-const POLL_INTERVAL_MS   = 60_000;       // chain poll every 60s
+const POLL_INTERVAL_MS   = 60_000;           // chain poll every 60s
 const EXPIRY_REFRESH_MS  = 4 * 60 * 60 * 1000; // expiry list refresh every 4h
 
 // In-memory store: { NIFTY: { expiries:[], chains:{}, spotPrice:0, updatedAt:0 } }
 const cache = {};
 
 const UNDERLYINGS = [
-  { name: "NIFTY",     upstoxKey: "NSE_INDEX|Nifty 50"  },
-  { name: "BANKNIFTY", upstoxKey: "NSE_INDEX|Nifty Bank" },
+  { name: "NIFTY",     upstoxKey: "NSE_INDEX|Nifty 50",  lotSize: 75  },
+  { name: "BANKNIFTY", upstoxKey: "NSE_INDEX|Nifty Bank", lotSize: 35  },
 ];
 
 // ── Auth header ───────────────────────────────────────────────────────────────
@@ -134,10 +141,10 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
 
   // Build strikes array for UI
   const strikes = sorted.map(s => {
-    const ceData = s.call_options?.market_data   || {};
-    const peData = s.put_options?.market_data    || {};
-    const ceGreeks = s.call_options?.option_greeks || {};
-    const peGreeks = s.put_options?.option_greeks  || {};
+    const ceData   = s.call_options?.market_data    || {};
+    const peData   = s.put_options?.market_data     || {};
+    const ceGreeks = s.call_options?.option_greeks  || {};
+    const peGreeks = s.put_options?.option_greeks   || {};
 
     const ceOI       = ceData.oi       || 0;
     const peOI       = peData.oi       || 0;
@@ -272,9 +279,35 @@ async function pollChains() {
         cache[u.name].spotPrice      = spotPrice;
         cache[u.name].updatedAt      = Date.now();
 
+        // Emit processed chain to frontend (OptionChain page)
         if (ioRef) {
           ioRef.emit("option-chain-update", { underlying: u.name, expiry, data: processed });
         }
+
+        // ── Feed Options Intelligence Engine ──────────────────────────────
+        // Normalize raw Upstox strikes into the format optionsIntelligenceEngine expects
+        try {
+          ingestChainData({
+            symbol:     u.name,
+            spotPrice,
+            expiryDate: expiry,
+            lotSize:    u.lotSize || 1,
+            chain: raw.map(s => ({
+              strike:   s.strike_price,
+              callOI:   s.call_options?.market_data?.oi       || 0,
+              putOI:    s.put_options?.market_data?.oi        || 0,
+              callVol:  s.call_options?.market_data?.volume   || 0,
+              putVol:   s.put_options?.market_data?.volume    || 0,
+              callLTP:  s.call_options?.market_data?.ltp      || 0,
+              putLTP:   s.put_options?.market_data?.ltp       || 0,
+              callIV:   s.call_options?.option_greeks?.iv     || 0,
+              putIV:    s.put_options?.option_greeks?.iv      || 0,
+            })),
+          });
+        } catch (err) {
+          console.warn(`⚠️ OI Intel ingest error for ${u.name}:`, err.message);
+        }
+        // ── End Options Intelligence Engine feed ──────────────────────────
 
         console.log(`📊 OI: ${u.name} ${expiry} — PCR=${processed.pcr} Spot=₹${spotPrice} Strikes=${raw.length}`);
         anySuccess = true;
@@ -315,9 +348,9 @@ function getExpiries(underlying)       { return cache[underlying]?.expiries || [
 function getChain(underlying, expiry)  { return cache[underlying]?.chains?.[expiry] || null; }
 function getAllCached()                 { return cache; }
 
-function addUnderlying(name, instrumentKey) {
+function addUnderlying(name, instrumentKey, lotSize) {
   if (UNDERLYINGS.find(u => u.upstoxKey === instrumentKey)) return;
-  UNDERLYINGS.push({ name, upstoxKey: instrumentKey });
+  UNDERLYINGS.push({ name, upstoxKey: instrumentKey, lotSize: lotSize || 1 });
   console.log(`➕ OI: added underlying ${name}`);
 }
 
@@ -408,8 +441,8 @@ function startNSEOIListener(io, tGetter) {
       socket.emit("option-expiries", { underlying, expiries: getExpiries(underlying) });
     });
 
-    socket.on("add-oi-underlying", ({ name, upstoxKey }) => {
-      addUnderlying(name, upstoxKey);
+    socket.on("add-oi-underlying", ({ name, upstoxKey, lotSize }) => {
+      addUnderlying(name, upstoxKey, lotSize);
     });
   });
 
@@ -424,7 +457,7 @@ function startNSEOIListener(io, tGetter) {
     await runExpiries();
     // Start chain polling after expiries are loaded
     setTimeout(() => pollChains(), 5000);
-    pollTimer  = setInterval(() => pollChains(),   POLL_INTERVAL_MS);
+    pollTimer   = setInterval(() => pollChains(),   POLL_INTERVAL_MS);
     expiryTimer = setInterval(() => runExpiries(), EXPIRY_REFRESH_MS);
   }, 3000);
 }
