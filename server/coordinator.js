@@ -2,15 +2,17 @@
  * coordinator.js
  * Location: server/coordinator.js
  *
- * UPDATED: 06 Apr 2026 (Session 4 patch)
- * - compositeScoreEngine wired: startCompositeEngine, ingestSmartMoney, ingestOpportunity
- * - composite-scores emitted on connect + on-demand via socket event
- * - All prior patches preserved (circuit watcher, delivery analyzer, etc.)
+ * UPDATED: 08 Apr 2026 (Session 5 patch)
+ * - Gann integration fixed: removed undefined onNewLTP/setGannSignal references
+ * - gannDataFetcher wired: auto-pulls 52w high/low + swing pivots for 200 NSE stocks
+ * - All prior patches preserved (composite engine, circuit watcher, delivery analyzer, etc.)
  */
 
 const fs   = require("fs");
 const path = require("path");
 
+const { startGannIntegration }                     = require("./services/intelligence/gannIntegration");
+const { startGannDataFetcher }                     = require("./services/intelligence/gannDataFetcher");
 const { startDeliveryAnalyzer, onDeliverySpike }   = require("./services/intelligence/deliveryAnalyzer");
 const { startCircuitWatcher, onCircuitAlert, onCircuitWatchlist } = require("./services/intelligence/circuitWatcher");
 
@@ -106,9 +108,7 @@ function persistSector(sectorData) {
 
 function persistOpportunity(opp) {
   if (!opp) return;
-  // Wire into composite engine before persisting
   ingestOpportunity(opp);
-
   const existing       = stored.opportunities.filter((o) => o.company !== opp.company);
   stored.opportunities = [opp, ...existing].slice(0, 20);
   saveToDisk();
@@ -167,12 +167,11 @@ function persistCircuitAlerts(alerts) {
 
 function persistCircuitWatchlist(watchlist) {
   if (!watchlist || watchlist.length === 0) return;
-  stored.circuitWatchlist = watchlist; // always replace — latest snapshot
-  // saveToDisk() intentionally skipped — too frequent (every 30s), interval handles it
+  stored.circuitWatchlist = watchlist;
 }
 
-// ── Smart money passthrough — called from nseDealsListener / bseListener ─────
-// Export this so listeners can call it directly.
+// ── Smart money passthrough ───────────────────────────────────────────────────
+
 function handleSmartMoneyEvent(event) {
   if (!event) return;
   ingestSmartMoney(event);
@@ -215,7 +214,6 @@ function sendStoredToClient(socket) {
     console.log(`📤 Sent ${stored.circuitWatchlist.length} watchlist stocks to client`);
   }
 
-  // Send composite leaderboard on connect
   const leaderboard = getLeaderboard(100);
   if (leaderboard.length > 0) {
     socket.emit("composite-scores", leaderboard);
@@ -232,19 +230,28 @@ function getStored() {
 function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   console.log("🚀 Coordinator Running");
 
-  // Start composite engine — wires into circuit watcher auto-recompute
+  // Composite score engine
   startCompositeEngine(io, { getCredibilityForScrip });
   console.log("⚡ Composite Score Engine started");
+
+  // Gann: wire socket handlers (no live tick feed needed)
+  startGannIntegration(io, {
+    onNewLTP:      (cb) => {},   // no-op: Gann levels update daily, not tick-by-tick
+    setGannSignal: (symbol, signal) => {},   // no-op: extend later to feed composite engine
+  });
+
+  // Gann: pull 52w high/low + swing pivots for all NSE stocks from Upstox
+  // Runs 5s after startup, then refreshes daily at 09:00 AM IST automatically
+  startGannDataFetcher();
+  console.log("📐 Gann Data Fetcher scheduled");
 
   io.on("connection", (socket) => {
     sendStoredToClient(socket);
 
-    // Client can request leaderboard on demand
     socket.on("get-composite-scores", () => {
       socket.emit("composite-scores", getLeaderboard(100));
     });
 
-    // Client can request a single stock score
     socket.on("get-composite-score", (symbol) => {
       if (!symbol) return;
       const score = getCompositeForScrip(symbol);
@@ -271,7 +278,6 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
 
   onCircuitWatchlist((watchlist) => {
     persistCircuitWatchlist(watchlist);
-    // Circuit poll triggers composite recompute automatically inside compositeScoreEngine
   });
 }
 
