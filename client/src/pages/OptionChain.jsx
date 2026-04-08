@@ -1,39 +1,25 @@
 /**
  * OptionChain.jsx — BLOOMBERG TERMINAL LEVEL
  *
- * ALL 5 FIXES FULLY INTEGRATED (reading upstoxStream.js + server/index.js):
+ * FIXES applied on top of the 5-fix version:
  *
- *  FIX 1 — position:fixed layout: header/summary/footer never scroll with page.
- *           CSS vars --header-h, --summary-h, --table-top drive the table container.
+ *  FIX 6 — GreeksPanel rendered via ReactDOM.createPortal(…, document.body)
+ *           Escapes .oc-page (position:fixed + overflow:hidden) which was
+ *           clipping the modal in Chrome/Safari. Portal mounts on body directly.
  *
- *  FIX 2 — ResizeObserver measures every fixed bar on each render.
- *           Writes exact pixel values to CSS vars so table top is mathematically
- *           correct even when header wraps on small screens or Greeks legend appears.
+ *  FIX 7 — Greeks legend removed as a separate fixed bar.
+ *           Legend is now an inline collapsible inside the header controls row.
+ *           Eliminates --legend-h CSS var, removes one ResizeObserver target,
+ *           frees ~24px of vertical table space.
+ *           legendRef and its ResizeObserver attachment are removed entirely.
  *
- *  FIX 3 — mergeChainData returns same row object refs when data unchanged.
- *           StrikeRow wrapped in React.memo with ref-equality comparator.
- *           Unchanged rows are fully skipped by React's reconciler.
- *
- *  FIX 4 — Greeks chart animKey derived from greekSeries data hash (NOT setInterval).
- *           Chart draws once on panel open, re-animates ONLY when real data changes.
- *           Removed the 3-second timer that caused constant re-animation.
- *
- *  FIX 5 — REST poll + socket feed same applyChainData merge pipeline.
- *           REST data silently ignored when socket has updated within last 2s.
- *           applyChainData is stable (useCallback, no closure over stale refs).
- *
- *  UPSTOX WIRING (from upstoxStream.js analysis):
- *    - Server emits "market-tick" for index prices (NIFTY 50, SENSEX, BANK NIFTY)
- *    - Server emits "option-chain-update" { underlying, data } for OI chain data
- *    - Server emits "option-expiries" { underlying, expiries } on connect
- *    - Server emits "upstox-status" { connected } on WS open/close
- *    - Client emits "request-option-chain" { underlying, expiry } to trigger push
- *    - upstoxStream.js handles reconnection internally — no client-side retry needed
+ *  All original FIX 1–5 retained unchanged.
  */
 
 import React, {
   useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect
 } from "react";
+import ReactDOM from "react-dom";
 import { io } from "socket.io-client";
 import "./OptionChain.css";
 
@@ -210,7 +196,6 @@ function BloombergSparkline({ data, color, height = 110, animKey }) {
     return { pts, pathD, areaD, yTicks, last: pts[pts.length-1], lastVal: validData[validData.length-1], min, max };
   }, [validData, IW, IH]);
 
-  // FIX 4: Only fires when animKey changes (data hash changed), NOT on a timer
   useEffect(() => {
     if (!pathRef.current || !computed) return;
     const el = pathRef.current;
@@ -222,7 +207,7 @@ function BloombergSparkline({ data, color, height = 110, animKey }) {
       el.style.transition = "stroke-dashoffset 1s cubic-bezier(0.16,1,0.3,1)";
       el.style.strokeDashoffset = "0";
     }));
-  }, [animKey]); // ← stable hash, only changes when data actually changes
+  }, [animKey]);
 
   const uid = useMemo(() => `c${Math.random().toString(36).slice(2,8)}`, []);
   const gId = `g_${uid}`;
@@ -374,19 +359,19 @@ function SidebarStatBlock({ greek, greeks, greekSeries, strike, spotPrice, dte }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Greeks Panel
-// FIX 4: animKey = useMemo over greekSeries hash — chart only redraws on data change
+// FIX 6: Rendered via ReactDOM.createPortal → mounts on document.body,
+//         completely outside .oc-page (position:fixed + overflow:hidden).
+//         This prevents the parent's overflow from clipping the modal.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }) {
 
-  // Build cross-strike greek series from all visible strikes
   const greekSeries = useMemo(() => {
     if (!allStrikes?.length) return { delta: [], gamma: [], theta: [], vega: [] };
     const series = { delta: [], gamma: [], theta: [], vega: [] };
     allStrikes.forEach(row => {
       const opt = side === "ce" ? row.ce : row.pe;
       let { delta: d, gamma: g, theta: t, vega: v } = opt || {};
-      // BS fallback for missing greeks
       if (spotPrice && row.strike && opt?.iv && dte != null && dte >= 0) {
         const T = Math.max(0.0001, (dte + 0.5) / 365);
         const sigma = Math.max(0.01, (opt.iv || 15) / 100);
@@ -406,8 +391,6 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
     return series;
   }, [allStrikes, side, spotPrice, dte]);
 
-  // FIX 4: Derive animKey from data content — NOT from a timer
-  // Format: "delta:N:lastVal|gamma:N:lastVal|..."
   const animKey = useMemo(() => {
     return Object.entries(greekSeries).map(([k, s]) => {
       const valid = s.filter(v => v != null && !isNaN(v));
@@ -415,7 +398,6 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
     }).join("|");
   }, [greekSeries]);
 
-  // Greeks for the specific selected strike, BS-augmented
   const greeks = useMemo(() => {
     let { delta: d, gamma: g, theta: t, vega: v, rho: r, iv, ltp, oi } = data || {};
     if (spotPrice && strike && iv && dte != null && dte >= 0) {
@@ -449,10 +431,11 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
   const leftGreeks  = [Greeks[0], Greeks[1]];
   const rightGreeks = [Greeks[2], Greeks[3]];
 
-  return (
+  // FIX 6: Portal renders directly on document.body — no parent clipping
+  return ReactDOM.createPortal(
     <div
       style={{
-        position: "fixed", inset: 0, zIndex: 500,
+        position: "fixed", inset: 0, zIndex: 9000,
         background: "rgba(2,6,14,0.92)",
         display: "flex", alignItems: "center", justifyContent: "center",
         backdropFilter: "blur(6px)",
@@ -568,7 +551,6 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
                     flex: 1, background: "rgba(0,0,0,0.35)", borderRadius: 6,
                     border: `1px solid ${g.color}20`, overflow: "hidden", position: "relative", minHeight: 0,
                   }}>
-                    {/* FIX 4: animKey prop is data-derived, not timer-derived */}
                     <BloombergSparkline data={series} color={g.color} height={110} animKey={animKey} />
                     <div style={{
                       position: "absolute", top: 5, right: 7,
@@ -607,7 +589,8 @@ function GreeksPanel({ strike, side, data, allStrikes, spotPrice, dte, onClose }
           </span>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body   // ← FIX 6: portal target — escapes .oc-page overflow:hidden
   );
 }
 
@@ -647,10 +630,7 @@ function GreekCell({ delta, theta, vega, side, onGreekClick }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Strike Row
-// FIX 3: React.memo with ref-equality comparator
-// Since mergeChainData returns same object reference when row data is unchanged,
-// the `row === next.row` check causes React to skip re-rendering untouched rows.
+// Strike Row — React.memo with ref-equality comparator (FIX 3)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const StrikeRow = React.memo(function StrikeRow({
@@ -681,20 +661,15 @@ const StrikeRow = React.memo(function StrikeRow({
       <td className="pe-cell oi-cell"><OIBar value={row.pe.oi} prevValue={prevRow?.pe.oi} max={maxPEOI} side="pe" signal={row.pe.signal}/></td>
     </tr>
   );
-}, (prev, next) => {
-  // FIX 3: Only re-render when THIS row's data actually changed.
-  // mergeChainData returns old ref if ce/pe values are identical, so this
-  // comparison short-circuits the entire render for unchanged rows.
-  return (
-    prev.row        === next.row        &&  // same object ref = data unchanged
-    prev.prevRow    === next.prevRow    &&
-    prev.maxCEOI    === next.maxCEOI    &&
-    prev.maxPEOI    === next.maxPEOI    &&
-    prev.spotPrice  === next.spotPrice  &&
-    prev.isFlash    === next.isFlash    &&
-    prev.showGreeks === next.showGreeks
-  );
-});
+}, (prev, next) => (
+  prev.row        === next.row        &&
+  prev.prevRow    === next.prevRow    &&
+  prev.maxCEOI    === next.maxCEOI    &&
+  prev.maxPEOI    === next.maxPEOI    &&
+  prev.spotPrice  === next.spotPrice  &&
+  prev.isFlash    === next.isFlash    &&
+  prev.showGreeks === next.showGreeks
+));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PCR Gauge
@@ -715,7 +690,7 @@ function PCRGauge({ pcr }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Update Timer — counts seconds since last data update
+// Update Timer
 // ─────────────────────────────────────────────────────────────────────────────
 
 function UpdateTimer({ lastUpdate }) {
@@ -734,7 +709,6 @@ function UpdateTimer({ lastUpdate }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Connection Badge
-// Reads upstox-status events from upstoxStream.js (connected: true/false)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ConnBadge({ status }) {
@@ -779,37 +753,22 @@ function calcDTE(expiryStr) {
   catch { return null; }
 }
 
-// Session persistence
 const SS_KEY = "oc_state_v2";
 function saveSession(obj) { try { sessionStorage.setItem(SS_KEY, JSON.stringify(obj)); } catch {} }
 function loadSession()    { try { return JSON.parse(sessionStorage.getItem(SS_KEY) || "null"); } catch { return null; } }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX 5: Stable data merger
-//
-// Key insight from reading mergeChainData + applyChainData together:
-// - Called from BOTH socket "option-chain-update" AND REST poll
-// - Returns same row object ref when trading values haven't changed
-// - This is what makes StrikeRow's ref-equality memo comparator work
-//
-// The REST poll path (FIX 5): if socket updated within 2s, REST data is dropped
-// entirely in applyChainData — this function is never even called for stale REST data.
+// mergeChainData — FIX 3+5: stable row refs for React.memo
 // ─────────────────────────────────────────────────────────────────────────────
 
 function mergeChainData(prev, next) {
   if (!prev) return next;
   const merged = { ...prev, ...next };
-
-  // Build strike lookup map from previous data
   const prevMap = {};
   (prev.strikes || []).forEach(r => { prevMap[r.strike] = r; });
-
   merged.strikes = (next.strikes || []).map(newRow => {
     const old = prevMap[newRow.strike];
-    if (!old) return newRow; // new strike, always render
-
-    // If key trading values are identical, return old reference
-    // → StrikeRow sees prev.row === next.row → skips re-render entirely
+    if (!old) return newRow;
     if (
       old.ce.oi     === newRow.ce.oi     &&
       old.ce.ltp    === newRow.ce.ltp    &&
@@ -819,11 +778,9 @@ function mergeChainData(prev, next) {
       old.pe.ltp    === newRow.pe.ltp    &&
       old.pe.iv     === newRow.pe.iv     &&
       old.pe.signal === newRow.pe.signal
-    ) return old; // ← CRITICAL: same reference → React.memo bails
-
+    ) return old;
     return newRow;
   });
-
   return merged;
 }
 
@@ -848,151 +805,110 @@ export default function OptionChain({ onBack }) {
   const [connStatus,     setConnStatus]  = useState("disconnected");
   const [greekPanel,     setGreekPanel]  = useState(null);
 
-  // ── FIX 1+2: Refs for DOM measurement of all fixed bars
+  // FIX 1+2: refs for fixed bar measurement
+  // legendRef removed — legend is now inline in header (FIX 7)
   const headerRef  = useRef(null);
   const summaryRef = useRef(null);
-  const legendRef  = useRef(null);
   const alertsRef  = useRef(null);
   const footerRef  = useRef(null);
   const tableRef   = useRef(null);
 
   const socketRef      = useRef(null);
-  const lastUpdateRef  = useRef(null);  // ref so REST poll check doesn't need stale closure
+  const lastUpdateRef  = useRef(null);
   const pollRef        = useRef(null);
 
-  // ── FIX 1+2: Measure all fixed bars → write CSS vars → table top is always exact
-  // Uses ResizeObserver so it auto-corrects on: header wrap, legend show/hide,
-  // alerts appearing, window resize, font scale changes.
+  // FIX 1+2: ResizeObserver measures fixed bars, writes CSS vars
+  // legendRef removed — no more --legend-h contribution (FIX 7)
   useLayoutEffect(() => {
     const measure = () => {
-      const hh     = headerRef.current?.offsetHeight  || 41;
-      const sh     = summaryRef.current?.offsetHeight || 56;
-      const lh     = legendRef.current?.offsetHeight  || 0;
-      const ah     = alertsRef.current?.offsetHeight  || 0;
-      const fh     = footerRef.current?.offsetHeight  || 28;
-      const flowH  = 4; // .oi-flow-bar fixed height
-      const tableTop = hh + sh + flowH + lh + ah;
+      const hh    = headerRef.current?.offsetHeight  || 41;
+      const sh    = summaryRef.current?.offsetHeight || 56;
+      const ah    = alertsRef.current?.offsetHeight  || 0;
+      const fh    = footerRef.current?.offsetHeight  || 28;
+      const flowH = 4;
+      const tableTop = hh + sh + flowH + ah;
 
       const root = document.documentElement;
       root.style.setProperty("--header-h",  hh  + "px");
       root.style.setProperty("--summary-h", sh  + "px");
-      root.style.setProperty("--legend-h",  lh  + "px");
       root.style.setProperty("--footer-h",  fh  + "px");
       root.style.setProperty("--table-top", tableTop + "px");
     };
 
     measure();
-
-    // ResizeObserver: fires when any fixed bar changes height
-    // Throttled internally by browser — cheap to attach to every render
     const ro = new ResizeObserver(measure);
-    [headerRef, summaryRef, legendRef, alertsRef, footerRef].forEach(r => {
+    [headerRef, summaryRef, alertsRef, footerRef].forEach(r => {
       if (r.current) ro.observe(r.current);
     });
     return () => ro.disconnect();
-  }); // ← runs every render (intentional — ResizeObserver throttles)
+  });
 
-  // ── Persist session state
   useEffect(() => {
     saveSession({ underlying, expiry: selectedExpiry, showATMOnly, strikeCount, showGreeks });
   }, [underlying, selectedExpiry, showATMOnly, strikeCount, showGreeks]);
 
-  // ── FIX 5: Stable applyChainData — the single merge pipeline for ALL data sources
-  // Both socket and REST poll call this. REST data is silently dropped if socket
-  // has pushed within 2s (checked via lastUpdateRef, not state).
+  // FIX 5: stable applyChainData
   const applyChainData = useCallback((data, source) => {
     if (!data?.strikes) return;
-
-    // Snapshot prev strikes for OI delta display BEFORE merging
     setPrevStrikes(() => {
       const n = {};
       (data.strikes || []).forEach(r => { n[r.strike] = r; });
       return n;
     });
-
-    // FIX 3+5: Merge new data — unchanged rows keep same object reference
-    // → React.memo StrikeRow comparator short-circuits unchanged rows
     setChainData(prev => mergeChainData(prev, data));
-
     const now = Date.now();
     setLastUpdate(now);
-    lastUpdateRef.current = now;   // used by REST poll to check socket freshness
+    lastUpdateRef.current = now;
     setLoading(false);
     setConnStatus(source === "socket" ? "live" : "rest");
-
-    // Flash animation for alert strikes
     if (data.alerts?.length) {
       const f = new Set(data.alerts.map(a => a.strike));
       setFlashStrikes(f);
       setTimeout(() => setFlashStrikes(new Set()), 1500);
     }
-  }, []); // no deps — stable across re-renders
+  }, []);
 
-  // ── Socket.io connection
-  // Reads: "option-expiries", "option-chain-update" from nseOIListener via server/index.js
-  // Reads: "upstox-status" from upstoxStream.js (connected true/false)
-  // Emits: "request-option-chain" to trigger push (server.js re-emits on expiry change)
+  // Socket.io connection
   useEffect(() => {
     const socket = io(window.location.origin, { transports: ["websocket"] });
     socketRef.current = socket;
-
     socket.on("connect", () => {
       setConnStatus("live");
       socket.emit("request-option-chain", { underlying, expiry: selectedExpiry });
     });
-
     socket.on("disconnect", () => setConnStatus("disconnected"));
-
-    // upstoxStream.js emits this when its WS connects/disconnects
-    // We use it to update badge but don't change data flow
     socket.on("upstox-status", ({ connected }) => {
       if (!connected) setConnStatus(prev => prev === "live" ? "rest" : prev);
     });
-
     socket.on("option-expiries", ({ underlying: u, expiries: e }) => {
       if (u !== underlying) return;
       setExpiries(e || []);
       setExpiry(prev => (prev && e?.includes(prev)) ? prev : (e?.[0] || null));
     });
-
-    // FIX 5: Socket data goes straight into applyChainData
-    // No separate state path — same pipeline as REST
     socket.on("option-chain-update", ({ underlying: u, data }) => {
       if (u !== underlying) return;
       applyChainData(data, "socket");
     });
-
-    return () => {
-      socket.disconnect();
-      setConnStatus("disconnected");
-    };
+    return () => { socket.disconnect(); setConnStatus("disconnected"); };
   }, [underlying]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-emit subscription request when expiry changes (server will push fresh chain)
   useEffect(() => {
     if (socketRef.current?.connected && selectedExpiry)
       socketRef.current.emit("request-option-chain", { underlying, expiry: selectedExpiry });
   }, [underlying, selectedExpiry]);
 
-  // ── REST fallback poll (3s)
-  // FIX 5: Only applies data when socket hasn't updated in >2s
-  // Uses lastUpdateRef (not state) to avoid stale closure issues
+  // REST fallback poll (FIX 5)
   useEffect(() => {
     if (!selectedExpiry) return;
-
     const poll = () => {
       fetch(`/api/option-chain?underlying=${underlying}&expiry=${selectedExpiry}`)
         .then(r => r.json())
         .then(data => {
           if (!data?.strikes) return;
           const age = lastUpdateRef.current ? Date.now() - lastUpdateRef.current : Infinity;
-
           if (age > 2000) {
-            // Socket hasn't sent data recently — use REST data
             applyChainData(data, "rest");
           } else {
-            // FIX 5: Socket is live and fresh — silently update timestamp only
-            // Do NOT call applyChainData here to avoid double-render
             const now = Date.now();
             setLastUpdate(now);
             lastUpdateRef.current = now;
@@ -1000,14 +916,12 @@ export default function OptionChain({ onBack }) {
         })
         .catch(() => {});
     };
-
     setLoading(true);
-    poll(); // immediate first poll
+    poll();
     pollRef.current = setInterval(poll, 3000);
     return () => clearInterval(pollRef.current);
   }, [underlying, selectedExpiry, applyChainData]);
 
-  // ── Load expiries when underlying changes
   useEffect(() => {
     setLoading(true);
     setChainData(null);
@@ -1024,7 +938,6 @@ export default function OptionChain({ onBack }) {
   const strikes = chainData?.strikes || [];
   const dte = useMemo(() => calcDTE(selectedExpiry), [selectedExpiry]);
 
-  // Apply ATM filter
   const visibleStrikes = useMemo(() => {
     if (!strikes.length) return [];
     if (!showATMOnly) return strikes;
@@ -1039,7 +952,6 @@ export default function OptionChain({ onBack }) {
   const maxCEOI = useMemo(() => Math.max(...visibleStrikes.map(s => s.ce.oi), 1), [visibleStrikes]);
   const maxPEOI = useMemo(() => Math.max(...visibleStrikes.map(s => s.pe.oi), 1), [visibleStrikes]);
 
-  // Auto-scroll to ATM on first data load or underlying/expiry change
   useEffect(() => {
     if (!chainData) return;
     const atm = tableRef.current?.querySelector(".atm");
@@ -1058,7 +970,11 @@ export default function OptionChain({ onBack }) {
   return (
     <div className="oc-page">
 
-      {/* Greeks Panel modal — rendered outside table scroll context */}
+      {/*
+        FIX 6: GreeksPanel is now a Portal — renders to document.body.
+        It's still controlled by greekPanel state here, but the DOM node
+        is outside .oc-page entirely, so overflow:hidden cannot clip it.
+      */}
       {greekPanel && (
         <GreeksPanel
           strike={greekPanel.strike}
@@ -1071,7 +987,7 @@ export default function OptionChain({ onBack }) {
         />
       )}
 
-      {/* ── FIX 1: HEADER — position:fixed, never scrolls ── */}
+      {/* ── HEADER ── */}
       <div className="oc-header" ref={headerRef}>
         <div className="oc-title">
           <span style={{fontSize:15}}>⚡</span>
@@ -1079,11 +995,14 @@ export default function OptionChain({ onBack }) {
           {chainData && <span className="live-dot"/>}
         </div>
         <div className="oc-controls">
+          {/* Underlying */}
           <div className="control-group">
             {UNDERLYINGS.map(u => (
               <button key={u} className={`ctrl-btn${underlying===u?" active":""}`} onClick={()=>setUnderlying(u)}>{u}</button>
             ))}
           </div>
+
+          {/* Expiry */}
           {expiries.length > 0 && (
             <div className="control-group">
               {expiries.slice(0,5).map(e => (
@@ -1091,6 +1010,8 @@ export default function OptionChain({ onBack }) {
               ))}
             </div>
           )}
+
+          {/* Near ATM filter */}
           <div className="control-group">
             <button className={`ctrl-btn${showATMOnly?" active":""}`} onClick={()=>setShowATMOnly(v=>!v)}>Near ATM</button>
             {showATMOnly && (
@@ -1099,11 +1020,27 @@ export default function OptionChain({ onBack }) {
               </select>
             )}
           </div>
+
+          {/*
+            FIX 7: Greeks toggle + inline legend — all in one header control group.
+            No separate fixed bar. Toggle button on left, legend chips on right (only when active).
+            Saves ~24px of vertical table space and removes --legend-h from the layout calculation.
+          */}
           <div className="control-group">
             <button className={`ctrl-btn${showGreeks?" active":""}`} onClick={()=>setShowGreeks(v=>!v)}>
-              {showGreeks ? "Hide Δθν" : "Δθν Greeks"}
+              {showGreeks ? "Hide Greeks" : "Δθν Greeks"}
             </button>
+            {showGreeks && (
+              <>
+                <span className="greek-legend-chip" style={{color:"#00c896"}}>Δ price</span>
+                <span className="greek-legend-chip" style={{color:"#ff8c42"}}>θ decay</span>
+                <span className="greek-legend-chip" style={{color:"#a78bfa"}}>ν vol</span>
+                <span className="greek-legend-chip" style={{color:"#4db8ff"}}>Γ curve</span>
+              </>
+            )}
           </div>
+
+          {/* DTE badge */}
           {dte != null && (
             <div style={{
               fontSize:9, fontFamily:"JetBrains Mono,monospace", fontWeight:700,
@@ -1112,12 +1049,13 @@ export default function OptionChain({ onBack }) {
               border:`1px solid ${dte<=3?"#ff6b6b30":"#1c2b3a"}`
             }}>{dte}d DTE</div>
           )}
+
           {onBack && <button className="ctrl-btn" onClick={onBack}>← Back</button>}
           <ConnBadge status={connStatus}/>
         </div>
       </div>
 
-      {/* ── FIX 1: SUMMARY BAR — position:fixed ── */}
+      {/* ── SUMMARY BAR ── */}
       {chainData && (
         <div className="oc-summary" ref={summaryRef}>
           <div className="summary-item"><span className="s-label">Spot</span><span className="s-val spot">{fmtPrice(chainData.spotPrice)}</span></div>
@@ -1139,18 +1077,8 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── OI Flow bar (4px fixed strip below summary) ── */}
+      {/* ── OI Flow bar ── */}
       {chainData && <OIFlowBar totalCEOI={chainData.totalCEOI} totalPEOI={chainData.totalPEOI}/>}
-
-      {/* ── Greeks legend (appears/disappears, ResizeObserver recalculates table top) ── */}
-      {showGreeks && (
-        <div className="greeks-legend" ref={legendRef}>
-          <span><span style={{color:"#00c896"}}>Δ Delta</span> — price sensitivity</span>
-          <span><span style={{color:"#ff8c42"}}>θ Theta</span> — daily decay ₹</span>
-          <span><span style={{color:"#a78bfa"}}>ν Vega</span> — IV sensitivity</span>
-          <span><span style={{color:"#4db8ff"}}>Γ Gamma</span> — delta curvature</span>
-        </div>
-      )}
 
       {/* ── Alerts strip ── */}
       {hasAlerts && (
@@ -1170,7 +1098,7 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── Loading state ── */}
+      {/* ── Loading ── */}
       {loading && (
         <div className="oc-loading">
           <div className="loading-pulse"/>
@@ -1178,7 +1106,7 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── Empty state ── */}
+      {/* ── Empty ── */}
       {!loading && !chainData && (
         <div className="oc-empty">
           <p>⏳ Waiting for first poll...</p>
@@ -1186,8 +1114,7 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── FIX 2: TABLE CONTAINER — top set by CSS var --table-top ── */}
-      {/* thead is sticky-within-this-container (not fixed to page) */}
+      {/* ── TABLE WRAP ── */}
       {!loading && chainData && (
         <div className="oc-table-wrap" ref={tableRef}>
           <table className="oc-table">
@@ -1215,7 +1142,6 @@ export default function OptionChain({ onBack }) {
             </thead>
             <tbody>
               {visibleStrikes.map(row => (
-                // FIX 3: StrikeRow memoized — skips render when row ref unchanged
                 <StrikeRow
                   key={row.strike}
                   row={row}
@@ -1233,9 +1159,9 @@ export default function OptionChain({ onBack }) {
         </div>
       )}
 
-      {/* ── FIX 1: FOOTER — position:fixed at bottom ── */}
+      {/* ── FOOTER ── */}
       <div className="oc-footer" ref={footerRef}>
-        <span>Socket · 3s REST · BS-augmented Greeks · Hull 10th ed. · {showGreeks?"Greeks visible":"Enable Greeks via Δθν button"}</span>
+        <span>Socket · 3s REST · BS-augmented Greeks · Hull 10th ed.</span>
         {chainData && <span>{visibleStrikes.length}/{strikes.length} strikes · {underlying} · {selectedExpiry}{dte!=null?` · ${dte}d DTE`:""}</span>}
       </div>
 

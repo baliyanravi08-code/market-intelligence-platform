@@ -1,35 +1,31 @@
 /* OptionChain.css
  *
  * FIX 1: All header/summary/footer bars are position:fixed.
- *         .oc-page itself is position:fixed inset:0 — the viewport is the scroll root.
- *
- * FIX 2: CSS custom properties written by ResizeObserver in useLayoutEffect.
- *         --table-top is the exact sum of all fixed bars above the table.
- *         Fallback values prevent layout shift before first measurement.
+ * FIX 2: CSS vars written by ResizeObserver in useLayoutEffect.
+ * FIX 7: .greeks-legend REMOVED — legend is now inline chips inside .oc-header.
+ *         --legend-h and legendRef are gone. --table-top is simpler:
+ *         header-h + summary-h + 4px (flow bar) + alerts-h only.
  *
  * Architecture:
- *   .oc-page           position:fixed  full viewport — prevents body scroll
- *   .oc-header         position:fixed  top:0          measured → --header-h
- *   .oc-summary        position:fixed  top:var(--header-h)
- *   .oi-flow-bar       position:fixed  top:calc(--header-h + --summary-h)
- *   .greeks-legend     position:fixed  top:calc(above + 4px)  measured → --legend-h
- *   .oc-alerts         position:fixed  (stacks below legend)  measured → alerts contribute to --table-top
- *   .oc-table-wrap     position:fixed  top:var(--table-top)   bottom:var(--footer-h)
- *   .oc-footer         position:fixed  bottom:0               measured → --footer-h
+ *   .oc-page        position:fixed  full viewport
+ *   .oc-header      position:fixed  top:0                    → --header-h
+ *   .oc-summary     position:fixed  top:var(--header-h)      → --summary-h
+ *   .oi-flow-bar    position:fixed  top:(header+summary)     4px strip
+ *   .oc-alerts      position:fixed  top:(above+4px)          → contributes to --table-top
+ *   .oc-table-wrap  position:fixed  top:var(--table-top)  bottom:var(--footer-h)
+ *   .oc-footer      position:fixed  bottom:0                 → --footer-h
  *
- * thead inside .oc-table-wrap uses sticky positioning within the scroll container,
- * NOT fixed — so it moves horizontally with the table on overflow:auto scroll.
+ * GreeksPanel renders via ReactDOM.createPortal to document.body (FIX 6) —
+ * no CSS needed here for it beyond the keyframe animations.
  */
 
-/* ── CSS Custom Properties (defaults before JS measures) ── */
+/* ── CSS Custom Properties ── */
 :root {
   --header-h:  41px;
   --summary-h: 56px;
-  --legend-h:  0px;
   --footer-h:  28px;
   --table-top: 101px;   /* header + summary + flow-bar(4px) fallback */
 
-  /* Design tokens */
   --bg-deep:     #020810;
   --bg-surface:  #040c18;
   --bg-card:     #060d1a;
@@ -47,10 +43,9 @@
   --accent-theta:#ff8c42;
 }
 
-/* ── Resets ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* ── FIX 1: Page occupies full viewport, no body scroll ── */
+/* ── Page ── */
 .oc-page {
   position: fixed;
   inset: 0;
@@ -58,7 +53,7 @@
   color: var(--text-bright);
   font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
   font-size: 11px;
-  overflow: hidden;   /* the table-wrap handles its own scroll */
+  overflow: hidden;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -149,7 +144,6 @@
 
 .ctrl-btn:hover { color: var(--text-mid); background: rgba(255,255,255,0.04); }
 .ctrl-btn.active { color: var(--ce-color); background: rgba(0,200,150,0.12); }
-
 .ctrl-btn.expiry { letter-spacing: 0.2px; }
 .ctrl-btn.expiry.active { color: var(--atm-color); background: rgba(240,192,64,0.12); }
 
@@ -164,6 +158,25 @@
   padding: 2px 4px;
   cursor: pointer;
   outline: none;
+}
+
+/*
+ * FIX 7: Greek legend chips — inline in the header control group.
+ * Replaces the old .greeks-legend fixed bar entirely.
+ * Each chip is a tiny coloured label that appears when Greeks are toggled on.
+ */
+.greek-legend-chip {
+  font-size: 8px;
+  font-weight: 700;
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
 }
 
 /* Connection badge */
@@ -236,7 +249,6 @@
 .s-val.pe-oi      { color: var(--pe-color); }
 .s-val.updated    { font-size: 11px; }
 
-/* PCR Gauge */
 .pcr-gauge {
   display: flex;
   align-items: center;
@@ -252,7 +264,6 @@
 
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* OI FLOW BAR (4px strip)                                                       */
-/* FIX 2: exact top = header-h + summary-h, tracked by JS                       */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .oi-flow-bar {
@@ -270,26 +281,6 @@
 .oi-flow-pe { background: linear-gradient(90deg, #ff6b6b20, #ff6b6b40); transition: width 0.8s ease; }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
-/* GREEKS LEGEND (conditionally rendered — ResizeObserver tracks height)         */
-/* ──────────────────────────────────────────────────────────────────────────── */
-
-.greeks-legend {
-  position: fixed;
-  left: 0;
-  right: 0;
-  z-index: 97;
-  top: calc(var(--header-h, 41px) + var(--summary-h, 56px) + 4px);
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 5px 16px;
-  background: rgba(4, 10, 22, 0.95);
-  border-bottom: 1px solid var(--border-dim);
-  font-size: 8px;
-  color: var(--text-dim);
-}
-
-/* ──────────────────────────────────────────────────────────────────────────── */
 /* ALERTS STRIP                                                                   */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
@@ -298,7 +289,7 @@
   left: 0;
   right: 0;
   z-index: 96;
-  top: calc(var(--header-h, 41px) + var(--summary-h, 56px) + 4px + var(--legend-h, 0px));
+  top: calc(var(--header-h, 41px) + var(--summary-h, 56px) + 4px);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -331,8 +322,7 @@
 
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* TABLE WRAP                                                                     */
-/* FIX 2: top = --table-top (written by ResizeObserver)                          */
-/* Scrolls independently; thead sticky within this container.                    */
+/* FIX 2: top = --table-top (JS-measured, no --legend-h contribution any more)   */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .oc-table-wrap {
@@ -343,11 +333,9 @@
   bottom: var(--footer-h, 28px);
   overflow: auto;
   background: var(--bg-deep);
-  /* Smooth scroll for ATM auto-scroll */
   scroll-behavior: smooth;
 }
 
-/* Thin scrollbars */
 .oc-table-wrap::-webkit-scrollbar { width: 5px; height: 5px; }
 .oc-table-wrap::-webkit-scrollbar-track { background: transparent; }
 .oc-table-wrap::-webkit-scrollbar-thumb { background: #1a3050; border-radius: 3px; }
@@ -364,14 +352,12 @@
   table-layout: auto;
 }
 
-/* Sticky thead within the scroll container (moves horizontally with table) */
 .oc-table thead {
   position: sticky;
   top: 0;
   z-index: 10;
 }
 
-/* CE/PE side label row */
 .side-label-row th {
   padding: 5px 0;
   font-size: 8px;
@@ -393,7 +379,6 @@
   background: linear-gradient(90deg, #1c0808 0%, #030a18 100%) !important;
 }
 
-/* Column headers */
 .oc-table thead tr:last-child th {
   padding: 5px 8px;
   font-size: 8px;
@@ -420,28 +405,19 @@
 }
 
 .strike-row:hover { background: rgba(255,255,255,0.018); }
-
-/* ITM tinting */
 .strike-row.itm-ce { background: rgba(0,200,150,0.024); }
 .strike-row.itm-pe { background: rgba(255,107,107,0.024); }
 
-/* ATM row highlight */
 .strike-row.atm {
   background: rgba(240,192,64,0.06) !important;
   border-top: 1px solid rgba(240,192,64,0.2) !important;
   border-bottom: 1px solid rgba(240,192,64,0.2) !important;
 }
 
-/* Flash animation on new alert strikes */
-.strike-row.flash {
-  animation: row-flash 1.5s ease-out;
-}
+.strike-row.flash    { animation: row-flash 1.5s ease-out; }
+.strike-row.tick-up  { animation: tick-flash-up 0.6s ease-out; }
+.strike-row.tick-down{ animation: tick-flash-down 0.6s ease-out; }
 
-/* OI tick directions */
-.strike-row.tick-up   { animation: tick-flash-up 0.6s ease-out; }
-.strike-row.tick-down { animation: tick-flash-down 0.6s ease-out; }
-
-/* Cells */
 .oc-table td {
   padding: 5px 8px;
   vertical-align: middle;
@@ -451,7 +427,6 @@
 .ce-cell { text-align: right; }
 .pe-cell { text-align: left; }
 
-/* Strike cell */
 .strike-cell {
   text-align: center;
   background: rgba(0,0,0,0.3);
@@ -481,7 +456,6 @@
   vertical-align: middle;
 }
 
-/* LTP cells */
 .ce-cell.ltp, .pe-cell.ltp {
   font-size: 11px;
   font-weight: 700;
@@ -489,7 +463,6 @@
   min-width: 70px;
 }
 
-/* IV cells */
 .ce-cell.iv, .pe-cell.iv {
   font-size: 10px;
   color: var(--atm-color);
@@ -497,7 +470,6 @@
   min-width: 48px;
 }
 
-/* OI change cells */
 .ce-cell.change, .pe-cell.change {
   font-size: 9.5px;
   font-weight: 700;
@@ -506,7 +478,6 @@
 .ce-cell.change.pos, .pe-cell.change.pos { color: var(--ce-color); }
 .ce-cell.change.neg, .pe-cell.change.neg { color: var(--pe-color); }
 
-/* Signal cells */
 .ce-cell.sig, .pe-cell.sig { min-width: 100px; }
 
 .sig-pill {
@@ -547,10 +518,7 @@
   transition: width 0.5s ease;
 }
 
-.pe-cell .oi-bar {
-  right: auto;
-  left: 0;
-}
+.pe-cell .oi-bar { right: auto; left: 0; }
 
 .oi-val {
   position: relative;
@@ -605,7 +573,6 @@
 
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* FOOTER                                                                         */
-/* FIX 1: position:fixed at bottom                                               */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .oc-footer {
@@ -672,7 +639,8 @@
 .empty-sub { font-size: 9px; color: var(--text-ghost); letter-spacing: 0.5px; }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
-/* GREEKS PANEL ANIMATIONS (panel-in, overlay-in)                                */
+/* KEYFRAME ANIMATIONS                                                            */
+/* Used by GreeksPanel (portalled to body) and table rows                        */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 @keyframes overlay-in {
@@ -684,10 +652,6 @@
   from { opacity: 0; transform: scale(0.97) translateY(8px); }
   to   { opacity: 1; transform: scale(1)    translateY(0); }
 }
-
-/* ──────────────────────────────────────────────────────────────────────────── */
-/* MISC ANIMATIONS                                                                */
-/* ──────────────────────────────────────────────────────────────────────────── */
 
 @keyframes dot-pulse {
   0%, 100% { opacity: 1; box-shadow: 0 0 6px currentColor; }
@@ -725,8 +689,8 @@
   .summary-item { padding: 4px 8px; }
   .s-val { font-size: 11px; }
   .s-val.spot { font-size: 13px; }
-  .oc-table-wrap { min-width: unset; }
   .oc-footer { font-size: 7px; padding: 4px 8px; }
+  .greek-legend-chip { display: none; } /* hide chips on narrow screens, button label is enough */
 }
 
 @media (max-width: 480px) {
