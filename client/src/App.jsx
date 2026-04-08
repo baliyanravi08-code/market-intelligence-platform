@@ -4,6 +4,8 @@ import "./App.css";
 import CircuitAlerts from "./components/CircuitAlerts";
 import OptionChain from "./pages/OptionChain";
 import ScoresPage from "./pages/ScoresPage";
+import OptionsIntelligencePage from "./pages/OptionsIntelligencePage";
+import GannBadge from "./components/GannBadge";
 
 const SIGNAL_COLOR = {
   ORDER_ALERT:         { bg: "#00ff9c", fg: "#000" },
@@ -23,10 +25,11 @@ const SIGNAL_COLOR = {
 const FEED_FILTERS = ["ALL", "ORDER", "MERGER", "CAPEX", "RESULT", "INSIDER", ">50"];
 
 const MOBILE_TABS = [
-  { key: "feed",  label: "📡 Feed"  },
-  { key: "radar", label: "🔍 Radar" },
-  { key: "data",  label: "📊 Data"  },
-  { key: "intel", label: "⚡ Intel" },
+  { key: "feed",         label: "📡 Feed"    },
+  { key: "radar",        label: "🔍 Radar"   },
+  { key: "data",         label: "📊 Data"    },
+  { key: "intel",        label: "⚡ Intel"   },
+  { key: "options-intel",label: "📐 OI Intel"},
 ];
 
 function getCurrentQuarter() {
@@ -683,7 +686,9 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
   );
 }
 
-function RadarPanel({ filteredRadar, radarQuery, setRadarQuery, compositeMap }) {
+// ─── RADAR PANEL — now accepts gannMap ───────────────────────────────────────
+
+function RadarPanel({ filteredRadar, radarQuery, setRadarQuery, compositeMap, gannMap }) {
   return (
     <div className="panel radar-panel">
       <div className="panel-header">
@@ -701,8 +706,8 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery, compositeMap }) 
           <div className="rc-top">
             <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>{r.company}</span>
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-              {/* Composite score badge inline on radar card */}
               <CompositeScoreBadge symbol={r.code || r.company} compositeMap={compositeMap} />
+              <GannBadge symbol={r.code || r.company} gannMap={gannMap} compact={true} />
               {r.conflict && <ConflictBadge risk={r.conflict} />}
               {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
               <span className={`type type-${r.type}`}>{r.type}</span>
@@ -871,8 +876,10 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
 // ─── NAV HEADER ───────────────────────────────────────────────────────────────
 
 function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsConnect, onSelectCompany }) {
-  const isOptions = currentPage === "options";
-  const isScores  = currentPage === "scores";
+  const isOptions      = currentPage === "options";
+  const isScores       = currentPage === "scores";
+  const isOptionsIntel = currentPage === "options-intel";
+  const isAltPage      = isOptions || isScores || isOptionsIntel;
 
   return (
     <div className="header">
@@ -904,7 +911,19 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           {isScores && <span className="options-nav-back">←</span>}
         </button>
 
-        {needsConnect && !isOptions && !isScores && (
+        {/* Options Intelligence page button — NEW */}
+        <button
+          className={`options-nav-btn${isOptionsIntel ? " active" : ""}`}
+          onClick={() => setCurrentPage(isOptionsIntel ? "dashboard" : "options-intel")}
+          title="Options Intelligence — Greeks, GEX, IV Rank, OI"
+          style={{ marginLeft: 4 }}
+        >
+          <span className="options-nav-icon">📐</span>
+          <span className="options-nav-label">{isOptionsIntel ? "Dashboard" : "OI Intel"}</span>
+          {isOptionsIntel && <span className="options-nav-back">←</span>}
+        </button>
+
+        {needsConnect && !isAltPage && (
           <span
             style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }}
             onClick={() => window.open("/auth/upstox", "_blank")}
@@ -915,8 +934,8 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {!isOptions && !isScores && <GlobalSearch onSelectCompany={onSelectCompany} />}
-        {(isOptions || isScores) && (
+        {!isAltPage && <GlobalSearch onSelectCompany={onSelectCompany} />}
+        {isAltPage && (
           <button
             className="back-to-dashboard-btn"
             onClick={() => setCurrentPage("dashboard")}
@@ -967,9 +986,14 @@ export default function App() {
   const [socket,           setSocket]           = useState(null);
 
   // Composite scores: map of symbol → score object for badge lookups
-  const [compositeScores,  setCompositeScores]  = useState([]);
+  const [compositeScores, setCompositeScores] = useState([]);
   const compositeMap = {};
   compositeScores.forEach(s => { compositeMap[s.symbol] = s; });
+
+  // Gann signals: map of symbol → gann signal object — NEW
+  const [gannSignals, setGannSignals] = useState([]);
+  const gannMap = {};
+  gannSignals.forEach(g => { gannMap[g.symbol] = g; });
 
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem("mi-theme");
@@ -995,7 +1019,6 @@ export default function App() {
 
     sock.on("connect", () => {
       console.log("Socket.io connected");
-      // Request composite leaderboard on connect
       sock.emit("get-composite-scores");
     });
 
@@ -1007,17 +1030,24 @@ export default function App() {
       setTickerStale(false);
     });
 
-    // Composite scores — full leaderboard
     sock.on("composite-scores", (scores) => {
       if (Array.isArray(scores)) setCompositeScores(scores);
     });
 
-    // Composite score — single stock update (live push every 30s from circuit poll)
     sock.on("composite-update", (update) => {
       if (!update?.symbol) return;
       setCompositeScores(prev => {
         const next = prev.filter(s => s.symbol !== update.symbol);
         return [update, ...next];
+      });
+    });
+
+    // Gann signals — NEW
+    sock.on("gann-signal", (signal) => {
+      if (!signal?.symbol) return;
+      setGannSignals(prev => {
+        const next = prev.filter(g => g.symbol !== signal.symbol);
+        return [signal, ...next];
       });
     });
 
@@ -1261,7 +1291,6 @@ export default function App() {
   );
 
   // ── Options page ───────────────────────────────────────────────────────────
-  // ── Options page ────────────────────────────────────────────── AFTER
   if (currentPage === "options") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
@@ -1276,14 +1305,27 @@ export default function App() {
   }
 
   // ── Scores page ────────────────────────────────────────────────────────────
-  // ── Scores page ────────────────────────────────────────────── AFTER
   if (currentPage === "scores") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
         {sharedHeader}
         {sharedTicker}
         <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-          <ScoresPage socket={socket} compositeScores={compositeScores} />
+          <ScoresPage socket={socket} compositeScores={compositeScores} gannMap={gannMap} />
+        </div>
+        <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
+      </div>
+    );
+  }
+
+  // ── Options Intelligence page — NEW ────────────────────────────────────────
+  if (currentPage === "options-intel") {
+    return (
+      <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
+        {sharedHeader}
+        {sharedTicker}
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          <OptionsIntelligencePage socket={socket} />
         </div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
@@ -1298,7 +1340,7 @@ export default function App() {
 
       <div className="layout desktop-layout">
         <IntelPanel  computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />
-        <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} />
+        <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} gannMap={gannMap} />
         <FeedPanel   filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
         <RightPanel  computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
       </div>
@@ -1310,12 +1352,14 @@ export default function App() {
           ))}
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("options")}>⚡ OI</button>
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("scores")}>🏆 SCR</button>
+          <button className="mobile-tab-btn" onClick={() => setCurrentPage("options-intel")}>📐 OI Intel</button>
         </div>
         <div className="mobile-panel-wrap">
-          {mobilePanelTab === "intel"   && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />}
-          {mobilePanelTab === "radar"   && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} />}
-          {mobilePanelTab === "feed"    && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
-          {mobilePanelTab === "data"    && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
+          {mobilePanelTab === "intel"        && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />}
+          {mobilePanelTab === "radar"        && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} gannMap={gannMap} />}
+          {mobilePanelTab === "feed"         && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
+          {mobilePanelTab === "data"         && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
+          {mobilePanelTab === "options-intel" && <OptionsIntelligencePage socket={socket} />}
         </div>
       </div>
 
