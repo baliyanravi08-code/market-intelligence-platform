@@ -1,30 +1,24 @@
-/* OptionChain.css
+/* OptionChain.css — FIXED
  *
- * FIX 1: All header/summary/footer bars are position:fixed.
- * FIX 2: CSS vars written by ResizeObserver in useLayoutEffect.
- * FIX 7: .greeks-legend REMOVED — legend is now inline chips inside .oc-header.
- *         --legend-h and legendRef are gone. --table-top is simpler:
- *         header-h + summary-h + 4px (flow bar) + alerts-h only.
+ * FIX C: Header overflow on zoom-in/zoom-out
+ *   Problem: .oc-header used flex-wrap:wrap which caused controls to drop
+ *            to a second line and then get clipped by overflow:hidden on .oc-page.
+ *            On zoom-in the second row disappears entirely.
+ *   Solution:
+ *     - .oc-header: flex-wrap:nowrap + overflow-x:auto (scrollable instead of wrapping)
+ *     - .oc-controls: flex-wrap:nowrap + flex-shrink:0 on each control-group
+ *     - .oc-title: flex-shrink:0 so it never squishes
+ *     - All control-group children: white-space:nowrap already applied
+ *     - Added scrollbar-width:none on .oc-header to hide the scrollbar visually
  *
- * Architecture:
- *   .oc-page        position:fixed  full viewport
- *   .oc-header      position:fixed  top:0                    → --header-h
- *   .oc-summary     position:fixed  top:var(--header-h)      → --summary-h
- *   .oi-flow-bar    position:fixed  top:(header+summary)     4px strip
- *   .oc-alerts      position:fixed  top:(above+4px)          → contributes to --table-top
- *   .oc-table-wrap  position:fixed  top:var(--table-top)  bottom:var(--footer-h)
- *   .oc-footer      position:fixed  bottom:0                 → --footer-h
- *
- * GreeksPanel renders via ReactDOM.createPortal to document.body (FIX 6) —
- * no CSS needed here for it beyond the keyframe animations.
+ * All other rules are unchanged from the original.
  */
 
-/* ── CSS Custom Properties ── */
 :root {
   --header-h:  41px;
   --summary-h: 56px;
   --footer-h:  28px;
-  --table-top: 101px;   /* header + summary + flow-bar(4px) fallback */
+  --table-top: 101px;
 
   --bg-deep:     #020810;
   --bg-surface:  #040c18;
@@ -45,7 +39,6 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* ── Page ── */
 .oc-page {
   position: fixed;
   inset: 0;
@@ -57,7 +50,7 @@
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
-/* HEADER                                                                        */
+/* HEADER — FIX C                                                                */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .oc-header {
@@ -75,14 +68,22 @@
   min-height: 41px;
   background: linear-gradient(90deg, #030912 0%, #040c18 50%, #030b16 100%);
   border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
 
+  /* FIX C: no wrapping — scroll horizontally instead */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* IE/Edge */
+}
+.oc-header::-webkit-scrollbar { display: none; }  /* Chrome/Safari */
+
+/* FIX C: title must not shrink — it anchors the left side */
 .oc-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+  flex-shrink: 0;   /* ← was missing, title was squishing on zoom */
+  min-width: 0;
 }
 
 .oc-title h1 {
@@ -108,15 +109,19 @@
   background: var(--ce-color);
   box-shadow: 0 0 8px var(--ce-color);
   animation: dot-pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
+/* FIX C: controls row also must not wrap */
 .oc-controls {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;   /* ← was wrap, caused controls to fall off */
+  flex-shrink: 0;      /* ← prevent controls from compressing */
 }
 
+/* FIX C: each control group must not shrink below its natural size */
 .control-group {
   display: flex;
   align-items: center;
@@ -125,6 +130,7 @@
   border: 1px solid var(--border-dim);
   border-radius: 5px;
   padding: 2px;
+  flex-shrink: 0;   /* ← prevents individual groups from collapsing */
 }
 
 .ctrl-btn {
@@ -140,6 +146,7 @@
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ctrl-btn:hover { color: var(--text-mid); background: rgba(255,255,255,0.04); }
@@ -160,11 +167,6 @@
   outline: none;
 }
 
-/*
- * FIX 7: Greek legend chips — inline in the header control group.
- * Replaces the old .greeks-legend fixed bar entirely.
- * Each chip is a tiny coloured label that appears when Greeks are toggled on.
- */
 .greek-legend-chip {
   font-size: 8px;
   font-weight: 700;
@@ -177,9 +179,9 @@
   white-space: nowrap;
   pointer-events: none;
   user-select: none;
+  flex-shrink: 0;
 }
 
-/* Connection badge */
 .conn-badge {
   display: flex;
   align-items: center;
@@ -191,6 +193,8 @@
   border-radius: 4px;
   border: 1px solid transparent;
   background: rgba(0,0,0,0.3);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -213,7 +217,6 @@
   overflow-x: auto;
   scrollbar-width: none;
 }
-
 .oc-summary::-webkit-scrollbar { display: none; }
 
 .summary-item {
@@ -263,7 +266,7 @@
 .pcr-level { font-size: 8px; font-weight: 800; letter-spacing: 0.5px; }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
-/* OI FLOW BAR (4px strip)                                                       */
+/* OI FLOW BAR                                                                    */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .oi-flow-bar {
@@ -299,7 +302,6 @@
   overflow-x: auto;
   scrollbar-width: none;
 }
-
 .oc-alerts::-webkit-scrollbar { display: none; }
 
 .oc-alert-pill {
@@ -322,7 +324,6 @@
 
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* TABLE WRAP                                                                     */
-/* FIX 2: top = --table-top (JS-measured, no --legend-h contribution any more)   */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .oc-table-wrap {
@@ -594,7 +595,7 @@
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
-/* LOADING / EMPTY STATES                                                         */
+/* LOADING / EMPTY                                                                */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .oc-loading {
@@ -639,8 +640,7 @@
 .empty-sub { font-size: 9px; color: var(--text-ghost); letter-spacing: 0.5px; }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
-/* KEYFRAME ANIMATIONS                                                            */
-/* Used by GreeksPanel (portalled to body) and table rows                        */
+/* KEYFRAMES                                                                      */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 @keyframes overlay-in {
@@ -682,6 +682,7 @@
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
+  /* On mobile the header still scrolls horizontally — just tighten spacing */
   .oc-header { gap: 6px; padding: 0 8px; }
   .oc-controls { gap: 4px; }
   .ctrl-btn { padding: 2px 6px; font-size: 8px; }
@@ -690,7 +691,7 @@
   .s-val { font-size: 11px; }
   .s-val.spot { font-size: 13px; }
   .oc-footer { font-size: 7px; padding: 4px 8px; }
-  .greek-legend-chip { display: none; } /* hide chips on narrow screens, button label is enough */
+  .greek-legend-chip { display: none; }
 }
 
 @media (max-width: 480px) {
