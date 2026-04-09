@@ -317,13 +317,13 @@ function TickerModal({ item, onClose }) {
 
   // ── FIX: unified TV symbol map (replaces the old getChartConfig) ──────────
   const TV_SYMBOLS = {
-    "NIFTY 50":   "NSE:NIFTY",
-    "SENSEX":     "BSE:SENSEX",
-    "BANK NIFTY": "NSE:BANKNIFTY",
-    "BTC":        "BINANCE:BTCUSDT",
-    "GOLD":       "TVC:GOLD",
-    "SILVER":     "TVC:SILVER",
-  };
+  "NIFTY 50":   "NIFTY_INDEX:NIFTY50",
+  "SENSEX":     "NIFTY_INDEX:SENSEX",
+  "BANK NIFTY": "NIFTY_INDEX:BANKNIFTY",
+  "BTC":        "BINANCE:BTCUSDT",
+  "GOLD":       "TVC:GOLD",
+  "SILVER":     "TVC:SILVER",
+};
   const tvSymbol = TV_SYMBOLS[item.name] || null;
   const isPI     = item.name === "PI";
   // ─────────────────────────────────────────────────────────────────────────
@@ -398,7 +398,7 @@ function TickerModal({ item, onClose }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid #0a2540", background: "#020b18", flexShrink: 0 }}>
           <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#1a4060" }}>
             {tvSymbol
-              ? "TradingView · 5-min chart · 15-min delayed for NSE/BSE without subscription"
+              ? "TradingView · 5-min chart · NIFTY Index data"
               : isPI
               ? "π PI Network · CoinMarketCap"
               : ""}
