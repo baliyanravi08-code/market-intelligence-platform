@@ -19,7 +19,7 @@ try {
 // ── PATCH: wire live LTP ticks into coordinator (feeds Gann + composite engine)
 let registerLTPTick = null;
 try {
-  ({ registerLTPTick } = require("../../coordinator"));
+  ({ registerLTPTick } = require("../coordinator"));
 } catch (e) {
   console.warn("⚠️  coordinator not found — registerLTPTick disabled:", e.message);
 }
