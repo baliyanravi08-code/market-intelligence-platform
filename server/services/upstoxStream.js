@@ -35,7 +35,6 @@ const NAME_MAP = {
 };
 
 // ── Option instruments (added dynamically by nseOIListener) ──────────────────
-// Set of NSE_FO|... instrument keys to subscribe for OI ticks
 const optionInstruments = new Set();
 
 // OI tick handler — injected by nseOIListener
@@ -43,15 +42,20 @@ let oiTickHandler = null;
 
 /**
  * Register the OI tick handler from nseOIListener.
- * Called once during startup wiring.
  */
 function setOITickHandler(handler) {
   oiTickHandler = handler;
 }
 
 /**
+ * Expose current token so other modules (e.g. gannDataFetcher) can read it.
+ */
+function getAccessToken() {
+  return currentToken || process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
+}
+
+/**
  * Subscribe a batch of NSE_FO instrument keys for live OI ticks.
- * Safe to call anytime — queues if streamer not yet open.
  */
 function subscribeOptions(instrKeys) {
   if (!instrKeys || !instrKeys.length) return;
@@ -61,7 +65,6 @@ function subscribeOptions(instrKeys) {
   newKeys.forEach(k => optionInstruments.add(k));
   console.log(`📡 Upstox: queuing ${newKeys.length} option instruments for OI subscription`);
 
-  // If streamer is connected, subscribe immediately
   if (streamer) {
     try {
       streamer.subscribe(newKeys, "full_d30");
@@ -70,7 +73,6 @@ function subscribeOptions(instrKeys) {
       console.warn("⚠️ Upstox option subscribe error:", e.message);
     }
   }
-  // If not connected yet, they'll be subscribed on next 'open' event
 }
 
 // ── Parse incoming feed ───────────────────────────────────────────────────────
@@ -85,7 +87,7 @@ function parseAndEmit(raw) {
     for (const [key, feed] of Object.entries(feeds)) {
       const ff = feed?.ff || feed;
 
-      // ── Index tick (NIFTY / SENSEX / BANKNIFTY price) ─────────────────────
+      // ── Index tick ─────────────────────────────────────────────────────────
       const name = NAME_MAP[key];
       if (name) {
         const ltpc =
@@ -113,14 +115,13 @@ function parseAndEmit(raw) {
             });
           }
         }
-        continue; // handled as index
+        continue;
       }
 
-      // ── Option instrument tick (NSE_FO|...) — OI data ─────────────────────
+      // ── Option instrument tick ─────────────────────────────────────────────
       if (key.startsWith("NSE_FO|") || key.startsWith("BSE_FO|")) {
         if (oiTickHandler) {
-          const feedData = ff || {};
-          oiTickHandler(key, feedData);
+          oiTickHandler(key, ff || {});
         }
       }
     }
@@ -129,7 +130,7 @@ function parseAndEmit(raw) {
       ioRef.emit("market-tick", updates);
     }
   } catch (e) {
-    // silently skip malformed ticks — happens on ping frames
+    // silently skip malformed ticks
   }
 }
 
@@ -137,7 +138,13 @@ function parseAndEmit(raw) {
 function stopStreamer() {
   if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
   if (streamer) {
-    try { streamer.disconnect(); } catch { /* ok */ }
+    try {
+      // Guard against SDK versions where clearSubscriptions may not exist
+      if (typeof streamer.clearSubscriptions === "function") {
+        streamer.clearSubscriptions();
+      }
+      streamer.disconnect();
+    } catch { /* ok */ }
     streamer = null;
   }
 }
@@ -167,7 +174,6 @@ function startStreamer(accessToken, io) {
     streamer.on("open", () => {
       console.log("✅ Upstox Market WebSocket connected");
 
-      // Subscribe indices (always)
       try {
         streamer.subscribe(INDEX_INSTRUMENTS, "ltpc");
         console.log("📡 Upstox: subscribed 3 index instruments (ltpc)");
@@ -175,7 +181,6 @@ function startStreamer(accessToken, io) {
         console.log("⚠️  Upstox index subscribe error:", e.message);
       }
 
-      // Subscribe any queued option instruments
       if (optionInstruments.size > 0) {
         try {
           const keys = Array.from(optionInstruments);
@@ -196,6 +201,8 @@ function startStreamer(accessToken, io) {
     streamer.on("close", () => {
       console.log("⚠️  Upstox WS closed — reconnecting in 5s");
       if (ioRef) ioRef.emit("upstox-status", { connected: false });
+      // Clear streamer ref before reconnecting to avoid stale state
+      streamer = null;
       reconnTimer = setTimeout(() => {
         if (currentToken) startStreamer(currentToken, ioRef);
       }, 5000);
@@ -210,10 +217,11 @@ function startStreamer(accessToken, io) {
 
   } catch (e) {
     console.log("❌ Upstox streamer init failed:", e.message);
+    streamer = null;
     reconnTimer = setTimeout(() => {
       if (currentToken) startStreamer(currentToken, ioRef);
     }, 10000);
   }
 }
 
-module.exports = { startStreamer, stopStreamer, subscribeOptions, setOITickHandler };
+module.exports = { startStreamer, stopStreamer, subscribeOptions, setOITickHandler, getAccessToken };
