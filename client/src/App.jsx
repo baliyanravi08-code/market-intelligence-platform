@@ -317,14 +317,14 @@ function TickerModal({ item, onClose }) {
 
   // ── FIX: unified TV symbol map (replaces the old getChartConfig) ──────────
   const TV_SYMBOLS = {
-  "NIFTY 50":   "NIFTY_INDEX:NIFTY50",
-  "SENSEX":     "NIFTY_INDEX:SENSEX",
-  "BANK NIFTY": "NIFTY_INDEX:BANKNIFTY",
+  "NIFTY 50":   "NSE:NIFTY",
+  "SENSEX":     "BSE:SENSEX",
+  "BANK NIFTY": "NSE:BANKNIFTY",
   "BTC":        "BINANCE:BTCUSDT",
   "GOLD":       "TVC:GOLD",
   "SILVER":     "TVC:SILVER",
 };
-  const tvSymbol = TV_SYMBOLS[item.name] || null;
+const tvSymbol = TV_SYMBOLS[item.name] || null;
   const isPI     = item.name === "PI";
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -360,21 +360,25 @@ function TickerModal({ item, onClose }) {
         {/* Chart body — FIXED: all known symbols now render a TV iframe */}
         <div style={{ flex: 1, minHeight: 420, flexShrink: 0 }}>
           {tvSymbol && (
-            <iframe
-              key={tvSymbol}
-              src={
-                "https://s.tradingview.com/widgetembed/?frameElementId=tv_chart" +
-                "&symbol=" + encodeURIComponent(tvSymbol) +
-                "&interval=5" +
-                "&hidesidetoolbar=0&hidetoptoolbar=0&symboledit=0&saveimage=0" +
-                "&toolbarbg=020c1a&theme=dark&style=1&timezone=Asia%2FKolkata" +
-                "&withdateranges=1&showpopupbutton=1&locale=en"
-              }
-              style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }}
-              allowFullScreen
-              title={item.name + " Chart"}
-            />
-          )}
+  <iframe
+    key={tvSymbol}
+    src={
+      "https://s.tradingview.com/widgetembed/?frameElementId=tv_chart" +
+      "&symbol=" + encodeURIComponent(tvSymbol) +
+      "&interval=5" +
+      "&hidesidetoolbar=0&hidetoptoolbar=0" +
+      "&symboledit=1&saveimage=0" +
+      "&toolbarbg=020c1a&theme=dark&style=1" +
+      "&timezone=Asia%2FKolkata" +
+      "&withdateranges=1&locale=en" +
+      "&utm_source=" + encodeURIComponent(window.location.hostname) +
+      "&utm_medium=widget&utm_campaign=chart"
+    }
+    style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }}
+    allowFullScreen
+    title={item.name + " Chart"}
+  />
+)}
 
           {/* PI network — no TV widget */}
           {isPI && (
