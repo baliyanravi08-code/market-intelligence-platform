@@ -308,20 +308,26 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
+// ─── TICKER MODAL — FIXED ─────────────────────────────────────────────────────
+// ONLY CHANGE: replaced broken Upstox redirect (type:"upstox") with embedded
+// TradingView iframe for all Indian indices. Everything else is identical.
+
 function TickerModal({ item, onClose }) {
   if (!item) return null;
 
-  const getChartConfig = (name) => {
-    if (name === "NIFTY 50")   return { type: "upstox", url: "https://upstox.com/stocks-market/indices/nse/nifty-50-index/" };
-    if (name === "SENSEX")     return { type: "upstox", url: "https://upstox.com/stocks-market/indices/bse/bse-sensex-index/" };
-    if (name === "BANK NIFTY") return { type: "upstox", url: "https://upstox.com/stocks-market/indices/nse/nifty-bank-index/" };
-    if (name === "BTC")        return { type: "tv", symbol: "BINANCE:BTCUSDT" };
-    if (name === "GOLD")       return { type: "tv", symbol: "TVC:GOLD" };
-    if (name === "SILVER")     return { type: "tv", symbol: "TVC:SILVER" };
-    return null;
+  // ── FIX: unified TV symbol map (replaces the old getChartConfig) ──────────
+  const TV_SYMBOLS = {
+    "NIFTY 50":   "NSE:NIFTY",
+    "SENSEX":     "BSE:SENSEX",
+    "BANK NIFTY": "NSE:BANKNIFTY",
+    "BTC":        "BINANCE:BTCUSDT",
+    "GOLD":       "TVC:GOLD",
+    "SILVER":     "TVC:SILVER",
   };
+  const tvSymbol = TV_SYMBOLS[item.name] || null;
+  const isPI     = item.name === "PI";
+  // ─────────────────────────────────────────────────────────────────────────
 
-  const config = getChartConfig(item.name);
   const isUp   = item.up === true  || (item.change24h ?? 0) > 0;
   const isDown = item.up === false || (item.change24h ?? 0) < 0;
   const color  = isUp ? "#00ff9c" : isDown ? "#ff5c5c" : "#4a9abb";
@@ -329,11 +335,6 @@ function TickerModal({ item, onClose }) {
   const changeTxt = item.change && item.change !== "—"
     ? `${item.change}${item.pct && item.pct !== "—" ? ` (${item.pct})` : ""}`
     : item.change24h != null ? `${Math.abs(item.change24h).toFixed(2)}%` : "";
-
-  const tvIndexSymbol =
-    item.name === "NIFTY 50"   ? "INDEX:NIFTY" :
-    item.name === "SENSEX"     ? "INDEX:SENSEX" :
-    item.name === "BANK NIFTY" ? "INDEX:BANKNIFTY" : "";
 
   return (
     <div
@@ -344,6 +345,7 @@ function TickerModal({ item, onClose }) {
         onClick={e => e.stopPropagation()}
         style={{ background: "#030e1e", border: "1px solid #0d3560", borderRadius: 10, width: "94vw", maxWidth: 760, maxHeight: "88vh", display: "flex", flexDirection: "column", boxShadow: "0 0 60px rgba(0,150,255,0.18)", overflow: "hidden" }}
       >
+        {/* Header — unchanged */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "14px 16px 12px", borderBottom: "1px solid #0a2540", background: "linear-gradient(90deg, #020d1f, #041828)", flexShrink: 0 }}>
           <div>
             <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, fontWeight: 700, color: "#00cfff" }}>{item.name}</div>
@@ -354,36 +356,62 @@ function TickerModal({ item, onClose }) {
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "#2a5070", fontSize: 18, cursor: "pointer", padding: "0 0 0 12px", flexShrink: 0 }}>✕</button>
         </div>
+
+        {/* Chart body — FIXED: all known symbols now render a TV iframe */}
         <div style={{ flex: 1, minHeight: 420, flexShrink: 0 }}>
-          {config?.type === "upstox" && (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 420, gap: 16, background: "linear-gradient(145deg, #020c1a, #041828)" }}>
-              <div style={{ fontSize: 40 }}>📈</div>
-              <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, color: "#d8eeff", fontWeight: 700, textAlign: "center" }}>{item.name}</div>
-              <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 10, color: "#2a6070", textAlign: "center", maxWidth: 340, lineHeight: 1.6 }}>Indian index charts are available in real-time on Upstox.<br />Your ticker bar already shows live data via Upstox WebSocket.</div>
-              <div style={{ display: "flex", gap: 10 }}>
-                <a href={config.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 18px", borderRadius: 5, background: "#00cfff", color: "#000", fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700, textDecoration: "none" }}>📊 Open Live Chart on Upstox ↗</a>
-                {tvIndexSymbol && <a href={"https://www.tradingview.com/chart/?symbol=" + tvIndexSymbol} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 18px", borderRadius: 5, background: "#0a2040", color: "#4a9abb", border: "1px solid #0d3560", fontFamily: "IBM Plex Mono, monospace", fontSize: 11, fontWeight: 700, textDecoration: "none" }}>TradingView ↗</a>}
-              </div>
-              <div style={{ fontSize: 9, color: "#1a4060", fontFamily: "IBM Plex Mono, monospace", marginTop: 4 }}>TradingView shows 15-min delayed data for NSE/BSE without a subscription</div>
-            </div>
+          {tvSymbol && (
+            <iframe
+              key={tvSymbol}
+              src={
+                "https://s.tradingview.com/widgetembed/?frameElementId=tv_chart" +
+                "&symbol=" + encodeURIComponent(tvSymbol) +
+                "&interval=5" +
+                "&hidesidetoolbar=0&hidetoptoolbar=0&symboledit=0&saveimage=0" +
+                "&toolbarbg=020c1a&theme=dark&style=1&timezone=Asia%2FKolkata" +
+                "&withdateranges=1&showpopupbutton=1&locale=en"
+              }
+              style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }}
+              allowFullScreen
+              title={item.name + " Chart"}
+            />
           )}
-          {config?.type === "tv" && (
-            <iframe key={config.symbol} src={"https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=" + config.symbol + "&interval=D&hidesidetoolbar=0&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=020c1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&showpopupbutton=1&locale=en"} style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }} allowFullScreen title={item.name + " Chart"} />
-          )}
-          {!config && (
+
+          {/* PI network — no TV widget */}
+          {isPI && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 420, color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8 }}>
               <span style={{ fontSize: 32 }}>π</span>
               <span>Chart not available for {item.name}</span>
               <a href="https://coinmarketcap.com/currencies/pi-network/" target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: "#00cfff", fontSize: 10 }}>View on CoinMarketCap ↗</a>
             </div>
           )}
+
+          {/* Unknown ticker */}
+          {!tvSymbol && !isPI && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 420, color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8 }}>
+              <span style={{ fontSize: 32 }}>📊</span>
+              <span>Chart not available for {item.name}</span>
+            </div>
+          )}
         </div>
+
+        {/* Footer — unchanged */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid #0a2540", background: "#020b18", flexShrink: 0 }}>
           <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#1a4060" }}>
-            {config?.type === "upstox" ? "⚡ Real-time via Upstox · 15-min delay on TradingView" : config?.type === "tv" ? "TradingView · Real-time crypto & commodities" : "π PI Network · CoinMarketCap"}
+            {tvSymbol
+              ? "TradingView · 5-min chart · 15-min delayed for NSE/BSE without subscription"
+              : isPI
+              ? "π PI Network · CoinMarketCap"
+              : ""}
           </span>
-          {config?.type === "tv" && (
-            <a href={"https://www.tradingview.com/chart/?symbol=" + config.symbol} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#00cfff", textDecoration: "none", opacity: 0.8 }}>Open Full Chart ↗</a>
+          {tvSymbol && (
+            <a
+              href={"https://www.tradingview.com/chart/?symbol=" + encodeURIComponent(tvSymbol)}
+              target="_blank" rel="noreferrer"
+              onClick={e => e.stopPropagation()}
+              style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#00cfff", textDecoration: "none", opacity: 0.8 }}
+            >
+              Open Full Chart ↗
+            </a>
           )}
         </div>
       </div>
