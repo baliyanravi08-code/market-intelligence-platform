@@ -44,8 +44,8 @@ function getWindowLabel() {
 async function connectDB() {
   try {
     await mongoose.connect(MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 10000,
+      serverSelectionTimeoutMS: 15000,
+      socketTimeoutMS: 20000,
     });
 
     Signal = mongoose.model("Signal", SignalSchema);
