@@ -10,8 +10,6 @@
  *
  * Runs once at startup, then refreshes daily at 09:00 AM IST.
  * Rate-limited to 3 requests/sec to stay within Upstox free-tier limits.
- *
- * Dependencies: none beyond Node built-ins + your existing upstox access token getter.
  */
 
 const fs   = require("fs");
@@ -21,14 +19,12 @@ const { ingestSwingData } = require("./gannIntegration");
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const MCAP_DB_PATH   = path.join(__dirname, "../../data/marketCapDB.json");
-const UPSTOX_BASE    = "https://api.upstox.com/v2";
-const RATE_LIMIT_MS  = 350;   // ~3 req/sec — safe for Upstox
-const MAX_STOCKS     = 200;   // cap so startup isn't slow; covers your top 200 NSE stocks
+const MCAP_DB_PATH  = path.join(__dirname, "../../data/marketCapDB.json");
+const UPSTOX_BASE   = "https://api.upstox.com/v2";
+const RATE_LIMIT_MS = 350;  // ~3 req/sec — safe for Upstox
+const MAX_STOCKS    = 200;  // cap so startup isn't slow
 
 // ─── Token getter ─────────────────────────────────────────────────────────────
-// Reuse whatever token mechanism you already have in upstoxStream.js.
-// Expects a function exported from there, or falls back to env var.
 
 let _getToken;
 try {
@@ -41,15 +37,29 @@ function getToken() {
   return process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
+// ─── Instrument map getter ────────────────────────────────────────────────────
+// Uses the real instrument map from server.js (symbol → NSE_EQ|ISIN key)
+// Falls back to guessing NSE_EQ|SYMBOL if map not available yet
+
+let _getInstrumentMap;
+try {
+  const server = require("../../server");
+  _getInstrumentMap = server.getInstrumentMap;
+} catch (_) {}
+
+function getInstrumentKey(symbol) {
+  if (typeof _getInstrumentMap === "function") {
+    const map = _getInstrumentMap();
+    if (map && map[symbol]) return map[symbol]; // e.g. "NSE_EQ|INE002A01018"
+  }
+  // Fallback: best-guess (works for most liquid stocks)
+  return `NSE_EQ|${symbol}`;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
-}
-
-/** Convert BSE scrip code → Upstox instrument key for NSE EQ segment */
-function toUpstoxKey(symbol) {
-  return `NSE_EQ|${symbol}`;   // e.g. "NSE_EQ|RELIANCE"
 }
 
 /** Format Date → "YYYY-MM-DD" */
@@ -57,14 +67,13 @@ function fmtDate(d) {
   return d.toISOString().slice(0, 10);
 }
 
-/** Returns { high52w, low52w, swingHigh, swingLow } from array of candles.
- *  Each candle: { timestamp, open, high, low, close, volume }
- *  swingHigh/swingLow = the most significant pivot in the last 60 candles (≈3 months).
+/**
+ * Returns { high52w, low52w, swingHigh, swingLow } from array of candles.
+ * swingHigh/swingLow = most significant pivot in last 60 candles (≈3 months).
  */
 function computeLevels(candles) {
   if (!candles || candles.length === 0) return null;
 
-  // 52-week extremes across all candles
   let high52w = -Infinity, low52w = Infinity;
   let high52wDate = "", low52wDate = "";
 
@@ -73,22 +82,18 @@ function computeLevels(candles) {
     if (c.low  < low52w)  { low52w  = c.low;  low52wDate  = c.timestamp; }
   }
 
-  // Swing pivot — look at last 60 trading days (≈3 months)
   const recent = candles.slice(-60);
-
   let swingHigh = { price: -Infinity, date: "" };
   let swingLow  = { price:  Infinity, date: "" };
 
   for (let i = 2; i < recent.length - 2; i++) {
     const c = recent[i];
-    // Local high: higher than 2 bars either side
     if (c.high > recent[i-1].high && c.high > recent[i-2].high &&
         c.high > recent[i+1].high && c.high > recent[i+2].high) {
       if (c.high > swingHigh.price) {
         swingHigh = { price: c.high, date: c.timestamp.slice(0, 10) };
       }
     }
-    // Local low
     if (c.low < recent[i-1].low && c.low < recent[i-2].low &&
         c.low < recent[i+1].low && c.low < recent[i+2].low) {
       if (c.low < swingLow.price) {
@@ -97,24 +102,26 @@ function computeLevels(candles) {
     }
   }
 
-  // Fallback: if no swing found in recent window, use 52w extremes
   if (swingHigh.price === -Infinity) swingHigh = { price: high52w, date: high52wDate.slice(0, 10) };
   if (swingLow.price  ===  Infinity) swingLow  = { price: low52w,  date: low52wDate.slice(0, 10)  };
 
   return { high52w, low52w, swingHigh, swingLow };
 }
 
-// ─── Upstox historical candles ─────────────────────────────────────────────────
+// ─── Upstox historical candles ────────────────────────────────────────────────
 
 async function fetchCandles(symbol) {
   const token = getToken();
   if (!token) throw new Error("No Upstox token available");
 
-  const instrKey = encodeURIComponent(toUpstoxKey(symbol));
-  const toDate   = fmtDate(new Date());
-  const fromDate = fmtDate(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
+  const instrKey = getInstrumentKey(symbol);
+  if (!instrKey) throw new Error(`No instrument key for ${symbol}`);
 
-  const url = `${UPSTOX_BASE}/historical-candle/${instrKey}/day/${toDate}/${fromDate}`;
+  const encodedKey = encodeURIComponent(instrKey);
+  const toDate     = fmtDate(new Date());
+  const fromDate   = fmtDate(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
+
+  const url = `${UPSTOX_BASE}/historical-candle/${encodedKey}/day/${toDate}/${fromDate}`;
 
   const res = await fetch(url, {
     headers: {
@@ -129,8 +136,7 @@ async function fetchCandles(symbol) {
   }
 
   const json = await res.json();
-  // Upstox v2 response shape: { data: { candles: [[ts, o, h, l, c, v, oi], ...] } }
-  const raw = json?.data?.candles || [];
+  const raw  = json?.data?.candles || [];
 
   return raw.map(([ts, o, h, l, c, v]) => ({
     timestamp: ts,
@@ -138,7 +144,7 @@ async function fetchCandles(symbol) {
   }));
 }
 
-// ─── Main fetch loop ───────────────────────────────────────────────────────────
+// ─── Main fetch loop ──────────────────────────────────────────────────────────
 
 async function fetchAndIngestAll() {
   let db;
@@ -149,12 +155,19 @@ async function fetchAndIngestAll() {
     return;
   }
 
-  // Collect all entries that have a symbol (NSE stocks)
   const entries = Object.values(db)
     .filter(e => e.symbol && e.lastPrice > 0)
     .slice(0, MAX_STOCKS);
 
   console.log(`📐 Gann fetcher: starting data pull for ${entries.length} NSE stocks…`);
+
+  // Log instrument map status
+  if (typeof _getInstrumentMap === "function") {
+    const map = _getInstrumentMap();
+    console.log(`📐 Gann fetcher: instrument map has ${Object.keys(map).length} symbols`);
+  } else {
+    console.warn("📐 Gann fetcher: instrument map not available — using fallback keys");
+  }
 
   let ok = 0, fail = 0;
 
@@ -183,7 +196,6 @@ async function fetchAndIngestAll() {
       }
     } catch (err) {
       fail++;
-      // Only log the first few failures so your console isn't spammed
       if (fail <= 5) {
         console.warn(`📐 Gann fetcher: skip ${symbol} (${name}) — ${err.message}`);
       }
@@ -197,14 +209,12 @@ async function fetchAndIngestAll() {
 
 // ─── Scheduler ────────────────────────────────────────────────────────────────
 
-/** Run once now, then again every day at 09:00 AM IST (03:30 UTC) */
 function startGannDataFetcher() {
-  // Run immediately on startup (deferred 5s so other services init first)
+  // Defer 15s so instrument master has time to load first
   setTimeout(() => fetchAndIngestAll().catch(e =>
     console.error("📐 Gann fetcher error:", e.message)
-  ), 5000);
+  ), 15000);
 
-  // Daily refresh at 09:00 IST = 03:30 UTC
   function scheduleDailyRefresh() {
     const now     = new Date();
     const nextRun = new Date();
