@@ -16,6 +16,14 @@ try {
   console.warn("⚠️  upstox-js-sdk not installed. Run: npm install upstox-js-sdk");
 }
 
+// ── PATCH: wire live LTP ticks into coordinator (feeds Gann + composite engine)
+let registerLTPTick = null;
+try {
+  ({ registerLTPTick } = require("../../coordinator"));
+} catch (e) {
+  console.warn("⚠️  coordinator not found — registerLTPTick disabled:", e.message);
+}
+
 let streamer     = null;
 let currentToken = null;
 let ioRef        = null;
@@ -113,6 +121,12 @@ function parseAndEmit(raw) {
               up,
               _ts:    Date.now(),
             });
+
+            // ── PATCH: feed Gann re-analysis + composite score engine ─────────
+            if (typeof registerLTPTick === "function") {
+              registerLTPTick(name, price);
+            }
+            // ─────────────────────────────────────────────────────────────────
           }
         }
         continue;

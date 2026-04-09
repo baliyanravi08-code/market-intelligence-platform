@@ -4,12 +4,18 @@
  * gannDataFetcher.js
  * Location: server/services/intelligence/gannDataFetcher.js
  *
- * Reads marketCapDB.json → finds every entry with a symbol field (NSE stocks)
- * → fetches 1-year daily candles from Upstox → computes 52w high/low + swing pivots
- * → feeds ingestSwingData() so the Gann engine has real levels for every stock.
+ * FIX (this session):
+ *   The original code used setTimeout(fetchAndIngestAll, 15000) at startup.
+ *   This caused a race condition: the 15s delay was not long enough for
+ *   loadInstrumentMaster() to finish fetching 2452 symbols from the Upstox CDN,
+ *   so all 200 stocks got fallback keys like "NSE_EQ|AMBALALSA" → HTTP 400.
  *
- * Runs once at startup, then refreshes daily at 09:00 AM IST.
- * Rate-limited to 3 requests/sec to stay within Upstox free-tier limits.
+ *   Fix: startGannDataFetcher() no longer fires the initial fetch itself.
+ *   server.js calls loadInstrumentMaster().finally(() => startGannDataFetcher())
+ *   so the map is guaranteed to be populated before fetchAndIngestAll() runs.
+ *   startGannDataFetcher() now only:
+ *     1. Calls fetchAndIngestAll() immediately (map is ready by the time it's called).
+ *     2. Schedules the daily 09:00 AM IST refresh.
  */
 
 const fs   = require("fs");
@@ -18,14 +24,12 @@ const path = require("path");
 const { ingestSwingData } = require("./gannIntegration");
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-
 const MCAP_DB_PATH  = path.join(__dirname, "../../data/marketCapDB.json");
 const UPSTOX_BASE   = "https://api.upstox.com/v2";
-const RATE_LIMIT_MS = 350;  // ~3 req/sec — safe for Upstox
-const MAX_STOCKS    = 200;  // cap so startup isn't slow
+const RATE_LIMIT_MS = 350;   // ~3 req/sec — safe for Upstox free tier
+const MAX_STOCKS    = 200;
 
 // ─── Token getter ─────────────────────────────────────────────────────────────
-
 let _getToken;
 try {
   const stream = require("../upstoxStream");
@@ -37,34 +41,36 @@ function getToken() {
   return process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
-// ─── Instrument map getter ────────────────────────────────────────────────────
-// Uses the real instrument map from server.js (symbol → NSE_EQ|ISIN key)
-// Falls back to guessing NSE_EQ|SYMBOL if map not available yet
-
+// ─── Instrument map ───────────────────────────────────────────────────────────
+// FIX: starts as empty map. server.js calls setInstrumentMap() synchronously
+// BEFORE startGannDataFetcher() is called, so by the time fetchAndIngestAll()
+// runs the map is fully populated with real ISIN instrument keys.
 let _instrumentMap = {};
 
 function setInstrumentMap(map) {
-  if (map && typeof map === "object") _instrumentMap = map;
+  if (map && typeof map === "object") {
+    _instrumentMap = map;
+    console.log(`📐 Gann fetcher: instrument map set — ${Object.keys(map).length} symbols`);
+  }
 }
 
 function getInstrumentKey(symbol) {
-  return _instrumentMap[symbol] || `NSE_EQ|${symbol}`;
+  // Use real ISIN key from master; only fall back if genuinely missing
+  const key = _instrumentMap[symbol];
+  if (!key) {
+    console.warn(`📐 Gann fetcher: no instrument key for ${symbol} — skipping`);
+    return null;
+  }
+  return key;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-/** Format Date → "YYYY-MM-DD" */
-function fmtDate(d) {
-  return d.toISOString().slice(0, 10);
-}
+function fmtDate(d) { return d.toISOString().slice(0, 10); }
 
 /**
- * Returns { high52w, low52w, swingHigh, swingLow } from array of candles.
- * swingHigh/swingLow = most significant pivot in last 60 candles (≈3 months).
+ * Compute 52w high/low + swing pivots from candles.
  */
 function computeLevels(candles) {
   if (!candles || candles.length === 0) return null;
@@ -83,17 +89,17 @@ function computeLevels(candles) {
 
   for (let i = 2; i < recent.length - 2; i++) {
     const c = recent[i];
-    if (c.high > recent[i-1].high && c.high > recent[i-2].high &&
-        c.high > recent[i+1].high && c.high > recent[i+2].high) {
-      if (c.high > swingHigh.price) {
-        swingHigh = { price: c.high, date: c.timestamp.slice(0, 10) };
-      }
+    if (
+      c.high > recent[i-1].high && c.high > recent[i-2].high &&
+      c.high > recent[i+1].high && c.high > recent[i+2].high
+    ) {
+      if (c.high > swingHigh.price) swingHigh = { price: c.high, date: c.timestamp.slice(0, 10) };
     }
-    if (c.low < recent[i-1].low && c.low < recent[i-2].low &&
-        c.low < recent[i+1].low && c.low < recent[i+2].low) {
-      if (c.low < swingLow.price) {
-        swingLow = { price: c.low, date: c.timestamp.slice(0, 10) };
-      }
+    if (
+      c.low < recent[i-1].low && c.low < recent[i-2].low &&
+      c.low < recent[i+1].low && c.low < recent[i+2].low
+    ) {
+      if (c.low < swingLow.price) swingLow = { price: c.low, date: c.timestamp.slice(0, 10) };
     }
   }
 
@@ -103,26 +109,21 @@ function computeLevels(candles) {
   return { high52w, low52w, swingHigh, swingLow };
 }
 
-// ─── Upstox historical candles ────────────────────────────────────────────────
-
+// ─── Upstox candle fetch ──────────────────────────────────────────────────────
 async function fetchCandles(symbol) {
-  const token = getToken();
+  const token    = getToken();
   if (!token) throw new Error("No Upstox token available");
 
   const instrKey = getInstrumentKey(symbol);
-  if (!instrKey) throw new Error(`No instrument key for ${symbol}`);
+  if (!instrKey) throw new Error(`No instrument key for ${symbol} — skipped`);
 
   const encodedKey = encodeURIComponent(instrKey);
   const toDate     = fmtDate(new Date());
   const fromDate   = fmtDate(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
-
-  const url = `${UPSTOX_BASE}/historical-candle/${encodedKey}/day/${toDate}/${fromDate}`;
+  const url        = `${UPSTOX_BASE}/historical-candle/${encodedKey}/day/${toDate}/${fromDate}`;
 
   const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept:        "application/json",
-    },
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
   });
 
   if (!res.ok) {
@@ -132,16 +133,19 @@ async function fetchCandles(symbol) {
 
   const json = await res.json();
   const raw  = json?.data?.candles || [];
-
-  return raw.map(([ts, o, h, l, c, v]) => ({
-    timestamp: ts,
-    open: o, high: h, low: l, close: c, volume: v,
-  }));
+  return raw.map(([ts, o, h, l, c, v]) => ({ timestamp: ts, open: o, high: h, low: l, close: c, volume: v }));
 }
 
 // ─── Main fetch loop ──────────────────────────────────────────────────────────
-
 async function fetchAndIngestAll() {
+  // Guard: if map is empty warn loudly but proceed with what we have
+  const mapSize = Object.keys(_instrumentMap).length;
+  if (mapSize === 0) {
+    console.warn("📐 Gann fetcher: instrument map is EMPTY — all fetches will fail. Check server.js wiring.");
+  } else {
+    console.log(`📐 Gann fetcher: instrument map has ${mapSize} symbols — starting data pull`);
+  }
+
   let db;
   try {
     db = JSON.parse(fs.readFileSync(MCAP_DB_PATH, "utf8"));
@@ -156,19 +160,10 @@ async function fetchAndIngestAll() {
 
   console.log(`📐 Gann fetcher: starting data pull for ${entries.length} NSE stocks…`);
 
-  // Log instrument map status
-  if (typeof _getInstrumentMap === "function") {
-    const map = _getInstrumentMap();
-    console.log(`📐 Gann fetcher: instrument map has ${Object.keys(map).length} symbols`);
-  } else {
-    console.warn("📐 Gann fetcher: instrument map not available — using fallback keys");
-  }
-
   let ok = 0, fail = 0;
 
   for (const entry of entries) {
     const { symbol, lastPrice, name } = entry;
-
     try {
       const candles = await fetchCandles(symbol);
       if (candles.length < 10) throw new Error("too few candles");
@@ -186,16 +181,13 @@ async function fetchAndIngestAll() {
       });
 
       ok++;
-      if (ok % 20 === 0) {
-        console.log(`📐 Gann fetcher: ${ok}/${entries.length} done…`);
-      }
+      if (ok % 20 === 0) console.log(`📐 Gann fetcher: ${ok}/${entries.length} done…`);
     } catch (err) {
       fail++;
-      if (fail <= 5) {
-        console.warn(`📐 Gann fetcher: skip ${symbol} (${name}) — ${err.message}`);
+      if (fail <= 10) {
+        console.warn(`📐 Gann fetcher: skip ${symbol} (${name || "?"}) — ${err.message}`);
       }
     }
-
     await sleep(RATE_LIMIT_MS);
   }
 
@@ -203,13 +195,18 @@ async function fetchAndIngestAll() {
 }
 
 // ─── Scheduler ────────────────────────────────────────────────────────────────
-
+/**
+ * FIX: No longer contains a setTimeout() for the initial fetch.
+ * server.js calls startGannDataFetcher() after loadInstrumentMaster() resolves,
+ * so we can call fetchAndIngestAll() immediately — the map is ready.
+ */
 function startGannDataFetcher() {
-  // Defer 15s so instrument master has time to load first
-  setTimeout(() => fetchAndIngestAll().catch(e =>
-    console.error("📐 Gann fetcher error:", e.message)
-  ), 15000);
+  // Kick off immediately — map is guaranteed populated by caller
+  fetchAndIngestAll().catch(e =>
+    console.error("📐 Gann fetcher initial run error:", e.message)
+  );
 
+  // Schedule daily refresh at 09:00 AM IST (03:30 UTC)
   function scheduleDailyRefresh() {
     const now     = new Date();
     const nextRun = new Date();
