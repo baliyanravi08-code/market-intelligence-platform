@@ -41,19 +41,14 @@ function getToken() {
 // Uses the real instrument map from server.js (symbol → NSE_EQ|ISIN key)
 // Falls back to guessing NSE_EQ|SYMBOL if map not available yet
 
-let _getInstrumentMap;
-try {
-  const server = require("../../server");
-  _getInstrumentMap = server.getInstrumentMap;
-} catch (_) {}
+let _instrumentMap = {};
+
+function setInstrumentMap(map) {
+  if (map && typeof map === "object") _instrumentMap = map;
+}
 
 function getInstrumentKey(symbol) {
-  if (typeof _getInstrumentMap === "function") {
-    const map = _getInstrumentMap();
-    if (map && map[symbol]) return map[symbol]; // e.g. "NSE_EQ|INE002A01018"
-  }
-  // Fallback: best-guess (works for most liquid stocks)
-  return `NSE_EQ|${symbol}`;
+  return _instrumentMap[symbol] || `NSE_EQ|${symbol}`;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -234,4 +229,4 @@ function startGannDataFetcher() {
   scheduleDailyRefresh();
 }
 
-module.exports = { startGannDataFetcher, fetchAndIngestAll };
+module.exports = { startGannDataFetcher, fetchAndIngestAll, setInstrumentMap };

@@ -84,6 +84,7 @@ async function loadInstrumentMaster() {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(INSTRUMENT_FILE, JSON.stringify({ _ts: Date.now(), map }), "utf8");
     console.log(`✅ Instrument master fetched & cached: ${Object.keys(map).length} NSE EQ symbols`);
+    try { require("./services/intelligence/gannDataFetcher").setInstrumentMap(map); } catch(e) {}
   } catch (e) {
     console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
     instrumentMap = {
