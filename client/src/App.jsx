@@ -1052,6 +1052,33 @@ export default function App() {
     });
 
     sock.on("upstox-status", ({ connected }) => { if (!connected) setTickerSource("connecting"); });
+    sock.on("nse_events", (events) => {
+  if (!Array.isArray(events)) return;
+  setNseEvents(prev => {
+    const combined = [...events, ...prev];
+    const seen = new Set();
+    return combined.filter(e => {
+      const key = `${e.company}||${(e.title||"").substring(0,60)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 200);
+  });
+});
+
+sock.on("bse_events", (events) => {
+  if (!Array.isArray(events)) return;
+  setBseEvents(prev => {
+    const combined = [...events, ...prev];
+    const seen = new Set();
+    return combined.filter(e => {
+      const key = `${e.company}||${(e.title||"").substring(0,60)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 200);
+  });
+});
     sock.on("disconnect", () => { setTickerSource("error"); });
 
     return () => sock.disconnect();
