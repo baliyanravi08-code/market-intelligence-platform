@@ -38,7 +38,7 @@ try {
 
 function getToken() {
   if (typeof _getToken === "function") return _getToken();
-  return process.env.UPSTOX_ACCESS_TOKEN || "";
+  return process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
