@@ -2,420 +2,230 @@
 
 /**
  * optionsIntegration.js
- * server/services/intelligence/optionsIntegration.js
+ * Location: server/services/intelligence/optionsIntegration.js
  *
- * Wires optionsIntelligenceEngine + gannEngine together and emits
- * structured socket events consumed by the Options Intel v2 dashboard.
+ * Bridges nseOIListener → optionsIntelligenceEngine → socket.io
  *
- * Socket events emitted:
- *   "options-intel"   → full intelligence payload per symbol (on every OI refresh)
- *   "gann-update"     → Gann analysis per symbol (on every LTP tick, throttled 30s)
- *   "options-alert"   → individual alert objects (high-priority, real-time)
+ * What it does:
+ *   1. Subscribes to OI chain updates from nseOIListener (via its event emitter)
+ *   2. Calls analyzeOptionsChain() from optionsIntelligenceEngine
+ *   3. Emits "options-intelligence" socket events to all connected clients
+ *   4. Optionally feeds strong signals into the composite score engine
+ *      via the ingestOptionsSignal callback
  *
- * Called from coordinator.js after it receives option chain data.
- *
- * Usage (in coordinator.js or nseOIListener.js):
- *   const { startOptionsIntegration, emitOptionsIntel, emitGannUpdate } = require('./optionsIntegration');
+ * Usage (coordinator.js):
+ *   const { startOptionsIntegration } = require('./services/intelligence/optionsIntegration');
  *   startOptionsIntegration(io, { ingestOptionsSignal: ingestOpportunity });
- *   // After each option chain refresh:
- *   emitOptionsIntel(io, symbol, displaySym, chain.strikes, spotPrice, expiryDate);
- *   // After each LTP tick:
- *   emitGannUpdate(io, symbol, displaySym, ltp, { high52w, low52w, swingHigh, swingLow });
  */
 
-const optionsEngine = require("./optionsIntelligenceEngine");
-const gannEngine    = require("./gannEngine");
+const { analyzeOptionsChain } = require("./optionsIntelligenceEngine");
 
-// ── Config ────────────────────────────────────────────────────────────────────
-
-const INDIA_RF = 0.065;
-
-// NSE lot sizes (update quarterly)
-const LOT_SIZES = {
-  NIFTY:      75,
-  BANKNIFTY:  35,
-  SENSEX:     10,
-  FINNIFTY:   65,
-  MIDCPNIFTY: 120,
-};
-
-// Gann throttle: re-run gann analysis at most every N ms per symbol
-const GANN_THROTTLE_MS = 30_000;
-const _gannLastRun = {};
-
-// Historical IV cache (symbol → last 252 daily ATM IVs, updated rolling)
-const _ivHistory    = {}; // symbol → number[]
-const _closeHistory = {}; // symbol → number[] (closing spot prices)
-
-// IO ref and optional signal ingestor
-let _io                  = null;
-let _ingestOptionsSignal = null;
-
-// ── Public API ────────────────────────────────────────────────────────────────
-
-/**
- * startOptionsIntegration — primary entry point called from coordinator.js
- *
- * @param {object} io   - socket.io server instance
- * @param {object} opts - { ingestOptionsSignal: fn }
- */
-function startOptionsIntegration(io, { ingestOptionsSignal } = {}) {
-  setIO(io);
-  if (typeof ingestOptionsSignal === "function") {
-    _ingestOptionsSignal = ingestOptionsSignal;
-  }
-  console.log("[optionsIntegration] started — IO attached");
+// nseOIListener may export an event emitter or a subscription function.
+// Support both patterns gracefully.
+let nseOIListener = null;
+try {
+  nseOIListener = require("./nseOIListener");
+} catch (e) {
+  console.warn("⚠️ optionsIntegration: could not load nseOIListener:", e.message);
 }
 
-function setIO(io) {
-  _io = io;
+// ── IV history store (in-memory, keyed by symbol) ─────────────────────────────
+// Keeps last 252 daily ATM IV snapshots per symbol for IV rank calculation.
+const ivHistory = {};          // symbol → number[]
+const MAX_IV_HISTORY = 252;
+
+function appendIVHistory(symbol, iv) {
+  if (!symbol || !iv || iv <= 0) return;
+  if (!ivHistory[symbol]) ivHistory[symbol] = [];
+  ivHistory[symbol].push(iv);
+  if (ivHistory[symbol].length > MAX_IV_HISTORY) {
+    ivHistory[symbol] = ivHistory[symbol].slice(-MAX_IV_HISTORY);
+  }
 }
 
-/**
- * Run full options intelligence and emit to all connected clients.
- *
- * @param {object} io         - socket.io server instance
- * @param {string} symbol     - "NIFTY" | "BANKNIFTY" | "SENSEX"
- * @param {string} displaySym - "NIFTY 50" | "BANK NIFTY" | "SENSEX" (UI label)
- * @param {Array}  rawChain   - array from processOptionChain().strikes
- * @param {number} spotPrice
- * @param {string} expiryDate - "YYYY-MM-DD"
- * @param {Array}  [historicalIVs]  - past year daily ATM IV values (0–1 range)
- * @param {Array}  [closes]         - past 60+ daily closing prices
- */
-function emitOptionsIntel(io, symbol, displaySym, rawChain, spotPrice, expiryDate, historicalIVs, closes) {
-  if (!rawChain || !spotPrice || !expiryDate) return;
+// ── Throttle: don't re-analyse the same symbol more than once per 10 seconds ──
+const lastAnalysisTs = {};
 
-  // Build chain format expected by optionsIntelligenceEngine
-  const chain = rawChain.map(s => ({
-    strike:   s.strike,
-    callOI:   s.ce?.oi       || 0,
-    putOI:    s.pe?.oi       || 0,
-    callVol:  s.ce?.volume   || 0,
-    putVol:   s.pe?.volume   || 0,
-    callLTP:  s.ce?.ltp      || 0,
-    putLTP:   s.pe?.ltp      || 0,
-    callIV:   s.ce?.iv       || null,
-    putIV:    s.pe?.iv       || null,
-    oiChange: (s.ce?.oiChange || 0) + (s.pe?.oiChange || 0),
-  }));
+function shouldAnalyse(symbol, minIntervalMs = 10_000) {
+  const now = Date.now();
+  if (lastAnalysisTs[symbol] && now - lastAnalysisTs[symbol] < minIntervalMs) return false;
+  lastAnalysisTs[symbol] = now;
+  return true;
+}
 
-  // Update rolling IV history from current ATM IV
-  const atmRow = chain.reduce((b, r) =>
-    Math.abs(r.strike - spotPrice) < Math.abs(b.strike - spotPrice) ? r : b
-  );
-  const atmIV = atmRow?.callIV || atmRow?.putIV;
-  if (atmIV && atmIV > 0.01) {
-    if (!_ivHistory[symbol]) _ivHistory[symbol] = [];
-    _ivHistory[symbol].push(atmIV);
-    if (_ivHistory[symbol].length > 252) _ivHistory[symbol].shift();
-  }
+// ── Core: run analysis on one symbol/expiry payload ──────────────────────────
 
-  // Update rolling close history
-  if (spotPrice) {
-    if (!_closeHistory[symbol]) _closeHistory[symbol] = [];
-    _closeHistory[symbol].push(spotPrice);
-    if (_closeHistory[symbol].length > 65) _closeHistory[symbol].shift();
-  }
-
-  const ivs     = historicalIVs || _ivHistory[symbol]    || [];
-  const clses   = closes        || _closeHistory[symbol] || [];
-  const lotSize = LOT_SIZES[symbol] || 1;
+function runAnalysis({ symbol, spotPrice, chain, expiryDate, lotSize }, io, ingestOptionsSignal) {
+  if (!chain || chain.length === 0 || !spotPrice || !expiryDate) return;
+  if (!shouldAnalyse(symbol)) return;
 
   let result;
   try {
-    result = optionsEngine.analyzeOptionsChain({
+    result = analyzeOptionsChain({
       symbol,
       spotPrice,
       chain,
       expiryDate,
-      historicalIVs: ivs,
-      closes:        clses,
-      lotSize,
-      riskFreeRate:  INDIA_RF,
+      historicalIVs: ivHistory[symbol] || [],
+      closes:        [],          // would need OHLC history for HV — skip for now
+      lotSize:       lotSize || 1,
+      riskFreeRate:  0.065,
     });
   } catch (e) {
-    console.error(`[optionsIntegration] analyzeOptionsChain failed for ${symbol}:`, e.message);
+    console.warn(`⚠️ optionsIntegration: analyzeOptionsChain failed for ${symbol}:`, e.message);
     return;
   }
 
   if (!result || result.error) return;
 
-  const unusualOI         = buildUnusualOI(rawChain, spotPrice, "near");
-  const unusualOITailRisk = buildUnusualOI(rawChain, spotPrice, "tail");
-
-  const payload = {
-    symbol:      displaySym,
-    score:       result.score,
-    bias:        result.bias,
-    confidence:  result.confidence,
-    factors:     result.factors || [],
-
-    spot: spotPrice,
-    ltp:  spotPrice,
-
-    strategy: (result.strategy || []).map(s => s.strategy),
-
-    volatility: {
-      atmIV:         result.volatility?.atmIV         || 0,
-      hv20:          result.volatility?.hv20          || 0,
-      hv60:          result.volatility?.hv60          || 0,
-      vrp:           result.volatility?.vrp           || 0,
-      ivRank:        result.volatility?.ivRank        || 0,
-      ivPercentile:  result.volatility?.ivPercentile  || 0,
-      skew25:        result.volatility?.skew25        || 0,
-      skewSentiment: result.volatility?.skewSentiment || "NEUTRAL",
-    },
-
-    atmGreeks: {
-      delta: result.atmGreeks?.delta || 0.5,
-      gamma: result.atmGreeks?.gamma || 0,
-      theta: result.atmGreeks?.theta || 0,
-      vega:  result.atmGreeks?.vega  || 0,
-      rho:   result.atmGreeks?.rho   || 0,
-    },
-
-    gex: {
-      netGEX:     result.gex?.netGEX    || 0,
-      callGEX:    result.gex?.callGEX   || 0,
-      putGEX:     result.gex?.putGEX    || 0,
-      callWall:   result.gex?.callWall  || null,
-      putWall:    result.gex?.putWall   || null,
-      gammaFlip:  result.gex?.gammaFlip || null,
-      regime:     result.gex?.regime    || "MEAN_REVERTING",
-      topStrikes: result.gex?.topStrikes || [],
-    },
-
-    dealerExposures: {
-      dex:  result.dealerExposures?.dex  || 0,
-      vex:  result.dealerExposures?.vex  || 0,
-      chex: result.dealerExposures?.chex || 0,
-    },
-
-    oi: {
-      pcr:            result.oi?.pcr           || 0,
-      maxPain:        result.oi?.maxPain        || null,
-      totalCallOI:    result.oi?.totalCallOI    || 0,
-      totalPutOI:     result.oi?.totalPutOI     || 0,
-      netPremiumFlow: result.oi?.netPremiumFlow || 0,
-      premiumBias:    result.oi?.premiumBias    || "NEUTRAL",
-      unusualOI,
-      unusualOITailRisk,
-    },
-
-    structure: {
-      straddlePrice:    result.structure?.straddlePrice    || 0,
-      expectedMoveAbs:  result.structure?.expectedMoveAbs  || 0,
-      expectedMovePct:  result.structure?.expectedMovePct  || 0,
-      vrp:              result.structure?.vrp              || 0,
-      ivEnvironment:    result.structure?.ivEnvironment    || "NORMAL",
-      eventRiskScore:   result.structure?.eventRiskScore   || 0,
-      supportFromOI:    result.structure?.supportFromOI    || result.gex?.putWall  || null,
-      resistanceFromOI: result.structure?.resistanceFromOI || result.gex?.callWall || null,
-    },
-
-    updatedAt: Date.now(),
-  };
-
-  (io || _io)?.emit("options-intel", payload);
-
-  // Optionally ingest high-conviction signals into the opportunity pipeline
-  if (_ingestOptionsSignal && result.score >= 70) {
-    try {
-      _ingestOptionsSignal({ source: "options-intel", symbol, payload });
-    } catch (_) {}
+  // Append ATM IV to rolling history for future IV rank calculations
+  if (result.volatility?.atmIV) {
+    appendIVHistory(symbol, result.volatility.atmIV / 100);  // store as fraction
   }
 
-  // Emit individual HIGH alerts
-  emitHighAlerts(io || _io, symbol, result);
+  // Emit to all connected socket clients
+  if (io) {
+    io.emit("options-intelligence", {
+      symbol,
+      data: result,
+      ltp:  spotPrice,
+      ts:   Date.now(),
+    });
+  }
+
+  // Feed strong signals into composite score engine
+  if (typeof ingestOptionsSignal === "function") {
+    const score  = result.score;
+    const bias   = result.bias;
+    const topStrat = result.strategy?.[0];
+
+    // Only ingest when signal is meaningful (not neutral)
+    if (score != null && (score >= 65 || score <= 35)) {
+      try {
+        ingestOptionsSignal({
+          scrip:     symbol,
+          source:    "OPTIONS",
+          score,
+          bias,
+          detail:    topStrat
+            ? `${topStrat.strategy}: ${topStrat.note?.slice(0, 80) || ""}`
+            : `Options score ${score} — ${bias}`,
+          timestamp: Date.now(),
+        });
+      } catch (e) { /* never crash on ingest */ }
+    }
+  }
 }
 
+// ── Adapter: nseOIListener payloads → runAnalysis ────────────────────────────
+
 /**
- * Run Gann analysis and emit update (throttled per symbol).
+ * nseOIListener emits one of these shapes (depending on version):
+ *   A) EventEmitter: emitter.on("oi-update", payload => …)
+ *   B) Callback:     setOITickHandler(cb)  — cb(payload)
+ *   C) Direct:       handleOITick(payload) is called from upstoxStream
  *
- * @param {object} io
- * @param {string} symbol     - "NIFTY" | "BANKNIFTY" | "SENSEX"
- * @param {string} displaySym - "NIFTY 50" | "BANK NIFTY" | "SENSEX"
- * @param {number} ltp
- * @param {object} gannParams - { high52w, low52w, swingHigh, swingLow, ipoDate, allTimeHigh, allTimeLow }
+ * The payload shape from nseOIListener (after parsing):
+ * {
+ *   symbol:    "NIFTY",
+ *   spotPrice: 24050,
+ *   expiries:  ["2025-04-24", ...],
+ *   chains: {
+ *     "2025-04-24": {
+ *       rows: [ { strike, callOI, putOI, callVol, putVol, callLTP, putLTP, callIV, putIV }, … ],
+ *       pcr, maxPainStrike, support, resistance, totalCEOI, totalPEOI
+ *     }
+ *   },
+ *   lotSize: 25,
+ * }
  */
-function emitGannUpdate(io, symbol, displaySym, ltp, gannParams = {}) {
-  const now = Date.now();
-  if (_gannLastRun[symbol] && now - _gannLastRun[symbol] < GANN_THROTTLE_MS) return;
-  _gannLastRun[symbol] = now;
+function handleOIPayload(payload, io, ingestOptionsSignal) {
+  if (!payload) return;
 
-  let result;
-  try {
-    result = gannEngine.analyzeGann({
-      symbol,
-      ltp,
-      high52w:     gannParams.high52w     || ltp * 1.1,
-      low52w:      gannParams.low52w      || ltp * 0.9,
-      swingHigh:   gannParams.swingHigh   || null,
-      swingLow:    gannParams.swingLow    || null,
-      ipoDate:     gannParams.ipoDate     || null,
-      allTimeHigh: gannParams.allTimeHigh || null,
-      allTimeLow:  gannParams.allTimeLow  || null,
-      priceUnit:   gannParams.priceUnit   || null,
-    });
-  } catch (e) {
-    console.error(`[optionsIntegration] analyzeGann failed for ${symbol}:`, e.message);
+  const symbol    = payload.symbol || payload.underlying;
+  const spotPrice = payload.spotPrice || payload.spot;
+  const lotSize   = payload.lotSize || 1;
+
+  if (!symbol || !spotPrice) return;
+
+  // Pick the nearest expiry with data
+  const chains   = payload.chains || {};
+  const expiries = payload.expiries || Object.keys(chains);
+  if (!expiries.length) return;
+
+  // Sort expiries ascending; pick nearest
+  const sortedExpiries = [...expiries].sort();
+  const nearestExpiry  = sortedExpiries[0];
+  const chainData      = chains[nearestExpiry];
+  if (!chainData) return;
+
+  // normalise rows — engine expects { strike, callOI, putOI, callVol, putVol, callLTP, putLTP, callIV, putIV }
+  const rows = (chainData.rows || chainData.data || chainData || []);
+  if (!Array.isArray(rows) || rows.length === 0) return;
+
+  const chain = rows.map(r => ({
+    strike:  r.strike   || r.strikePrice || r.SP,
+    callOI:  r.callOI   || r.CE_OI       || r.ceOI  || 0,
+    putOI:   r.putOI    || r.PE_OI       || r.peOI  || 0,
+    callVol: r.callVol  || r.CE_Vol      || r.ceVol || 0,
+    putVol:  r.putVol   || r.PE_Vol      || r.peVol || 0,
+    callLTP: r.callLTP  || r.CE_LTP      || r.ceLTP || 0,
+    putLTP:  r.putLTP   || r.PE_LTP      || r.peLTP || 0,
+    callIV:  r.callIV   || r.CE_IV       || r.ceIV  || null,
+    putIV:   r.putIV    || r.PE_IV       || r.peIV  || null,
+  })).filter(r => r.strike > 0);
+
+  runAnalysis({ symbol, spotPrice, chain, expiryDate: nearestExpiry, lotSize }, io, ingestOptionsSignal);
+}
+
+// ── Start function ────────────────────────────────────────────────────────────
+
+function startOptionsIntegration(io, { ingestOptionsSignal } = {}) {
+  console.log("📊 Options Integration: starting…");
+
+  if (!nseOIListener) {
+    console.warn("⚠️ optionsIntegration: nseOIListener not available — options analysis disabled");
     return;
   }
 
-  if (!result || result.error) return;
-
-  const payload = {
-    symbol: displaySym,
-
-    signal: {
-      bias:    result.signal?.bias    || "NEUTRAL",
-      score:   result.signal?.score   || 50,
-      summary: result.signal?.summary || "",
-    },
-
-    squareOfNine: result.squareOfNine ? {
-      angleOnSquare:    result.squareOfNine.angleOnSquare,
-      positionOnSquare: result.squareOfNine.positionOnSquare,
-    } : null,
-
-    keyLevels: result.keyLevels ? {
-      supports:    (result.keyLevels.supports    || []).slice(0, 3),
-      resistances: (result.keyLevels.resistances || []).slice(0, 3),
-      masterAngle: result.keyLevels.masterAngle || null,
-    } : null,
-
-    timeCycles: (result.timeCycles || []).slice(0, 4).map(c => ({
-      label:         c.label,
-      daysFromToday: c.daysFromToday,
-      proximity:     c.proximity,
-      cycleStrength: c.cycleStrength,
-    })),
-
-    alerts: (result.alerts || []).slice(0, 4).map(a => ({
-      priority: a.priority,
-      message:  a.message,
-    })),
-
-    headline:       result.headline       || "",
-    priceOnUpFan:   result.priceOnUpFan   || null,
-    priceOnDownFan: result.priceOnDownFan || null,
-
-    updatedAt: Date.now(),
-  };
-
-  (io || _io)?.emit("gann-update", payload);
-
-  // Emit HIGH priority Gann alerts individually
-  (result.alerts || [])
-    .filter(a => a.priority === "HIGH")
-    .forEach(a => {
-      (io || _io)?.emit("options-alert", {
-        type:     a.type || "GANN",
-        priority: "HIGH",
-        symbol:   displaySym,
-        message:  a.message,
-        ts:       Date.now(),
-      });
+  // Pattern A: EventEmitter
+  if (typeof nseOIListener.on === "function") {
+    nseOIListener.on("oi-update", (payload) => {
+      handleOIPayload(payload, io, ingestOptionsSignal);
     });
-}
-
-// ── Private helpers ───────────────────────────────────────────────────────────
-
-/**
- * Build unusualOI / tailRisk arrays from raw strike data.
- * "near" = within 8% of spot   (active hedging / directional bets)
- * "tail" = beyond 8% of spot   (institutional tail-risk hedges)
- */
-function buildUnusualOI(rawChain, spotPrice, mode) {
-  if (!rawChain || !spotPrice) return [];
-
-  const results      = [];
-  const pctThreshold = 0.08;
-
-  for (const row of rawChain) {
-    const dist   = Math.abs(row.strike - spotPrice) / spotPrice;
-    const isNear = dist <= pctThreshold;
-    if (mode === "near" && !isNear) continue;
-    if (mode === "tail" &&  isNear) continue;
-
-    if ((row.ce?.oi || 0) > 50_000 || (row.ce?.volume || 0) > 5_000) {
-      results.push({
-        strike:   row.strike,
-        type:     "CALL",
-        oi:       row.ce?.oi       || 0,
-        vol:      row.ce?.volume   || 0,
-        oiChange: row.ce?.oiChange || 0,
-      });
-    }
-    if ((row.pe?.oi || 0) > 50_000 || (row.pe?.volume || 0) > 5_000) {
-      results.push({
-        strike:   row.strike,
-        type:     "PUT",
-        oi:       row.pe?.oi       || 0,
-        vol:      row.pe?.volume   || 0,
-        oiChange: row.pe?.oiChange || 0,
-      });
-    }
+    console.log("📊 Options Integration: subscribed via EventEmitter (oi-update)");
+    return;
   }
 
-  return results.sort((a, b) => b.oi - a.oi).slice(0, 10);
-}
-
-/**
- * Emit individual high-priority alerts derived from the options result.
- */
-function emitHighAlerts(io, symbol, result) {
-  if (!io) return;
-
-  const pcr = result.oi?.pcr;
-  if (pcr && pcr > 1.5) {
-    io.emit("options-alert", {
-      type:     "PCR_SPIKE",
-      priority: "HIGH",
-      symbol,
-      message:  `${symbol}: PCR ${pcr.toFixed(2)} — extreme put loading`,
-      ts:       Date.now(),
+  // Pattern B: setOITickHandler callback registration
+  if (typeof nseOIListener.setOITickHandler === "function") {
+    const existingHandler = nseOIListener.getOITickHandler?.() || null;
+    nseOIListener.setOITickHandler((payload) => {
+      // chain to existing handler so nseOIListener still works normally
+      if (typeof existingHandler === "function") existingHandler(payload);
+      handleOIPayload(payload, io, ingestOptionsSignal);
     });
+    console.log("📊 Options Integration: subscribed via setOITickHandler");
+    return;
   }
 
-  if (result.gex?.regime === "TREND_AMPLIFYING" && Math.abs(result.gex.netGEX) > 30) {
-    io.emit("options-alert", {
-      type:     "GAMMA_FLIP",
-      priority: "HIGH",
-      symbol,
-      message:  `${symbol}: Negative GEX ₹${result.gex.netGEX}Cr — dealers short gamma`,
-      ts:       Date.now(),
-    });
+  // Pattern C: polling — fall back to polling getAllCached() every 30 seconds
+  if (typeof nseOIListener.getAllCached === "function") {
+    console.log("📊 Options Integration: no event hook found — using 30s poll on getAllCached");
+    setInterval(() => {
+      try {
+        const all = nseOIListener.getAllCached();
+        for (const [symbol, payload] of Object.entries(all || {})) {
+          handleOIPayload({ ...payload, symbol }, io, ingestOptionsSignal);
+        }
+      } catch (e) {
+        console.warn("⚠️ optionsIntegration poll error:", e.message);
+      }
+    }, 30_000);
+    return;
   }
 
-  if (result.volatility?.ivRank > 85) {
-    io.emit("options-alert", {
-      type:     "IV_SPIKE",
-      priority: "MEDIUM",
-      symbol,
-      message:  `${symbol}: IV rank ${result.volatility.ivRank}% — premium sellers' market`,
-      ts:       Date.now(),
-    });
-  }
+  console.warn("⚠️ optionsIntegration: no compatible hook found in nseOIListener — options analysis passive");
 }
 
-// ── Cache helpers (optional HTTP polling support) ─────────────────────────────
-
-const _cache = {};
-function cacheResult(symbol, payload) {
-  _cache[symbol] = { ...payload, cachedAt: Date.now() };
-}
-function getCached(symbol) {
-  return _cache[symbol] || null;
-}
-
-// ── Exports ───────────────────────────────────────────────────────────────────
-
-module.exports = {
-  startOptionsIntegration, // ← primary entry point for coordinator.js
-  setIO,
-  emitOptionsIntel,
-  emitGannUpdate,
-  getCached,
-};
+module.exports = { startOptionsIntegration };
