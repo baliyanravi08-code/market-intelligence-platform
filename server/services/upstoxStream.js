@@ -42,6 +42,14 @@ const NAME_MAP = {
   "NSE_INDEX|Nifty Bank": "BANK NIFTY",
 };
 
+// ── Symbol normalisation for coordinator / Gann (expects short keys) ──────────
+// UI display uses "NIFTY 50" / "BANK NIFTY" but internal engines use short form.
+const GANN_SYMBOL_MAP = {
+  "NIFTY 50":   "NIFTY",
+  "BANK NIFTY": "BANKNIFTY",
+  "SENSEX":     "SENSEX",
+};
+
 // ── Option instruments (added dynamically by nseOIListener) ──────────────────
 const optionInstruments = new Set();
 
@@ -123,8 +131,11 @@ function parseAndEmit(raw) {
             });
 
             // ── PATCH: feed Gann re-analysis + composite score engine ─────────
+            // NAME_MAP outputs "NIFTY 50" / "BANK NIFTY" for UI display,
+            // but coordinator/gann expects "NIFTY" / "BANKNIFTY".
             if (typeof registerLTPTick === "function") {
-              registerLTPTick(name, price);
+              const gannSym = GANN_SYMBOL_MAP[name] || name;
+              registerLTPTick(gannSym, price);
             }
             // ─────────────────────────────────────────────────────────────────
           }
