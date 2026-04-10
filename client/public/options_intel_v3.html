@@ -430,7 +430,22 @@ body::before {
   </div>
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
+<script>
+// ── Safe socket.io bootstrap ──────────────────────────────────────────────
+// Load socket.io dynamically so a 404 never crashes the page.
+// The UI renders immediately with default state; sockets wire up once loaded.
+(function() {
+  const s = document.createElement('script');
+  s.src = '/socket.io/socket.io.js';
+  s.onload  = () => window._socketIOReady && window._socketIOReady();
+  s.onerror = () => {
+    console.warn('[Options Intel] socket.io not available — running in offline mode');
+    window._socketOffline = true;
+    window._socketIOReady && window._socketIOReady();
+  };
+  document.head.appendChild(s);
+})();
+</script>
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
 //  OPTIONS INTEL v3 — Live Socket Edition
@@ -503,87 +518,70 @@ const MAX_ALERTS = 6;
 // Connection state
 let isConnected = false;
 
-// ── Socket.io connection ───────────────────────────────────────────────────
-const socket = io({ transports: ["websocket", "polling"] });
-
-socket.on("connect", () => {
-  console.log("✅ Options Intel: socket connected");
-  isConnected = true;
-  renderToolbar();   // update live dot
-});
-
-socket.on("disconnect", () => {
-  console.log("⚠️  Options Intel: socket disconnected");
-  isConnected = false;
-  renderToolbar();
-});
-
-// ── Main intelligence update ───────────────────────────────────────────────
-// Event: "options-intel"
-// Payload shape from optionsIntegration.js:
-//   { symbol, score, bias, strategy, spot, ltp, volatility, atmGreeks,
-//     gex, dealerExposures, oi, structure, updatedAt }
-socket.on("options-intel", (data) => {
-  if (!data?.symbol) return;
-  const sym = data.symbol;   // "NIFTY 50" | "BANK NIFTY" | "SENSEX"
-  if (!STATE[sym]) return;
-
-  // Deep-merge into STATE (keeps old values for fields not in payload)
-  Object.assign(STATE[sym], data);
-
-  // Push spot to history
-  if (data.spot && data.spot > 0) {
-    spotHistory[sym].push(data.spot);
-    if (spotHistory[sym].length > 24) spotHistory[sym].shift();
+// ── Socket.io connection (wired after script loads safely) ────────────────
+window._socketIOReady = function() {
+  if (window._socketOffline || typeof io === 'undefined') {
+    console.warn('[Options Intel] offline mode — UI rendered with default state');
+    return;
   }
+  const socket = io({ transports: ["websocket", "polling"] });
 
-  if (active === sym) render();
-});
+  socket.on("connect", () => {
+    console.log("✅ Options Intel: socket connected");
+    isConnected = true;
+    renderToolbar();
+  });
+  socket.on("disconnect", () => {
+    console.warn("⚠️  Options Intel: socket disconnected");
+    isConnected = false;
+    renderToolbar();
+  });
 
-// ── Gann update ────────────────────────────────────────────────────────────
-// Event: "gann-update"
-// Payload shape from optionsIntegration.js:
-//   { symbol, signal, squareOfNine, keyLevels, timeCycles, alerts, headline }
-socket.on("gann-update", (data) => {
-  if (!data?.symbol) return;
-  GANN_STATE[data.symbol] = data;
-  if (active === data.symbol) render();
-});
-
-// ── Real-time alerts ───────────────────────────────────────────────────────
-// Event: "options-alert"
-// Payload: { type, priority, symbol, message, ts }
-socket.on("options-alert", (alert) => {
-  if (!alert?.message) return;
-  // Deduplicate by message
-  const already = alerts.some(a => a.message === alert.message && Date.now() - a.ts < 60000);
-  if (!already) {
-    alerts.unshift({ ...alert, ts: alert.ts || Date.now() });
-    if (alerts.length > MAX_ALERTS) alerts = alerts.slice(0, MAX_ALERTS);
-    renderToolbar();   // only toolbar needs refresh for new alert
-  }
-});
-
-// ── Live spot ticks from upstoxStream ────────────────────────────────────
-// Event: "market-tick"
-// Payload: Array of { name, price (string), raw (number), change, pct, up, _ts }
-socket.on("market-tick", (updates) => {
-  if (!Array.isArray(updates)) return;
-  let changed = false;
-  for (const tick of updates) {
-    const sym = tick.name;   // "NIFTY 50" | "BANK NIFTY" | "SENSEX"
-    if (!STATE[sym]) continue;
-    if (tick.raw && tick.raw > 0) {
-      STATE[sym].spot = tick.raw;
-      STATE[sym].ltp  = tick.raw;
-      spotHistory[sym].push(tick.raw);
+  socket.on("options-intel", (data) => {
+    if (!data?.symbol) return;
+    const sym = data.symbol;
+    if (!STATE[sym]) return;
+    Object.assign(STATE[sym], data);
+    if (data.spot && data.spot > 0) {
+      spotHistory[sym].push(data.spot);
       if (spotHistory[sym].length > 24) spotHistory[sym].shift();
-      if (sym === active) changed = true;
     }
-  }
-  // Only re-render scorecard (spot + sparkline), not all panels
-  if (changed) renderScoreCard();
-});
+    if (active === sym) render();
+  });
+
+  socket.on("gann-update", (data) => {
+    if (!data?.symbol) return;
+    GANN_STATE[data.symbol] = data;
+    if (active === data.symbol) render();
+  });
+
+  socket.on("options-alert", (alert) => {
+    if (!alert?.message) return;
+    const already = alerts.some(a => a.message === alert.message && Date.now() - a.ts < 60_000);
+    if (!already) {
+      alerts.unshift({ ...alert, ts: alert.ts || Date.now() });
+      if (alerts.length > MAX_ALERTS) alerts = alerts.slice(0, MAX_ALERTS);
+      renderToolbar();
+    }
+  });
+
+  socket.on("market-tick", (updates) => {
+    if (!Array.isArray(updates)) return;
+    let changed = false;
+    for (const tick of updates) {
+      const sym = tick.name;
+      if (!STATE[sym]) continue;
+      if (tick.raw && tick.raw > 0) {
+        STATE[sym].spot = tick.raw;
+        STATE[sym].ltp  = tick.raw;
+        spotHistory[sym].push(tick.raw);
+        if (spotHistory[sym].length > 24) spotHistory[sym].shift();
+        if (sym === active) changed = true;
+      }
+    }
+    if (changed) renderScoreCard();
+  });
+};
 
 // Alert age refresh (every 10s)
 setInterval(() => {
