@@ -15,12 +15,12 @@
  * Called from coordinator.js after it receives option chain data.
  *
  * Usage (in coordinator.js or nseOIListener.js):
- *   const { emitOptionsIntel, emitGannUpdate, setIO } = require('./optionsIntegration');
- *   setIO(io);
+ *   const { startOptionsIntegration, emitOptionsIntel, emitGannUpdate } = require('./optionsIntegration');
+ *   startOptionsIntegration(io, { ingestOptionsSignal: ingestOpportunity });
  *   // After each option chain refresh:
- *   emitOptionsIntel(io, symbol, chainData, spotPrice, expiryDate, gannParams);
+ *   emitOptionsIntel(io, symbol, displaySym, chain.strikes, spotPrice, expiryDate);
  *   // After each LTP tick:
- *   emitGannUpdate(io, symbol, ltp, gannParams);
+ *   emitGannUpdate(io, symbol, displaySym, ltp, { high52w, low52w, swingHigh, swingLow });
  */
 
 const optionsEngine = require("./optionsIntelligenceEngine");
@@ -32,11 +32,11 @@ const INDIA_RF = 0.065;
 
 // NSE lot sizes (update quarterly)
 const LOT_SIZES = {
-  NIFTY:     75,
-  BANKNIFTY: 35,
-  SENSEX:    10,
-  FINNIFTY:  65,
-  MIDCPNIFTY:120,
+  NIFTY:      75,
+  BANKNIFTY:  35,
+  SENSEX:     10,
+  FINNIFTY:   65,
+  MIDCPNIFTY: 120,
 };
 
 // Gann throttle: re-run gann analysis at most every N ms per symbol
@@ -44,13 +44,28 @@ const GANN_THROTTLE_MS = 30_000;
 const _gannLastRun = {};
 
 // Historical IV cache (symbol → last 252 daily ATM IVs, updated rolling)
-const _ivHistory = {};    // symbol → number[]
+const _ivHistory    = {}; // symbol → number[]
 const _closeHistory = {}; // symbol → number[] (closing spot prices)
 
-// IO ref
-let _io = null;
+// IO ref and optional signal ingestor
+let _io                  = null;
+let _ingestOptionsSignal = null;
 
 // ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * startOptionsIntegration — primary entry point called from coordinator.js
+ *
+ * @param {object} io   - socket.io server instance
+ * @param {object} opts - { ingestOptionsSignal: fn }
+ */
+function startOptionsIntegration(io, { ingestOptionsSignal } = {}) {
+  setIO(io);
+  if (typeof ingestOptionsSignal === "function") {
+    _ingestOptionsSignal = ingestOptionsSignal;
+  }
+  console.log("[optionsIntegration] started — IO attached");
+}
 
 function setIO(io) {
   _io = io;
@@ -74,14 +89,14 @@ function emitOptionsIntel(io, symbol, displaySym, rawChain, spotPrice, expiryDat
   // Build chain format expected by optionsIntelligenceEngine
   const chain = rawChain.map(s => ({
     strike:   s.strike,
-    callOI:   s.ce?.oi   || 0,
-    putOI:    s.pe?.oi   || 0,
-    callVol:  s.ce?.volume || 0,
-    putVol:   s.pe?.volume || 0,
-    callLTP:  s.ce?.ltp  || 0,
-    putLTP:   s.pe?.ltp  || 0,
-    callIV:   s.ce?.iv   || null,   // Upstox provides these
-    putIV:    s.pe?.iv   || null,
+    callOI:   s.ce?.oi       || 0,
+    putOI:    s.pe?.oi       || 0,
+    callVol:  s.ce?.volume   || 0,
+    putVol:   s.pe?.volume   || 0,
+    callLTP:  s.ce?.ltp      || 0,
+    putLTP:   s.pe?.ltp      || 0,
+    callIV:   s.ce?.iv       || null,
+    putIV:    s.pe?.iv       || null,
     oiChange: (s.ce?.oiChange || 0) + (s.pe?.oiChange || 0),
   }));
 
@@ -103,8 +118,8 @@ function emitOptionsIntel(io, symbol, displaySym, rawChain, spotPrice, expiryDat
     if (_closeHistory[symbol].length > 65) _closeHistory[symbol].shift();
   }
 
-  const ivs    = historicalIVs   || _ivHistory[symbol]    || [];
-  const clses  = closes           || _closeHistory[symbol] || [];
+  const ivs     = historicalIVs || _ivHistory[symbol]    || [];
+  const clses   = closes        || _closeHistory[symbol] || [];
   const lotSize = LOT_SIZES[symbol] || 1;
 
   let result;
@@ -126,15 +141,7 @@ function emitOptionsIntel(io, symbol, displaySym, rawChain, spotPrice, expiryDat
 
   if (!result || result.error) return;
 
-  // ── Map engine output → dashboard payload ──────────────────────────────────
-  // Dashboard expects: { symbol, score, bias, strategy, spot, ltp,
-  //   volatility, atmGreeks, gex, dealerExposures, oi, structure }
-  //
-  // strategy is array of strategy strings for the tag chips
-  // oi.unusualOI and oi.unusualOITailRisk need to be arrays of
-  //   { strike, type, oi, vol, oiChange }
-
-  const unusualOI = buildUnusualOI(rawChain, spotPrice, "near");
+  const unusualOI         = buildUnusualOI(rawChain, spotPrice, "near");
   const unusualOITailRisk = buildUnusualOI(rawChain, spotPrice, "tail");
 
   const payload = {
@@ -144,21 +151,20 @@ function emitOptionsIntel(io, symbol, displaySym, rawChain, spotPrice, expiryDat
     confidence:  result.confidence,
     factors:     result.factors || [],
 
-    spot:  spotPrice,
-    ltp:   spotPrice,
+    spot: spotPrice,
+    ltp:  spotPrice,
 
-    // Strategy tags (array of strategy name strings)
     strategy: (result.strategy || []).map(s => s.strategy),
 
     volatility: {
-      atmIV:        result.volatility?.atmIV  || 0,
-      hv20:         result.volatility?.hv20   || 0,
-      hv60:         result.volatility?.hv60   || 0,
-      vrp:          result.volatility?.vrp    || 0,
-      ivRank:       result.volatility?.ivRank || 0,
-      ivPercentile: result.volatility?.ivPercentile || 0,
-      skew25:       result.volatility?.skew25 || 0,
-      skewSentiment:result.volatility?.skewSentiment || "NEUTRAL",
+      atmIV:         result.volatility?.atmIV         || 0,
+      hv20:          result.volatility?.hv20          || 0,
+      hv60:          result.volatility?.hv60          || 0,
+      vrp:           result.volatility?.vrp           || 0,
+      ivRank:        result.volatility?.ivRank        || 0,
+      ivPercentile:  result.volatility?.ivPercentile  || 0,
+      skew25:        result.volatility?.skew25        || 0,
+      skewSentiment: result.volatility?.skewSentiment || "NEUTRAL",
     },
 
     atmGreeks: {
@@ -170,13 +176,13 @@ function emitOptionsIntel(io, symbol, displaySym, rawChain, spotPrice, expiryDat
     },
 
     gex: {
-      netGEX:    result.gex?.netGEX  || 0,
-      callGEX:   result.gex?.callGEX || 0,
-      putGEX:    result.gex?.putGEX  || 0,
-      callWall:  result.gex?.callWall   || null,
-      putWall:   result.gex?.putWall    || null,
-      gammaFlip: result.gex?.gammaFlip  || null,
-      regime:    result.gex?.regime     || "MEAN_REVERTING",
+      netGEX:     result.gex?.netGEX    || 0,
+      callGEX:    result.gex?.callGEX   || 0,
+      putGEX:     result.gex?.putGEX    || 0,
+      callWall:   result.gex?.callWall  || null,
+      putWall:    result.gex?.putWall   || null,
+      gammaFlip:  result.gex?.gammaFlip || null,
+      regime:     result.gex?.regime    || "MEAN_REVERTING",
       topStrikes: result.gex?.topStrikes || [],
     },
 
@@ -187,12 +193,12 @@ function emitOptionsIntel(io, symbol, displaySym, rawChain, spotPrice, expiryDat
     },
 
     oi: {
-      pcr:             result.oi?.pcr            || 0,
-      maxPain:         result.oi?.maxPain         || null,
-      totalCallOI:     result.oi?.totalCallOI     || 0,
-      totalPutOI:      result.oi?.totalPutOI      || 0,
-      netPremiumFlow:  result.oi?.netPremiumFlow  || 0,
-      premiumBias:     result.oi?.premiumBias     || "NEUTRAL",
+      pcr:            result.oi?.pcr           || 0,
+      maxPain:        result.oi?.maxPain        || null,
+      totalCallOI:    result.oi?.totalCallOI    || 0,
+      totalPutOI:     result.oi?.totalPutOI     || 0,
+      netPremiumFlow: result.oi?.netPremiumFlow || 0,
+      premiumBias:    result.oi?.premiumBias    || "NEUTRAL",
       unusualOI,
       unusualOITailRisk,
     },
@@ -204,7 +210,7 @@ function emitOptionsIntel(io, symbol, displaySym, rawChain, spotPrice, expiryDat
       vrp:              result.structure?.vrp              || 0,
       ivEnvironment:    result.structure?.ivEnvironment    || "NORMAL",
       eventRiskScore:   result.structure?.eventRiskScore   || 0,
-      supportFromOI:    result.structure?.supportFromOI    || result.gex?.putWall || null,
+      supportFromOI:    result.structure?.supportFromOI    || result.gex?.putWall  || null,
       resistanceFromOI: result.structure?.resistanceFromOI || result.gex?.callWall || null,
     },
 
@@ -212,6 +218,13 @@ function emitOptionsIntel(io, symbol, displaySym, rawChain, spotPrice, expiryDat
   };
 
   (io || _io)?.emit("options-intel", payload);
+
+  // Optionally ingest high-conviction signals into the opportunity pipeline
+  if (_ingestOptionsSignal && result.score >= 70) {
+    try {
+      _ingestOptionsSignal({ source: "options-intel", symbol, payload });
+    } catch (_) {}
+  }
 
   // Emit individual HIGH alerts
   emitHighAlerts(io || _io, symbol, result);
@@ -236,14 +249,14 @@ function emitGannUpdate(io, symbol, displaySym, ltp, gannParams = {}) {
     result = gannEngine.analyzeGann({
       symbol,
       ltp,
-      high52w:    gannParams.high52w    || ltp * 1.1,
-      low52w:     gannParams.low52w     || ltp * 0.9,
-      swingHigh:  gannParams.swingHigh  || null,
-      swingLow:   gannParams.swingLow   || null,
-      ipoDate:    gannParams.ipoDate    || null,
-      allTimeHigh:gannParams.allTimeHigh|| null,
-      allTimeLow: gannParams.allTimeLow || null,
-      priceUnit:  gannParams.priceUnit  || null,
+      high52w:     gannParams.high52w     || ltp * 1.1,
+      low52w:      gannParams.low52w      || ltp * 0.9,
+      swingHigh:   gannParams.swingHigh   || null,
+      swingLow:    gannParams.swingLow    || null,
+      ipoDate:     gannParams.ipoDate     || null,
+      allTimeHigh: gannParams.allTimeHigh || null,
+      allTimeLow:  gannParams.allTimeLow  || null,
+      priceUnit:   gannParams.priceUnit   || null,
     });
   } catch (e) {
     console.error(`[optionsIntegration] analyzeGann failed for ${symbol}:`, e.message);
@@ -252,31 +265,26 @@ function emitGannUpdate(io, symbol, displaySym, ltp, gannParams = {}) {
 
   if (!result || result.error) return;
 
-  // Map gannEngine output → dashboard GANN_MAP format
   const payload = {
     symbol: displaySym,
 
-    // signal block (dashboard reads signal.bias, signal.score, signal.summary)
     signal: {
       bias:    result.signal?.bias    || "NEUTRAL",
       score:   result.signal?.score   || 50,
       summary: result.signal?.summary || "",
     },
 
-    // squareOfNine block
     squareOfNine: result.squareOfNine ? {
       angleOnSquare:    result.squareOfNine.angleOnSquare,
       positionOnSquare: result.squareOfNine.positionOnSquare,
     } : null,
 
-    // keyLevels block
     keyLevels: result.keyLevels ? {
       supports:    (result.keyLevels.supports    || []).slice(0, 3),
       resistances: (result.keyLevels.resistances || []).slice(0, 3),
       masterAngle: result.keyLevels.masterAngle || null,
     } : null,
 
-    // timeCycles array
     timeCycles: (result.timeCycles || []).slice(0, 4).map(c => ({
       label:         c.label,
       daysFromToday: c.daysFromToday,
@@ -284,15 +292,12 @@ function emitGannUpdate(io, symbol, displaySym, ltp, gannParams = {}) {
       cycleStrength: c.cycleStrength,
     })),
 
-    // alerts array
     alerts: (result.alerts || []).slice(0, 4).map(a => ({
       priority: a.priority,
       message:  a.message,
     })),
 
-    headline: result.headline || "",
-
-    // gannFan position (for structure panel)
+    headline:       result.headline       || "",
     priceOnUpFan:   result.priceOnUpFan   || null,
     priceOnDownFan: result.priceOnDownFan || null,
 
@@ -319,23 +324,22 @@ function emitGannUpdate(io, symbol, displaySym, ltp, gannParams = {}) {
 
 /**
  * Build unusualOI / tailRisk arrays from raw strike data.
- * "near" = within 8% of spot, high OI/vol
- * "tail" = beyond 8% of spot (institutional hedges)
+ * "near" = within 8% of spot   (active hedging / directional bets)
+ * "tail" = beyond 8% of spot   (institutional tail-risk hedges)
  */
 function buildUnusualOI(rawChain, spotPrice, mode) {
   if (!rawChain || !spotPrice) return [];
 
-  const results = [];
+  const results      = [];
   const pctThreshold = 0.08;
 
   for (const row of rawChain) {
-    const dist = Math.abs(row.strike - spotPrice) / spotPrice;
+    const dist   = Math.abs(row.strike - spotPrice) / spotPrice;
     const isNear = dist <= pctThreshold;
-    if (mode === "near"  && !isNear) continue;
-    if (mode === "tail"  &&  isNear) continue;
+    if (mode === "near" && !isNear) continue;
+    if (mode === "tail" &&  isNear) continue;
 
-    // CE
-    if ((row.ce?.oi || 0) > 50000 || (row.ce?.volume || 0) > 5000) {
+    if ((row.ce?.oi || 0) > 50_000 || (row.ce?.volume || 0) > 5_000) {
       results.push({
         strike:   row.strike,
         type:     "CALL",
@@ -344,8 +348,7 @@ function buildUnusualOI(rawChain, spotPrice, mode) {
         oiChange: row.ce?.oiChange || 0,
       });
     }
-    // PE
-    if ((row.pe?.oi || 0) > 50000 || (row.pe?.volume || 0) > 5000) {
+    if ((row.pe?.oi || 0) > 50_000 || (row.pe?.volume || 0) > 5_000) {
       results.push({
         strike:   row.strike,
         type:     "PUT",
@@ -356,18 +359,15 @@ function buildUnusualOI(rawChain, spotPrice, mode) {
     }
   }
 
-  return results
-    .sort((a, b) => b.oi - a.oi)
-    .slice(0, 10);
+  return results.sort((a, b) => b.oi - a.oi).slice(0, 10);
 }
 
 /**
- * Emit individual high-priority alerts from options result.
+ * Emit individual high-priority alerts derived from the options result.
  */
 function emitHighAlerts(io, symbol, result) {
   if (!io) return;
 
-  // PCR extreme
   const pcr = result.oi?.pcr;
   if (pcr && pcr > 1.5) {
     io.emit("options-alert", {
@@ -379,7 +379,6 @@ function emitHighAlerts(io, symbol, result) {
     });
   }
 
-  // GEX flip
   if (result.gex?.regime === "TREND_AMPLIFYING" && Math.abs(result.gex.netGEX) > 30) {
     io.emit("options-alert", {
       type:     "GAMMA_FLIP",
@@ -390,7 +389,6 @@ function emitHighAlerts(io, symbol, result) {
     });
   }
 
-  // IV spike
   if (result.volatility?.ivRank > 85) {
     io.emit("options-alert", {
       type:     "IV_SPIKE",
@@ -402,10 +400,8 @@ function emitHighAlerts(io, symbol, result) {
   }
 }
 
-/**
- * REST endpoint helper — returns latest cached result for a symbol.
- * Call from coordinator if you want HTTP polling support too.
- */
+// ── Cache helpers (optional HTTP polling support) ─────────────────────────────
+
 const _cache = {};
 function cacheResult(symbol, payload) {
   _cache[symbol] = { ...payload, cachedAt: Date.now() };
@@ -414,7 +410,10 @@ function getCached(symbol) {
   return _cache[symbol] || null;
 }
 
+// ── Exports ───────────────────────────────────────────────────────────────────
+
 module.exports = {
+  startOptionsIntegration, // ← primary entry point for coordinator.js
   setIO,
   emitOptionsIntel,
   emitGannUpdate,
