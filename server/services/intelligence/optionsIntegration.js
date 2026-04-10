@@ -12,9 +12,34 @@
  *  3. Falls back to getChain() per-expiry if getAllCached() rows are missing
  *  4. Exports ingestChainData so nseOIListener can call it directly (fixes
  *     "ingestChainData is not a function" error in nseOIListener)
+ *
+ * FIX (page-refresh data loss):
+ *  5. Calls setCachedIntel() from websocket.js BEFORE every io.emit("options-intelligence")
+ *     so that newly connected / refreshed clients get an immediate snapshot replay
+ *     instead of blank 0.0 / — fields until the next Upstox tick arrives.
  */
 
 const { analyzeOptionsChain } = require("./optionsIntelligenceEngine");
+
+// FIX: import cache writer from websocket — used in runAnalysis below
+// Safe lazy pattern: if websocket isn't attached yet, setCachedIntel is a no-op
+let _setCachedIntel = null;
+try {
+  ({ setCachedIntel: _setCachedIntel } = require("../../api/websocket"));
+} catch (e) {
+  // websocket module not yet available — will retry on first emit
+}
+function safeSetCachedIntel(symbol, payload) {
+  // Retry require once in case it wasn't ready at module load time
+  if (!_setCachedIntel) {
+    try {
+      ({ setCachedIntel: _setCachedIntel } = require("../../api/websocket"));
+    } catch (_) {}
+  }
+  if (typeof _setCachedIntel === "function") {
+    try { _setCachedIntel(symbol, payload); } catch (_) {}
+  }
+}
 
 // ── Rolling IV history for IV Rank ────────────────────────────────────────────
 const ivHistory = {};
@@ -53,12 +78,12 @@ function extractRows(chainData) {
   if (entries.length > 0 && !isNaN(Number(entries[0][0]))) {
     const rows = entries.map(([strike, v]) => ({
       strike:  Number(strike),
-      callOI:  v?.CE?.openInterest   || v?.CE?.oi   || v?.ce?.oi   || 0,
-      putOI:   v?.PE?.openInterest   || v?.PE?.oi   || v?.pe?.oi   || 0,
-      callVol: v?.CE?.totalTradedVolume || v?.CE?.vol || v?.ce?.vol || 0,
-      putVol:  v?.PE?.totalTradedVolume || v?.PE?.vol || v?.pe?.vol || 0,
-      callLTP: v?.CE?.lastPrice      || v?.CE?.ltp  || v?.ce?.ltp  || 0,
-      putLTP:  v?.PE?.lastPrice      || v?.PE?.ltp  || v?.pe?.ltp  || 0,
+      callOI:  v?.CE?.openInterest      || v?.CE?.oi   || v?.ce?.oi   || 0,
+      putOI:   v?.PE?.openInterest      || v?.PE?.oi   || v?.pe?.oi   || 0,
+      callVol: v?.CE?.totalTradedVolume || v?.CE?.vol  || v?.ce?.vol  || 0,
+      putVol:  v?.PE?.totalTradedVolume || v?.PE?.vol  || v?.pe?.vol  || 0,
+      callLTP: v?.CE?.lastPrice         || v?.CE?.ltp  || v?.ce?.ltp  || 0,
+      putLTP:  v?.PE?.lastPrice         || v?.PE?.ltp  || v?.pe?.ltp  || 0,
       callIV:  v?.CE?.impliedVolatility != null ? Number(v.CE.impliedVolatility) / 100 : null,
       putIV:   v?.PE?.impliedVolatility != null ? Number(v.PE.impliedVolatility) / 100 : null,
     })).filter(r => r.strike > 0);
@@ -126,12 +151,21 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
   if (result.volatility?.atmIV) appendIV(symbol, result.volatility.atmIV);
 
   if (_io) {
-    _io.emit("options-intelligence", {
+    // FIX: build payload once, cache it BEFORE emitting so any client that
+    // connects (or reconnects after a page refresh) gets the snapshot immediately
+    // via the connection-time replay in websocket.js — zero logic change otherwise.
+    const payload = {
       symbol,
       data: result,
       ltp:  spotPrice,
       ts:   Date.now(),
-    });
+    };
+
+    // FIX: write to cache first so replay is always up-to-date
+    safeSetCachedIntel(symbol, payload);
+
+    // Emit exactly as before
+    _io.emit("options-intelligence", payload);
     console.log(`📡 options-intelligence: ${symbol} score=${result.score} bias=${result.bias} strikes=${chain.length}`);
   }
 

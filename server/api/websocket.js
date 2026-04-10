@@ -10,6 +10,11 @@
  *  4. Added "option-chain-update" emitter that optionChainEngine calls via emitChainUpdate()
  *  5. Added upstox-status broadcast so client ConnBadge stays accurate
  *  6. Graceful reconnect guard — duplicate socket.disconnect() calls are no-ops
+ *
+ * FIX (page-refresh data loss):
+ *  7. Added _intelCache — stores latest options-intelligence payload per symbol
+ *  8. On new socket connection, replays all cached intel immediately (no wait for next tick)
+ *  9. Added "request-intel-snapshot" handler so client can explicitly ask for replay
  */
 
 const http    = require("http");
@@ -43,6 +48,40 @@ function broadcastUpstoxStatus(connected) {
   _io.emit("upstox-status", { connected });
 }
 
+// ─── Intel snapshot cache ──────────────────────────────────────────────────
+// Stores the latest options-intelligence payload per symbol.
+// Populated by setCachedIntel() — called from optionsIntegration.js
+// whenever a fresh payload is about to be emitted.
+// On new socket connect we replay all cached payloads so the client
+// gets data immediately instead of waiting for the next Upstox tick.
+
+const _intelCache    = new Map();  // key: SYMBOL (uppercase) → latest options-intelligence payload
+const _chainCache    = new Map();  // key: `${underlying}_${expiry}` → data
+const _expiriesCache = new Map();  // key: underlying → string[]
+
+/**
+ * Store the latest options-intelligence payload for a symbol.
+ * Call this from optionsIntegration.js BEFORE emitting to socket.
+ *
+ * @param {string} symbol   e.g. "BANKNIFTY"
+ * @param {Object} payload  full options-intelligence payload
+ */
+function setCachedIntel(symbol, payload) {
+  if (!symbol || !payload) return;
+  _intelCache.set(symbol.toUpperCase(), payload);
+}
+
+/**
+ * Retrieve the latest cached intel for a symbol.
+ *
+ * @param {string} symbol
+ * @returns {Object|null}
+ */
+function getCachedIntel(symbol) {
+  if (!symbol) return null;
+  return _intelCache.get(symbol.toUpperCase()) || null;
+}
+
 /**
  * Attach Socket.io to an existing Express http.Server.
  *
@@ -70,11 +109,33 @@ function attachSocketIO(server) {
   io.on("connection", (socket) => {
     console.log(`👤 Client connected: ${socket.id}`);
 
+    // ── FIX: Replay latest options-intelligence snapshots immediately ───────
+    // Without this, a freshly connected / refreshed client shows 0.0 / — for
+    // all fields until the next Upstox tick arrives (could be seconds or minutes).
+    // We replay every symbol we have cached so the UI populates instantly.
+    if (_intelCache.size > 0) {
+      for (const [, payload] of _intelCache) {
+        socket.emit("options-intelligence", payload);
+      }
+      console.log(`📤 Replayed ${_intelCache.size} intel snapshot(s) to ${socket.id}`);
+    }
+
     // ── Heartbeat: client sends "ping", server replies "pong" ──────────────
     // This keeps the WS alive through proxies/load balancers and prevents
     // the client falling back to REST poll mode.
     socket.on("ping", () => {
       socket.emit("pong");
+    });
+
+    // ── FIX: Client explicitly requests a snapshot replay ──────────────────
+    // Emitted from OptionsIntelligencePage on mount as a safety net in case
+    // the connection event fires before the cache is warm.
+    socket.on("request-intel-snapshot", () => {
+      if (_intelCache.size === 0) return;
+      for (const [, payload] of _intelCache) {
+        socket.emit("options-intelligence", payload);
+      }
+      console.log(`📤 On-demand snapshot replay → ${socket.id} (${_intelCache.size} symbol(s))`);
     });
 
     // ── Client requests a specific option chain ────────────────────────────
@@ -125,12 +186,9 @@ function attachSocketIO(server) {
   return io;
 }
 
-// ─── Simple in-memory cache for latest chain snapshots ────────────────────────
+// ─── Chain cache helpers ───────────────────────────────────────────────────
 // Your optionChainEngine should call setCachedChain() after each processOptionChain()
 // so new socket connections get data immediately without waiting for the next poll.
-
-const _chainCache   = new Map();   // key: `${underlying}_${expiry}` → data
-const _expiriesCache = new Map();  // key: underlying → string[]
 
 function setCachedChain(underlying, expiry, data) {
   _chainCache.set(`${underlying}_${expiry}`, data);
@@ -167,4 +225,7 @@ module.exports = {
   setCachedExpiries,
   getCachedChain,
   getCachedExpiries,
+  // FIX exports — used by optionsIntegration.js to populate the cache
+  setCachedIntel,
+  getCachedIntel,
 };

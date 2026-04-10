@@ -362,7 +362,6 @@ function GEXPanel({ gex, dealerExposures }) {
   const gexBiasC   = gex.netGEX > 0 ? "#00ff9c" : gex.netGEX < 0 ? "#ef5350" : "#ffd54f";
 
   // FIX: vanna and charm come from dealerExposures, not gex directly
-  // Support both legacy (gex.vanna) and correct (dealerExposures.vex / dealerExposures.chex) shapes
   const vanna = gex.vanna ?? dealerExposures?.vex ?? null;
   const charm = gex.charm ?? dealerExposures?.chex ?? null;
 
@@ -381,7 +380,6 @@ function GEXPanel({ gex, dealerExposures }) {
         <MiniCard label="CALL WALL"  value={gex.callWall ? gex.callWall.toLocaleString("en-IN") : "—"}    sub="resistance"  color="#4fc3f7" />
         <MiniCard label="PUT WALL"   value={gex.putWall  ? gex.putWall.toLocaleString("en-IN")  : "—"}    sub="support"     color="#ff8a65" />
       </div>
-      {/* FIX: now reads from correct source */}
       {(vanna != null || charm != null) && (
         <>
           <div style={{ borderTop: "1px solid #1a3040", margin: "8px 0 4px" }}/>
@@ -702,6 +700,15 @@ export default function OptionsIntelligencePage({ socket }) {
     return () => clearInterval(t);
   }, []);
 
+  // FIX: on mount, ask server to replay the latest cached intel snapshot
+  // so all panels populate immediately after a page refresh instead of
+  // waiting for the next Upstox tick (which can take seconds/minutes).
+  // This is a one-shot emit — it does not change any existing socket logic.
+  useEffect(() => {
+    if (!socket) return;
+    socket.emit("request-intel-snapshot");
+  }, [socket]);
+
   const requestGann = useCallback((sym, ltp) => {
     if (!socket || !sym) return;
     socket.emit("get-gann-analysis", { symbol: toGannSym(sym), ltp });
@@ -790,9 +797,6 @@ export default function OptionsIntelligencePage({ socket }) {
   const spot = d?.spot || d?.ltp || structure?.spot || null;
 
   // FIX: nearATMSignals / tailRiskSignals logic
-  // Original had a bug: `rawLeg` was set to `null` if EITHER oiNear OR oiTail had length,
-  // meaning if only one was populated, the other would be given an empty array from rawLeg path.
-  // Correct logic: use the dedicated fields if BOTH exist, else fall back to filtering unusualOI.
   const oiNear = oi.unusualOI         || [];
   const oiTail = oi.unusualOITailRisk || [];
   const hasDedicatedFields = oiNear.length > 0 || oiTail.length > 0;
@@ -800,19 +804,16 @@ export default function OptionsIntelligencePage({ socket }) {
 
   let nearATMSignals, tailRiskSignals;
   if (hasDedicatedFields) {
-    // Server already split them — use directly
     nearATMSignals  = oiNear;
     tailRiskSignals = oiTail;
   } else {
-    // Fall back: split from unusualOI by proximity
     const allUnusual = oi.unusualOI || [];
     nearATMSignals  = filterByProximity(allUnusual, spot, activeSymbol, nearATMPct);
     const nearSet   = new Set(nearATMSignals.map(u => `${u.strike}-${u.type}`));
     tailRiskSignals = allUnusual.filter(u => !nearSet.has(`${u.strike}-${u.type}`));
   }
 
-  // FIX: HV field name normalisation — engine outputs hv20/hv60 (lowercase),
-  // but some payloads may use HV20/HV60 or hv_20/hv_60. Support all variants.
+  // FIX: HV field name normalisation
   const atmIV  = normaliseIV(
     vol.atmIV ?? vol.iv ?? vol.atm_iv ?? vol.atmIv ?? vol.ATM_IV ?? null
   );
@@ -821,26 +822,24 @@ export default function OptionsIntelligencePage({ socket }) {
   const vrp    = vol.vrp   ?? vol.vRp    ?? vol.VRP   ?? null;
   const skew25 = vol.skew25 ?? null;
 
-  // FIX: lambda guard — same zero-guard as gamma
+  // FIX: lambda guard
   const lambda      = greeks.lambda ?? greeks.leverage ?? null;
   const lambdaDisplay = (lambda != null && lambda !== 0) ? fmt2(lambda) : "—";
 
-  // FIX: gamma guard — preserve original zero-guard logic
+  // FIX: gamma guard
   const gammaDisplay = (greeks.gamma && greeks.gamma !== 0) ? greeks.gamma.toFixed(4) : "—";
 
-  // FIX: delta sanity — ATM call delta should be ~0.45-0.55.
-  // If delta > 0.85, the ATM strike selection is likely wrong (deep ITM selected).
-  // Surface a warning color so it's visible.
+  // FIX: delta sanity
   const deltaVal     = greeks.delta ?? null;
   const deltaDisplay = deltaVal != null ? fmt2(deltaVal) : "—";
   const deltaColor   = deltaVal == null       ? "#e8f2ff"
-                     : Math.abs(deltaVal) > 0.85 ? "#ffd54f"   // suspect — flag amber
+                     : Math.abs(deltaVal) > 0.85 ? "#ffd54f"
                      : deltaVal > 0           ? "#00ff9c"
                      : "#ef5350";
 
   const ageSec = lastUpdated ? Math.round((Date.now() - lastUpdated) / 1000) : null;
 
-  // FIX: HV display — normalise from fraction if needed (engine outputs as %, some feeds as fraction)
+  // FIX: HV display normalisation
   const hv20Display = hv20 != null ? (hv20 < 3 ? (hv20 * 100).toFixed(1) : Number(hv20).toFixed(1)) + "%" : "—";
   const hv60Display = hv60 != null ? (hv60 < 3 ? (hv60 * 100).toFixed(1) : Number(hv60).toFixed(1)) + "%" : "—";
   const vrpDisplay  = vrp  != null ? `${vrp > 0 ? "+" : ""}${fmt2(vrp)}%` : "—";
@@ -912,19 +911,16 @@ export default function OptionsIntelligencePage({ socket }) {
                     color={structure.eventRiskScore > 60 ? "#ef5350" : structure.eventRiskScore > 0 ? "#ffd54f" : "#5a90a8"} />
                   <VDivider />
                   <HStat label="ATM IV" value={atmIV != null ? `${atmIV.toFixed(1)}%` : "—"} color="#00cfff" />
-                  {/* FIX: VRP and HV now use normalised display values */}
                   <HStat label="VRP"    value={vrpDisplay} sub="IV−HV20"
                     color={vrp != null ? (vrp > 0 ? "#ff8a65" : "#00ff9c") : "#4a9abb"} />
                   <HStat label="HV 20" value={hv20Display} />
                   <HStat label="HV 60" value={hv60Display} />
                   <IVRankBar ivRank={vol.ivRank} ivPct={vol.ivPercentile} />
                   <VDivider />
-                  {/* FIX: delta uses deltaColor which turns amber if suspicious value */}
                   <HStat label="Delta"  value={deltaDisplay} color={deltaColor} />
                   <HStat label="Gamma"  value={gammaDisplay} color={gammaDisplay === "—" ? "#5a90a8" : "#e8f2ff"} />
                   <HStat label="Theta"  value={greeks.theta != null ? fmt2(greeks.theta) : "—"} sub="₹/day" color="#ff8a65" />
                   <HStat label="Vega"   value={fmt2(greeks.vega)} sub="1%IV" color="#4fc3f7" />
-                  {/* FIX: lambda guard applied */}
                   <HStat label="Lambda" value={lambdaDisplay} sub="lev" />
                   <HStat label="Rho"    value={fmt2(greeks.rho)} />
                 </div>
@@ -943,7 +939,6 @@ export default function OptionsIntelligencePage({ socket }) {
 
             {/* ══ 4 PANELS ════════════════════════════════════════════════ */}
             <div style={{ flex: 1, display: "flex", gap: 8, minHeight: 0 }}>
-              {/* FIX: pass dealerExp to GEXPanel so vanna/charm render correctly */}
               <GEXPanel gex={gex} dealerExposures={dealerExp} />
               <OIPanel
                 oi={oi}
