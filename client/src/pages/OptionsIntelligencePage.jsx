@@ -74,7 +74,7 @@ function interpretOI(u, spot) {
     if (!increasing && dist < 0) return { label: "Put unwind",     color: "#4fc3f7", icon: "▼", action: `Weak floor @ ${fmtInt(u.strike)}` };
     if (increasing  && dist > 0) return { label: "Put writing",    color: "#ff8a65", icon: "◆", action: `Dealer short @ ${fmtInt(u.strike)}` };
   }
-  return { label: "OI activity", color: "#5ab8d8", icon: "◈", action: `${fmtInt(u.strike)}` };
+  return { label: "OI activity", color: "#a8c8e0", icon: "◈", action: `${fmtInt(u.strike)}` };
 }
 
 const ALERT_ICONS = {
@@ -89,9 +89,9 @@ const ALERT_ICONS = {
 function HStat({ label, value, sub, color }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 52 }}>
-      <div style={{ fontSize: 8, color: "#6aA0b8", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 0.8, textTransform: "uppercase", whiteSpace: "nowrap" }}>{label}</div>
-      <div style={{ fontSize: 11, fontWeight: 700, color: color || "#d8eeff", fontFamily: "IBM Plex Mono,monospace", lineHeight: 1.1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 7, color: "#5a90b8", fontFamily: "IBM Plex Mono,monospace" }}>{sub}</div>}
+      <div style={{ fontSize: 8, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 0.8, textTransform: "uppercase", whiteSpace: "nowrap" }}>{label}</div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: color || "#e8f2ff", fontFamily: "IBM Plex Mono,monospace", lineHeight: 1.1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 7, color: "#a0b8cc", fontFamily: "IBM Plex Mono,monospace" }}>{sub}</div>}
     </div>
   );
 }
@@ -102,7 +102,7 @@ function VDivider() {
 
 function SL({ children, icon }) {
   return (
-    <div style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: "#7ab8cc", letterSpacing: 1.5, textTransform: "uppercase", borderBottom: "1px solid #1e4060", paddingBottom: 4, marginBottom: 6 }}>
+    <div style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: "#c8d8e8", letterSpacing: 1.5, textTransform: "uppercase", borderBottom: "1px solid #1e4060", paddingBottom: 4, marginBottom: 6 }}>
       {icon && <span style={{ marginRight: 4 }}>{icon}</span>}{children}
     </div>
   );
@@ -113,7 +113,7 @@ function GexBar({ label, value, max, color }) {
   return (
     <div style={{ marginBottom: 5 }}>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontFamily: "IBM Plex Mono,monospace", marginBottom: 2 }}>
-        <span style={{ color: "#90c8e8" }}>{label}</span>
+        <span style={{ color: "#c8d8e8" }}>{label}</span>
         <span style={{ color }}>{fmtCr(value)}</span>
       </div>
       <div style={{ height: 3, background: "#1a3040", borderRadius: 2 }}>
@@ -126,9 +126,9 @@ function GexBar({ label, value, max, color }) {
 function MiniCard({ label, value, sub, color }) {
   return (
     <div style={{ background: "#071828", border: "1px solid #1e3a50", borderRadius: 4, padding: "6px 8px" }}>
-      <div style={{ fontSize: 7, color: "#6aA0b8", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 13, fontWeight: 700, color: color || "#d8eeff", fontFamily: "IBM Plex Mono,monospace", lineHeight: 1.1, wordBreak: "break-word" }}>{value}</div>
-      {sub && <div style={{ fontSize: 7, color: "#5a90b8", marginTop: 1, fontFamily: "IBM Plex Mono,monospace" }}>{sub}</div>}
+      <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: color || "#e8f2ff", fontFamily: "IBM Plex Mono,monospace", lineHeight: 1.1, wordBreak: "break-word" }}>{value}</div>
+      {sub && <div style={{ fontSize: 7, color: "#a0b8cc", marginTop: 1, fontFamily: "IBM Plex Mono,monospace" }}>{sub}</div>}
     </div>
   );
 }
@@ -139,13 +139,13 @@ function IVRankBar({ ivRank, ivPct }) {
   return (
     <div style={{ minWidth: 80 }}>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 7, fontFamily: "IBM Plex Mono,monospace", marginBottom: 2 }}>
-        <span style={{ color: "#6aA0b8", textTransform: "uppercase", letterSpacing: 0.8 }}>IV Rank</span>
+        <span style={{ color: "#c8d8e8", textTransform: "uppercase", letterSpacing: 0.8 }}>IV Rank</span>
         <span style={{ color: clr, fontWeight: 700 }}>{rank > 0 ? fmt2(rank) : "—"}</span>
       </div>
       <div style={{ height: 4, background: "#1a3040", borderRadius: 2 }}>
         <div style={{ height: 4, width: `${rank}%`, minWidth: rank > 0 ? 2 : 0, background: clr, borderRadius: 2 }} />
       </div>
-      {ivPct != null && <div style={{ fontSize: 6, color: "#5a90b8", fontFamily: "IBM Plex Mono,monospace", marginTop: 1 }}>%ile: {fmt2(ivPct)}</div>}
+      {ivPct != null && <div style={{ fontSize: 6, color: "#a0b8cc", fontFamily: "IBM Plex Mono,monospace", marginTop: 1 }}>%ile: {fmt2(ivPct)}</div>}
     </div>
   );
 }
@@ -164,7 +164,7 @@ function StrategyTag({ signal }) {
     DEFENSIVE:        { bg: "#1a0000", color: "#ef5350", border: "#ef535033" },
     IV_CRUSH:         { bg: "#1a0000", color: "#ef5350", border: "#ef535033" },
   };
-  const c = colors[label] || { bg: "#1a3040", color: "#5ab8d8", border: "#4a9abb33" };
+  const c = colors[label] || { bg: "#1a3040", color: "#a8c8e0", border: "#4a9abb33" };
   return (
     <span style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, padding: "1px 5px", borderRadius: 2, background: c.bg, color: c.color, border: `1px solid ${c.border}` }}>
       {label.replace(/_/g, " ")}
@@ -184,7 +184,7 @@ function EmptyState({ symbol }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 10 }}>
       <div style={{ fontSize: 28, opacity: 0.2 }}>◤</div>
-      <div style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 10, color: "#7ab8cc", textAlign: "center" }}>
+      <div style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 10, color: "#c8d8e8", textAlign: "center" }}>
         {symbol ? `Waiting for data on ${symbol}…` : "Select a symbol"}
       </div>
     </div>
@@ -196,13 +196,13 @@ function EmptyState({ symbol }) {
 function AlertFeed({ alerts }) {
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollTop = 0; }, [alerts?.length]);
-  if (!alerts?.length) return <div style={{ fontSize: 8, color: "#5a90b0", fontFamily: "IBM Plex Mono,monospace", textAlign: "center", padding: "6px 0" }}>◌ No alerts</div>;
+  if (!alerts?.length) return <div style={{ fontSize: 8, color: "#a0b8cc", fontFamily: "IBM Plex Mono,monospace", textAlign: "center", padding: "6px 0" }}>◌ No alerts</div>;
   return (
     <div ref={ref} style={{ maxHeight: 100, overflowY: "auto" }}>
       {alerts.slice(0, 8).map((a, i) => {
         const icon   = ALERT_ICONS[a.type] || "◈";
         const isHigh = a.priority === "HIGH";
-        const color  = isHigh ? "#ef5350" : a.priority === "MEDIUM" ? "#ffd54f" : "#4a9abb";
+        const color  = isHigh ? "#ef5350" : a.priority === "MEDIUM" ? "#ffd54f" : "#a8c8e0";
         const age    = a.ts ? Math.round((Date.now() - a.ts) / 1000) : null;
         return (
           <div key={i} style={{ display: "flex", gap: 5, padding: "3px 0", borderBottom: i < alerts.length - 1 ? "1px solid #1a3040" : "none", opacity: age && age > 300 ? 0.4 : 1 }}>
@@ -210,7 +210,7 @@ function AlertFeed({ alerts }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 8, color, fontFamily: "IBM Plex Mono,monospace", fontWeight: isHigh ? 700 : 400, lineHeight: 1.3 }}>{a.message || a.detail || String(a)}</div>
             </div>
-            {age != null && <span style={{ fontSize: 6, color: "#5a90b0", fontFamily: "IBM Plex Mono,monospace", flexShrink: 0, marginTop: 1 }}>{age < 60 ? `${age}s` : `${Math.round(age / 60)}m`}</span>}
+            {age != null && <span style={{ fontSize: 6, color: "#a0b8cc", fontFamily: "IBM Plex Mono,monospace", flexShrink: 0, marginTop: 1 }}>{age < 60 ? `${age}s` : `${Math.round(age / 60)}m`}</span>}
           </div>
         );
       })}
@@ -265,13 +265,13 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol, live
 
       {nearATMSignals.length > 0 && (
         <>
-          <div style={{ fontSize: 7, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 4 }}>
-            UNUSUAL OI — NEAR ATM <span style={{ color: "#7ab0d0", fontWeight: 400 }}>±{(activeSymbol || "").toUpperCase().includes("BANK") ? "10" : "8"}%</span>
+          <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 4 }}>
+            UNUSUAL OI — NEAR ATM <span style={{ color: "#c8d8e8", fontWeight: 400 }}>±{(activeSymbol || "").toUpperCase().includes("BANK") ? "10" : "8"}%</span>
           </div>
           {nearATMSignals.slice(0, 5).map((u, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 8, fontFamily: "IBM Plex Mono,monospace", padding: "3px 0", borderBottom: i < Math.min(nearATMSignals.length, 5) - 1 ? "1px solid #1a3040" : "none" }}>
               <span style={{ color: (u.type || "").toUpperCase() === "CALL" ? "#4fc3f7" : "#ff8a65", minWidth: 72 }}>{(u.type || "").toUpperCase()} {u.strike}</span>
-              <span style={{ color: "#d8eeff" }}>{(u.oi || 0).toLocaleString("en-IN")}</span>
+              <span style={{ color: "#e8f2ff" }}>{(u.oi || 0).toLocaleString("en-IN")}</span>
               <span style={{ color: "#ff5cff", fontSize: 7 }}>v:{(u.vol || 0).toLocaleString("en-IN")}</span>
               {u.oiChgPct > 0 && <span style={{ color: (u.oiChange || 0) > 0 ? "#00ff9c" : "#ef5350", fontSize: 7 }}>{(u.oiChange || 0) > 0 ? "+" : ""}{u.oiChgPct}%</span>}
             </div>
@@ -287,11 +287,11 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol, live
             <div key={i} style={{ padding: "3px 0", borderBottom: i < 2 ? "1px solid #0a0a20" : "none" }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, fontFamily: "IBM Plex Mono,monospace" }}>
                 <span style={{ color: (u.type || "").toUpperCase() === "CALL" ? "#4fc3f788" : "#ff8a6588" }}>
-                  {(u.type || "").toUpperCase()} {u.strike} <span style={{ color: "#9a70b0", fontSize: 7 }}>({u.distPct > 0 ? "+" : ""}{u.distPct}%)</span>
+                  {(u.type || "").toUpperCase()} {u.strike} <span style={{ color: "#c090e0", fontSize: 7 }}>({u.distPct > 0 ? "+" : ""}{u.distPct}%)</span>
                 </span>
-                <span style={{ color: "#b870e0", fontSize: 7, fontWeight: 700 }}>{u.neighborRatio}× nbrs</span>
+                <span style={{ color: "#d890f8", fontSize: 7, fontWeight: 700 }}>{u.neighborRatio}× nbrs</span>
               </div>
-              {u.interpretation && <div style={{ fontSize: 7, color: "#aa80d0", fontFamily: "IBM Plex Mono,monospace", lineHeight: 1.3 }}>◈ {u.interpretation}</div>}
+              {u.interpretation && <div style={{ fontSize: 7, color: "#d0a0f8", fontFamily: "IBM Plex Mono,monospace", lineHeight: 1.3 }}>◈ {u.interpretation}</div>}
             </div>
           ))}
         </>
@@ -299,7 +299,7 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol, live
 
       <div style={{ borderTop: "1px solid #1a3040", marginTop: 6, paddingTop: 6 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-          <div style={{ fontSize: 7, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase" }}>⚡ Alerts</div>
+          <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase" }}>⚡ Alerts</div>
           {liveAlerts?.length > 0 && <span style={{ fontSize: 7, fontFamily: "IBM Plex Mono,monospace", padding: "1px 4px", borderRadius: 2, background: "#1a0000", color: "#ef5350" }}>{liveAlerts.length}</span>}
         </div>
         <AlertFeed alerts={liveAlerts} />
@@ -314,7 +314,7 @@ function GannPanel({ gann }) {
   if (!gann) return (
     <PanelWrap>
       <SL icon="◤">Gann Analysis</SL>
-      <div style={{ fontSize: 8, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", textAlign: "center", padding: "16px 0" }}>◌ Awaiting Gann data…</div>
+      <div style={{ fontSize: 8, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", textAlign: "center", padding: "16px 0" }}>◌ Awaiting Gann data…</div>
     </PanelWrap>
   );
 
@@ -342,7 +342,7 @@ function GannPanel({ gann }) {
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: gc.color, fontFamily: "IBM Plex Mono,monospace" }}>{gBias.replace(/_/g, " ")}</div>
-          {sig.summary && <div style={{ fontSize: 8, color: "#5a90a8", fontFamily: "IBM Plex Mono,monospace", lineHeight: 1.3 }}>{sig.summary.replace(/^Gann: [A-Z]+ \(score \d+\/100\)\.\s?/, "")}</div>}
+          {sig.summary && <div style={{ fontSize: 8, color: "#a0b8cc", fontFamily: "IBM Plex Mono,monospace", lineHeight: 1.3 }}>{sig.summary.replace(/^Gann: [A-Z]+ \(score \d+\/100\)\.\s?/, "")}</div>}
         </div>
         {cardinal?.inCardinalZone?.strength === "ON_CARDINAL" && (
           <span style={{ fontSize: 7, padding: "1px 4px", borderRadius: 2, background: "#1a0800", border: "1px solid #ffd54f44", color: "#ffd54f", fontFamily: "IBM Plex Mono,monospace" }}>CARDINAL</span>
@@ -352,20 +352,20 @@ function GannPanel({ gann }) {
       {(levels.supports?.length > 0 || levels.resistances?.length > 0) && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginBottom: 8 }}>
           <div style={{ background: "#071828", border: "1px solid #00ff9c22", borderRadius: 4, padding: "5px 7px" }}>
-            <div style={{ fontSize: 7, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>SUPPORTS</div>
+            <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>SUPPORTS</div>
             {(levels.supports || []).slice(0, 3).map((s, i) => (
               <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 8, fontFamily: "IBM Plex Mono,monospace", padding: "1px 0" }}>
                 <span style={{ color: "#00ff9c" }}>S{i + 1} {fmtInt(s.price)}</span>
-                <span style={{ color: "#6aA0b8", fontSize: 7 }}>{s.source?.includes("Nine") ? "SoN" : s.source?.includes("Cardinal") ? "Card" : "—"}</span>
+                <span style={{ color: "#c8d8e8", fontSize: 7 }}>{s.source?.includes("Nine") ? "SoN" : s.source?.includes("Cardinal") ? "Card" : "—"}</span>
               </div>
             ))}
           </div>
           <div style={{ background: "#071828", border: "1px solid #ef535022", borderRadius: 4, padding: "5px 7px" }}>
-            <div style={{ fontSize: 7, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>RESISTANCES</div>
+            <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>RESISTANCES</div>
             {(levels.resistances || []).slice(0, 3).map((r, i) => (
               <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 8, fontFamily: "IBM Plex Mono,monospace", padding: "1px 0" }}>
                 <span style={{ color: "#ef5350" }}>R{i + 1} {fmtInt(r.price)}</span>
-                <span style={{ color: "#6aA0b8", fontSize: 7 }}>{r.source?.includes("Nine") ? "SoN" : r.source?.includes("Cardinal") ? "Card" : "—"}</span>
+                <span style={{ color: "#c8d8e8", fontSize: 7 }}>{r.source?.includes("Nine") ? "SoN" : r.source?.includes("Cardinal") ? "Card" : "—"}</span>
               </div>
             ))}
           </div>
@@ -374,7 +374,7 @@ function GannPanel({ gann }) {
 
       {son?.positionOnSquare && (
         <div style={{ marginBottom: 6 }}>
-          <div style={{ fontSize: 7, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>SQUARE OF NINE</div>
+          <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>SQUARE OF NINE</div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <span style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", color: "#4fc3f7" }}>{son.angleOnSquare?.toFixed(1)}° on square</span>
             <span style={{ fontSize: 7, padding: "1px 4px", borderRadius: 2, fontFamily: "IBM Plex Mono,monospace",
@@ -383,23 +383,23 @@ function GannPanel({ gann }) {
               {son.positionOnSquare.strength}
             </span>
           </div>
-          <div style={{ fontSize: 7, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", marginTop: 2 }}>{son.positionOnSquare.label}</div>
+          <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", marginTop: 2 }}>{son.positionOnSquare.label}</div>
         </div>
       )}
 
       {fan && (
         <div style={{ marginBottom: 6, padding: "5px 7px", background: "#071828", borderRadius: 3, border: "1px solid #1a3848" }}>
-          <div style={{ fontSize: 7, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", marginBottom: 2 }}>GANN FAN</div>
+          <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", marginBottom: 2 }}>GANN FAN</div>
           <div style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", color: fan.aboveMasterAngle ? "#00ff9c" : "#ef5350", fontWeight: 700 }}>
             {fan.aboveMasterAngle ? "▲ Above" : "▼ Below"} 1×1 master
-            {fan.criticalLevel != null && <span style={{ color: "#5ab8d8", fontWeight: 400 }}> @ ₹{fmtInt(fan.criticalLevel)}</span>}
+            {fan.criticalLevel != null && <span style={{ color: "#a8c8e0", fontWeight: 400 }}> @ ₹{fmtInt(fan.criticalLevel)}</span>}
           </div>
         </div>
       )}
 
       {cycles.length > 0 && (
         <div style={{ marginBottom: 6 }}>
-          <div style={{ fontSize: 7, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>TIME CYCLES</div>
+          <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>TIME CYCLES</div>
           {cycles.map((c, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 8, fontFamily: "IBM Plex Mono,monospace", padding: "2px 0", borderBottom: "1px solid #1a3040" }}>
               <span style={{ color: cycC[c.cycleStrength] || "#4a9abb", flex: 1, paddingRight: 4, lineHeight: 1.3 }}>{c.label}</span>
@@ -413,7 +413,7 @@ function GannPanel({ gann }) {
 
       {gAlerts.length > 0 && (
         <div>
-          <div style={{ fontSize: 7, color: "#7ab8cc", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>ALERTS</div>
+          <div style={{ fontSize: 7, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3 }}>ALERTS</div>
           {gAlerts.map((a, i) => (
             <div key={i} style={{ padding: "4px 6px", background: "#1a0000", border: "1px solid #ef535033", borderRadius: 3, marginBottom: 3, fontSize: 8, fontFamily: "IBM Plex Mono,monospace" }}>
               <div style={{ color: "#ef5350", fontWeight: 700 }}>{a.message}</div>
@@ -423,7 +423,7 @@ function GannPanel({ gann }) {
       )}
 
       {gann.headline && (
-        <div style={{ fontSize: 8, color: "#5aA0b0", fontFamily: "IBM Plex Mono,monospace", marginTop: 4, lineHeight: 1.4, padding: "4px 6px", background: "#071828", borderRadius: 3, border: "1px solid #1a3848" }}>{gann.headline}</div>
+        <div style={{ fontSize: 8, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", marginTop: 4, lineHeight: 1.4, padding: "4px 6px", background: "#071828", borderRadius: 3, border: "1px solid #1a3848" }}>{gann.headline}</div>
       )}
     </PanelWrap>
   );
@@ -478,31 +478,31 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
         <div style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace" }}>
           {callWall  && dCall  != null && (
             <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #1a3040" }}>
-              <span style={{ color: "#7ab8cc" }}>↑ To Call Wall</span>
+              <span style={{ color: "#c8d8e8" }}>↑ To Call Wall</span>
               <span style={{ color: "#4fc3f7", fontWeight: 700 }}>+{Math.abs(dCall).toFixed(1)}% ₹{fmtInt(callWall - spot)}</span>
             </div>
           )}
           {putWall  && dPut   != null && (
             <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #1a3040" }}>
-              <span style={{ color: "#7ab8cc" }}>↓ To Put Wall</span>
+              <span style={{ color: "#c8d8e8" }}>↓ To Put Wall</span>
               <span style={{ color: "#ff8a65", fontWeight: 700 }}>-{Math.abs(dPut).toFixed(1)}% ₹{fmtInt(spot - putWall)}</span>
             </div>
           )}
           {gammaFlip && dGamma != null && (
             <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #1a3040" }}>
-              <span style={{ color: "#7ab8cc" }}>γ Gamma Flip</span>
+              <span style={{ color: "#c8d8e8" }}>γ Gamma Flip</span>
               <span style={{ color: aboveGF ? "#00ff9c" : "#ffd54f", fontWeight: 700 }}>{aboveGF ? "+" : "-"}{Math.abs(dGamma).toFixed(1)}% ₹{fmtInt(gammaFlip)}</span>
             </div>
           )}
           {maxPain && (
             <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #1a3040" }}>
-              <span style={{ color: "#7ab8cc" }}>⊗ Max Pain</span>
-              <span style={{ color: "#5ab8d8", fontWeight: 700 }}>₹{fmtInt(maxPain)}</span>
+              <span style={{ color: "#c8d8e8" }}>⊗ Max Pain</span>
+              <span style={{ color: "#a8c8e0", fontWeight: 700 }}>₹{fmtInt(maxPain)}</span>
             </div>
           )}
           {pcr != null && (
             <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
-              <span style={{ color: "#7ab8cc" }}>⊕ PCR</span>
+              <span style={{ color: "#c8d8e8" }}>⊕ PCR</span>
               <span style={{ color: pcr > 1.2 ? "#00ff9c" : pcr < 0.8 ? "#ef5350" : "#ffd54f", fontWeight: 700 }}>{pcr.toFixed(2)} {pcr > 1.2 ? "bullish" : pcr < 0.8 ? "bearish" : "neutral"}</span>
             </div>
           )}
@@ -510,19 +510,19 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
       )}
 
       {structure.ivEnvironment && (
-        <div style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", color: "#5a90a8", marginTop: 6 }}>
+        <div style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", color: "#a0b8cc", marginTop: 6 }}>
           IV env: <span style={{ color: "#ffd54f" }}>{structure.ivEnvironment.replace(/_/g, " ")}</span>
         </div>
       )}
       {structure.straddlePrice != null && (
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontFamily: "IBM Plex Mono,monospace", padding: "5px 0", borderTop: "1px solid #1a3040", marginTop: 6 }}>
-          <span style={{ color: "#7ab8cc" }}>ATM Straddle</span>
-          <span style={{ color: "#d8eeff", fontWeight: 700 }}>₹{fmt2(structure.straddlePrice)}</span>
+          <span style={{ color: "#c8d8e8" }}>ATM Straddle</span>
+          <span style={{ color: "#e8f2ff", fontWeight: 700 }}>₹{fmt2(structure.straddlePrice)}</span>
         </div>
       )}
       {gannData?.keyLevels?.masterAngle != null && (
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontFamily: "IBM Plex Mono,monospace", padding: "5px 0", borderTop: "1px solid #1a3040" }}>
-          <span style={{ color: "#7ab8cc" }}>Gann 1×1</span>
+          <span style={{ color: "#c8d8e8" }}>Gann 1×1</span>
           <span style={{ color: "#ffd54f", fontWeight: 700 }}>₹{Math.round(gannData.keyLevels.masterAngle).toLocaleString("en-IN")}</span>
         </div>
       )}
@@ -659,14 +659,14 @@ export default function OptionsIntelligencePage({ socket }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", borderBottom: "1px solid #1c3a58", flexShrink: 0, background: "#060f1c", flexWrap: "wrap" }}>
         <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 9, fontWeight: 700, color: "#00cfff", letterSpacing: 1 }}>⚡ OPTIONS INTEL</span>
         <div style={{ display: "flex", gap: 3, flexWrap: "wrap", flex: 1 }}>
-          {symbolList.length === 0 && <span style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", color: "#7ab8cc" }}>◌ Waiting…</span>}
+          {symbolList.length === 0 && <span style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", color: "#c8d8e8" }}>◌ Waiting…</span>}
           {symbolList.slice(0, 20).map(sym => (
             <button key={sym} onClick={() => handleSymbolChange(sym)} style={{ background: activeSymbol === sym ? "#00cfff22" : "transparent", border: `1px solid ${activeSymbol === sym ? "#00cfff66" : "#1c3a58"}`, borderRadius: 2, padding: "1px 7px", cursor: "pointer", fontFamily: "IBM Plex Mono,monospace", fontSize: 8, fontWeight: 700, color: activeSymbol === sym ? "#00cfff" : "#5a90a8" }}>
               {sym}
             </button>
           ))}
         </div>
-        {lastUpdated && <span style={{ fontSize: 7, fontFamily: "IBM Plex Mono,monospace", color: "#5a90b0" }}>Updated {Math.round((Date.now() - lastUpdated) / 1000)}s ago</span>}
+        {lastUpdated && <span style={{ fontSize: 7, fontFamily: "IBM Plex Mono,monospace", color: "#a0b8cc" }}>Updated {Math.round((Date.now() - lastUpdated) / 1000)}s ago</span>}
       </div>
 
       {!d ? <EmptyState symbol={activeSymbol} /> : (
@@ -683,7 +683,7 @@ export default function OptionsIntelligencePage({ socket }) {
               </div>
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
-                  <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 13, fontWeight: 700, color: "#d8eeff" }}>{activeSymbol}</span>
+                  <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 13, fontWeight: 700, color: "#e8f2ff" }}>{activeSymbol}</span>
                   <span style={{ fontSize: 9, color: band?.color, fontFamily: "IBM Plex Mono,monospace" }}>{bias}</span>
                   {gannData && <GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={true} />}
                 </div>
@@ -720,7 +720,7 @@ export default function OptionsIntelligencePage({ socket }) {
               <VDivider />
 
               {/* Greeks */}
-              <HStat label="Delta"  value={fmt2(greeks.delta)}  color={greeks.delta > 0 ? "#00ff9c" : greeks.delta < 0 ? "#ef5350" : "#d8eeff"} />
+              <HStat label="Delta"  value={fmt2(greeks.delta)}  color={greeks.delta > 0 ? "#00ff9c" : greeks.delta < 0 ? "#ef5350" : "#e8f2ff"} />
               <HStat label="Gamma"  value={greeks.gamma != null ? greeks.gamma.toFixed(4) : "—"} />
               <HStat label="Theta"  value={greeks.theta != null ? fmt2(greeks.theta) : "—"} sub="₹/day" color="#ff8a65" />
               <HStat label="Vega"   value={fmt2(greeks.vega)} sub="1%IV" color="#4fc3f7" />
