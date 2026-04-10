@@ -25,6 +25,15 @@
  *   put writers have been accumulating all series.
  *   Both tiers are emitted separately so the frontend can render them with
  *   appropriate context labels.
+ *
+ * FIX: 11 Apr 2026 — Session 8:
+ * - ingestChainData() was being called with a single object argument instead of
+ *   5 positional arguments. optionsIntegration expects:
+ *     ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize)
+ *   Previously called as:
+ *     ingestChainData({ symbol, spotPrice, expiryDate, lotSize, chain })
+ *   This meant symbol=whole object, spotPrice=undefined, chainData=undefined —
+ *   so GEX / IV / PCR / OI fields were always 0 / "—" in the dashboard.
  */
 
 const axios = require("axios");
@@ -167,8 +176,8 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
       if (oi < minAbsOI) continue; // skip tiny absolute OI regardless
 
       // Gather neighbour OIs (±neighborWindow strikes, excluding self)
-      const start      = Math.max(0, i - neighborWindow);
-      const end        = Math.min(strikes.length - 1, i + neighborWindow);
+      const start       = Math.max(0, i - neighborWindow);
+      const end         = Math.min(strikes.length - 1, i + neighborWindow);
       const neighborOIs = [];
       for (let j = start; j <= end; j++) {
         if (j !== i) neighborOIs.push(oiByIndex[j]);
@@ -177,8 +186,8 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
 
       // Median of neighbours
       neighborOIs.sort((a, b) => a - b);
-      const mid        = Math.floor(neighborOIs.length / 2);
-      const medianOI   = neighborOIs.length % 2 === 0
+      const mid      = Math.floor(neighborOIs.length / 2);
+      const medianOI = neighborOIs.length % 2 === 0
         ? (neighborOIs[mid - 1] + neighborOIs[mid]) / 2
         : neighborOIs[mid];
 
@@ -203,10 +212,10 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
         type:     side,
         oi,
         vol,
-        oiChange:        oiChg,
-        oiChgPct:        +(oiChgPct * 100).toFixed(1),
+        oiChange:         oiChg,
+        oiChgPct:         +(oiChgPct * 100).toFixed(1),
         neighborMedianOI: Math.round(medianOI),
-        neighborRatio:   +ratio.toFixed(1),
+        neighborRatio:    +ratio.toFixed(1),
         ltp,
         iv:       +(iv * 100).toFixed(2),
         distPct:  +distPct.toFixed(1),
@@ -434,25 +443,28 @@ async function pollChains() {
           ioRef.emit("option-chain-update", { underlying: u.name, expiry, data: processed });
         }
 
-        // Feed Options Intelligence Engine
+        // FIX: was previously called as ingestChainData({ symbol, spotPrice, ... })
+        // i.e. a single object — but optionsIntegration expects 5 positional args:
+        //   ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize)
+        // Corrected to pass positional args so the engine actually receives the data.
         try {
-          ingestChainData({
-            symbol:     u.name,
-            spotPrice,
-            expiryDate: expiry,
-            lotSize:    u.lotSize || 1,
-            chain: raw.map(s => ({
-              strike:   s.strike_price,
-              callOI:   s.call_options?.market_data?.oi       || 0,
-              putOI:    s.put_options?.market_data?.oi        || 0,
-              callVol:  s.call_options?.market_data?.volume   || 0,
-              putVol:   s.put_options?.market_data?.volume    || 0,
-              callLTP:  s.call_options?.market_data?.ltp      || 0,
-              putLTP:   s.put_options?.market_data?.ltp       || 0,
-              callIV:   s.call_options?.option_greeks?.iv     || 0,
-              putIV:    s.put_options?.option_greeks?.iv      || 0,
-            })),
-          });
+          ingestChainData(
+            u.name,       // symbol     — was: whole object
+            spotPrice,    // spotPrice  — was: undefined
+            raw.map(s => ({
+              strike:  s.strike_price,
+              callOI:  s.call_options?.market_data?.oi       || 0,
+              putOI:   s.put_options?.market_data?.oi        || 0,
+              callVol: s.call_options?.market_data?.volume   || 0,
+              putVol:  s.put_options?.market_data?.volume    || 0,
+              callLTP: s.call_options?.market_data?.ltp      || 0,
+              putLTP:  s.put_options?.market_data?.ltp       || 0,
+              callIV:  s.call_options?.option_greeks?.iv     || 0,
+              putIV:   s.put_options?.option_greeks?.iv      || 0,
+            })),          // chainData  — was: undefined
+            expiry,       // expiryDate — was: undefined
+            u.lotSize || 1, // lotSize  — was: undefined
+          );
         } catch (err) {
           console.warn(`⚠️ OI Intel ingest error for ${u.name}:`, err.message);
         }
@@ -521,16 +533,16 @@ function persistCache() {
         updatedAt: data.updatedAt || 0,
         chains: Object.entries(data.chains || {}).reduce((acc, [exp, chain]) => {
           acc[exp] = {
-            pcr:              chain.pcr,
-            maxPainStrike:    chain.maxPainStrike,
-            support:          chain.support,
-            resistance:       chain.resistance,
-            totalCEOI:        chain.totalCEOI,
-            totalPEOI:        chain.totalPEOI,
-            atmStrike:        chain.atmStrike,
-            spotPrice:        chain.spotPrice,
-            updatedAt:        chain.updatedAt,
-            unusualOI:        chain.unusualOI        || [],
+            pcr:               chain.pcr,
+            maxPainStrike:     chain.maxPainStrike,
+            support:           chain.support,
+            resistance:        chain.resistance,
+            totalCEOI:         chain.totalCEOI,
+            totalPEOI:         chain.totalPEOI,
+            atmStrike:         chain.atmStrike,
+            spotPrice:         chain.spotPrice,
+            updatedAt:         chain.updatedAt,
+            unusualOI:         chain.unusualOI         || [],
             unusualOITailRisk: chain.unusualOITailRisk || [],
             strikes: (chain.strikes || []).map(s => ({
               strike: s.strike, isATM: s.isATM,
