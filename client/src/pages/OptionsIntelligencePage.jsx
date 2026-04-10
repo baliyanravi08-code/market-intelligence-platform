@@ -2,22 +2,23 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import GannBadge from "../components/GannBadge";
 
 /**
- * OptionsIntelligencePage.jsx — COMPLETE, single file, no extra imports needed.
+ * OptionsIntelligencePage.jsx
  *
- * NEW in this version:
- *  A. MarketContextBar — fully inlined (no separate file, no extra import)
- *     · Visual bar: spot dot positioned between put wall → gamma flip → call wall
- *     · Distance rows: "+5.1% to Call Wall, ₹1,225 away"
- *     · OI Signal Read: "🟢 Call unwinding → Breakout potential above 24,000"
- *     · Live Alert Feed: auto-scrolls, fades old alerts after 5 min
- *  B. liveAlerts state — wired to gann-alert + market-alert socket events
- *  C. Symbol normalisation fix: "NIFTY 50"→"NIFTY", "BANK NIFTY"→"BANKNIFTY"
- *     for Gann requests (was causing dead Gann panel)
- *  D. All prior fixes preserved (two-tier OI, IV normalisation, GEX bar, etc.)
+ * LAYOUT CHANGES (Session 8):
+ *  1. Volatility stats (ATM IV, VRP, HV20, HV60, IV Rank) + Portfolio Greeks
+ *     moved INTO the Score Card header as extra stat columns next to
+ *     Expected Move / Event Risk — no separate cards for these anymore.
+ *  2. Grid order: GEX → OI → MarketContextBar → then Gann + Market Structure
+ *     rendered SIDE BY SIDE in a 2-col sub-grid (gridColumn span trick).
+ *  3. All prior fixes preserved:
+ *     - Two-tier unusual OI (nearATM + tailRisk)
+ *     - IV normalisation (handles both % and decimal)
+ *     - Symbol normalisation for Gann ("NIFTY 50"→"NIFTY")
+ *     - Lambda pulled from greeks correctly
+ *     - liveAlerts wired to gann-alert + market-alert
  */
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
-
 function fmt2(n)   { return n == null ? "—" : Number(n).toFixed(2); }
 function fmtInt(n) { return n == null ? "—" : Math.round(Number(n)).toLocaleString("en-IN"); }
 function fmtCr(n) {
@@ -42,7 +43,7 @@ function normaliseIV(raw) {
   return isNaN(v) ? null : (v > 200 ? v / 100 : v);
 }
 
-// ─── Proximity filter (legacy fallback for old backend) ───────────────────────
+// ─── Proximity filter (legacy fallback) ──────────────────────────────────────
 function filterByProximity(arr, spot, symbol, pct = 10) {
   if (!arr?.length || !spot) return arr || [];
   const p  = (symbol || "").toUpperCase().includes("BANK") ? 15 : pct;
@@ -74,8 +75,8 @@ function gannPalette(bias) {
 
 // ─── OI signal interpreter ────────────────────────────────────────────────────
 function interpretOI(u, spot) {
-  const isCall    = (u.type || "").toUpperCase() === "CALL";
-  const dist      = u.distPct ?? calcPct(u.strike, spot) ?? 0;
+  const isCall     = (u.type || "").toUpperCase() === "CALL";
+  const dist       = u.distPct ?? calcPct(u.strike, spot) ?? 0;
   const increasing = (u.oiChange || 0) > 0;
   if (isCall) {
     if (increasing  && dist > 0) return { label: "Supply wall building",   color: "#ef5350", icon: "🔴", action: `Resistance at ${fmtInt(u.strike)}` };
@@ -97,7 +98,7 @@ const ALERT_ICONS = {
 };
 
 // ════════════════════════════════════════════════════════════════════════════
-// ── Shared sub-components ────────────────────────────────────────────────────
+// ── Shared sub-components ───────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════════════════
 
 function StatCard({ label, value, sub, color, small }) {
@@ -107,6 +108,17 @@ function StatCard({ label, value, sub, color, small }) {
       <div style={{ fontSize: 9, color: "#1a5070", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: small || isLong ? 11 : 18, fontWeight: 700, color: color || "#d8eeff", fontFamily: "IBM Plex Mono,monospace", wordBreak: "break-word", lineHeight: 1.3 }}>{value}</div>
       {sub && <div style={{ fontSize: 9, color: "#2a6080", marginTop: 3, fontFamily: "IBM Plex Mono,monospace" }}>{sub}</div>}
+    </div>
+  );
+}
+
+/** Compact inline stat pill used inside the Score Card header strip */
+function HeaderStat({ label, value, sub, color }) {
+  return (
+    <div style={{ background: "#00081544", border: "1px solid #0c224066", borderRadius: 5, padding: "7px 10px", minWidth: 72, flex: "0 0 auto" }}>
+      <div style={{ fontSize: 8, color: "#1a4060", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 3, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: color || "#d8eeff", fontFamily: "IBM Plex Mono,monospace", lineHeight: 1.2 }}>{value}</div>
+      {sub && <div style={{ fontSize: 8, color: "#1a4060", marginTop: 2, fontFamily: "IBM Plex Mono,monospace" }}>{sub}</div>}
     </div>
   );
 }
@@ -133,12 +145,34 @@ function GexBar({ label, value, max, color }) {
   );
 }
 
+/** Slim IV Rank progress bar — used inside HeaderStat area */
+function IVRankBar({ ivRank, ivPct }) {
+  const rank = Math.min(Math.max(ivRank || 0, 0), 100);
+  const clr  = rank > 70 ? "#ef5350" : rank > 40 ? "#ffd54f" : "#00ff9c";
+  return (
+    <div style={{ minWidth: 110 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, fontFamily: "IBM Plex Mono,monospace", marginBottom: 3 }}>
+        <span style={{ color: "#1a4060", textTransform: "uppercase", letterSpacing: 1 }}>IV Rank</span>
+        <span style={{ color: clr, fontWeight: 700 }}>{rank > 0 ? fmt2(rank) : "—"}</span>
+      </div>
+      <div style={{ height: 5, background: "#0a1828", borderRadius: 3 }}>
+        <div style={{ height: 5, width: `${rank}%`, minWidth: rank > 0 ? 2 : 0, background: clr, borderRadius: 3 }} />
+      </div>
+      {ivPct != null && (
+        <div style={{ fontSize: 7, color: "#1a4060", fontFamily: "IBM Plex Mono,monospace", marginTop: 2 }}>
+          %ile: {fmt2(ivPct)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StrategyTag({ signal }) {
   const label = typeof signal === "string" ? signal : (signal?.strategy || "");
   const colors = {
-    SELL_PREMIUM: { bg: "#002210", color: "#00ff9c", border: "#00ff9c44" },
-    BUY_OPTIONS:  { bg: "#001828", color: "#4fc3f7", border: "#4fc3f744" },
-    BUY_PREMIUM:  { bg: "#001828", color: "#4fc3f7", border: "#4fc3f744" },
+    SELL_PREMIUM:     { bg: "#002210", color: "#00ff9c", border: "#00ff9c44" },
+    BUY_OPTIONS:      { bg: "#001828", color: "#4fc3f7", border: "#4fc3f744" },
+    BUY_PREMIUM:      { bg: "#001828", color: "#4fc3f7", border: "#4fc3f744" },
     GAMMA_SQUEEZE:    { bg: "#1a1000", color: "#ffd54f", border: "#ffd54f44" },
     GAMMA_WALL:       { bg: "#1a1000", color: "#ffd54f", border: "#ffd54f44" },
     SKEW_TRADE:       { bg: "#1a0a00", color: "#ff8a65", border: "#ff8a6544" },
@@ -152,27 +186,6 @@ function StrategyTag({ signal }) {
     <span style={{ fontSize: 9, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: c.bg, color: c.color, border: `1px solid ${c.border}` }}>
       {label.replace(/_/g, " ")}
     </span>
-  );
-}
-
-function IVRankMeter({ ivRank, ivPct }) {
-  const rank = Math.min(Math.max(ivRank || 0, 0), 100);
-  const clr  = rank > 70 ? "#ef5350" : rank > 40 ? "#ffd54f" : "#00ff9c";
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontFamily: "IBM Plex Mono,monospace", marginBottom: 4 }}>
-        <span style={{ color: "#1a5070" }}>IV RANK</span>
-        <span style={{ color: clr, fontWeight: 700 }}>{fmt2(rank)}</span>
-      </div>
-      <div style={{ height: 8, background: "#0a1828", borderRadius: 4 }}>
-        <div style={{ height: 8, width: `${rank}%`, minWidth: 2, background: clr, borderRadius: 4 }} />
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, fontFamily: "IBM Plex Mono,monospace", marginTop: 3 }}>
-        <span style={{ color: "#1a4060" }}>LOW</span>
-        <span style={{ color: "#1a5070" }}>IV%ile: {ivPct != null ? fmt2(ivPct) : "—"}</span>
-        <span style={{ color: "#1a4060" }}>HIGH</span>
-      </div>
-    </div>
   );
 }
 
@@ -192,7 +205,7 @@ function EmptyState({ symbol }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// ── MarketContextBar (inlined — no separate file needed) ─────────────────────
+// ── MarketContextBar ─────────────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════════════════
 
 function PriceBar({ spot, putWall, callWall, gammaFlip }) {
@@ -260,26 +273,24 @@ function AlertFeed({ alerts }) {
   );
 }
 
-function MarketContextBar({ spot, callWall, putWall, gammaFlip, maxPain, pcr, alerts, nearATMSignals, symbol }) {
+function MarketContextBar({ spot, callWall, putWall, gammaFlip, maxPain, pcr, alerts, nearATMSignals }) {
   if (!spot) return null;
 
-  const dCall  = callWall  ? calcPct(callWall,  spot) : null;
-  const dPut   = putWall   ? calcPct(spot, putWall)   : null;
-  const dGamma = gammaFlip ? calcPct(gammaFlip, spot) : null;
-  const dPain  = maxPain   ? calcPct(maxPain,   spot) : null;
+  const dCall   = callWall  ? calcPct(callWall,  spot) : null;
+  const dPut    = putWall   ? calcPct(spot, putWall)   : null;
+  const dGamma  = gammaFlip ? calcPct(gammaFlip, spot) : null;
+  const dPain   = maxPain   ? calcPct(maxPain,   spot) : null;
   const aboveGF = gammaFlip ? spot > gammaFlip : null;
 
   let zoneLabel, zoneColor;
-  if (callWall  && spot >= callWall  * 0.99) { zoneLabel = "At Call Wall — resistance zone";    zoneColor = "#4fc3f7"; }
-  else if (putWall  && spot <= putWall  * 1.01) { zoneLabel = "At Put Wall — support zone";     zoneColor = "#ff8a65"; }
-  else if (gammaFlip && spot >= gammaFlip)       { zoneLabel = "Above Gamma Flip — trend zone"; zoneColor = "#00ff9c"; }
-  else if (gammaFlip && spot <  gammaFlip)       { zoneLabel = "Below Gamma Flip — mean-revert";zoneColor = "#ffd54f"; }
-  else { zoneLabel = "Between walls"; zoneColor = "#4a9abb"; }
+  if      (callWall  && spot >= callWall  * 0.99) { zoneLabel = "At Call Wall — resistance zone";  zoneColor = "#4fc3f7"; }
+  else if (putWall   && spot <= putWall   * 1.01) { zoneLabel = "At Put Wall — support zone";      zoneColor = "#ff8a65"; }
+  else if (gammaFlip && spot >= gammaFlip)         { zoneLabel = "Above Gamma Flip — trend zone";  zoneColor = "#00ff9c"; }
+  else if (gammaFlip && spot <  gammaFlip)         { zoneLabel = "Below Gamma Flip — mean-revert"; zoneColor = "#ffd54f"; }
+  else                                             { zoneLabel = "Between walls";                  zoneColor = "#4a9abb"; }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-
-      {/* Price position card */}
       <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px" }}>
         <SectionLabel>Price vs Key Levels</SectionLabel>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 4, marginBottom: 10, background: `${zoneColor}11`, border: `1px solid ${zoneColor}33` }}>
@@ -287,14 +298,13 @@ function MarketContextBar({ spot, callWall, putWall, gammaFlip, maxPain, pcr, al
           <span style={{ fontSize: 9, color: zoneColor, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700 }}>{zoneLabel}</span>
         </div>
         <PriceBar spot={spot} putWall={putWall} callWall={callWall} gammaFlip={gammaFlip} />
-        {callWall  && dCall  != null && <CtxRow label="To Call Wall"  value={`+${Math.abs(dCall).toFixed(1)}%`}  sub={`₹${fmtInt(callWall - spot)} away`}  color="#4fc3f7" icon="↑" />}
-        {putWall   && dPut   != null && <CtxRow label="To Put Wall"   value={`-${Math.abs(dPut).toFixed(1)}%`}   sub={`₹${fmtInt(spot - putWall)} away`}   color="#ff8a65" icon="↓" />}
-        {gammaFlip && dGamma != null && <CtxRow label="Gamma Flip" value={aboveGF ? `+${Math.abs(dGamma).toFixed(1)}% above` : `-${Math.abs(dGamma).toFixed(1)}% below`} sub={`₹${fmtInt(gammaFlip)}`} color={aboveGF ? "#00ff9c" : "#ffd54f"} icon="γ" />}
-        {maxPain   && dPain  != null && <CtxRow label="Max Pain"  value={`${dPain >= 0 ? "+" : ""}${dPain.toFixed(1)}%`} sub={`₹${fmtInt(maxPain)} expiry magnet`} color="#4a9abb" icon="⊗" />}
+        {callWall  && dCall  != null && <CtxRow label="To Call Wall" value={`+${Math.abs(dCall).toFixed(1)}%`}  sub={`₹${fmtInt(callWall - spot)} away`} color="#4fc3f7" icon="↑" />}
+        {putWall   && dPut   != null && <CtxRow label="To Put Wall"  value={`-${Math.abs(dPut).toFixed(1)}%`}   sub={`₹${fmtInt(spot - putWall)} away`}  color="#ff8a65" icon="↓" />}
+        {gammaFlip && dGamma != null && <CtxRow label="Gamma Flip"   value={aboveGF ? `+${Math.abs(dGamma).toFixed(1)}% above` : `-${Math.abs(dGamma).toFixed(1)}% below`} sub={`₹${fmtInt(gammaFlip)}`} color={aboveGF ? "#00ff9c" : "#ffd54f"} icon="γ" />}
+        {maxPain   && dPain  != null && <CtxRow label="Max Pain"     value={`${dPain >= 0 ? "+" : ""}${dPain.toFixed(1)}%`} sub={`₹${fmtInt(maxPain)} expiry magnet`} color="#4a9abb" icon="⊗" />}
         {pcr != null && <CtxRow label="PCR" value={pcr.toFixed(2)} sub={pcr > 1.2 ? "bullish (put-heavy)" : pcr < 0.8 ? "bearish (call-heavy)" : "neutral"} color={pcr > 1.2 ? "#00ff9c" : pcr < 0.8 ? "#ef5350" : "#ffd54f"} icon="⊕" />}
       </div>
 
-      {/* OI Signal Read */}
       {nearATMSignals?.length > 0 && (
         <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px" }}>
           <SectionLabel>OI Signal Read</SectionLabel>
@@ -317,7 +327,6 @@ function MarketContextBar({ spot, callWall, putWall, gammaFlip, maxPain, pcr, al
         </div>
       )}
 
-      {/* Live Alert Feed */}
       <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #0a2030", paddingBottom: 5, marginBottom: 8 }}>
           <div style={{ fontSize: 9, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: "#1a5070", letterSpacing: 1.5, textTransform: "uppercase" }}>⚡ Live Alerts</div>
@@ -338,7 +347,7 @@ function MarketContextBar({ spot, callWall, putWall, gammaFlip, maxPain, pcr, al
 function GannPanel({ gann }) {
   if (!gann) {
     return (
-      <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px" }}>
+      <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px", height: "100%" }}>
         <SectionLabel>📐 Gann Analysis</SectionLabel>
         <div style={{ fontSize: 9, color: "#1a5070", fontFamily: "IBM Plex Mono,monospace", textAlign: "center", padding: "20px 0" }}>
           ◌ Awaiting Gann data…<br /><span style={{ color: "#0d3050" }}>Swing data ingested at startup — check gannDataFetcher</span>
@@ -346,16 +355,20 @@ function GannPanel({ gann }) {
       </div>
     );
   }
-  const sig = gann.signal || {}, son = gann.squareOfNine || {}, fan = gann.priceOnUpFan || gann.priceOnDownFan || null;
-  const cycles = (gann.timeCycles || []).slice(0, 4), seasonal = (gann.seasonalAlerts || []).slice(0, 2);
-  const gAlerts = (gann.alerts || []).filter(a => a.priority === "HIGH").slice(0, 3);
-  const levels = gann.keyLevels || {}, cardinal = gann.cardinalCross || {};
+  const sig      = gann.signal    || {};
+  const son      = gann.squareOfNine || {};
+  const fan      = gann.priceOnUpFan || gann.priceOnDownFan || null;
+  const cycles   = (gann.timeCycles     || []).slice(0, 4);
+  const seasonal = (gann.seasonalAlerts || []).slice(0, 2);
+  const gAlerts  = (gann.alerts || []).filter(a => a.priority === "HIGH").slice(0, 3);
+  const levels   = gann.keyLevels  || {};
+  const cardinal = gann.cardinalCross || {};
   const gBias = sig.bias || "NEUTRAL", gScore = sig.score ?? null, gc = gannPalette(gBias);
   const proxC = { IMMINENT: "#ef5350", THIS_WEEK: "#ffd54f", THIS_FORTNIGHT: "#ff8a65", THIS_MONTH: "#4fc3f7" };
   const cycC  = { EXTREME: "#ef5350", MAJOR: "#ff8a65", SIGNIFICANT: "#ffd54f", MINOR: "#4a9abb" };
 
   return (
-    <div style={{ background: "#010a18", border: `1px solid ${gc.border}`, borderRadius: 8, padding: "12px 14px" }}>
+    <div style={{ background: "#010a18", border: `1px solid ${gc.border}`, borderRadius: 8, padding: "12px 14px", height: "100%" }}>
       <SectionLabel>📐 Gann Analysis</SectionLabel>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 10px", background: gc.bg, borderRadius: 6, border: `1px solid ${gc.border}` }}>
         <div style={{ textAlign: "center", minWidth: 48 }}>
@@ -366,9 +379,13 @@ function GannPanel({ gann }) {
           <div style={{ fontSize: 12, fontWeight: 700, color: gc.color, fontFamily: "IBM Plex Mono,monospace" }}>{gBias.replace(/_/g, " ")}</div>
           {sig.summary && <div style={{ fontSize: 9, color: "#2a6080", fontFamily: "IBM Plex Mono,monospace", marginTop: 2, lineHeight: 1.4 }}>{sig.summary.replace(/^Gann: [A-Z]+ \(score \d+\/100\)\.\s?/, "")}</div>}
         </div>
-        {cardinal?.inCardinalZone?.strength === "ON_CARDINAL" && <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 3, background: "#1a0800", border: "1px solid #ffd54f44", color: "#ffd54f", fontFamily: "IBM Plex Mono,monospace" }}>ON CARDINAL</span>}
+        {cardinal?.inCardinalZone?.strength === "ON_CARDINAL" && (
+          <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 3, background: "#1a0800", border: "1px solid #ffd54f44", color: "#ffd54f", fontFamily: "IBM Plex Mono,monospace" }}>ON CARDINAL</span>
+        )}
       </div>
-      {gann.headline && <div style={{ fontSize: 9, color: "#2a7090", fontFamily: "IBM Plex Mono,monospace", marginBottom: 8, lineHeight: 1.5, padding: "4px 6px", background: "#010f1e", borderRadius: 4, border: "1px solid #0a2030" }}>{gann.headline}</div>}
+      {gann.headline && (
+        <div style={{ fontSize: 9, color: "#2a7090", fontFamily: "IBM Plex Mono,monospace", marginBottom: 8, lineHeight: 1.5, padding: "4px 6px", background: "#010f1e", borderRadius: 4, border: "1px solid #0a2030" }}>{gann.headline}</div>
+      )}
       {(levels.supports?.length > 0 || levels.resistances?.length > 0) && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
           <div style={{ background: "#010f1e", border: "1px solid #00ff9c22", borderRadius: 5, padding: "7px 9px" }}>
@@ -396,7 +413,10 @@ function GannPanel({ gann }) {
           <div style={{ fontSize: 8, color: "#1a5070", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1, marginBottom: 4 }}>SQUARE OF NINE</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <span style={{ fontSize: 9, fontFamily: "IBM Plex Mono,monospace", color: "#4fc3f7" }}>{son.angleOnSquare?.toFixed(1)}° on square</span>
-            <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, fontFamily: "IBM Plex Mono,monospace", background: son.positionOnSquare.strength === "EXTREME" ? "#1a0000" : son.positionOnSquare.strength === "STRONG" ? "#1a0800" : "#0a1020", color: son.positionOnSquare.strength === "EXTREME" ? "#ef5350" : son.positionOnSquare.strength === "STRONG" ? "#ffd54f" : "#4a9abb", border: "1px solid #0a2030" }}>{son.positionOnSquare.strength}</span>
+            <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, fontFamily: "IBM Plex Mono,monospace",
+              background: son.positionOnSquare.strength === "EXTREME" ? "#1a0000" : son.positionOnSquare.strength === "STRONG" ? "#1a0800" : "#0a1020",
+              color:      son.positionOnSquare.strength === "EXTREME" ? "#ef5350" : son.positionOnSquare.strength === "STRONG" ? "#ffd54f" : "#4a9abb",
+              border: "1px solid #0a2030" }}>{son.positionOnSquare.strength}</span>
           </div>
           <div style={{ fontSize: 8, color: "#1a5070", fontFamily: "IBM Plex Mono,monospace", marginTop: 3 }}>{son.positionOnSquare.label}</div>
           {son.priceVibration && <div style={{ fontSize: 8, color: "#0d3050", fontFamily: "IBM Plex Mono,monospace", marginTop: 2 }}>{son.priceVibration}</div>}
@@ -419,7 +439,9 @@ function GannPanel({ gann }) {
           {cycles.map((c, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 9, fontFamily: "IBM Plex Mono,monospace", padding: "3px 0", borderBottom: "1px solid #0a1828" }}>
               <span style={{ color: cycC[c.cycleStrength] || "#4a9abb", flex: 1, paddingRight: 6, lineHeight: 1.3 }}>{c.label}</span>
-              <span style={{ color: proxC[c.proximity] || "#4a9abb", whiteSpace: "nowrap" }}>{c.daysFromToday === 0 ? "TODAY" : c.daysFromToday < 0 ? `${Math.abs(c.daysFromToday)}d ago` : `+${c.daysFromToday}d`}</span>
+              <span style={{ color: proxC[c.proximity] || "#4a9abb", whiteSpace: "nowrap" }}>
+                {c.daysFromToday === 0 ? "TODAY" : c.daysFromToday < 0 ? `${Math.abs(c.daysFromToday)}d ago` : `+${c.daysFromToday}d`}
+              </span>
             </div>
           ))}
         </div>
@@ -458,16 +480,70 @@ function GannPanel({ gann }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// ── Main Page ────────────────────────────────────────════════════════════════
+// ── Market Structure Panel ───────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+
+function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol }) {
+  return (
+    <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px", height: "100%" }}>
+      <SectionLabel>Market Structure</SectionLabel>
+      {gannData && (
+        <div style={{ marginBottom: 10 }}>
+          <GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={false} />
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+        <StatCard label="SUPPORT (OI)"    value={structure.supportFromOI    ? structure.supportFromOI.toLocaleString("en-IN")    : "—"} sub="put OI wall"  color="#00ff9c" />
+        <StatCard label="RESISTANCE (OI)" value={structure.resistanceFromOI ? structure.resistanceFromOI.toLocaleString("en-IN") : "—"} sub="call OI wall" color="#ef5350" />
+        {gannData?.keyLevels && (
+          <>
+            <StatCard
+              label="SUPPORT (GANN)"
+              value={gannData.keyLevels.supports?.[0]?.price ? gannData.keyLevels.supports[0].price.toLocaleString("en-IN") : "—"}
+              sub={gannData.keyLevels.supports?.[0]?.source || "Square of Nine"}
+              color="#00ff9c"
+            />
+            <StatCard
+              label="RESISTANCE (GANN)"
+              value={gannData.keyLevels.resistances?.[0]?.price ? gannData.keyLevels.resistances[0].price.toLocaleString("en-IN") : "—"}
+              sub={gannData.keyLevels.resistances?.[0]?.source || "Square of Nine"}
+              color="#ef5350"
+            />
+          </>
+        )}
+      </div>
+      {structure.ivEnvironment && (
+        <div style={{ fontSize: 9, fontFamily: "IBM Plex Mono,monospace", color: "#2a6080", marginBottom: 6 }}>
+          IV env: <span style={{ color: "#ffd54f" }}>{structure.ivEnvironment.replace(/_/g, " ")}</span>
+        </div>
+      )}
+      {structure.straddlePrice != null && (
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "IBM Plex Mono,monospace", padding: "6px 0", borderTop: "1px solid #0a1828" }}>
+          <span style={{ color: "#1a5070" }}>ATM Straddle</span>
+          <span style={{ color: "#d8eeff", fontWeight: 700 }}>₹{fmt2(structure.straddlePrice)}</span>
+        </div>
+      )}
+      {gannData?.keyLevels?.masterAngle != null && (
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "IBM Plex Mono,monospace", padding: "6px 0", borderTop: "1px solid #0a1828" }}>
+          <span style={{ color: "#1a5070" }}>Gann 1×1 Master</span>
+          <span style={{ color: "#ffd54f", fontWeight: 700 }}>₹{Math.round(gannData.keyLevels.masterAngle).toLocaleString("en-IN")}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── Main Page ────────────────────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════════════════
 
 export default function OptionsIntelligencePage({ socket }) {
-  const [data,         setData]        = useState({});
-  const [gannMap,      setGannMap]     = useState({});
-  const [liveAlerts,   setLiveAlerts]  = useState([]);
-  const [activeSymbol, setActiveSymbol] = useState(null);
-  const [symbolList,   setSymbolList]  = useState([]);
-  const [lastUpdated,  setLastUpdated] = useState(null);
+  const [data,          setData]         = useState({});
+  const [gannMap,       setGannMap]      = useState({});
+  const [liveAlerts,    setLiveAlerts]   = useState([]);
+  const [activeSymbol,  setActiveSymbol] = useState(null);
+  const [symbolList,    setSymbolList]   = useState([]);
+  const [lastUpdated,   setLastUpdated]  = useState(null);
   const [, forceRender] = useState(0);
 
   useEffect(() => {
@@ -477,7 +553,6 @@ export default function OptionsIntelligencePage({ socket }) {
 
   const requestGann = useCallback((sym, ltp) => {
     if (!socket || !sym) return;
-    // ← FIX: normalise symbol before sending ("NIFTY 50" → "NIFTY")
     socket.emit("get-gann-analysis", { symbol: toGannSym(sym), ltp });
   }, [socket]);
 
@@ -489,7 +564,10 @@ export default function OptionsIntelligencePage({ socket }) {
       const sym = payload.symbol || "UNKNOWN";
       setSymbolList(prev => prev.includes(sym) ? prev : [sym, ...prev].slice(0, 40));
       setActiveSymbol(prev => {
-        if (!prev) { const d = payload?.data || payload || {}; setTimeout(() => requestGann(sym, d?.ltp || d?.spot || null), 100); }
+        if (!prev) {
+          const d = payload?.data || payload || {};
+          setTimeout(() => requestGann(sym, d?.ltp || d?.spot || null), 100);
+        }
         return prev || sym;
       });
       setData(prev => ({ ...prev, [sym]: payload }));
@@ -537,17 +615,21 @@ export default function OptionsIntelligencePage({ socket }) {
     requestGann(sym, d?.ltp || d?.spot || null);
   };
 
-  const current = data[activeSymbol] || null;
-  const d       = current?.data || current || null;
-  const score   = d?.score ?? null;
-  const bias    = d?.bias  ?? "NEUTRAL";
-  const band    = score != null ? ScoreBand(score) : null;
+  // ── Derived state ───────────────────────────────────────────────────────────
+  const current   = data[activeSymbol] || null;
+  const d         = current?.data || current || null;
+  const score     = d?.score ?? null;
+  const bias      = d?.bias  ?? "NEUTRAL";
+  const band      = score != null ? ScoreBand(score) : null;
 
-  const vol = d?.volatility || {}, greeks = d?.atmGreeks || {}, gex = d?.gex || {};
-  const oi  = d?.oi || {}, structure = d?.structure || {};
-  const strategy = d?.strategy || [], factors = d?.factors || [];
+  const vol       = d?.volatility  || {};
+  const greeks    = d?.atmGreeks   || {};
+  const gex       = d?.gex         || {};
+  const oi        = d?.oi          || {};
+  const structure = d?.structure   || {};
+  const strategy  = d?.strategy    || [];
+  const factors   = d?.factors     || [];
 
-  // Gann data — look up by both short and long key
   const gannData = activeSymbol
     ? (gannMap[toGannSym(activeSymbol)] || gannMap[activeSymbol] || gannMap[activeSymbol?.toUpperCase()] || null)
     : null;
@@ -555,29 +637,39 @@ export default function OptionsIntelligencePage({ socket }) {
   const gannBadgeMap = {};
   if (activeSymbol && gannData) {
     const gs = gannData.signal || {}, gl = gannData.keyLevels || {};
-    gannBadgeMap[activeSymbol] = { bias: gs.bias || "NEUTRAL", support: gl.supports?.[0]?.price ?? null, resistance: gl.resistances?.[0]?.price ?? null, angle: gannData.squareOfNine?.angleOnSquare ?? null };
+    gannBadgeMap[activeSymbol] = {
+      bias:       gs.bias || "NEUTRAL",
+      support:    gl.supports?.[0]?.price    ?? null,
+      resistance: gl.resistances?.[0]?.price ?? null,
+      angle:      gannData.squareOfNine?.angleOnSquare ?? null,
+    };
   }
 
-  const gexCallVal = gex.callGEX ?? null, gexPutVal = gex.putGEX ?? null;
-  const gexMax = Math.max(Math.abs(gex.netGEX || 0), Math.abs(gexCallVal || 0), Math.abs(gexPutVal || 0), 1);
-  const spot = d?.spot || d?.ltp || structure?.spot || null;
+  const gexCallVal = gex.callGEX ?? null;
+  const gexPutVal  = gex.putGEX  ?? null;
+  const gexMax     = Math.max(Math.abs(gex.netGEX || 0), Math.abs(gexCallVal || 0), Math.abs(gexPutVal || 0), 1);
+  const spot       = d?.spot || d?.ltp || structure?.spot || null;
 
-  // Two-tier OI
-  const oiNear = oi.unusualOI || [], oiTail = oi.unusualOITailRisk || [];
-  const rawLeg = (oiNear.length || oiTail.length) ? null : (oi.unusualOI || []);
-  const nearATMSignals  = rawLeg ? filterByProximity(rawLeg, spot, activeSymbol, 8)  : oiNear;
-  const tailRiskSignals = rawLeg ? filterByProximity(rawLeg, spot, activeSymbol, 100).filter(u => !filterByProximity([u], spot, activeSymbol, 8).length) : oiTail;
+  // Two-tier unusual OI
+  const oiNear          = oi.unusualOI         || [];
+  const oiTail          = oi.unusualOITailRisk || [];
+  const rawLeg          = (oiNear.length || oiTail.length) ? null : (oi.unusualOI || []);
+  const nearATMSignals  = rawLeg ? filterByProximity(rawLeg, spot, activeSymbol, 8) : oiNear;
+  const tailRiskSignals = rawLeg
+    ? filterByProximity(rawLeg, spot, activeSymbol, 100).filter(u => !filterByProximity([u], spot, activeSymbol, 8).length)
+    : oiTail;
 
+  // Normalised vol values
   const atmIV  = normaliseIV(vol.atmIV ?? vol.iv ?? vol.atm_iv ?? vol.atmIv ?? null);
-  const hv20   = vol.hv20  ?? vol.hv_20 ?? vol.HV20 ?? null;
-  const hv60   = vol.hv60  ?? vol.hv_60 ?? vol.HV60 ?? null;
-  const vrp    = vol.vrp   ?? vol.vRp   ?? vol.VRP  ?? null;
+  const hv20   = vol.hv20 ?? vol.hv_20 ?? vol.HV20 ?? null;
+  const hv60   = vol.hv60 ?? vol.hv_60 ?? vol.HV60 ?? null;
+  const vrp    = vol.vrp  ?? vol.vRp   ?? vol.VRP  ?? null;
   const lambda = greeks.lambda ?? greeks.leverage ?? null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#020d1c" }}>
 
-      {/* Toolbar */}
+      {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid #0c2240", flexShrink: 0, background: "#010a18", flexWrap: "wrap" }}>
         <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 10, fontWeight: 700, color: "#00cfff", letterSpacing: 1 }}>⚡ OPTIONS INTELLIGENCE</span>
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", flex: 1 }}>
@@ -594,41 +686,82 @@ export default function OptionsIntelligencePage({ socket }) {
       {!d ? <EmptyState symbol={activeSymbol} /> : (
         <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10, alignContent: "start" }}>
 
-          {/* Score Card */}
-          <div style={{ gridColumn: "1 / -1", background: band?.bg || "#010a18", border: `1px solid ${band?.color || "#0c2240"}44`, borderRadius: 8, padding: "14px 16px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 80 }}>
-              <div style={{ fontSize: 44, fontWeight: 700, fontFamily: "IBM Plex Mono,monospace", color: band?.color || "#4a9abb", lineHeight: 1 }}>{score != null ? Math.round(score) : "—"}</div>
-              <div style={{ fontSize: 9, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: band?.color || "#1a5070", letterSpacing: 1 }}>{band?.label || "NO DATA"}</div>
-            </div>
-            <div style={{ flex: 1, minWidth: 180 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
-                <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 14, fontWeight: 700, color: "#d8eeff" }}>{activeSymbol}</span>
-                <span style={{ fontSize: 10, color: band?.color, fontWeight: 400, fontFamily: "IBM Plex Mono,monospace" }}>{bias}</span>
-                {gannData && <GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={true} />}
+          {/* ══════════════════════════════════════════════════════════════════
+              SCORE CARD — full width
+              Contains: score + symbol + strategy/factors
+                        + compact stat strip (Vol + Greeks) below
+          ══════════════════════════════════════════════════════════════════ */}
+          <div style={{ gridColumn: "1 / -1", background: band?.bg || "#010a18", border: `1px solid ${band?.color || "#0c2240"}44`, borderRadius: 8, padding: "14px 16px" }}>
+
+            {/* Row 1 — score + identity + tags */}
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 14 }}>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 80, flexShrink: 0 }}>
+                <div style={{ fontSize: 44, fontWeight: 700, fontFamily: "IBM Plex Mono,monospace", color: band?.color || "#4a9abb", lineHeight: 1 }}>{score != null ? Math.round(score) : "—"}</div>
+                <div style={{ fontSize: 9, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: band?.color || "#1a5070", letterSpacing: 1 }}>{band?.label || "NO DATA"}</div>
               </div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>{strategy.slice(0, 5).map((s, i) => <StrategyTag key={i} signal={s} />)}</div>
-              {factors.length > 0 && <div>{factors.slice(0, 3).map((f, i) => <div key={i} style={{ fontSize: 9, fontFamily: "IBM Plex Mono,monospace", color: "#2a7090", marginBottom: 2 }}>· {typeof f === "string" ? f : (f.label || f.reason || JSON.stringify(f))}</div>)}</div>}
-              {gannData?.headline && <div style={{ marginTop: 6, fontSize: 9, fontFamily: "IBM Plex Mono,monospace", color: "#1a5070", lineHeight: 1.4 }}>📐 {gannData.headline}</div>}
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                  <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 14, fontWeight: 700, color: "#d8eeff" }}>{activeSymbol}</span>
+                  <span style={{ fontSize: 10, color: band?.color, fontWeight: 400, fontFamily: "IBM Plex Mono,monospace" }}>{bias}</span>
+                  {gannData && <GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={true} />}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                  {strategy.slice(0, 5).map((s, i) => <StrategyTag key={i} signal={s} />)}
+                </div>
+                {factors.length > 0 && (
+                  <div>
+                    {factors.slice(0, 3).map((f, i) => (
+                      <div key={i} style={{ fontSize: 9, fontFamily: "IBM Plex Mono,monospace", color: "#2a7090", marginBottom: 2 }}>
+                        · {typeof f === "string" ? f : (f.label || f.reason || JSON.stringify(f))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {gannData?.headline && (
+                  <div style={{ marginTop: 6, fontSize: 9, fontFamily: "IBM Plex Mono,monospace", color: "#1a5070", lineHeight: 1.4 }}>📐 {gannData.headline}</div>
+                )}
+              </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, minWidth: 200 }}>
-              <StatCard label="EXPECTED MOVE" value={structure.expectedMoveAbs ? `±${fmt2(structure.expectedMoveAbs)}` : "—"} sub="1σ straddle" color="#4fc3f7" />
-              <StatCard label="EVENT RISK" value={structure.eventRiskScore != null ? Math.round(structure.eventRiskScore) : "0"} sub="0–100 scale" color={structure.eventRiskScore > 60 ? "#ef5350" : structure.eventRiskScore > 0 ? "#ffd54f" : "#2a6080"} />
+
+            {/* Row 2 — compact stat strip */}
+            <div style={{ borderTop: "1px solid #0a2030", paddingTop: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
+
+              {/* Market */}
+              <HeaderStat label="Expected Move" value={structure.expectedMoveAbs ? `±${fmt2(structure.expectedMoveAbs)}` : "—"} sub="1σ straddle" color="#4fc3f7" />
+              <HeaderStat label="Event Risk"    value={structure.eventRiskScore != null ? Math.round(structure.eventRiskScore) : "0"} sub="0–100 scale"
+                color={structure.eventRiskScore > 60 ? "#ef5350" : structure.eventRiskScore > 0 ? "#ffd54f" : "#2a6080"} />
+
+              {/* Divider */}
+              <div style={{ width: 1, background: "#0c2240", alignSelf: "stretch", margin: "0 4px" }} />
+
+              {/* Volatility */}
+              <HeaderStat label="ATM IV" value={atmIV != null ? `${atmIV.toFixed(1)}%` : "—"} color="#00cfff" />
+              <HeaderStat label="VRP"    value={vrp != null ? `${vrp > 0 ? "+" : ""}${fmt2(vrp)}%` : "—"} sub="IV − HV20"
+                color={vrp != null ? (vrp > 0 ? "#ff8a65" : "#00ff9c") : "#4a9abb"} />
+              <HeaderStat label="HV 20"  value={hv20 != null ? `${Number(hv20).toFixed(1)}%` : "—"} />
+              <HeaderStat label="HV 60"  value={hv60 != null ? `${Number(hv60).toFixed(1)}%` : "—"} />
+
+              {/* IV Rank bar pill */}
+              <div style={{ background: "#00081544", border: "1px solid #0c224066", borderRadius: 5, padding: "7px 10px", minWidth: 110, flex: "0 0 auto" }}>
+                <IVRankBar ivRank={vol.ivRank} ivPct={vol.ivPercentile} />
+              </div>
+
+              {/* Divider */}
+              <div style={{ width: 1, background: "#0c2240", alignSelf: "stretch", margin: "0 4px" }} />
+
+              {/* Greeks */}
+              <HeaderStat label="Delta"  value={fmt2(greeks.delta)}  color={greeks.delta > 0 ? "#00ff9c" : greeks.delta < 0 ? "#ef5350" : "#d8eeff"} />
+              <HeaderStat label="Gamma"  value={greeks.gamma != null ? greeks.gamma.toFixed(4) : "—"} />
+              <HeaderStat label="Theta"  value={greeks.theta != null ? fmt2(greeks.theta) : "—"} sub="₹/day" color="#ff8a65" />
+              <HeaderStat label="Vega"   value={fmt2(greeks.vega)} sub="per 1% IV" color="#4fc3f7" />
+              <HeaderStat label="Lambda" value={lambda != null ? fmt2(lambda) : "—"} sub="leverage" />
+              <HeaderStat label="Rho"    value={fmt2(greeks.rho)} />
             </div>
           </div>
 
-          {/* Volatility */}
-          <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px" }}>
-            <SectionLabel>Volatility</SectionLabel>
-            <IVRankMeter ivRank={vol.ivRank} ivPct={vol.ivPercentile} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
-              <StatCard label="ATM IV" value={atmIV != null ? `${atmIV.toFixed(1)}%` : "—"} color="#00cfff" />
-              <StatCard label="VRP" value={vrp != null ? `${vrp > 0 ? "+" : ""}${fmt2(vrp)}%` : "—"} sub="IV − HV20" color={vrp != null ? (vrp > 0 ? "#ff8a65" : "#00ff9c") : "#4a9abb"} />
-              <StatCard label="HV 20" value={hv20 != null ? `${Number(hv20).toFixed(1)}%` : "—"} />
-              <StatCard label="HV 60" value={hv60 != null ? `${Number(hv60).toFixed(1)}%` : "—"} />
-            </div>
-          </div>
-
-          {/* GEX */}
+          {/* ══════════════════════════════════════════════════════════════════
+              GEX
+          ══════════════════════════════════════════════════════════════════ */}
           <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px" }}>
             <SectionLabel>Dealer Positioning (GEX)</SectionLabel>
             <GexBar label="Net GEX"  value={gex.netGEX}  max={gexMax} color={gex.netGEX >= 0 ? "#00ff9c" : "#ef5350"} />
@@ -640,9 +773,20 @@ export default function OptionsIntelligencePage({ socket }) {
               <StatCard label="CALL WALL"  value={gex.callWall ? gex.callWall.toLocaleString("en-IN") : "—"} sub="resistance" color="#4fc3f7" />
               <StatCard label="PUT WALL"   value={gex.putWall  ? gex.putWall.toLocaleString("en-IN")  : "—"} sub="support"    color="#ff8a65" />
             </div>
+            {(gex.vanna != null || gex.charm != null) && (
+              <>
+                <div style={{ marginTop: 10 }}><SectionLabel>Second-Order Flow</SectionLabel></div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <StatCard label="VANNA (DEX)" value={gex.vanna != null ? fmtCr(gex.vanna) : "—"} sub="Δ vs vol"        color="#ff5cff" />
+                  <StatCard label="CHARM"        value={gex.charm != null ? fmtCr(gex.charm) : "—"} sub="time-decay flow" color="#ffd54f" />
+                </div>
+              </>
+            )}
           </div>
 
-          {/* OI Panel */}
+          {/* ══════════════════════════════════════════════════════════════════
+              OI Intelligence
+          ══════════════════════════════════════════════════════════════════ */}
           <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px" }}>
             <SectionLabel>Open Interest Intelligence</SectionLabel>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
@@ -678,11 +822,18 @@ export default function OptionsIntelligencePage({ socket }) {
                     {tailRiskSignals.slice(0, 4).map((u, i) => (
                       <div key={i} style={{ padding: "5px 0", borderBottom: i < tailRiskSignals.slice(0, 4).length - 1 ? "1px solid #0a0a20" : "none" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 9, fontFamily: "IBM Plex Mono,monospace" }}>
-                          <span style={{ color: (u.type || "").toUpperCase() === "CALL" ? "#4fc3f788" : "#ff8a6588", minWidth: 80 }}>{(u.type || "").toUpperCase()} {u.strike} <span style={{ color: "#2a1040" }}>({u.distPct > 0 ? "+" : ""}{u.distPct}%)</span></span>
+                          <span style={{ color: (u.type || "").toUpperCase() === "CALL" ? "#4fc3f788" : "#ff8a6588", minWidth: 80 }}>
+                            {(u.type || "").toUpperCase()} {u.strike} <span style={{ color: "#2a1040" }}>({u.distPct > 0 ? "+" : ""}{u.distPct}%)</span>
+                          </span>
                           <span style={{ color: "#5a4070" }}>{(u.oi || 0).toLocaleString("en-IN")} OI</span>
                           <span style={{ fontSize: 8, color: "#8040a0", fontWeight: 700 }}>{u.neighborRatio}× nbrs</span>
                         </div>
-                        {u.interpretation && <div style={{ fontSize: 8, color: "#3a1060", fontFamily: "IBM Plex Mono,monospace", marginTop: 2, lineHeight: 1.4 }}>◈ {u.interpretation}{u.oiChgPct > 0 && <span style={{ color: (u.oiChange || 0) > 0 ? "#40805088" : "#80404088", marginLeft: 6 }}>OI {(u.oiChange || 0) > 0 ? "+" : ""}{u.oiChgPct}%</span>}</div>}
+                        {u.interpretation && (
+                          <div style={{ fontSize: 8, color: "#3a1060", fontFamily: "IBM Plex Mono,monospace", marginTop: 2, lineHeight: 1.4 }}>
+                            ◈ {u.interpretation}
+                            {u.oiChgPct > 0 && <span style={{ color: (u.oiChange || 0) > 0 ? "#40805088" : "#80404088", marginLeft: 6 }}>OI {(u.oiChange || 0) > 0 ? "+" : ""}{u.oiChgPct}%</span>}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -691,7 +842,9 @@ export default function OptionsIntelligencePage({ socket }) {
             )}
           </div>
 
-          {/* ══ MarketContextBar — sits right here in the grid, no import needed ══ */}
+          {/* ══════════════════════════════════════════════════════════════════
+              Market Context Bar
+          ══════════════════════════════════════════════════════════════════ */}
           <MarketContextBar
             spot={spot}
             callWall={gex.callWall}
@@ -701,61 +854,19 @@ export default function OptionsIntelligencePage({ socket }) {
             pcr={oi.pcr}
             alerts={liveAlerts}
             nearATMSignals={nearATMSignals}
-            symbol={activeSymbol}
           />
 
-          {/* Greeks */}
-          <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px" }}>
-            <SectionLabel>Portfolio Greeks (ATM)</SectionLabel>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
-              <StatCard label="DELTA"  value={fmt2(greeks.delta)} color={greeks.delta > 0 ? "#00ff9c" : "#ef5350"} />
-              <StatCard label="GAMMA"  value={greeks.gamma != null ? greeks.gamma.toFixed(4) : "—"} />
-              <StatCard label="THETA"  value={greeks.theta != null ? fmt2(greeks.theta) : "—"} sub="₹/day" color="#ff8a65" />
-              <StatCard label="VEGA"   value={fmt2(greeks.vega)} sub="per 1% IV" color="#4fc3f7" />
-              <StatCard label="LAMBDA" value={lambda != null ? fmt2(lambda) : "—"} sub="leverage" />
-              <StatCard label="RHO"    value={fmt2(greeks.rho)} />
-            </div>
-            {(gex.vanna != null || gex.charm != null) && (
-              <>
-                <SectionLabel>Second-Order Flow</SectionLabel>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  <StatCard label="VANNA (DEX)" value={gex.vanna != null ? fmtCr(gex.vanna) : "—"} sub="Δ vs vol" color="#ff5cff" />
-                  <StatCard label="CHARM"       value={gex.charm != null ? fmtCr(gex.charm) : "—"} sub="time-decay flow" color="#ffd54f" />
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Gann Panel */}
-          <GannPanel gann={gannData} />
-
-          {/* Market Structure */}
-          <div style={{ background: "#010a18", border: "1px solid #0c2240", borderRadius: 8, padding: "12px 14px" }}>
-            <SectionLabel>Market Structure</SectionLabel>
-            {gannData && <div style={{ marginBottom: 10 }}><GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={false} /></div>}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
-              <StatCard label="SUPPORT (OI)"    value={structure.supportFromOI ? structure.supportFromOI.toLocaleString("en-IN") : "—"} sub="put OI wall" color="#00ff9c" />
-              <StatCard label="RESISTANCE (OI)" value={structure.resistanceFromOI ? structure.resistanceFromOI.toLocaleString("en-IN") : "—"} sub="call OI wall" color="#ef5350" />
-              {gannData?.keyLevels && (
-                <>
-                  <StatCard label="SUPPORT (GANN)"    value={gannData.keyLevels.supports?.[0]?.price ? gannData.keyLevels.supports[0].price.toLocaleString("en-IN") : "—"} sub={gannData.keyLevels.supports?.[0]?.source || "Square of Nine"} color="#00ff9c" />
-                  <StatCard label="RESISTANCE (GANN)" value={gannData.keyLevels.resistances?.[0]?.price ? gannData.keyLevels.resistances[0].price.toLocaleString("en-IN") : "—"} sub={gannData.keyLevels.resistances?.[0]?.source || "Square of Nine"} color="#ef5350" />
-                </>
-              )}
-            </div>
-            {structure.ivEnvironment && <div style={{ fontSize: 9, fontFamily: "IBM Plex Mono,monospace", color: "#2a6080", marginBottom: 6 }}>IV env: <span style={{ color: "#ffd54f" }}>{structure.ivEnvironment.replace(/_/g, " ")}</span></div>}
-            {structure.straddlePrice != null && (
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "IBM Plex Mono,monospace", padding: "6px 0", borderTop: "1px solid #0a1828" }}>
-                <span style={{ color: "#1a5070" }}>ATM Straddle</span>
-                <span style={{ color: "#d8eeff", fontWeight: 700 }}>₹{fmt2(structure.straddlePrice)}</span>
-              </div>
-            )}
-            {gannData?.keyLevels?.masterAngle != null && (
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "IBM Plex Mono,monospace", padding: "6px 0", borderTop: "1px solid #0a1828" }}>
-                <span style={{ color: "#1a5070" }}>Gann 1×1 Master</span>
-                <span style={{ color: "#ffd54f", fontWeight: 700 }}>₹{Math.round(gannData.keyLevels.masterAngle).toLocaleString("en-IN")}</span>
-              </div>
-            )}
+          {/* ══════════════════════════════════════════════════════════════════
+              Gann Analysis + Market Structure — side by side, full width
+          ══════════════════════════════════════════════════════════════════ */}
+          <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <GannPanel gann={gannData} />
+            <MarketStructurePanel
+              structure={structure}
+              gannData={gannData}
+              gannBadgeMap={gannBadgeMap}
+              activeSymbol={activeSymbol}
+            />
           </div>
 
         </div>
