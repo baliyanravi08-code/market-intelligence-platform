@@ -18,10 +18,16 @@ function calcPct(a, b) {
 const GANN_SYM = { "NIFTY 50": "NIFTY", "BANK NIFTY": "BANKNIFTY", "SENSEX": "SENSEX" };
 function toGannSym(sym) { return GANN_SYM[sym] || sym; }
 
+// FIX: normaliseIV — engine returns IV already as % (e.g. 17.6), but raw socket
+// payloads may send as fraction (0.176) or already as % (17.6) or even basis points (1760).
+// Unified normaliser: treat >200 as basis points, >3 as %, else as fraction.
 function normaliseIV(raw) {
   if (raw == null) return null;
   const v = Number(raw);
-  return isNaN(v) ? null : (v > 200 ? v / 100 : v);
+  if (isNaN(v) || v <= 0) return null;
+  if (v > 200) return v / 100;   // basis points → %
+  if (v > 3)   return v;          // already %
+  return v * 100;                 // fraction → %
 }
 
 function filterByProximity(arr, spot, symbol, pct = 10) {
@@ -258,7 +264,6 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
   const ROWS = 7;
   const nearLabel = (activeSymbol || "").toUpperCase().includes("BANK") ? "±10%" : "±8%";
 
-  // Sort by distance from spot, CE before PE at same strike
   const sortRows = (arr) =>
     [...(arr || [])].sort((a, b) => {
       const da = Math.abs(a.strike - spot);
@@ -274,7 +279,6 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-      {/* Tab row */}
       <div style={{ display: "flex", gap: 4, marginBottom: 5 }}>
         {[
           { key: "near", label: `NEAR ATM ${nearLabel}`, color: "#4fc3f7" },
@@ -291,7 +295,6 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
         ))}
       </div>
 
-      {/* Column headers */}
       <div style={{ display: "grid", gridTemplateColumns: "28px 52px 1fr 1fr 44px", gap: 3, fontSize: 7, fontFamily: "IBM Plex Mono,monospace", color: "#5a90a8", letterSpacing: 0.7, textTransform: "uppercase", paddingBottom: 3, borderBottom: "1px solid #1a3040", marginBottom: 2, flexShrink: 0 }}>
         <span></span>
         <span>STRIKE</span>
@@ -300,7 +303,6 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
         <span style={{ textAlign: "right" }}>DIST%</span>
       </div>
 
-      {/* Data rows */}
       <div style={{ flex: 1, overflow: "hidden" }}>
         {rows.length === 0
           ? <div style={{ fontSize: 7, color: "#5a90a8", fontFamily: "IBM Plex Mono,monospace", textAlign: "center", padding: "10px 0" }}>◌ No data</div>
@@ -333,7 +335,6 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
         }
       </div>
 
-      {/* Scroll controls */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 4, borderTop: "1px solid #1a3040", marginTop: 4, flexShrink: 0 }}>
         <span style={{ fontSize: 7, color: "#5a90a8", fontFamily: "IBM Plex Mono,monospace" }}>
           {rows.length > 0 ? `${scrollIdx + 1}–${Math.min(scrollIdx + ROWS, rows.length)} / ${rows.length}` : "0"}
@@ -351,7 +352,7 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
 
 // ════════════════ GEX Panel ═══════════════════════════════════════════════════
 
-function GEXPanel({ gex }) {
+function GEXPanel({ gex, dealerExposures }) {
   const gexCallVal = gex.callGEX ?? null;
   const gexPutVal  = gex.putGEX  ?? null;
   const gexMax     = Math.max(Math.abs(gex.netGEX || 0), Math.abs(gexCallVal || 0), Math.abs(gexPutVal || 0), 1);
@@ -359,6 +360,11 @@ function GEXPanel({ gex }) {
                    : gex.netGEX < 0 ? "Dealers short gamma — volatile, trend-amplifying"
                    : "Neutral dealer positioning";
   const gexBiasC   = gex.netGEX > 0 ? "#00ff9c" : gex.netGEX < 0 ? "#ef5350" : "#ffd54f";
+
+  // FIX: vanna and charm come from dealerExposures, not gex directly
+  // Support both legacy (gex.vanna) and correct (dealerExposures.vex / dealerExposures.chex) shapes
+  const vanna = gex.vanna ?? dealerExposures?.vex ?? null;
+  const charm = gex.charm ?? dealerExposures?.chex ?? null;
 
   return (
     <PanelWrap>
@@ -375,13 +381,14 @@ function GEXPanel({ gex }) {
         <MiniCard label="CALL WALL"  value={gex.callWall ? gex.callWall.toLocaleString("en-IN") : "—"}    sub="resistance"  color="#4fc3f7" />
         <MiniCard label="PUT WALL"   value={gex.putWall  ? gex.putWall.toLocaleString("en-IN")  : "—"}    sub="support"     color="#ff8a65" />
       </div>
-      {(gex.vanna != null || gex.charm != null) && (
+      {/* FIX: now reads from correct source */}
+      {(vanna != null || charm != null) && (
         <>
           <div style={{ borderTop: "1px solid #1a3040", margin: "8px 0 4px" }}/>
           <SL>2nd Order</SL>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
-            <MiniCard label="VANNA" value={fmtCr(gex.vanna)} sub="Δ vs vol"   color="#ff5cff" />
-            <MiniCard label="CHARM" value={fmtCr(gex.charm)} sub="time decay" color="#ffd54f" />
+            <MiniCard label="VANNA" value={fmtCr(vanna)} sub="Δ vs vol"   color="#ff5cff" />
+            <MiniCard label="CHARM" value={fmtCr(charm)} sub="time decay" color="#ffd54f" />
           </div>
         </>
       )}
@@ -586,7 +593,6 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
         </div>
       )}
 
-      {/* Spot + range bar */}
       {spot && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#e8f2ff", fontFamily: "IBM Plex Mono,monospace", marginBottom: 3 }}>₹{fmtInt(spot)}</div>
@@ -690,7 +696,6 @@ export default function OptionsIntelligencePage({ socket }) {
   const [activeSymbol, setActiveSymbol]= useState(null);
   const [symbolList,   setSymbolList]  = useState([]);
   const [lastUpdated,  setLastUpdated] = useState(null);
-  // Timer ONLY for age display + alert timestamps — avoids full page re-render
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTick(n => n + 1), 1000);
@@ -759,12 +764,13 @@ export default function OptionsIntelligencePage({ socket }) {
   const bias      = d?.bias  ?? "NEUTRAL";
   const band      = score != null ? ScoreBand(score) : null;
 
-  const vol       = d?.volatility  || {};
-  const greeks    = d?.atmGreeks   || {};
-  const gex       = d?.gex         || {};
-  const oi        = d?.oi          || {};
-  const structure = d?.structure   || {};
-  const strategy  = d?.strategy    || [];
+  const vol            = d?.volatility     || {};
+  const greeks         = d?.atmGreeks      || {};
+  const gex            = d?.gex            || {};
+  const dealerExp      = d?.dealerExposures || {};
+  const oi             = d?.oi             || {};
+  const structure      = d?.structure      || {};
+  const strategy       = d?.strategy       || [];
 
   const gannData = activeSymbol
     ? (gannMap[toGannSym(activeSymbol)] || gannMap[activeSymbol] || gannMap[activeSymbol?.toUpperCase()] || null)
@@ -783,26 +789,61 @@ export default function OptionsIntelligencePage({ socket }) {
 
   const spot = d?.spot || d?.ltp || structure?.spot || null;
 
-  const oiNear          = oi.unusualOI         || [];
-  const oiTail          = oi.unusualOITailRisk || [];
-  const rawLeg          = (oiNear.length || oiTail.length) ? null : (oi.unusualOI || []);
-  const nearATMPct      = (activeSymbol || "").toUpperCase().includes("BANK") ? 10 : 8;
-  const nearATMSignals  = rawLeg ? filterByProximity(rawLeg, spot, activeSymbol, nearATMPct) : oiNear;
-  const tailRiskSignals = rawLeg
-    ? filterByProximity(rawLeg, spot, activeSymbol, 100).filter(u => !filterByProximity([u], spot, activeSymbol, nearATMPct).length)
-    : oiTail;
+  // FIX: nearATMSignals / tailRiskSignals logic
+  // Original had a bug: `rawLeg` was set to `null` if EITHER oiNear OR oiTail had length,
+  // meaning if only one was populated, the other would be given an empty array from rawLeg path.
+  // Correct logic: use the dedicated fields if BOTH exist, else fall back to filtering unusualOI.
+  const oiNear = oi.unusualOI         || [];
+  const oiTail = oi.unusualOITailRisk || [];
+  const hasDedicatedFields = oiNear.length > 0 || oiTail.length > 0;
+  const nearATMPct = (activeSymbol || "").toUpperCase().includes("BANK") ? 10 : 8;
 
-  const atmIV  = normaliseIV(vol.atmIV ?? vol.iv ?? vol.atm_iv ?? vol.atmIv ?? null);
-  const hv20   = vol.hv20 ?? vol.hv_20 ?? vol.HV20 ?? null;
-  const hv60   = vol.hv60 ?? vol.hv_60 ?? vol.HV60 ?? null;
-  const vrp    = vol.vrp  ?? vol.vRp   ?? vol.VRP  ?? null;
-  const lambda = greeks.lambda ?? greeks.leverage ?? null;
+  let nearATMSignals, tailRiskSignals;
+  if (hasDedicatedFields) {
+    // Server already split them — use directly
+    nearATMSignals  = oiNear;
+    tailRiskSignals = oiTail;
+  } else {
+    // Fall back: split from unusualOI by proximity
+    const allUnusual = oi.unusualOI || [];
+    nearATMSignals  = filterByProximity(allUnusual, spot, activeSymbol, nearATMPct);
+    const nearSet   = new Set(nearATMSignals.map(u => `${u.strike}-${u.type}`));
+    tailRiskSignals = allUnusual.filter(u => !nearSet.has(`${u.strike}-${u.type}`));
+  }
+
+  // FIX: HV field name normalisation — engine outputs hv20/hv60 (lowercase),
+  // but some payloads may use HV20/HV60 or hv_20/hv_60. Support all variants.
+  const atmIV  = normaliseIV(
+    vol.atmIV ?? vol.iv ?? vol.atm_iv ?? vol.atmIv ?? vol.ATM_IV ?? null
+  );
+  const hv20   = vol.hv20  ?? vol.hv_20  ?? vol.HV20  ?? vol.Hv20  ?? null;
+  const hv60   = vol.hv60  ?? vol.hv_60  ?? vol.HV60  ?? vol.Hv60  ?? null;
+  const vrp    = vol.vrp   ?? vol.vRp    ?? vol.VRP   ?? null;
   const skew25 = vol.skew25 ?? null;
 
-  // ── Gamma guard (fix: zero → "—" not "0.0000")
+  // FIX: lambda guard — same zero-guard as gamma
+  const lambda      = greeks.lambda ?? greeks.leverage ?? null;
+  const lambdaDisplay = (lambda != null && lambda !== 0) ? fmt2(lambda) : "—";
+
+  // FIX: gamma guard — preserve original zero-guard logic
   const gammaDisplay = (greeks.gamma && greeks.gamma !== 0) ? greeks.gamma.toFixed(4) : "—";
 
+  // FIX: delta sanity — ATM call delta should be ~0.45-0.55.
+  // If delta > 0.85, the ATM strike selection is likely wrong (deep ITM selected).
+  // Surface a warning color so it's visible.
+  const deltaVal     = greeks.delta ?? null;
+  const deltaDisplay = deltaVal != null ? fmt2(deltaVal) : "—";
+  const deltaColor   = deltaVal == null       ? "#e8f2ff"
+                     : Math.abs(deltaVal) > 0.85 ? "#ffd54f"   // suspect — flag amber
+                     : deltaVal > 0           ? "#00ff9c"
+                     : "#ef5350";
+
   const ageSec = lastUpdated ? Math.round((Date.now() - lastUpdated) / 1000) : null;
+
+  // FIX: HV display — normalise from fraction if needed (engine outputs as %, some feeds as fraction)
+  const hv20Display = hv20 != null ? (hv20 < 3 ? (hv20 * 100).toFixed(1) : Number(hv20).toFixed(1)) + "%" : "—";
+  const hv60Display = hv60 != null ? (hv60 < 3 ? (hv60 * 100).toFixed(1) : Number(hv60).toFixed(1)) + "%" : "—";
+  const vrpDisplay  = vrp  != null ? `${vrp > 0 ? "+" : ""}${fmt2(vrp)}%` : "—";
 
   return (
     <>
@@ -816,7 +857,6 @@ export default function OptionsIntelligencePage({ socket }) {
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", borderBottom: "1px solid #1c3a58", flexShrink: 0, background: "#060f1c", minHeight: 36 }}>
           <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 9, fontWeight: 700, color: "#00cfff", letterSpacing: 1, flexShrink: 0 }}>⚡ OPTIONS INTEL</span>
 
-          {/* Symbol tabs */}
           <div style={{ display: "flex", gap: 3, overflowX: "auto", flex: 1 }}>
             {symbolList.length === 0 && <span style={{ fontSize: 8, fontFamily: "IBM Plex Mono,monospace", color: "#c8d8e8" }}>◌ Waiting…</span>}
             {symbolList.slice(0, 20).map(sym => (
@@ -826,7 +866,6 @@ export default function OptionsIntelligencePage({ socket }) {
             ))}
           </div>
 
-          {/* Alert card lives here */}
           {d && <AlertCard alerts={liveAlerts} />}
 
           {ageSec != null && <span style={{ fontSize: 7, fontFamily: "IBM Plex Mono,monospace", color: "#a0b8cc", flexShrink: 0 }}>↻ {ageSec}s</span>}
@@ -838,10 +877,8 @@ export default function OptionsIntelligencePage({ socket }) {
             {/* ══ SCORE CARD ══════════════════════════════════════════════ */}
             <div style={{ flexShrink: 0, background: band?.bg || "#060f1c", border: `1px solid ${band?.color || "#1c3a58"}44`, borderRadius: 6, padding: "8px 14px" }}>
 
-              {/* Single row: score | identity+tags | divider | stats */}
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
 
-                {/* Score */}
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 52, flexShrink: 0 }}>
                   <div style={{ fontSize: 34, fontWeight: 700, fontFamily: "IBM Plex Mono,monospace", color: band?.color || "#4a9abb", lineHeight: 1 }}>
                     {score != null ? Math.round(score) : "—"}
@@ -851,14 +888,12 @@ export default function OptionsIntelligencePage({ socket }) {
                   </div>
                 </div>
 
-                {/* Symbol + bias + strategy tags (all compact, same column) */}
                 <div style={{ flexShrink: 0, minWidth: 120 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
                     <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 13, fontWeight: 700, color: "#e8f2ff" }}>{activeSymbol}</span>
                     <span style={{ fontSize: 9, color: band?.color, fontFamily: "IBM Plex Mono,monospace" }}>{bias}</span>
                     {gannData && <GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={true} />}
                   </div>
-                  {/* Strategy tags — compact wrap */}
                   <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                     {strategy.slice(0, 4).map((s, i) => <StrategyTag key={i} signal={s} />)}
                   </div>
@@ -866,7 +901,6 @@ export default function OptionsIntelligencePage({ socket }) {
 
                 <VDivider />
 
-                {/* Stats strip — horizontal scroll, nowrap */}
                 <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flex: 1, overflowX: "auto", flexWrap: "nowrap" }}>
                   {spot && (
                     <HStat label="Spot" value={`₹${fmtInt(spot)}`}
@@ -878,22 +912,24 @@ export default function OptionsIntelligencePage({ socket }) {
                     color={structure.eventRiskScore > 60 ? "#ef5350" : structure.eventRiskScore > 0 ? "#ffd54f" : "#5a90a8"} />
                   <VDivider />
                   <HStat label="ATM IV" value={atmIV != null ? `${atmIV.toFixed(1)}%` : "—"} color="#00cfff" />
-                  <HStat label="VRP"    value={vrp != null ? `${vrp > 0 ? "+" : ""}${fmt2(vrp)}%` : "—"} sub="IV−HV20"
+                  {/* FIX: VRP and HV now use normalised display values */}
+                  <HStat label="VRP"    value={vrpDisplay} sub="IV−HV20"
                     color={vrp != null ? (vrp > 0 ? "#ff8a65" : "#00ff9c") : "#4a9abb"} />
-                  <HStat label="HV 20" value={hv20 != null ? `${Number(hv20).toFixed(1)}%` : "—"} />
-                  <HStat label="HV 60" value={hv60 != null ? `${Number(hv60).toFixed(1)}%` : "—"} />
+                  <HStat label="HV 20" value={hv20Display} />
+                  <HStat label="HV 60" value={hv60Display} />
                   <IVRankBar ivRank={vol.ivRank} ivPct={vol.ivPercentile} />
                   <VDivider />
-                  <HStat label="Delta"  value={fmt2(greeks.delta)} color={greeks.delta > 0 ? "#00ff9c" : greeks.delta < 0 ? "#ef5350" : "#e8f2ff"} />
+                  {/* FIX: delta uses deltaColor which turns amber if suspicious value */}
+                  <HStat label="Delta"  value={deltaDisplay} color={deltaColor} />
                   <HStat label="Gamma"  value={gammaDisplay} color={gammaDisplay === "—" ? "#5a90a8" : "#e8f2ff"} />
                   <HStat label="Theta"  value={greeks.theta != null ? fmt2(greeks.theta) : "—"} sub="₹/day" color="#ff8a65" />
                   <HStat label="Vega"   value={fmt2(greeks.vega)} sub="1%IV" color="#4fc3f7" />
-                  <HStat label="Lambda" value={lambda != null ? fmt2(lambda) : "—"} sub="lev" />
+                  {/* FIX: lambda guard applied */}
+                  <HStat label="Lambda" value={lambdaDisplay} sub="lev" />
                   <HStat label="Rho"    value={fmt2(greeks.rho)} />
                 </div>
               </div>
 
-              {/* Trade Decision bar — row 2, only renders if signal exists */}
               <TradeDecision
                 spot={spot}
                 callWall={gex.callWall}
@@ -905,9 +941,10 @@ export default function OptionsIntelligencePage({ socket }) {
               />
             </div>
 
-            {/* ══ 4 PANELS — full vertical stretch ════════════════════════ */}
+            {/* ══ 4 PANELS ════════════════════════════════════════════════ */}
             <div style={{ flex: 1, display: "flex", gap: 8, minHeight: 0 }}>
-              <GEXPanel gex={gex} />
+              {/* FIX: pass dealerExp to GEXPanel so vanna/charm render correctly */}
+              <GEXPanel gex={gex} dealerExposures={dealerExp} />
               <OIPanel
                 oi={oi}
                 nearATMSignals={nearATMSignals}

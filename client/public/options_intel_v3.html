@@ -1,0 +1,1292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Options Intel v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600;700&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg0: #010b15;
+  --bg1: #040f1a;
+  --bg2: #060f1e;
+  --bg3: #0a1828;
+  --bg4: #0d2035;
+  --border: #1a3548;
+  --border2: #243f58;
+  --text1: #e8f2ff;
+  --text2: #c8d8e8;
+  --text3: #8aacc2;
+  --text4: #4a7090;
+  --cyan: #00cfff;
+  --green: #00ff9c;
+  --red: #ef5350;
+  --amber: #ffd54f;
+  --blue: #4fc3f7;
+  --purple: #d090ff;
+  --orange: #ff8a65;
+  --pink: #ff5cff;
+  --scanline-color: rgba(0,207,255,0.025);
+}
+
+html, body { height: 100%; background: var(--bg0); overflow: hidden; }
+
+/* CRT scanline overlay */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 1px, var(--scanline-color) 1px, var(--scanline-color) 2px);
+  pointer-events: none; z-index: 9999;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: var(--bg1); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* Keyframes */
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+@keyframes glow { 0%,100%{box-shadow:0 0 4px currentColor} 50%{box-shadow:0 0 14px currentColor,0 0 28px currentColor} }
+@keyframes ticker { from{transform:translateX(0)} to{transform:translateX(-50%)} }
+@keyframes fadeIn { from{opacity:0;transform:translateY(3px)} to{opacity:1;transform:translateY(0)} }
+@keyframes scanPulse { 0%,100%{opacity:.4} 50%{opacity:.9} }
+@keyframes barIn { from{width:0} to{width:var(--w)} }
+@keyframes sparkDraw { from{stroke-dashoffset:var(--len)} to{stroke-dashoffset:0} }
+
+#app {
+  display: flex; flex-direction: column;
+  height: 100vh; overflow: hidden;
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--text1);
+  background:
+    radial-gradient(ellipse 80% 40% at 50% -10%, rgba(0,207,255,0.07) 0%, transparent 70%),
+    var(--bg0);
+  animation: fadeIn .3s ease;
+}
+
+/* ─── TOOLBAR ─────────────────────────────────────────────────────────── */
+#toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px;
+  height: 40px; flex-shrink: 0;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+#toolbar::after {
+  content: '';
+  position: absolute; bottom: -1px; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  opacity: .4;
+}
+
+.logo {
+  font-size: 9px; font-weight: 700; letter-spacing: 2px;
+  color: var(--cyan); flex-shrink: 0;
+  text-shadow: 0 0 8px var(--cyan);
+}
+
+.sym-btn {
+  padding: 2px 9px; border-radius: 2px; cursor: pointer;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 8px; font-weight: 700; letter-spacing: .5px;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text4); transition: all .15s;
+  flex-shrink: 0;
+}
+.sym-btn:hover { border-color: var(--border2); color: var(--text2); }
+.sym-btn.active {
+  background: rgba(0,207,255,.1);
+  border-color: rgba(0,207,255,.5);
+  color: var(--cyan);
+  box-shadow: 0 0 8px rgba(0,207,255,.2);
+}
+
+.spacer { flex: 1; }
+
+/* alert strip */
+.alert-strip {
+  display: flex; flex-direction: column; gap: 0;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 8px;
+  min-width: 170px; max-width: 250px; flex-shrink: 0;
+  max-height: 68px; overflow: hidden;
+}
+.alert-strip-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 3px;
+}
+.alert-strip-head span { font-size: 7px; font-weight: 700; letter-spacing: 1px; color: var(--text2); }
+.alert-count {
+  font-size: 7px; padding: 1px 4px; border-radius: 2px;
+  background: rgba(239,83,80,.15); color: var(--red); font-weight: 700;
+}
+.alert-row {
+  display: flex; align-items: flex-start; gap: 4px;
+  font-size: 7px; line-height: 1.35; color: var(--red);
+  padding: 1px 0; border-bottom: 1px solid var(--border);
+}
+.alert-row:last-child { border-bottom: none; }
+.alert-row.medium { color: var(--amber); }
+.alert-row.high { animation: pulse 1.4s infinite; }
+.alert-icon { flex-shrink: 0; margin-top: 1px; }
+.alert-msg { flex: 1; }
+.alert-age { color: var(--text4); flex-shrink: 0; font-size: 6px; margin-top: 1px; }
+
+.live-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--green); flex-shrink: 0;
+  animation: pulse 1.5s infinite;
+  box-shadow: 0 0 6px var(--green);
+}
+.live-label { font-size: 7px; color: var(--text4); flex-shrink: 0; }
+
+/* ─── BODY ────────────────────────────────────────────────────────────── */
+#body {
+  flex: 1; display: flex; flex-direction: column;
+  padding: 7px 8px; gap: 7px; overflow: hidden; min-height: 0;
+}
+
+/* ─── SCORE CARD ─────────────────────────────────────────────────────── */
+#scorecard {
+  flex-shrink: 0; border-radius: 6px;
+  padding: 9px 14px; display: flex; align-items: center; gap: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  position: relative; overflow: hidden;
+}
+#scorecard::before {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, var(--score-color, #00ff9c) 0%, transparent 25%);
+  opacity: .04; pointer-events: none;
+}
+
+.score-block { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; min-width: 50px; }
+.score-num { font-size: 36px; font-weight: 700; line-height: 1; }
+.score-label { font-size: 7px; font-weight: 700; letter-spacing: 1px; margin-top: 1px; }
+
+.score-sym { flex-shrink: 0; min-width: 120px; }
+.score-sym-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.score-sym-name { font-size: 14px; font-weight: 700; color: var(--text1); }
+.score-bias { font-size: 9px; font-weight: 700; }
+.gann-badge-compact {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 1px 6px; border-radius: 3px;
+  font-size: 8px; font-weight: 700; cursor: default;
+  border: 1px solid; letter-spacing: .3px;
+}
+.strats { display: flex; gap: 3px; flex-wrap: wrap; }
+.strat-tag {
+  font-size: 7px; font-weight: 700; padding: 1px 5px; border-radius: 2px;
+  border: 1px solid; white-space: nowrap; letter-spacing: .3px;
+}
+
+.vdiv { width: 1px; background: var(--border); align-self: stretch; margin: 0 6px; flex-shrink: 0; }
+
+.stats-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  flex: 1; overflow-x: auto; flex-wrap: nowrap;
+}
+.stat {
+  display: flex; flex-direction: column; gap: 1px;
+  min-width: 50px; flex-shrink: 0;
+}
+.stat-label { font-size: 7px; color: var(--text2); letter-spacing: .8px; text-transform: uppercase; white-space: nowrap; }
+.stat-val { font-size: 11px; font-weight: 700; line-height: 1.1; }
+.stat-sub { font-size: 6.5px; color: var(--text3); }
+
+.iv-rank-wrap { min-width: 76px; flex-shrink: 0; }
+.iv-rank-row { display: flex; justify-content: space-between; font-size: 7px; margin-bottom: 2px; }
+.rank-bar-bg { height: 4px; background: var(--bg4); border-radius: 2px; overflow: hidden; }
+.rank-bar-fg { height: 4px; border-radius: 2px; transition: width .6s ease; }
+.rank-pct { font-size: 6px; color: var(--text3); margin-top: 1px; }
+
+/* sparkline container (spot history) */
+.spark-wrap { flex-shrink: 0; width: 70px; display: flex; flex-direction: column; gap: 2px; align-items: center; }
+.spark-label { font-size: 6.5px; color: var(--text3); letter-spacing: .5px; }
+
+/* ─── PANEL GRID ─────────────────────────────────────────────────────── */
+#panels {
+  flex: 1; display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 7px; min-height: 0; overflow: hidden;
+}
+
+.panel {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 12px;
+  display: flex; flex-direction: column;
+  overflow-y: auto; min-height: 0;
+  animation: fadeIn .25s ease;
+}
+.panel-title {
+  font-size: 8px; font-weight: 700; color: var(--text3);
+  letter-spacing: 1.5px; text-transform: uppercase;
+  border-bottom: 1px solid var(--border); padding-bottom: 5px;
+  margin-bottom: 8px; flex-shrink: 0;
+}
+
+/* GEX bars */
+.gex-bar-wrap { margin-bottom: 7px; }
+.gex-bar-head { display: flex; justify-content: space-between; font-size: 9px; margin-bottom: 3px; }
+.gex-bar-bg { height: 6px; background: var(--bg4); border-radius: 3px; overflow: hidden; position: relative; }
+.gex-bar-fill {
+  height: 6px; border-radius: 3px;
+  --w: 0%; width: var(--w);
+  animation: barIn .7s cubic-bezier(.4,0,.2,1) forwards;
+  position: relative;
+}
+.gex-bar-fill::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent 70%, rgba(255,255,255,.25));
+  border-radius: 3px;
+}
+
+.gex-regime-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 7px; border-radius: 3px; font-size: 7px; font-weight: 700;
+  border: 1px solid; margin-bottom: 8px;
+}
+
+.mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.mini-card {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 8px;
+}
+.mini-card-label { font-size: 7px; color: var(--text2); letter-spacing: .8px; margin-bottom: 2px; display: block; }
+.mini-card-val { font-size: 12px; font-weight: 700; line-height: 1.1; display: block; word-break: break-word; }
+.mini-card-sub { font-size: 6.5px; color: var(--text3); margin-top: 1px; display: block; }
+
+.sub-title {
+  font-size: 7px; font-weight: 700; color: var(--text3);
+  letter-spacing: 1px; text-transform: uppercase;
+  border-bottom: 1px solid var(--border); padding-bottom: 3px;
+  margin: 8px 0 5px; flex-shrink: 0;
+}
+
+/* OI rows */
+.oi-tabs { display: flex; gap: 4px; margin-bottom: 6px; }
+.oi-tab {
+  flex: 1; font-size: 7px; font-weight: 700; letter-spacing: .5px;
+  padding: 3px 2px; border-radius: 3px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text4); transition: all .15s;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.oi-tab.active-near { background: rgba(79,195,247,.1); border-color: rgba(79,195,247,.4); color: var(--blue); }
+.oi-tab.active-tail { background: rgba(208,144,255,.1); border-color: rgba(208,144,255,.4); color: var(--purple); }
+
+.oi-hdr {
+  display: grid; grid-template-columns: 26px 52px 1fr 1fr 44px;
+  gap: 3px; font-size: 7px; color: var(--text4); letter-spacing: .5px;
+  padding-bottom: 3px; border-bottom: 1px solid var(--border); margin-bottom: 2px;
+}
+.oi-row {
+  display: grid; grid-template-columns: 26px 52px 1fr 1fr 44px;
+  gap: 3px; padding: 3px 2px; border-radius: 2px; align-items: center;
+  transition: background .1s;
+}
+.oi-row:nth-child(even) { background: rgba(6,15,28,.6); }
+.oi-row:hover { background: var(--bg4); }
+.oi-type {
+  font-size: 7px; font-weight: 700; padding: 1px 2px;
+  border-radius: 2px; border: 1px solid; text-align: center; display: block;
+}
+.oi-strike { font-size: 8px; font-weight: 700; color: var(--text1); }
+.oi-oi { font-size: 7px; color: var(--text2); text-align: right; display: block; }
+.oi-vol { font-size: 7px; color: var(--pink); text-align: right; display: block; }
+.oi-dist { font-size: 7px; font-weight: 700; text-align: right; display: block; }
+
+.oi-pgn { display: flex; align-items: center; justify-content: space-between; padding-top: 4px; border-top: 1px solid var(--border); margin-top: 4px; }
+.oi-pgn-info { font-size: 7px; color: var(--text4); }
+.oi-pgn-btns { display: flex; gap: 3px; }
+.oi-pgn-btn {
+  font-size: 8px; padding: 1px 6px; border-radius: 2px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text4); cursor: pointer;
+  font-family: 'IBM Plex Mono', monospace; transition: all .1s;
+}
+.oi-pgn-btn:not(:disabled):hover { background: var(--bg4); color: var(--text2); border-color: var(--border2); }
+.oi-pgn-btn:disabled { opacity: .35; cursor: default; }
+
+/* Gann panel */
+.gann-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 5px; border: 1px solid; margin-bottom: 8px;
+}
+.gann-score-ring {
+  width: 48px; height: 48px; flex-shrink: 0; position: relative;
+}
+.gann-score-num { font-size: 20px; font-weight: 700; display: block; text-align: center; line-height: 1; }
+.gann-score-sub { font-size: 7px; opacity: .6; display: block; text-align: center; }
+.gann-head-body { flex: 1; }
+.gann-bias-label { font-size: 12px; font-weight: 700; display: block; }
+.gann-summary { font-size: 7.5px; color: var(--text3); line-height: 1.35; display: block; margin-top: 2px; }
+
+.gann-levels { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 7px; }
+.gann-level-card { background: var(--bg3); border-radius: 4px; padding: 5px 7px; }
+.gann-level-head { font-size: 7px; color: var(--text2); letter-spacing: 1px; margin-bottom: 3px; display: block; }
+.gann-level-row { display: flex; justify-content: space-between; font-size: 8px; padding: 1px 0; }
+
+.son-wrap { margin-bottom: 7px; }
+.son-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.son-angle { font-size: 8px; color: var(--blue); }
+.son-strength {
+  font-size: 7px; padding: 1px 4px; border-radius: 2px;
+  font-weight: 700;
+}
+.son-label { font-size: 7px; color: var(--text3); margin-top: 2px; display: block; }
+
+.cycle-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 8px; padding: 3px 0; border-bottom: 1px solid var(--border);
+}
+.cycle-label { color: var(--text2); flex: 1; padding-right: 6px; line-height: 1.3; }
+.cycle-timing { white-space: nowrap; font-size: 7px; font-weight: 700; }
+
+.gann-alert {
+  padding: 4px 6px; background: rgba(239,83,80,.08);
+  border: 1px solid rgba(239,83,80,.25); border-radius: 3px;
+  margin-bottom: 3px; font-size: 8px; color: var(--red); font-weight: 700;
+  animation: pulse 1.8s infinite;
+}
+.gann-headline {
+  font-size: 8px; color: var(--text3); margin-top: 5px;
+  line-height: 1.45; padding: 5px 7px;
+  background: var(--bg3); border-radius: 3px; border: 1px solid var(--border);
+}
+
+/* Structure panel */
+.zone-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 3px; margin-bottom: 6px;
+  border: 1px solid; font-size: 8px; font-weight: 700;
+}
+.zone-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+.range-bar-wrap { margin-bottom: 8px; }
+.range-bar-labels { display: flex; justify-content: space-between; font-size: 7px; color: var(--text4); margin-bottom: 2px; }
+.range-bar-bg { height: 6px; background: var(--bg4); border-radius: 3px; position: relative; overflow: visible; }
+.range-bar-fill { height: 6px; border-radius: 3px; background: linear-gradient(90deg, rgba(255,138,101,.4), rgba(255,213,79,.4)); transition: width .6s ease; }
+.range-bar-needle {
+  position: absolute; top: -2px; width: 2px; height: 10px;
+  background: var(--text1); border-radius: 1px;
+  transform: translateX(-50%); transition: left .4s ease;
+  box-shadow: 0 0 4px rgba(255,255,255,.5);
+}
+
+.lvl-row {
+  display: flex; justify-content: space-between;
+  padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 8px;
+}
+.lvl-label { color: var(--text2); }
+.lvl-val { font-weight: 700; }
+
+/* GEX MINI CHART (top strikes) */
+.gex-strike-bar {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 8px; padding: 2px 0; border-bottom: 1px solid rgba(26,53,72,.5);
+}
+.gex-strike-label { width: 50px; color: var(--text2); flex-shrink: 0; }
+.gex-strike-track { flex: 1; height: 4px; background: var(--bg4); border-radius: 2px; overflow: hidden; }
+.gex-strike-fill { height: 4px; border-radius: 2px; --w: 0%; width: var(--w); animation: barIn .6s ease forwards; }
+.gex-strike-val { width: 40px; text-align: right; font-size: 7px; font-weight: 700; }
+
+/* Greeks mini ring (SVG donut) */
+.greeks-ring-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.greeks-ring-items { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; flex: 1; }
+.greek-item { display: flex; flex-direction: column; }
+.greek-label { font-size: 7px; color: var(--text3); letter-spacing: .5px; }
+.greek-val { font-size: 10px; font-weight: 700; }
+.greek-sub { font-size: 6px; color: var(--text3); }
+
+/* Volatility micro-heatmap */
+.vol-heatmap { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; margin-bottom: 8px; }
+.vol-cell {
+  height: 20px; border-radius: 2px; display: flex; align-items: center;
+  justify-content: center; font-size: 6.5px; font-weight: 700;
+  border: 1px solid rgba(255,255,255,.05);
+  transition: transform .15s;
+  cursor: default;
+}
+.vol-cell:hover { transform: scale(1.08); z-index: 10; }
+.vol-heatmap-labels { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; margin-bottom: 5px; }
+.vol-heatmap-label { font-size: 6px; color: var(--text4); text-align: center; letter-spacing: .3px; }
+
+/* Inline "chart" for spot history sparkline */
+.spark-svg { overflow: visible; }
+
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar"></div>
+  <div id="body">
+    <div id="scorecard"></div>
+    <div id="panels"></div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  OPTIONS INTEL v3 — Live Socket Edition
+//  Replaces all MOCK data with real socket.io events from your backend:
+//    "options-intel"  → full intelligence payload per symbol
+//    "gann-update"    → Gann analysis per symbol
+//    "options-alert"  → individual alert objects
+//    "market-tick"    → spot price ticks from upstoxStream
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SYMBOLS = ["NIFTY 50", "BANK NIFTY", "SENSEX"];
+
+// ── Live state (replaces MOCK) ─────────────────────────────────────────────
+// Each symbol starts with sensible defaults so the UI renders immediately.
+// Values are overwritten as socket events arrive.
+const STATE = {
+  "NIFTY 50": {
+    symbol:"NIFTY 50", score:50, bias:"NEUTRAL",
+    spot:0, ltp:0, strategy:[],
+    volatility:{ atmIV:0, hv20:0, hv60:0, vrp:0, ivRank:50, ivPercentile:50, skew25:0, skewSentiment:"NEUTRAL" },
+    atmGreeks:{ delta:0.50, gamma:0, theta:0, vega:0, rho:0 },
+    gex:{ netGEX:0, callGEX:0, putGEX:0, callWall:null, putWall:null, gammaFlip:null, regime:"MEAN_REVERTING", topStrikes:[] },
+    dealerExposures:{ dex:0, vex:0, chex:0 },
+    oi:{ pcr:1.0, maxPain:null, totalCallOI:0, totalPutOI:0, netPremiumFlow:0, premiumBias:"NEUTRAL", unusualOI:[], unusualOITailRisk:[] },
+    structure:{ straddlePrice:0, expectedMoveAbs:0, expectedMovePct:0, vrp:0, ivEnvironment:"NORMAL", eventRiskScore:0, supportFromOI:null, resistanceFromOI:null },
+  },
+  "BANK NIFTY": {
+    symbol:"BANK NIFTY", score:50, bias:"NEUTRAL",
+    spot:0, ltp:0, strategy:[],
+    volatility:{ atmIV:0, hv20:0, hv60:0, vrp:0, ivRank:50, ivPercentile:50, skew25:0, skewSentiment:"NEUTRAL" },
+    atmGreeks:{ delta:0.50, gamma:0, theta:0, vega:0, rho:0 },
+    gex:{ netGEX:0, callGEX:0, putGEX:0, callWall:null, putWall:null, gammaFlip:null, regime:"MEAN_REVERTING", topStrikes:[] },
+    dealerExposures:{ dex:0, vex:0, chex:0 },
+    oi:{ pcr:1.0, maxPain:null, totalCallOI:0, totalPutOI:0, netPremiumFlow:0, premiumBias:"NEUTRAL", unusualOI:[], unusualOITailRisk:[] },
+    structure:{ straddlePrice:0, expectedMoveAbs:0, expectedMovePct:0, vrp:0, ivEnvironment:"NORMAL", eventRiskScore:0, supportFromOI:null, resistanceFromOI:null },
+  },
+  "SENSEX": {
+    symbol:"SENSEX", score:50, bias:"NEUTRAL",
+    spot:0, ltp:0, strategy:[],
+    volatility:{ atmIV:0, hv20:0, hv60:0, vrp:0, ivRank:50, ivPercentile:50, skew25:0, skewSentiment:"NEUTRAL" },
+    atmGreeks:{ delta:0.50, gamma:0, theta:0, vega:0, rho:0 },
+    gex:{ netGEX:0, callGEX:0, putGEX:0, callWall:null, putWall:null, gammaFlip:null, regime:"MEAN_REVERTING", topStrikes:[] },
+    dealerExposures:{ dex:0, vex:0, chex:0 },
+    oi:{ pcr:1.0, maxPain:null, totalCallOI:0, totalPutOI:0, netPremiumFlow:0, premiumBias:"NEUTRAL", unusualOI:[], unusualOITailRisk:[] },
+    structure:{ straddlePrice:0, expectedMoveAbs:0, expectedMovePct:0, vrp:0, ivEnvironment:"NORMAL", eventRiskScore:0, supportFromOI:null, resistanceFromOI:null },
+  },
+};
+
+// Gann state keyed by DISPLAY symbol ("NIFTY 50", "BANK NIFTY", "SENSEX")
+const GANN_STATE = {
+  "NIFTY 50":   null,
+  "BANK NIFTY": null,
+  "SENSEX":     null,
+};
+
+// Spot history (rolling 24-point window per symbol, for sparkline)
+const spotHistory = {};
+SYMBOLS.forEach(s => { spotHistory[s] = []; });
+
+// UI state
+let active   = "NIFTY 50";
+let oiView   = "near";
+let oiScroll = 0;
+const OI_ROWS = 7;
+
+// Live alerts (from "options-alert" socket events)
+let alerts = [];
+const MAX_ALERTS = 6;
+
+// Connection state
+let isConnected = false;
+
+// ── Socket.io connection ───────────────────────────────────────────────────
+const socket = io({ transports: ["websocket", "polling"] });
+
+socket.on("connect", () => {
+  console.log("✅ Options Intel: socket connected");
+  isConnected = true;
+  renderToolbar();   // update live dot
+});
+
+socket.on("disconnect", () => {
+  console.log("⚠️  Options Intel: socket disconnected");
+  isConnected = false;
+  renderToolbar();
+});
+
+// ── Main intelligence update ───────────────────────────────────────────────
+// Event: "options-intel"
+// Payload shape from optionsIntegration.js:
+//   { symbol, score, bias, strategy, spot, ltp, volatility, atmGreeks,
+//     gex, dealerExposures, oi, structure, updatedAt }
+socket.on("options-intel", (data) => {
+  if (!data?.symbol) return;
+  const sym = data.symbol;   // "NIFTY 50" | "BANK NIFTY" | "SENSEX"
+  if (!STATE[sym]) return;
+
+  // Deep-merge into STATE (keeps old values for fields not in payload)
+  Object.assign(STATE[sym], data);
+
+  // Push spot to history
+  if (data.spot && data.spot > 0) {
+    spotHistory[sym].push(data.spot);
+    if (spotHistory[sym].length > 24) spotHistory[sym].shift();
+  }
+
+  if (active === sym) render();
+});
+
+// ── Gann update ────────────────────────────────────────────────────────────
+// Event: "gann-update"
+// Payload shape from optionsIntegration.js:
+//   { symbol, signal, squareOfNine, keyLevels, timeCycles, alerts, headline }
+socket.on("gann-update", (data) => {
+  if (!data?.symbol) return;
+  GANN_STATE[data.symbol] = data;
+  if (active === data.symbol) render();
+});
+
+// ── Real-time alerts ───────────────────────────────────────────────────────
+// Event: "options-alert"
+// Payload: { type, priority, symbol, message, ts }
+socket.on("options-alert", (alert) => {
+  if (!alert?.message) return;
+  // Deduplicate by message
+  const already = alerts.some(a => a.message === alert.message && Date.now() - a.ts < 60000);
+  if (!already) {
+    alerts.unshift({ ...alert, ts: alert.ts || Date.now() });
+    if (alerts.length > MAX_ALERTS) alerts = alerts.slice(0, MAX_ALERTS);
+    renderToolbar();   // only toolbar needs refresh for new alert
+  }
+});
+
+// ── Live spot ticks from upstoxStream ────────────────────────────────────
+// Event: "market-tick"
+// Payload: Array of { name, price (string), raw (number), change, pct, up, _ts }
+socket.on("market-tick", (updates) => {
+  if (!Array.isArray(updates)) return;
+  let changed = false;
+  for (const tick of updates) {
+    const sym = tick.name;   // "NIFTY 50" | "BANK NIFTY" | "SENSEX"
+    if (!STATE[sym]) continue;
+    if (tick.raw && tick.raw > 0) {
+      STATE[sym].spot = tick.raw;
+      STATE[sym].ltp  = tick.raw;
+      spotHistory[sym].push(tick.raw);
+      if (spotHistory[sym].length > 24) spotHistory[sym].shift();
+      if (sym === active) changed = true;
+    }
+  }
+  // Only re-render scorecard (spot + sparkline), not all panels
+  if (changed) renderScoreCard();
+});
+
+// Alert age refresh (every 10s)
+setInterval(() => {
+  if (document.querySelector('.alert-row')) renderToolbar();
+}, 10_000);
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+const fmt2  = n => n==null?"—":Number(n).toFixed(2);
+const fmtI  = n => n==null?"—":Math.round(Number(n)).toLocaleString("en-IN");
+const fmtCr = n => { if(n==null)return"—"; const a=Math.abs(n); return a>=1000?(n/1000).toFixed(1)+"K Cr":Number(n).toFixed(1)+" Cr"; };
+const calcP = (a,b) => (!a||!b)?null:+((a-b)/b*100).toFixed(1);
+
+function scoreBand(s) {
+  if(s>=80) return {color:"#00ff9c",bg:"rgba(0,255,156,.06)",border:"rgba(0,255,156,.3)",label:"STRONG BUY"};
+  if(s>=65) return {color:"#4fc3f7",bg:"rgba(79,195,247,.06)",border:"rgba(79,195,247,.3)",label:"BUY"};
+  if(s>=45) return {color:"#ffd54f",bg:"rgba(255,213,79,.06)",border:"rgba(255,213,79,.3)",label:"NEUTRAL"};
+  if(s>=30) return {color:"#ff8a65",bg:"rgba(255,138,101,.06)",border:"rgba(255,138,101,.3)",label:"SELL"};
+  return {color:"#ef5350",bg:"rgba(239,83,80,.06)",border:"rgba(239,83,80,.3)",label:"STRONG SELL"};
+}
+function gannPal(bias) {
+  const p = {
+    STRONG_BULLISH:{color:"#00ff9c",bg:"rgba(0,255,156,.07)",border:"rgba(0,255,156,.3)"},
+    BULLISH:{color:"#00ff9c",bg:"rgba(0,255,156,.05)",border:"rgba(0,255,156,.2)"},
+    NEUTRAL:{color:"#ffd54f",bg:"rgba(255,213,79,.05)",border:"rgba(255,213,79,.2)"},
+    BEARISH:{color:"#ef5350",bg:"rgba(239,83,80,.05)",border:"rgba(239,83,80,.2)"},
+    STRONG_BEARISH:{color:"#ef5350",bg:"rgba(239,83,80,.08)",border:"rgba(239,83,80,.3)"}
+  };
+  return p[bias]||p.NEUTRAL;
+}
+const stratColors = {
+  SELL_PREMIUM:{bg:"rgba(0,255,156,.07)",color:"#00ff9c",border:"rgba(0,255,156,.25)"},
+  BUY_OPTIONS:{bg:"rgba(79,195,247,.07)",color:"#4fc3f7",border:"rgba(79,195,247,.25)"},
+  DEFENSIVE:{bg:"rgba(239,83,80,.07)",color:"#ef5350",border:"rgba(239,83,80,.25)"},
+  GAMMA_WALL:{bg:"rgba(255,213,79,.07)",color:"#ffd54f",border:"rgba(255,213,79,.25)"},
+  UNUSUAL_ACTIVITY:{bg:"rgba(255,92,255,.07)",color:"#ff5cff",border:"rgba(255,92,255,.25)"},
+  SKEW_TRADE:{bg:"rgba(255,138,101,.07)",color:"#ff8a65",border:"rgba(255,138,101,.25)"},
+};
+const proxColor = {IMMINENT:"#ef5350",THIS_WEEK:"#ffd54f",THIS_FORTNIGHT:"#ff8a65",THIS_MONTH:"#4fc3f7"};
+const cycColor  = {EXTREME:"#ef5350",MAJOR:"#ff8a65",SIGNIFICANT:"#ffd54f",MINOR:"#4a9abb"};
+
+// ── DOM helpers ───────────────────────────────────────────────────────────
+function h(tag, props={}, ...children) {
+  const el = document.createElement(tag);
+  for(const [k,v] of Object.entries(props)) {
+    if(k==='class') el.className = v;
+    else if(k==='style' && typeof v==='object') Object.assign(el.style, v);
+    else if(k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
+    else el.setAttribute(k, v);
+  }
+  for(const child of children.flat()) {
+    if(child==null||child===false) continue;
+    el.appendChild(typeof child==='string'||typeof child==='number'
+      ? document.createTextNode(String(child)) : child);
+  }
+  return el;
+}
+function svgEl(tag, attrs={}) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for(const [k,v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+// ── Sparkline SVG ─────────────────────────────────────────────────────────
+function buildSparkline(history, color, w=70, ht=24) {
+  if(!history||history.length<2) return null;
+  const mn = Math.min(...history), mx = Math.max(...history);
+  const range = mx - mn || 1;
+  const pts = history.map((v,i) => {
+    const x = (i/(history.length-1))*w;
+    const y = ht - ((v-mn)/range)*(ht-4) - 2;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const polyline = pts.join(' ');
+  const fillPts = `0,${ht} ` + polyline + ` ${w},${ht}`;
+  const svg = svgEl('svg', {viewBox:`0 0 ${w} ${ht}`, width:w, height:ht, class:'spark-svg'});
+  const defs = svgEl('defs');
+  const gradId = 'spark-grad-'+Math.random().toString(36).slice(2,6);
+  const grad = svgEl('linearGradient', {id:gradId, x1:'0', y1:'0', x2:'0', y2:'1'});
+  const s1 = svgEl('stop', {offset:'0%'}); s1.setAttribute('stop-color', color); s1.setAttribute('stop-opacity', '0.25');
+  const s2 = svgEl('stop', {offset:'100%'}); s2.setAttribute('stop-color', color); s2.setAttribute('stop-opacity', '0.01');
+  grad.appendChild(s1); grad.appendChild(s2); defs.appendChild(grad); svg.appendChild(defs);
+  svg.appendChild(svgEl('polygon', {points: fillPts, fill:`url(#${gradId})`}));
+  svg.appendChild(svgEl('polyline', {points: polyline, fill:'none', stroke:color, 'stroke-width':'1.2', 'stroke-linejoin':'round', 'stroke-linecap':'round'}));
+  const last = pts[pts.length-1].split(',');
+  svg.appendChild(svgEl('circle', {cx:last[0], cy:last[1], r:'2', fill:color, 'filter':'drop-shadow(0 0 3px '+color+')'}));
+  return svg;
+}
+
+// ── Score donut ring ──────────────────────────────────────────────────────
+function scoreDonut(score, color, size=52) {
+  const R = size/2 - 5, cx = size/2, cy = size/2;
+  const circ = 2*Math.PI*R;
+  const dash = (score/100)*circ;
+  const svg = svgEl('svg', {viewBox:`0 0 ${size} ${size}`, width:size, height:size});
+  svg.appendChild(svgEl('circle', {cx, cy, r:R, fill:'none', stroke:'#1a3548', 'stroke-width':'4'}));
+  svg.appendChild(svgEl('circle', {cx, cy, r:R, fill:'none', stroke:color, 'stroke-width':'4',
+    'stroke-dasharray':`${dash.toFixed(1)} ${circ.toFixed(1)}`,
+    'stroke-dashoffset': circ*0.25,
+    'stroke-linecap':'round',
+    style:`filter:drop-shadow(0 0 4px ${color})`}));
+  return svg;
+}
+function gannRing(score, color) { return scoreDonut(score||0, color, 48); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TOOLBAR
+// ═══════════════════════════════════════════════════════════════════════════
+function renderToolbar() {
+  const tb = document.getElementById('toolbar');
+  tb.innerHTML = '';
+
+  tb.appendChild(h('span', {class:'logo'}, '⚡ OPTIONS INTEL'));
+
+  SYMBOLS.forEach(sym => {
+    const d = STATE[sym];
+    const hasData = d.spot > 0;
+    const btn = h('button', {
+      class: 'sym-btn' + (active===sym?' active':''),
+      onClick: () => { active=sym; oiView='near'; oiScroll=0; render(); }
+    }, sym + (hasData ? '' : ' …'));
+    tb.appendChild(btn);
+  });
+
+  tb.appendChild(h('div', {class:'spacer'}));
+
+  // Alert strip
+  const ac = h('div', {class:'alert-strip'});
+  ac.appendChild(h('div', {class:'alert-strip-head'},
+    h('span', {}, '⚡ ALERTS'),
+    h('span', {class:'alert-count'}, String(alerts.length))
+  ));
+  if (alerts.length === 0) {
+    ac.appendChild(h('div', {style:{fontSize:'7px',color:'#4a7090',padding:'2px 0'}},
+      isConnected ? '◌ Monitoring…' : '◌ Connecting…'));
+  } else {
+    alerts.slice(0,3).forEach(a => {
+      const age = Math.round((Date.now()-a.ts)/1000);
+      const ageStr = age<60?`${age}s`:`${Math.round(age/60)}m`;
+      const isH = a.priority==='HIGH';
+      const icon = a.type==='GAMMA_FLIP'||a.type==='GEX_FLIP'?'⚡':a.type==='TIME_CYCLE'?'◷':a.type==='PCR_SPIKE'?'▲':'●';
+      ac.appendChild(h('div', {class:`alert-row ${isH?'high':'medium'}`},
+        h('span', {class:'alert-icon'}, icon),
+        h('span', {class:'alert-msg'}, a.message),
+        h('span', {class:'alert-age'}, ageStr)
+      ));
+    });
+  }
+  tb.appendChild(ac);
+
+  // Live indicator
+  const dotColor = isConnected ? '#00ff9c' : '#ef5350';
+  const dotEl = h('div', {class:'live-dot', style:{background:dotColor, boxShadow:`0 0 6px ${dotColor}`}});
+  tb.appendChild(dotEl);
+  tb.appendChild(h('span', {class:'live-label'}, isConnected ? '↻ live' : '⊗ offline'));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SCORE CARD
+// ═══════════════════════════════════════════════════════════════════════════
+function renderScoreCard() {
+  const d    = STATE[active];
+  const gann = GANN_STATE[active];
+  const band = scoreBand(d.score);
+  const gc   = gannPal(gann?.signal?.bias || 'NEUTRAL');
+  const gannBias = gann?.signal?.bias || 'NEUTRAL';
+  const spot = d.spot;
+  const g    = d.gex, vol = d.volatility, gr = d.atmGreeks, st = d.structure;
+  const history = spotHistory[active];
+  const isUp = history.length>=2 && history[history.length-1] >= history[history.length-2];
+  const spotColor = isUp ? '#00ff9c' : '#ef5350';
+
+  const card = document.getElementById('scorecard');
+  card.innerHTML = '';
+  card.style.setProperty('--score-color', band.color);
+  card.style.background = `linear-gradient(90deg, ${band.bg} 0%, #060f1e 30%)`;
+  card.style.borderColor = band.border;
+
+  // Score donut
+  const sb = h('div', {class:'score-block'});
+  const ringWrap = h('div', {style:{position:'relative', width:'52px', height:'52px', flexShrink:'0'}});
+  ringWrap.appendChild(scoreDonut(d.score, band.color));
+  ringWrap.appendChild(h('span', {style:{
+    position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
+    fontSize:'16px', fontWeight:'700', color:band.color, lineHeight:'1'
+  }}, String(d.score)));
+  sb.appendChild(ringWrap);
+  sb.appendChild(h('span', {class:'score-label', style:{color:band.color}}, band.label));
+  card.appendChild(sb);
+
+  // Symbol + bias + Gann badge + strategy tags
+  const symBlock = h('div', {class:'score-sym'});
+  const symRow = h('div', {class:'score-sym-row'});
+  symRow.appendChild(h('span', {class:'score-sym-name'}, active));
+  symRow.appendChild(h('span', {class:'score-bias', style:{color:band.color}}, d.bias));
+  const shortBias = gannBias.replace('STRONG_','S·').replace(/_/g,'');
+  symRow.appendChild(h('span', {class:'gann-badge-compact', style:{
+    background:gc.bg, borderColor:gc.border, color:gc.color
+  }}, '📐 '+shortBias));
+  symBlock.appendChild(symRow);
+  const stags = h('div', {class:'strats'});
+  (d.strategy||[]).slice(0,4).forEach(s => {
+    const sc = stratColors[s]||{bg:'#1a3040',color:'#a8c8e0',border:'rgba(74,155,187,.2)'};
+    stags.appendChild(h('span', {class:'strat-tag', style:{
+      background:sc.bg, color:sc.color, borderColor:sc.border
+    }}, s.replace(/_/g,' ')));
+  });
+  symBlock.appendChild(stags);
+  card.appendChild(symBlock);
+
+  card.appendChild(h('div', {class:'vdiv'}));
+
+  // Stats row
+  const stats = h('div', {class:'stats-row'});
+  function stat(label, value, sub, color) {
+    return h('div', {class:'stat'},
+      h('span', {class:'stat-label'}, label),
+      h('span', {class:'stat-val', style:{color:color||'#e8f2ff'}}, String(value)),
+      sub ? h('span', {class:'stat-sub'}, sub) : null
+    );
+  }
+  function vdiv() { return h('div', {class:'vdiv'}); }
+
+  const rangePct = g.callWall&&g.putWall&&spot
+    ? Math.max(0,Math.min(100, Math.round(((spot-g.putWall)/(g.callWall-g.putWall))*100)))
+    : null;
+
+  stats.appendChild(stat('Spot', spot>0?'₹'+fmtI(spot):'—', rangePct!=null?rangePct+'% rng':null, spotColor));
+  stats.appendChild(stat('Exp Move', st.expectedMoveAbs>0?'±'+fmt2(st.expectedMoveAbs):'—', '1σ', '#4fc3f7'));
+  stats.appendChild(stat('Evt Risk', String(st.eventRiskScore||0), '0–100',
+    st.eventRiskScore>60?'#ef5350':st.eventRiskScore>30?'#ffd54f':'#5a90a8'));
+  stats.appendChild(vdiv());
+  stats.appendChild(stat('ATM IV', vol.atmIV>0?(vol.atmIV).toFixed(1)+'%':'—', null, '#00cfff'));
+  stats.appendChild(stat('VRP', vol.vrp!=null?(vol.vrp>0?'+':'')+fmt2(vol.vrp)+'%':'—', 'IV−HV20',
+    (vol.vrp||0)>0?'#ff8a65':'#00ff9c'));
+  stats.appendChild(stat('HV 20', vol.hv20>0?(vol.hv20).toFixed(1)+'%':'—'));
+  stats.appendChild(stat('HV 60', vol.hv60>0?(vol.hv60).toFixed(1)+'%':'—'));
+
+  // IV rank bar
+  const ivRankWrap = h('div', {class:'iv-rank-wrap'});
+  const ivR = vol.ivRank||0;
+  const ivc = ivR>70?'#ef5350':ivR>40?'#ffd54f':'#00ff9c';
+  ivRankWrap.appendChild(h('div', {class:'iv-rank-row'},
+    h('span', {style:{color:'#c8d8e8',letterSpacing:'.5px',fontSize:'7px'}}, 'IV RANK'),
+    h('span', {style:{color:ivc,fontWeight:'700',fontSize:'7px'}}, fmt2(ivR))
+  ));
+  const bg = h('div', {class:'rank-bar-bg'});
+  bg.appendChild(h('div', {class:'rank-bar-fg', style:{width:ivR+'%','--w':ivR+'%', background:ivc}}));
+  ivRankWrap.appendChild(bg);
+  if(vol.ivPercentile!=null) ivRankWrap.appendChild(h('span', {class:'rank-pct'}, `%ile: ${fmt2(vol.ivPercentile)}`));
+  stats.appendChild(ivRankWrap);
+  stats.appendChild(vdiv());
+
+  const dc = Math.abs(gr.delta)>0.85?'#ffd54f':gr.delta>0?'#00ff9c':'#ef5350';
+  stats.appendChild(stat('Delta', fmt2(gr.delta), null, dc));
+  stats.appendChild(stat('Gamma', gr.gamma?gr.gamma.toFixed(4):'—'));
+  stats.appendChild(stat('Theta', fmt2(gr.theta), '₹/day', '#ff8a65'));
+  stats.appendChild(stat('Vega',  fmt2(gr.vega),  '1%IV',  '#4fc3f7'));
+
+  card.appendChild(stats);
+
+  // Sparkline
+  if (history.length >= 2) {
+    const sparkWrap = h('div', {class:'spark-wrap', style:{marginLeft:'8px'}});
+    sparkWrap.appendChild(h('span', {class:'spark-label'}, 'SPOT TRAIL'));
+    const svg = buildSparkline(history, spotColor);
+    if(svg) sparkWrap.appendChild(svg);
+    card.appendChild(sparkWrap);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  GEX PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+function renderGEX(d) {
+  const g = d.gex, de = d.dealerExposures||{};
+  const gexMax = Math.max(Math.abs(g.netGEX||0), Math.abs(g.callGEX||0), Math.abs(g.putGEX||0), 1);
+  const bc = g.netGEX>0?'#00ff9c':'#ef5350';
+  const biasText = g.netGEX>0
+    ? 'Dealers long gamma — stabilized'
+    : g.netGEX<0 ? 'Dealers short gamma — volatile' : 'Neutral positioning';
+
+  const p = h('div', {class:'panel'});
+  p.appendChild(h('div', {class:'panel-title'}, '⬡ Dealer GEX'));
+
+  function gexBar(label, value, color) {
+    const pct = Math.min(Math.abs((value||0)/(gexMax||1))*100, 100).toFixed(1);
+    const wr = h('div', {class:'gex-bar-wrap'});
+    wr.appendChild(h('div', {class:'gex-bar-head'},
+      h('span', {style:{color:'#c8d8e8'}}, label),
+      h('span', {style:{color,fontWeight:'700'}}, fmtCr(value))
+    ));
+    const bg = h('div', {class:'gex-bar-bg'});
+    bg.appendChild(h('div', {class:'gex-bar-fill', style:{
+      '--w':pct+'%', background:`linear-gradient(90deg, ${color}99, ${color})`, width:pct+'%'
+    }}));
+    wr.appendChild(bg);
+    return wr;
+  }
+
+  p.appendChild(gexBar('Net GEX', g.netGEX, g.netGEX>=0?'#00ff9c':'#ef5350'));
+  p.appendChild(gexBar('Call GEX', g.callGEX, '#4fc3f7'));
+  p.appendChild(gexBar('Put GEX', g.putGEX, '#ff8a65'));
+
+  const regimeColor = g.regime==='MEAN_REVERTING'?'#00ff9c':'#ef5350';
+  p.appendChild(h('div', {class:'gex-regime-tag', style:{
+    color:regimeColor, background:`${regimeColor}0f`, borderColor:`${regimeColor}33`
+  }},
+    h('span', {style:{fontSize:'8px'}}, g.netGEX>=0?'●':'●'),
+    h('span', {style:{fontSize:'7px',fontWeight:'700',letterSpacing:'.5px'}},
+      (g.regime||'—').replace(/_/g,' ')),
+    h('span', {style:{fontSize:'7px',color:'#8aacc2'}}, '— '+biasText)
+  ));
+
+  // GEX key levels grid
+  function mc(label, val, sub, color) {
+    return h('div', {class:'mini-card'},
+      h('span', {class:'mini-card-label'}, label),
+      h('span', {class:'mini-card-val', style:{color:color||'#e8f2ff'}}, String(val)),
+      sub ? h('span', {class:'mini-card-sub'}, sub) : null
+    );
+  }
+  const grid = h('div', {class:'mini-grid'});
+  grid.appendChild(mc('GAMMA FLIP', g.gammaFlip?fmtI(g.gammaFlip):'—', 'spot level', '#ffd54f'));
+  grid.appendChild(mc('REGIME', (g.regime||'—').replace(/_/g,' '), null, regimeColor));
+  grid.appendChild(mc('CALL WALL', g.callWall?fmtI(g.callWall):'—', 'resistance', '#4fc3f7'));
+  grid.appendChild(mc('PUT WALL',  g.putWall ?fmtI(g.putWall):'—',  'support',    '#ff8a65'));
+  p.appendChild(grid);
+
+  // 2nd order
+  const vanna = de.vex??null, charm = de.chex??null;
+  if(vanna!=null||charm!=null) {
+    p.appendChild(h('div', {class:'sub-title'}, '2nd Order Greeks'));
+    const g2 = h('div', {class:'mini-grid'});
+    if(vanna!=null) g2.appendChild(mc('VANNA', fmtCr(vanna), 'Δ vs vol', '#ff5cff'));
+    if(charm!=null) g2.appendChild(mc('CHARM', fmtCr(charm), 'time decay', '#ffd54f'));
+    p.appendChild(g2);
+  }
+
+  // Top GEX strikes mini bar chart
+  if(g.topStrikes?.length>0) {
+    p.appendChild(h('div', {class:'sub-title'}, 'Top GEX Strikes'));
+    const maxStrike = Math.max(...g.topStrikes.map(s=>Math.abs(s.netGEX||0)), 1);
+    g.topStrikes.slice(0,4).forEach(s => {
+      const pct = Math.min(Math.abs((s.netGEX||0)/maxStrike)*100, 100).toFixed(1);
+      const sc = (s.netGEX||0)>=0?'#00ff9c':'#ef5350';
+      p.appendChild(h('div', {class:'gex-strike-bar'},
+        h('span', {class:'gex-strike-label'}, fmtI(s.strike)),
+        h('div', {class:'gex-strike-track'},
+          h('div', {class:'gex-strike-fill', style:{'--w':pct+'%',width:pct+'%',background:sc}})
+        ),
+        h('span', {class:'gex-strike-val', style:{color:sc}}, fmtCr(s.netGEX))
+      ));
+    });
+  }
+
+  // Loading placeholder
+  if(g.netGEX===0 && g.callGEX===0) {
+    p.appendChild(h('div', {style:{fontSize:'7px',color:'#4a7090',textAlign:'center',padding:'8px 0'}},
+      '◌ Awaiting live GEX data…'));
+  }
+
+  return p;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  OI PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+function renderOI(d) {
+  const oi = d.oi, spot = d.spot;
+  const oiC = oi.pcr>1.2?'#00ff9c':oi.pcr<0.8?'#ef5350':'#ffd54f';
+
+  const p = h('div', {class:'panel'});
+  p.appendChild(h('div', {class:'panel-title'}, '◎ OI Intelligence'));
+
+  function mc(label, val, sub, color) {
+    return h('div', {class:'mini-card'},
+      h('span', {class:'mini-card-label'}, label),
+      h('span', {class:'mini-card-val', style:{color:color||'#e8f2ff'}}, String(val)),
+      sub ? h('span', {class:'mini-card-sub'}, sub) : null
+    );
+  }
+
+  const grid = h('div', {class:'mini-grid', style:{marginBottom:'6px'}});
+  grid.appendChild(mc('PCR', oi.pcr>0?fmt2(oi.pcr):'—', 'put/call', oiC));
+  grid.appendChild(mc('MAX PAIN', oi.maxPain?fmtI(oi.maxPain):'—', 'expiry', '#4fc3f7'));
+  const tot = (oi.totalCallOI||0)+(oi.totalPutOI||0);
+  grid.appendChild(mc('TOTAL OI', tot>0?(tot/1e5).toFixed(1)+'L':'—'));
+  grid.appendChild(mc('NET FLOW', oi.netPremiumFlow!=null?fmtCr(oi.netPremiumFlow):'—',
+    null, (oi.netPremiumFlow||0)>0?'#00ff9c':'#ef5350'));
+  p.appendChild(grid);
+
+  const oiSumText = oi.pcr>1.2 ? 'Put dominance → bullish (mm hedge)'
+    : oi.pcr<0.8 ? 'Call dominance → market complacent'
+    : oi.pcr>0 ? 'Balanced PCR → neutral' : null;
+  if(oiSumText) {
+    p.appendChild(h('div', {style:{
+      fontSize:'7px', color:oiC, marginBottom:'6px', padding:'3px 6px',
+      background:oiC+'10', borderRadius:'3px', border:`1px solid ${oiC}22`
+    }}, '◈ '+oiSumText));
+  }
+
+  // Tabs
+  const tabs = h('div', {class:'oi-tabs'});
+  [{key:'near',label:'NEAR ATM ±8%',colorClass:'near'},{key:'tail',label:'FII HEDGE / TAIL',colorClass:'tail'}].forEach(t => {
+    tabs.appendChild(h('button', {
+      class:`oi-tab ${oiView===t.key?`active-${t.colorClass}`:''}`,
+      onClick: () => { oiView=t.key; oiScroll=0; render(); }
+    }, t.label));
+  });
+  p.appendChild(tabs);
+
+  const rows = oiView==='near' ? oi.unusualOI : (oi.unusualOITailRisk||[]);
+  const sorted = [...(rows||[])].sort((a,b)=>{
+    const da=spot?Math.abs(a.strike-spot):0, db=spot?Math.abs(b.strike-spot):0;
+    return da!==db ? da-db : (a.type||'').toUpperCase()==='CALL'?-1:1;
+  });
+  const visible = sorted.slice(oiScroll, oiScroll+OI_ROWS);
+  const canUp = oiScroll>0, canDn = oiScroll+OI_ROWS<sorted.length;
+
+  p.appendChild(h('div', {class:'oi-hdr'},
+    h('span',{},''),
+    h('span',{},'STRIKE'),
+    h('span',{style:{textAlign:'right'}},'OI'),
+    h('span',{style:{textAlign:'right'}},'VOL'),
+    h('span',{style:{textAlign:'right'}},'DIST%')
+  ));
+
+  if(visible.length===0) {
+    p.appendChild(h('div', {style:{fontSize:'7px',color:'#5a90a8',textAlign:'center',padding:'10px 0'}},
+      oi.totalCallOI===0 ? '◌ Awaiting OI data…' : '◌ No data for this view'));
+  } else {
+    visible.forEach(u => {
+      const isCE = (u.type||'').toUpperCase()==='CALL';
+      const dist = spot ? calcP(u.strike, spot) : null;
+      const tc = isCE?'#4fc3f7':'#ff8a65';
+      p.appendChild(h('div', {class:'oi-row'},
+        h('span', {class:'oi-type', style:{background:tc+'18',color:tc,borderColor:tc+'33'}}, isCE?'CE':'PE'),
+        h('span', {class:'oi-strike'}, fmtI(u.strike)),
+        h('span', {class:'oi-oi'}, (u.oi||0).toLocaleString('en-IN')),
+        h('span', {class:'oi-vol'}, (u.vol||0).toLocaleString('en-IN')),
+        h('span', {class:'oi-dist', style:{color:dist!=null?(dist>0?'#4fc3f7':'#ff8a65'):'#5a90a8'}},
+          dist!=null?(dist>0?'+':'')+dist+'%':'—')
+      ));
+    });
+  }
+
+  const pgn = h('div', {class:'oi-pgn'});
+  pgn.appendChild(h('span', {class:'oi-pgn-info'},
+    sorted.length>0?`${oiScroll+1}–${Math.min(oiScroll+OI_ROWS,sorted.length)} / ${sorted.length}`:'0'));
+  const btnWrap = h('div', {class:'oi-pgn-btns'});
+  const bUp = h('button', {class:'oi-pgn-btn', ...(canUp?{}:{disabled:''}),
+    ...(canUp?{onClick:()=>{oiScroll=Math.max(0,oiScroll-OI_ROWS);render();}}:{})}, '▲');
+  const bDn = h('button', {class:'oi-pgn-btn', ...(canDn?{}:{disabled:''}),
+    ...(canDn?{onClick:()=>{oiScroll=Math.min(sorted.length-OI_ROWS,oiScroll+OI_ROWS);render();}}:{})}, '▼');
+  btnWrap.appendChild(bUp); btnWrap.appendChild(bDn);
+  pgn.appendChild(btnWrap);
+  p.appendChild(pgn);
+
+  return p;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  GANN PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+function renderGann(gann) {
+  const p = h('div', {class:'panel'});
+  p.appendChild(h('div', {class:'panel-title'}, '◤ Gann Analysis'));
+
+  if(!gann) {
+    p.appendChild(h('div', {style:{fontSize:'8px',color:'#c8d8e8',textAlign:'center',padding:'16px 0'}},
+      '◌ Awaiting Gann data…'));
+    return p;
+  }
+
+  const sig = gann.signal||{}, son = gann.squareOfNine||{}, cycles = (gann.timeCycles||[]).slice(0,4);
+  const gBias = sig.bias||'NEUTRAL', gc = gannPal(gBias);
+  p.style.borderColor = gc.border.replace('0.2','0.35');
+
+  const head = h('div', {class:'gann-head', style:{background:gc.bg, borderColor:gc.border}});
+  const ringWrap = h('div', {style:{position:'relative',width:'48px',height:'48px',flexShrink:'0'}});
+  ringWrap.appendChild(gannRing(sig.score||0, gc.color));
+  ringWrap.appendChild(h('span', {style:{
+    position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',
+    fontSize:'14px',fontWeight:'700',color:gc.color,lineHeight:'1'
+  }}, sig.score!=null?String(Math.round(sig.score)):'—'));
+  head.appendChild(ringWrap);
+
+  const hBody = h('div', {class:'gann-head-body'});
+  hBody.appendChild(h('span', {class:'gann-bias-label', style:{color:gc.color}}, gBias.replace(/_/g,' ')));
+  if(sig.summary) hBody.appendChild(h('span', {class:'gann-summary'},
+    sig.summary.replace(/^Gann: [A-Z]+ \(score \d+\/100\)\.\s?/,'')));
+  head.appendChild(hBody);
+  p.appendChild(head);
+
+  // Key levels
+  const levels = gann.keyLevels||{};
+  if((levels.supports?.length||0)+(levels.resistances?.length||0) > 0) {
+    const lg = h('div', {class:'gann-levels'});
+    const supp = h('div', {class:'gann-level-card', style:{borderColor:'rgba(0,255,156,.15)'}});
+    supp.appendChild(h('span', {class:'gann-level-head'}, 'SUPPORTS'));
+    (levels.supports||[]).slice(0,3).forEach((s,i) => {
+      supp.appendChild(h('div', {class:'gann-level-row'},
+        h('span', {style:{color:'#00ff9c'}}, `S${i+1} ${fmtI(s.price)}`),
+        h('span', {style:{color:'#5a90a8',fontSize:'7px'}},
+          s.source?.includes('Nine')?'SoN':s.source?.includes('Cardinal')?'Card':'—')
+      ));
+    });
+    const res = h('div', {class:'gann-level-card', style:{borderColor:'rgba(239,83,80,.15)'}});
+    res.appendChild(h('span', {class:'gann-level-head'}, 'RESISTANCES'));
+    (levels.resistances||[]).slice(0,3).forEach((r2,i) => {
+      res.appendChild(h('div', {class:'gann-level-row'},
+        h('span', {style:{color:'#ef5350'}}, `R${i+1} ${fmtI(r2.price)}`),
+        h('span', {style:{color:'#5a90a8',fontSize:'7px'}},
+          r2.source?.includes('Nine')?'SoN':r2.source?.includes('Cardinal')?'Card':'—')
+      ));
+    });
+    lg.appendChild(supp); lg.appendChild(res);
+    p.appendChild(lg);
+  }
+
+  // Square of Nine
+  if(son?.positionOnSquare) {
+    const sq = h('div', {class:'son-wrap'});
+    sq.appendChild(h('div', {class:'sub-title', style:{marginTop:'0'}}, 'Square of Nine'));
+    const row = h('div', {class:'son-row'});
+    row.appendChild(h('span', {class:'son-angle'}, `${son.angleOnSquare?.toFixed(1)||'—'}° on square`));
+    const sc = son.positionOnSquare.strength;
+    const sc_color = sc==='EXTREME'?'#ef5350':sc==='STRONG'?'#ffd54f':'#4a9abb';
+    row.appendChild(h('span', {class:'son-strength', style:{
+      background:sc_color+'15', color:sc_color, borderRadius:'2px', border:`1px solid ${sc_color}33`
+    }}, sc));
+    sq.appendChild(row);
+    sq.appendChild(h('span', {class:'son-label'}, son.positionOnSquare.label));
+    p.appendChild(sq);
+  }
+
+  // Time cycles
+  if(cycles.length>0) {
+    p.appendChild(h('div', {class:'sub-title'}, 'Time Cycles'));
+    cycles.forEach(c => {
+      const timingStr = c.daysFromToday===0?'TODAY':c.daysFromToday<0?`${Math.abs(c.daysFromToday)}d ago`:`+${c.daysFromToday}d`;
+      p.appendChild(h('div', {class:'cycle-row'},
+        h('span', {class:'cycle-label', style:{color:cycColor[c.cycleStrength]||'#4a9abb'}}, c.label),
+        h('span', {class:'cycle-timing', style:{color:proxColor[c.proximity]||'#4a9abb'}}, timingStr)
+      ));
+    });
+  }
+
+  // HIGH alerts
+  const gAlerts = (gann.alerts||[]).filter(a=>a.priority==='HIGH').slice(0,2);
+  if(gAlerts.length>0) {
+    p.appendChild(h('div', {class:'sub-title', style:{borderColor:'rgba(239,83,80,.25)'}}, 'HIGH PRIORITY'));
+    gAlerts.forEach(a => p.appendChild(h('div', {class:'gann-alert'}, a.message)));
+  }
+
+  if(gann.headline) p.appendChild(h('div', {class:'gann-headline'}, gann.headline));
+
+  return p;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  STRUCTURE PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+function renderStructure(d, gann) {
+  const st = d.structure, g = d.gex, oi = d.oi, spot = d.spot;
+  const cw = g.callWall, pw = g.putWall, gf = g.gammaFlip;
+  let rangePct = null;
+  if(cw&&pw&&spot) rangePct = Math.max(0,Math.min(100,Math.round(((spot-pw)/(cw-pw))*100)));
+
+  let zoneLabel, zoneColor;
+  if(cw&&spot>=cw*.99)       { zoneLabel='At Call Wall — resistance'; zoneColor='#4fc3f7'; }
+  else if(pw&&spot<=pw*1.01) { zoneLabel='At Put Wall — support';     zoneColor='#ff8a65'; }
+  else if(gf&&spot>=gf)      { zoneLabel='Above Gamma Flip — trend';  zoneColor='#00ff9c'; }
+  else if(gf&&spot<gf)       { zoneLabel='Below Gamma Flip — MR';     zoneColor='#ffd54f'; }
+  else if(spot>0)             { zoneLabel='Between walls';              zoneColor='#4a9abb'; }
+  else                        { zoneLabel='Awaiting data';              zoneColor='#4a7090'; }
+
+  const p = h('div', {class:'panel'});
+
+  // Gann box at top
+  if(gann) {
+    const gc = gannPal(gann.signal?.bias||'NEUTRAL');
+    const gbx = h('div', {style:{
+      background:gc.bg, border:`1px solid ${gc.border}`,
+      borderRadius:'5px', padding:'6px 10px', marginBottom:'7px',
+      display:'flex', flexDirection:'column', gap:'3px'
+    }});
+    gbx.appendChild(h('span', {style:{fontSize:'7px',color:'#1a5070',letterSpacing:'1px'}}, 'GANN'));
+    const biasRow = h('div', {style:{display:'flex',alignItems:'center',gap:'5px'}});
+    biasRow.appendChild(h('span', {style:{fontSize:'11px',fontWeight:'700',color:gc.color}},
+      '📐 '+(gann.signal?.bias||'NEUTRAL').replace(/_/g,' ')));
+    if(gann.squareOfNine?.angleOnSquare!=null)
+      biasRow.appendChild(h('span', {style:{fontSize:'9px',opacity:'.6',color:gc.color}},
+        gann.squareOfNine.angleOnSquare.toFixed(1)+'°'));
+    gbx.appendChild(biasRow);
+    if(gann.keyLevels?.supports?.[0]||gann.keyLevels?.resistances?.[0]) {
+      const lvRow = h('div', {style:{display:'flex',gap:'10px',fontSize:'9px'}});
+      if(gann.keyLevels.supports?.[0]) lvRow.appendChild(h('span',{style:{color:'#00ff9c'}},'S '+fmtI(gann.keyLevels.supports[0].price)));
+      if(gann.keyLevels.resistances?.[0]) lvRow.appendChild(h('span',{style:{color:'#ef5350'}},'R '+fmtI(gann.keyLevels.resistances[0].price)));
+      gbx.appendChild(lvRow);
+    }
+    p.appendChild(gbx);
+  }
+
+  p.appendChild(h('div', {class:'panel-title'}, '≡ Market Structure'));
+
+  p.appendChild(h('div', {class:'zone-badge', style:{color:zoneColor, background:zoneColor+'11', borderColor:zoneColor+'33'}},
+    h('div', {class:'zone-dot', style:{background:zoneColor}}),
+    zoneLabel
+  ));
+
+  if(spot>0) p.appendChild(h('span', {style:{fontSize:'12px',fontWeight:'700',color:'#e8f2ff',marginBottom:'4px',display:'block'}},
+    '₹'+fmtI(spot)));
+
+  // Range bar
+  if(rangePct!==null) {
+    const wrap = h('div', {class:'range-bar-wrap'});
+    wrap.appendChild(h('div', {class:'range-bar-labels'},
+      h('span',{}, 'PUT '+fmtI(pw)),
+      h('span',{style:{color:'#e8f2ff'}}, rangePct+'% in range'),
+      h('span',{}, 'CALL '+fmtI(cw))
+    ));
+    const rbg = h('div', {class:'range-bar-bg'});
+    rbg.appendChild(h('div', {class:'range-bar-fill', style:{width:rangePct+'%'}}));
+    rbg.appendChild(h('div', {class:'range-bar-needle', style:{left:rangePct+'%'}}));
+    wrap.appendChild(rbg);
+    p.appendChild(wrap);
+  }
+
+  // Mini grid
+  const mg = h('div', {class:'mini-grid', style:{marginBottom:'8px'}});
+  function mc(label, val, sub, color) {
+    return h('div', {class:'mini-card'},
+      h('span', {class:'mini-card-label'}, label),
+      h('span', {class:'mini-card-val', style:{color:color||'#e8f2ff'}}, String(val)),
+      sub ? h('span', {class:'mini-card-sub'}, sub) : null
+    );
+  }
+  mg.appendChild(mc('SUPPORT (OI)',  st.supportFromOI ?fmtI(st.supportFromOI) :'—', 'put OI wall',  '#00ff9c'));
+  mg.appendChild(mc('RESIST (OI)',   st.resistanceFromOI?fmtI(st.resistanceFromOI):'—', 'call OI wall', '#ef5350'));
+  if(gann?.keyLevels) {
+    mg.appendChild(mc('SUPPORT (GANN)',   gann.keyLevels.supports?.[0]?.price?fmtI(gann.keyLevels.supports[0].price):'—',
+      gann.keyLevels.supports?.[0]?.source||'SoN', '#00ff9c'));
+    mg.appendChild(mc('RESIST (GANN)',    gann.keyLevels.resistances?.[0]?.price?fmtI(gann.keyLevels.resistances[0].price):'—',
+      gann.keyLevels.resistances?.[0]?.source||'SoN', '#ef5350'));
+  }
+  p.appendChild(mg);
+
+  // Levels table
+  function lvRow(label, val, color) {
+    p.appendChild(h('div', {class:'lvl-row'},
+      h('span', {class:'lvl-label'}, label),
+      h('span', {class:'lvl-val', style:{color}}, val)
+    ));
+  }
+  if(cw&&spot) { const d2=calcP(cw,spot); lvRow('↑ Call Wall', `+${Math.abs(d2).toFixed(1)}% ₹${fmtI(cw-spot)}`, '#4fc3f7'); }
+  if(pw&&spot) { const d2=calcP(spot,pw); lvRow('↓ Put Wall', `-${Math.abs(d2).toFixed(1)}% ₹${fmtI(spot-pw)}`, '#ff8a65'); }
+  if(gf&&spot) { const abv=spot>gf, d2=calcP(gf,spot); lvRow('γ Flip', (abv?'+':'-')+Math.abs(d2).toFixed(1)+'% ₹'+fmtI(gf), abv?'#00ff9c':'#ffd54f'); }
+  if(oi.maxPain) lvRow('⊗ Max Pain', '₹'+fmtI(oi.maxPain), '#a8c8e0');
+  if(oi.pcr>0) {
+    lvRow('⊕ PCR', oi.pcr.toFixed(2)+' — '+(oi.pcr>1.2?'bullish':oi.pcr<0.8?'bearish':'neutral'),
+      oi.pcr>1.2?'#00ff9c':oi.pcr<0.8?'#ef5350':'#ffd54f');
+  }
+
+  if(st.ivEnvironment) {
+    p.appendChild(h('div', {style:{fontSize:'7.5px',color:'#a0b8cc',marginTop:'6px'}},
+      'IV env: ', h('span', {style:{color:'#ffd54f'}}, st.ivEnvironment.replace(/_/g,' '))
+    ));
+  }
+  if(st.straddlePrice>0) {
+    const sr = h('div', {style:{display:'flex',justifyContent:'space-between',fontSize:'9px',
+      padding:'5px 0',borderTop:'1px solid #1a3040',marginTop:'6px'}});
+    sr.appendChild(h('span', {style:{color:'#c8d8e8'}}, 'ATM Straddle'));
+    sr.appendChild(h('span', {style:{color:'#e8f2ff',fontWeight:'700'}}, '₹'+fmt2(st.straddlePrice)));
+    p.appendChild(sr);
+  }
+
+  return p;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  MAIN RENDER
+// ═══════════════════════════════════════════════════════════════════════════
+function render() {
+  const d    = STATE[active];
+  const gann = GANN_STATE[active];
+
+  renderToolbar();
+  renderScoreCard();
+
+  const panels = document.getElementById('panels');
+  panels.innerHTML = '';
+  panels.appendChild(renderGEX(d));
+  panels.appendChild(renderOI(d));
+  panels.appendChild(renderGann(gann));
+  panels.appendChild(renderStructure(d, gann));
+}
+
+// Initial render (empty state — will be filled by socket events)
+render();
+</script>
+</body>
+</html>
