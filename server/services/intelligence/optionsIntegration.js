@@ -4,15 +4,42 @@
  * optionsIntegration.js
  * Location: server/services/intelligence/optionsIntegration.js
  *
+ * ══════════════════════════════════════════════════════════════
  * FIXES APPLIED:
- *  1. Direct require of websocket.js (no lazy load)
- *  2. setCachedIntel() called BEFORE every io.emit
- *  3. extractRows() correctly handles processChain() output shape (s.ce/s.pe)
- *  4. safeIV() normalises Upstox decimal (0.15) AND NSE % (15.0)
- *  5. ingestChainData exported for nseOIListener's 5 positional-arg call
- *  6. FIX: HV closes array — uses ivHistory proxy instead of empty []
- *  7. FIX: buildNearATMRows — injects ALL CE+PE strikes near spot into
- *          result.oi.unusualOI so the Near ATM table shows both sides
+ *
+ * FIX A — poll() fallback disabled:
+ *   Root cause: poll() re-read getAllCached() from nseOIListener every 15s
+ *   and re-ran analyzeOptionsChain() AGAIN — even though nseOIListener's
+ *   pollChains() already called ingestChainData() directly after each fetch.
+ *   This created a SECOND emit within the same 60s window using slightly
+ *   different (stale) data, causing the flashing absurd values to linger.
+ *   Fix: poll() is now a no-op. nseOIListener drives all analysis by calling
+ *   ingestChainData() directly with clean data after every successful fetch.
+ *
+ * FIX B — Throttle reduced to match nseOIListener poll interval:
+ *   canRun() was throttling to 15s, but nseOIListener polls every 60s.
+ *   This meant the first call from nseOIListener always ran, but if anything
+ *   triggered a second call within 15s it would be silently dropped.
+ *   Fix: throttle now uses 55s (just under the 60s poll interval) so each
+ *   legitimate poll from nseOIListener always gets through, but duplicate
+ *   calls within the same poll cycle are rejected.
+ *
+ * FIX C — prevVolMap wired through for delta-based net flow:
+ *   analyzeOptionsChain() supports prevVolMap for delta-based netPremiumFlow
+ *   but optionsIntegration was never passing it. Now manages prevVolMap per
+ *   symbol/expiry and passes it through so the engine computes delta flow,
+ *   not full vol×LTP recalc which explodes mid-session.
+ *
+ * FIX D — setCachedIntel called before emit (preserved from previous session).
+ *
+ * Previously fixed (preserved):
+ *  - Direct require of websocket.js
+ *  - extractRows() handles processChain() output shape (s.ce/s.pe)
+ *  - safeIV() normalises Upstox decimal AND NSE %
+ *  - ingestChainData exported for nseOIListener's 5 positional-arg call
+ *  - HV closes array from ivHistory proxy
+ *  - buildNearATMRows injects all CE+PE strikes near spot
+ * ══════════════════════════════════════════════════════════════
  */
 
 const { analyzeOptionsChain } = require("./optionsIntelligenceEngine");
@@ -27,16 +54,39 @@ function appendIV(symbol, ivPct) {
   if (ivHistory[symbol].length > 252) ivHistory[symbol] = ivHistory[symbol].slice(-252);
 }
 
-// ── Throttle — max one analysis per symbol/expiry per 15 s ───────────────────
+// ── FIX B: Throttle — 55s matches the 60s poll interval in nseOIListener ─────
 const lastRun = {};
 function canRun(key) {
   const now = Date.now();
-  if (lastRun[key] && now - lastRun[key] < 15_000) return false;
+  if (lastRun[key] && now - lastRun[key] < 55_000) return false;
   lastRun[key] = now;
   return true;
 }
 
-// ── Normalise IV — handles Upstox decimal (0.15) AND NSE % (15.0) ────────────
+// ── FIX C: prevVolMap store — one map per symbol+expiry ──────────────────────
+// Passed to analyzeOptionsChain so it can compute delta-based net flow
+// instead of full vol×LTP recalc (which explodes mid-session).
+const prevVolMaps = {};
+
+function getPrevVolMap(symbol, expiry) {
+  const key = `${symbol}__${expiry}`;
+  if (!prevVolMaps[key]) prevVolMaps[key] = {};
+  return prevVolMaps[key];
+}
+
+function updatePrevVolMap(symbol, expiry, chain) {
+  const key = `${symbol}__${expiry}`;
+  const map = {};
+  for (const row of chain) {
+    if (row.strike) {
+      map[`${row.strike}_ce`] = row.callVol || 0;
+      map[`${row.strike}_pe`] = row.putVol  || 0;
+    }
+  }
+  prevVolMaps[key] = map;
+}
+
+// ── Normalise IV ──────────────────────────────────────────────────────────────
 function safeIV(raw) {
   if (raw == null || raw <= 0) return null;
   return raw > 5 ? raw / 100 : raw;
@@ -45,9 +95,9 @@ function safeIV(raw) {
 // ── Extract rows from ANY chain shape nseOIListener might produce ─────────────
 function extractRows(chainData) {
   if (!chainData) return null;
-
   if (Array.isArray(chainData)) return chainData.length > 0 ? chainData : null;
 
+  // processChain() output shape: { strikes: [{ strike, ce: {oi,vol,...}, pe: {oi,vol,...} }] }
   if (Array.isArray(chainData.strikes) && chainData.strikes.length > 0) {
     return chainData.strikes.map(s => ({
       strike:  s.strike,
@@ -102,48 +152,25 @@ function normaliseRow(r) {
   };
 }
 
-// ── FIX 7: Build near-ATM rows for OI table (CE + PE, all strikes) ────────────
-// This replaces the engine's unusualOI (which only flags statistically unusual
-// strikes) with ALL strikes within ±pct of spot, so both CE and PE show up
-// in the Near ATM table every time.
+// ── Build near-ATM rows for OI table ─────────────────────────────────────────
 function buildNearATMRows(chain, spot, pct = 8) {
   if (!chain || !spot || spot <= 0) return [];
   const lo = spot * (1 - pct / 100);
   const hi = spot * (1 + pct / 100);
   const rows = [];
 
-  // Sort by proximity to spot so table renders closest strikes first
   const nearStrikes = chain
     .filter(r => r.strike >= lo && r.strike <= hi)
     .sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot));
 
   for (const r of nearStrikes) {
-    // Always emit CE row if any CE data exists
     if (r.callOI > 0 || r.callVol > 0) {
-      rows.push({
-        strike: r.strike,
-        type:   "call",
-        oi:     r.callOI  || 0,
-        vol:    r.callVol || 0,
-        ltp:    r.callLTP || 0,
-        iv:     r.callIV  || null,
-        note:   "Near ATM call",
-      });
+      rows.push({ strike: r.strike, type: "call", oi: r.callOI || 0, vol: r.callVol || 0, ltp: r.callLTP || 0, iv: r.callIV || null, note: "Near ATM call" });
     }
-    // Always emit PE row if any PE data exists
     if (r.putOI > 0 || r.putVol > 0) {
-      rows.push({
-        strike: r.strike,
-        type:   "put",
-        oi:     r.putOI  || 0,
-        vol:    r.putVol || 0,
-        ltp:    r.putLTP || 0,
-        iv:     r.putIV  || null,
-        note:   "Near ATM put",
-      });
+      rows.push({ strike: r.strike, type: "put",  oi: r.putOI  || 0, vol: r.putVol  || 0, ltp: r.putLTP  || 0, iv: r.putIV  || null, note: "Near ATM put"  });
     }
   }
-
   return rows;
 }
 
@@ -164,13 +191,13 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
     return;
   }
 
-  // FIX 6: Pass closing price proxy from IV history so HV 20/60 can compute.
-  // Using spot * (1 - iv) as a rough daily-close proxy. Self-corrects as
-  // ivHistory fills up over the trading session.
-  const ivHist = ivHistory[symbol] || [];
+  const ivHist      = ivHistory[symbol] || [];
   const closesProxy = ivHist.length > 20
     ? ivHist.map(iv => spotPrice * (1 - iv))
     : [];
+
+  // FIX C: get prevVolMap for delta-based net flow
+  const prevVolMap = getPrevVolMap(symbol, expiryDate);
 
   let result;
   try {
@@ -180,9 +207,10 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
       chain,
       expiryDate,
       historicalIVs: ivHist,
-      closes:        closesProxy,   // ← was always [] before
+      closes:        closesProxy,
       lotSize:       lotSize || 1,
       riskFreeRate:  0.065,
+      prevVolMap,           // FIX C: delta net flow
     });
   } catch (e) {
     console.warn(`⚠️ optionsIntegration [${symbol}]:`, e.message);
@@ -191,18 +219,19 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
 
   if (!result || result.error) return;
 
-  // FIX 7: Inject full near-ATM CE+PE rows so the dashboard table is never
-  // empty and always shows both sides of the chain.
-  const nearPct = symbol.toUpperCase().includes("BANK") ? 10 : 8;
+  // FIX C: update prevVolMap for next cycle
+  updatePrevVolMap(symbol, expiryDate, chain);
+
+  // Inject near-ATM and tail-risk OI rows
+  const nearPct        = symbol.toUpperCase().includes("BANK") ? 10 : 8;
   const nearATMRows    = buildNearATMRows(chain, spotPrice, nearPct);
   const nearSet        = new Set(nearATMRows.map(r => `${r.strike}-${r.type}`));
-  // Tail risk = rows the engine flagged as unusual that fall outside near-ATM
   const engineUnusual  = result.oi?.unusualOI || [];
   const tailRiskRows   = engineUnusual.filter(r => !nearSet.has(`${r.strike}-${r.type}`));
 
   if (result.oi) {
-    result.oi.unusualOI         = nearATMRows;   // near-ATM table
-    result.oi.unusualOITailRisk = tailRiskRows;  // FII/tail table
+    result.oi.unusualOI         = nearATMRows;
+    result.oi.unusualOITailRisk = tailRiskRows;
   }
 
   if (result.volatility?.atmIV) appendIV(symbol, result.volatility.atmIV);
@@ -210,6 +239,7 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
   if (_io) {
     const payload = { symbol, data: result, ltp: spotPrice, ts: Date.now() };
 
+    // FIX D: cache before emit so new clients get fresh snapshot
     try { setCachedIntel(symbol, payload); } catch (_) {}
 
     _io.emit("options-intelligence", payload);
@@ -251,80 +281,23 @@ function ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize) {
   runAnalysis(symbol, spotPrice, rows, expiryDate, lotSize || 1);
 }
 
-// ── Poll fallback — reads nseOIListener cache every 15s ──────────────────────
+// ── FIX A: poll() is now a NO-OP ─────────────────────────────────────────────
+// nseOIListener.pollChains() calls ingestChainData() directly after every
+// successful Upstox fetch with clean normalised data. The old poll() here
+// was reading stale getAllCached() data and re-running analysis 15s later,
+// causing a second conflicting emit with different (sometimes raw-lot-scale)
+// values — the root cause of values that "stayed wrong for longer".
 function poll() {
-  let nseOI;
-  try { nseOI = require("./nseOIListener"); } catch (e) { return; }
-
-  const hasGetChain    = typeof nseOI.getChain    === "function";
-  const hasGetExpiries = typeof nseOI.getExpiries === "function";
-  const hasGetAll      = typeof nseOI.getAllCached === "function";
-
-  if (hasGetChain && hasGetExpiries) {
-    const symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"];
-    for (const symbol of symbols) {
-      let expiries = [];
-      try { expiries = nseOI.getExpiries(symbol) || []; } catch (_) {}
-      if (!expiries.length) continue;
-
-      let spotPrice = 0;
-      if (hasGetAll) {
-        try {
-          const all = nseOI.getAllCached();
-          spotPrice = all?.[symbol]?.spotPrice || 0;
-        } catch (_) {}
-      }
-      if (!spotPrice) continue;
-
-      for (const expiry of [...expiries].sort().slice(0, 3)) {
-        let chainData;
-        try { chainData = nseOI.getChain(symbol, expiry); } catch (_) { continue; }
-        if (!chainData) continue;
-        const rows = extractRows(chainData);
-        if (rows && rows.length > 0) {
-          runAnalysis(symbol, spotPrice, rows, expiry, 1);
-        } else {
-          console.warn(
-            `⚠️ optionsIntegration poll: ${symbol}/${expiry}` +
-            ` — no rows (keys: ${Object.keys(chainData || {}).join(",")})`
-          );
-        }
-      }
-    }
-    return;
-  }
-
-  if (!hasGetAll) return;
-  let all;
-  try { all = nseOI.getAllCached(); } catch (e) { return; }
-  if (!all || typeof all !== "object") return;
-
-  for (const [symbol, payload] of Object.entries(all)) {
-    if (!payload) continue;
-    const spotPrice = payload.spotPrice || 0;
-    const lotSize   = payload.lotSize   || 1;
-    const chains    = payload.chains    || {};
-    const expiries  = payload.expiries  || Object.keys(chains);
-    if (!spotPrice || !expiries.length) continue;
-
-    for (const expiry of [...expiries].sort().slice(0, 3)) {
-      const chainData = chains[expiry];
-      if (!chainData) continue;
-      const rows = extractRows(chainData);
-      if (rows && rows.length > 0) {
-        runAnalysis(symbol, spotPrice, rows, expiry, lotSize);
-      }
-    }
-  }
+  // Intentionally disabled — nseOIListener drives all analysis directly.
+  // Kept as a stub so startOptionsIntegration() wiring is unchanged.
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 function startOptionsIntegration(io, { ingestOptionsSignal } = {}) {
   _io = io;
   _ingestOptionsSignal = ingestOptionsSignal;
-  setTimeout(poll, 25_000);
-  setInterval(poll, 15_000);
-  console.log("📊 Options Integration: polling every 15s (first run in 25s)");
+  // FIX A: no longer start poll interval — nseOIListener drives analysis
+  console.log("📊 Options Integration: ready (analysis driven by nseOIListener)");
 }
 
 module.exports = { startOptionsIntegration, ingestChainData };

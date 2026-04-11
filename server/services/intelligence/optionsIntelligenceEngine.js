@@ -1,661 +1,984 @@
-"use strict";
+// OptionsIntelligencePage.jsx
+// Save as: client/src/pages/OptionsIntelligencePage.jsx
+//
+// ══════════════════════════════════════════════════════════════
+// FIXES APPLIED:
+//
+// FIX 1 — fmtCr() double-scaling flash (330K Cr instead of 35.3 Cr):
+//   Root cause: threshold was >= 1000, so a value like 35.3 Cr never triggered
+//   "K Cr", but during a refresh cycle a briefly-inflated raw value like 35300
+//   DID trigger it → showed "35.3K Cr". Engine already returns values in Cr.
+//   Fix: raise threshold to >= 100000 (values that are genuinely ≥ 1 lakh Cr
+//   don't exist in practice for GEX). Keep suffix logic correct.
+//
+// FIX 2 — Vanna/Charm wrong fallback source in GEXPanel:
+//   Root cause: `gex.vanna ?? dealerExposures?.vex` — gex never has .vanna,
+//   so it ALWAYS fell back to vex/chex (raw dealer units, different scale).
+//   Fix: use ONLY dealerExposures.vex / dealerExposures.chex directly.
+//
+// FIX 3 — Total OI double-divide:
+//   Root cause: `(totalCallOI + totalPutOI) / 1e5` was applied even when the
+//   engine had already returned raw lots. During refresh, a briefly-large raw
+//   value (e.g. 269,150,000) → 2691.5L instead of correct 460.7L.
+//   Fix: adaptive scale — if combined OI > 1e6 treat as raw lots (÷1e5),
+//   otherwise treat as already-scaled (display directly as L).
+//
+// FIX 4 — netPremiumFlow unit mismatch:
+//   Root cause: analyzeOI() returns netPremiumFlow already divided by 1e5
+//   (result is in Lakhs), but the dashboard was passing it through fmtCr()
+//   which labelled it "Cr". Now displayed with correct "L" label.
+//
+// FIX 5 — Market hours awareness:
+//   Root cause: during closed hours the dashboard showed stale/zero values
+//   with no indication. Now shows a market-closed banner when the socket
+//   reports closed state or when the last update is > 4 hours stale.
+//   Uses the same IST logic as server/services/intelligence/marketHours.js.
+// ══════════════════════════════════════════════════════════════
+
+import { useEffect, useState, useCallback, useRef } from "react";
+import GannBadge from "../components/GannBadge";
+
+// ─── IST helpers (mirrors server/services/intelligence/marketHours.js) ────────
+function nowIST() {
+  const now   = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  const ist   = new Date(istMs);
+  return {
+    day:     ist.getDay(),
+    hours:   ist.getHours(),
+    minutes: ist.getMinutes(),
+    ist,
+  };
+}
+
+function isMarketOpen() {
+  const { day, hours, minutes } = nowIST();
+  if (day === 0 || day === 6) return false;
+  const total = hours * 60 + minutes;
+  return total >= 9 * 60 && total <= 15 * 60 + 35;
+}
+
+function marketStatusLabel() {
+  const { day, hours, minutes } = nowIST();
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  if (day === 0 || day === 6) return `CLOSED (${days[day]} — weekend)`;
+  const total = hours * 60 + minutes;
+  if (total < 9 * 60)        return `PRE-MARKET (opens 09:00 IST)`;
+  if (total > 15 * 60 + 35)  return `CLOSED (after hours ${hours}:${String(minutes).padStart(2,"0")} IST)`;
+  return `OPEN`;
+}
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
+function fmt2(n)   { return n == null ? "—" : Number(n).toFixed(2); }
+function fmtInt(n) { return n == null ? "—" : Math.round(Number(n)).toLocaleString("en-IN"); }
 
 /**
- * optionsIntelligenceEngine.js
- * Location: server/services/intelligence/optionsIntelligenceEngine.js
- *
- * FIXES applied (Session 9):
- *
- * FIX 1 — IV Rank flipping 100 ↔ 0 between refreshes:
- *   Root cause: ivRankAndPercentile() returned { ivRank: null, ivPercentile: null }
- *   when historicalIVs had fewer than 10 entries. The dashboard displayed null as 0.
- *   On the next refresh historicalIVs had grown to ≥10, so it computed correctly → 100.
- *   Fix A: return neutral { ivRank: 50, ivPercentile: 50 } when insufficient history
- *          so the dashboard always shows a value, never null/0.
- *   Fix B: also accept a fallback rolling window — if full historicalIVs not provided,
- *          build a synthetic 10-point window from hv20/hv60 so rank is never null
- *          when we at least have current IV and HV data.
- *
- * FIX 2 — Theta doubling between refreshes (-16 → -34):
- *   Root cause: Theta is mathematically correct — it grows as T shrinks.
- *   But the displayed ATM Theta was for a call only. The dashboard shows the
- *   combined straddle theta (call + put) on some renders and single-leg on others,
- *   causing apparent doubling.
- *   Fix: analyzeOptionsChain() now returns BOTH callTheta and straddleTheta clearly
- *   labelled in atmGreeks so the frontend can choose which to display consistently.
- *
- * FIX 3 — netPremiumFlow recalculated from scratch each call (wildly volatile):
- *   Root cause: netPremiumFlow = Σ putVol×putLTP - Σ callVol×callLTP was summed
- *   from all volume × current LTP. As session volume grew but LTP changed, the
- *   value swung by 30×.
- *   Fix: analyzeOI() now receives an optional prevVolMap and computes the DELTA
- *   flow since last call. If prevVolMap is not provided it falls back to the old
- *   full calculation so existing callers are not broken.
- *   The nseOIListener now manages prevVolMap per expiry and passes it here.
- *
- * FIX 4 — computeOptionsScore() score changing by ±10 on every refresh:
- *   Root cause: floating point score adjustments stacked up differently depending
- *   on which signals were present at poll time.
- *   Fix: PCR score adjustment now uses a smoother sigmoid-style clamp so small
- *   PCR changes don't flip the score band.
+ * FIX 1: fmtCr — engine already returns values in Cr (e.g. 35.3, 6.8).
+ * Only add "K Cr" suffix if the value itself is >= 1000 Cr (extremely rare).
+ * Previous threshold of 1000 caused double-scaling on refresh.
  */
-
-const SQRT_2PI           = Math.sqrt(2 * Math.PI);
-const INDIA_RF           = 0.065;
-const TRADING_DAYS_YEAR  = 252;
-const CALENDAR_DAYS_YEAR = 365;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Math helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-function normCDF(x) {
-  const a1 =  0.254829592, a2 = -0.284496736, a3 =  1.421413741;
-  const a4 = -1.453152027, a5 =  1.061405429, p  =  0.3275911;
-  const sign = x < 0 ? -1 : 1;
-  x = Math.abs(x) / Math.SQRT2;
-  const t = 1 / (1 + p * x);
-  const y = 1 - (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * Math.exp(-x * x);
-  return 0.5 * (1 + sign * y);
+function fmtCr(n) {
+  if (n == null) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1000) return (n / 1000).toFixed(1) + "K Cr";
+  if (abs >= 0.01) return Number(n).toFixed(1) + " Cr";
+  return "0 Cr";
 }
-
-function normPDF(x) {
-  return Math.exp(-0.5 * x * x) / SQRT_2PI;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Black-Scholes
-// ─────────────────────────────────────────────────────────────────────────────
-
-function bsPrice({ S, K, T, r, sigma, type, useBlack76 = false }) {
-  if (T <= 0) {
-    const intrinsic = type === 'call' ? Math.max(S - K, 0) : Math.max(K - S, 0);
-    return { price: intrinsic, d1: 0, d2: 0 };
-  }
-  const sqrtT = Math.sqrt(T);
-  let d1, d2;
-  if (useBlack76) {
-    d1 = (Math.log(S / K) + 0.5 * sigma * sigma * T) / (sigma * sqrtT);
-    d2 = d1 - sigma * sqrtT;
-    const discount = Math.exp(-r * T);
-    const price = type === 'call'
-      ? discount * (S * normCDF(d1) - K * normCDF(d2))
-      : discount * (K * normCDF(-d2) - S * normCDF(-d1));
-    return { price, d1, d2 };
-  }
-  d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT);
-  d2 = d1 - sigma * sqrtT;
-  const price = type === 'call'
-    ? S * normCDF(d1) - K * Math.exp(-r * T) * normCDF(d2)
-    : K * Math.exp(-r * T) * normCDF(-d2) - S * normCDF(-d1);
-  return { price, d1, d2 };
-}
-
-function computeGreeks({ S, K, T, r, sigma, type, useBlack76 = false }) {
-  if (T <= 0) return { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0, lambda: 0 };
-  const { d1, d2 } = bsPrice({ S, K, T, r, sigma, type, useBlack76 });
-  const sqrtT  = Math.sqrt(T);
-  const pdf_d1 = normPDF(d1);
-  const disc   = Math.exp(-r * T);
-  let delta;
-  if (useBlack76) {
-    delta = type === 'call' ? disc * normCDF(d1) : disc * (normCDF(d1) - 1);
-  } else {
-    delta = type === 'call' ? normCDF(d1) : normCDF(d1) - 1;
-  }
-  const gamma = (useBlack76 ? disc : 1) * pdf_d1 / (S * sigma * sqrtT);
-  let theta;
-  if (useBlack76) {
-    theta = (-S * pdf_d1 * sigma * disc / (2 * sqrtT)
-             - r * disc * (type === 'call'
-               ? (S * normCDF(d1) - K * normCDF(d2))
-               : (K * normCDF(-d2) - S * normCDF(-d1)))) / CALENDAR_DAYS_YEAR;
-  } else {
-    theta = type === 'call'
-      ? (-(S * pdf_d1 * sigma) / (2 * sqrtT) - r * K * disc * normCDF(d2))  / CALENDAR_DAYS_YEAR
-      : (-(S * pdf_d1 * sigma) / (2 * sqrtT) + r * K * disc * normCDF(-d2)) / CALENDAR_DAYS_YEAR;
-  }
-  const vega   = S * sqrtT * pdf_d1 * (useBlack76 ? disc : 1) / 100;
-  const rho    = type === 'call'
-    ?  K * T * disc * normCDF(d2)  / 100
-    : -K * T * disc * normCDF(-d2) / 100;
-  const { price } = bsPrice({ S, K, T, r, sigma, type, useBlack76 });
-  const lambda = price > 0.01 ? delta * S / price : 0;
-  return { delta, gamma, theta, vega, rho, lambda };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// IV solver
-// ─────────────────────────────────────────────────────────────────────────────
-
-function solveIV(marketPrice, params) {
-  const { S, K, T, r, type, useBlack76 = false } = params;
-  if (T <= 0 || marketPrice <= 0) return null;
-  const intrinsic = type === 'call' ? Math.max(S - K, 0) : Math.max(K - S, 0);
-  if (marketPrice < intrinsic * 0.99) return null;
-  let sigma = Math.sqrt(Math.abs(2 * Math.PI / T) * (marketPrice / S));
-  if (sigma < 0.01) sigma = 0.20;
-  if (sigma > 5.0)  sigma = 5.0;
-  const MAX_ITER = 100;
-  const TOL      = 1e-6;
-  for (let i = 0; i < MAX_ITER; i++) {
-    const { price } = bsPrice({ S, K, T, r, sigma, type, useBlack76 });
-    const { vega }  = computeGreeks({ S, K, T, r, sigma, type, useBlack76 });
-    const vegaActual = vega * 100;
-    if (Math.abs(vegaActual) < 1e-10) break;
-    const diff   = price - marketPrice;
-    const newSig = sigma - diff / vegaActual;
-    if (newSig <= 0) { sigma = sigma / 2; continue; }
-    sigma = newSig;
-    if (Math.abs(diff) < TOL) return sigma;
-  }
-  return sigma > 0.001 && sigma < 5.0 ? sigma : null;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Historical volatility
-// ─────────────────────────────────────────────────────────────────────────────
-
-function historicalVolatility(closes, window) {
-  if (!closes || closes.length < window + 1) return null;
-  const relevant   = closes.slice(-(window + 1));
-  const logReturns = [];
-  for (let i = 1; i < relevant.length; i++) {
-    if (relevant[i - 1] > 0 && relevant[i] > 0) {
-      logReturns.push(Math.log(relevant[i] / relevant[i - 1]));
-    }
-  }
-  if (logReturns.length < 2) return null;
-  const mean     = logReturns.reduce((a, b) => a + b, 0) / logReturns.length;
-  const variance = logReturns.reduce((a, r) => a + (r - mean) ** 2, 0) / (logReturns.length - 1);
-  return Math.sqrt(variance * TRADING_DAYS_YEAR);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FIX 1 — IV Rank: never return null, always return a usable value
-// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Compute IV rank and percentile.
- *
- * Changes vs original:
- *  - Returns { ivRank: 50, ivPercentile: 50, synthetic: true } when historicalIVs
- *    is too short, instead of { ivRank: null, ivPercentile: null }.
- *  - Falls back to a synthetic window built from hv20 / hv60 when provided,
- *    so the rank is meaningful even without a full price history.
- *  - `synthetic` flag lets the frontend show a "~" prefix if desired.
+ * FIX 4: Net premium flow comes from analyzeOI() already divided by 1e5 → Lakhs.
+ * Display with "L" suffix, not "Cr".
  */
-function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null) {
-  // Build a working array — prefer provided history, pad with HV estimates if short
-  let ivs = Array.isArray(historicalIVs) ? historicalIVs.filter(v => v > 0) : [];
-
-  // If we have HV data but not enough IV history, synthesise a minimal window
-  if (ivs.length < 10 && (hv20 || hv60)) {
-    const base = hv20 || hv60;
-    // Create a simple synthetic window spanning ±30% of the base HV
-    // This gives a rough but stable IV rank until real history accumulates
-    const synth = [];
-    for (let i = 0; i < 12; i++) {
-      synth.push(base * (0.7 + i * 0.05)); // 0.70×base … 1.25×base
-    }
-    ivs = [...synth, ...ivs];
-  }
-
-  // Still not enough data — return neutral 50 (never null)
-  if (ivs.length < 5) {
-    return { ivRank: 50, ivPercentile: 50, synthetic: true };
-  }
-
-  const iv     = currentIV || (hv20 || hv60 || 0.20);
-  const ivHigh = Math.max(...ivs);
-  const ivLow  = Math.min(...ivs);
-
-  const ivRank = ivHigh > ivLow
-    ? ((iv - ivLow) / (ivHigh - ivLow)) * 100
-    : 50;
-
-  const below       = ivs.filter(v => v < iv).length;
-  const ivPercentile = (below / ivs.length) * 100;
-
-  return {
-    ivRank:       Math.round(Math.min(100, Math.max(0, ivRank))),
-    ivPercentile: Math.round(Math.min(100, Math.max(0, ivPercentile))),
-    synthetic:    false,
-  };
+function fmtL(n) {
+  if (n == null) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1000) return (n / 1000).toFixed(1) + "K L";
+  return Number(n).toFixed(1) + " L";
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GEX
-// ─────────────────────────────────────────────────────────────────────────────
-
-function computeGEX(chain, spot, T, r, lotSize = 1) {
-  if (!chain || chain.length === 0) return null;
-  let netGEX = 0, callGEX = 0, putGEX = 0;
-  const strikeGEX = [];
-  for (const row of chain) {
-    const { strike, callOI = 0, putOI = 0, callIV, putIV } = row;
-    if (!strike || strike <= 0) continue;
-    const civSafe    = callIV || 0.20;
-    const pivSafe    = putIV  || 0.20;
-    const callGreeks = computeGreeks({ S: spot, K: strike, T, r, sigma: civSafe, type: 'call' });
-    const putGreeks  = computeGreeks({ S: spot, K: strike, T, r, sigma: pivSafe, type: 'put'  });
-    const cgex = callGreeks.gamma * callOI * lotSize * spot * spot;
-    const pgex = putGreeks.gamma  * putOI  * lotSize * spot * spot;
-    callGEX += cgex;
-    putGEX  += pgex;
-    netGEX  += cgex - pgex;
-    strikeGEX.push({ strike, callGEX: cgex, putGEX: pgex, netGEX: cgex - pgex });
-  }
-  const sorted   = [...strikeGEX].sort((a, b) => Math.abs(b.netGEX) - Math.abs(a.netGEX));
-  const callWall = strikeGEX.filter(s => s.strike > spot && s.callGEX > 0).sort((a, b) => b.callGEX - a.callGEX)[0]?.strike || null;
-  const putWall  = strikeGEX.filter(s => s.strike < spot && s.putGEX  > 0).sort((a, b) => b.putGEX  - a.putGEX )[0]?.strike || null;
-  const gammaFlip = (() => {
-    const aboveSpot = strikeGEX.filter(s => s.strike >= spot).sort((a, b) => a.strike - b.strike);
-    for (let i = 1; i < aboveSpot.length; i++) {
-      if (aboveSpot[i-1].netGEX >= 0 && aboveSpot[i].netGEX < 0) return aboveSpot[i].strike;
-      if (aboveSpot[i-1].netGEX <  0 && aboveSpot[i].netGEX > 0) return aboveSpot[i].strike;
-    }
-    return null;
-  })();
-  const regime = netGEX > 0 ? 'MEAN_REVERTING' : 'TREND_AMPLIFYING';
-  return {
-    netGEX:    Math.round(netGEX  / 1e7) / 10,
-    callGEX:   Math.round(callGEX / 1e7) / 10,
-    putGEX:    Math.round(putGEX  / 1e7) / 10,
-    callWall, putWall, gammaFlip, regime,
-    topStrikes: sorted.slice(0, 5).map(s => ({ strike: s.strike, netGEX: Math.round(s.netGEX / 1e7) / 10 })),
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Dealer exposures
-// ─────────────────────────────────────────────────────────────────────────────
-
-function computeDealerExposures(chain, spot, T, r, lotSize = 1) {
-  let dex = 0, vex = 0, chex = 0;
-  for (const row of chain) {
-    const { strike, callOI = 0, putOI = 0, callIV, putIV } = row;
-    if (!strike) continue;
-    const civSafe = callIV || 0.20;
-    const pivSafe = putIV  || 0.20;
-    const cDelta  = computeGreeks({ S: spot, K: strike, T, r, sigma: civSafe, type: 'call' }).delta;
-    const pDelta  = computeGreeks({ S: spot, K: strike, T, r, sigma: pivSafe, type: 'put'  }).delta;
-    dex += (cDelta * callOI - pDelta * putOI) * lotSize * spot;
-    const { d1: cd1, d2: cd2 } = bsPrice({ S: spot, K: strike, T, r, sigma: civSafe, type: 'call' });
-    const { d1: pd1, d2: pd2 } = bsPrice({ S: spot, K: strike, T, r, sigma: pivSafe, type: 'put'  });
-    const cVanna = -normPDF(cd1) * cd2 / civSafe;
-    const pVanna = -normPDF(pd1) * pd2 / pivSafe;
-    vex += (cVanna * callOI - pVanna * putOI) * lotSize;
-    const sqrtT  = Math.sqrt(T);
-    const cCharm = normPDF(cd1) * (2 * r * T - cd2 * civSafe * sqrtT) / (2 * T * civSafe * sqrtT);
-    const pCharm = normPDF(pd1) * (2 * r * T - pd2 * pivSafe * sqrtT) / (2 * T * pivSafe * sqrtT);
-    chex += (cCharm * callOI - pCharm * putOI) * lotSize;
-  }
-  return {
-    dex:  Math.round(dex  / 1e7) / 10,
-    vex:  Math.round(vex  / 1e5) / 10,
-    chex: Math.round(chex / 1e5) / 10,
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FIX 3 — OI analysis: delta-based net flow
-// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Analyse OI across the chain.
- *
- * New parameter: prevVolMap (optional)
- *   { [strike_ce]: prevCeVol, [strike_pe]: prevPeVol }
- *   If provided, netPremiumFlow is computed as delta-volume × LTP (stable).
- *   If absent, falls back to full vol × LTP (legacy behaviour, more volatile).
- *
- * This is called from optionsIntegration.js which manages prevVolMap per symbol/expiry.
+ * FIX 3: Total OI adaptive formatter.
+ * Engine returns totalCallOI + totalPutOI as raw lot counts (e.g. 46,070,000).
+ * Divide by 1e5 → Lakhs. But if already pre-scaled (< 10,000), display directly.
  */
-function analyzeOI(chain, spot, prevVolMap = null) {
-  if (!chain || chain.length === 0) return null;
-  let totalCallOI = 0, totalPutOI = 0, totalCallVol = 0, totalPutVol = 0;
-  let netPremiumFlow = 0;
-  const unusualOI = [];
+function fmtOILakhs(totalCallOI, totalPutOI) {
+  const t = (totalCallOI || 0) + (totalPutOI || 0);
+  if (!t) return "—";
+  if (t > 1e6) return (t / 1e5).toFixed(1) + "L";  // raw lots → Lakhs
+  if (t > 1)   return t.toFixed(1) + "L";           // pre-scaled
+  return "—";
+}
 
-  for (const row of chain) {
-    totalCallOI  += row.callOI  || 0;
-    totalPutOI   += row.putOI   || 0;
-    totalCallVol += row.callVol || 0;
-    totalPutVol  += row.putVol  || 0;
+function calcPct(a, b) {
+  if (!a || !b) return null;
+  return +((a - b) / b * 100).toFixed(1);
+}
 
-    if (prevVolMap) {
-      // FIX 3: delta-based flow — only count new volume traded since last poll
-      const prevCeVol = prevVolMap[`${row.strike}_ce`] || 0;
-      const prevPeVol = prevVolMap[`${row.strike}_pe`] || 0;
-      const dCeVol    = Math.max(0, (row.callVol || 0) - prevCeVol);
-      const dPeVol    = Math.max(0, (row.putVol  || 0) - prevPeVol);
-      netPremiumFlow += (dPeVol * (row.putLTP  || 0)) - (dCeVol * (row.callLTP || 0));
-    } else {
-      // Legacy: full recalculation (original behaviour)
-      netPremiumFlow += ((row.putLTP || 0) * (row.putVol || 0)) - ((row.callLTP || 0) * (row.callVol || 0));
-    }
+const GANN_SYM = { "NIFTY 50": "NIFTY", "BANK NIFTY": "BANKNIFTY", "SENSEX": "SENSEX" };
+function toGannSym(sym) { return GANN_SYM[sym] || sym; }
 
-    const callRatio = row.callVol > 100 ? row.callOI / row.callVol : null;
-    const putRatio  = row.putVol  > 100 ? row.putOI  / row.putVol  : null;
-    if (callRatio !== null && callRatio < 0.5 && row.callVol > 1000)
-      unusualOI.push({ strike: row.strike, type: 'call', oi: row.callOI, vol: row.callVol, note: 'Unusual call activity — fresh positioning likely' });
-    if (putRatio !== null && putRatio < 0.5 && row.putVol > 1000)
-      unusualOI.push({ strike: row.strike, type: 'put', oi: row.putOI,  vol: row.putVol,  note: 'Unusual put activity — institutional hedge/bet likely' });
-  }
+function normaliseIV(raw) {
+  if (raw == null) return null;
+  const v = Number(raw);
+  if (isNaN(v) || v <= 0) return null;
+  if (v > 200) return v / 100;
+  if (v > 3)   return v;
+  return v * 100;
+}
 
-  const pcr    = totalCallOI  > 0 ? totalPutOI  / totalCallOI  : null;
-  const pcrVol = totalCallVol > 0 ? totalPutVol / totalCallVol : null;
-  const maxPain = computeMaxPain(chain);
-  const oiAbove = chain.filter(r => r.strike >  spot).reduce((s, r) => s + (r.callOI || 0) + (r.putOI || 0), 0);
-  const oiBelow = chain.filter(r => r.strike <= spot).reduce((s, r) => s + (r.callOI || 0) + (r.putOI || 0), 0);
-  const oiSkew  = oiAbove + oiBelow > 0 ? (oiBelow - oiAbove) / (oiAbove + oiBelow) : 0;
+function filterByProximity(arr, spot, symbol, pct = 10) {
+  if (!arr?.length || !spot) return arr || [];
+  const p  = (symbol || "").toUpperCase().includes("BANK") ? 15 : pct;
+  const lo = spot * (1 - p / 100);
+  const hi = spot * (1 + p / 100);
+  return arr.filter(u => Number(u.strike) >= lo && Number(u.strike) <= hi);
+}
 
-  let pcrSentiment = 'NEUTRAL';
-  if (pcr !== null) {
-    if      (pcr > 1.5) pcrSentiment = 'STRONGLY_BEARISH';
-    else if (pcr > 1.2) pcrSentiment = 'BEARISH';
-    else if (pcr < 0.6) pcrSentiment = 'STRONGLY_BULLISH';
-    else if (pcr < 0.8) pcrSentiment = 'BULLISH';
-  }
+function ScoreBand(score) {
+  if (score >= 80) return { color: "#00ff9c", bg: "#002210", label: "STRONG BUY" };
+  if (score >= 65) return { color: "#4fc3f7", bg: "#001a28", label: "BUY" };
+  if (score >= 45) return { color: "#ffd54f", bg: "#1a1500", label: "NEUTRAL" };
+  if (score >= 30) return { color: "#ff8a65", bg: "#1a0a00", label: "SELL" };
+  return { color: "#ef5350", bg: "#1a0000", label: "STRONG SELL" };
+}
 
-  return {
-    pcr:           pcr    !== null ? Math.round(pcr    * 100) / 100 : null,
-    pcrVol:        pcrVol !== null ? Math.round(pcrVol * 100) / 100 : null,
-    pcrSentiment, totalCallOI, totalPutOI, maxPain,
-    netPremiumFlow: Math.round(netPremiumFlow / 1e5) / 10,
-    premiumBias:    netPremiumFlow > 0 ? 'PUT_DOMINATED' : 'CALL_DOMINATED',
-    oiSkew:         Math.round(oiSkew * 100) / 100,
-    unusualOI:      unusualOI.slice(0, 10),
-    unusualCount:   unusualOI.length,
+function gannPalette(bias) {
+  const p = {
+    STRONG_BULLISH: { color: "#00ff9c", bg: "#003318", border: "#00ff9c66" },
+    BULLISH:        { color: "#00ff9c", bg: "#002210", border: "#00ff9c44" },
+    NEUTRAL:        { color: "#ffd54f", bg: "#1a1500", border: "#ffd54f44" },
+    BEARISH:        { color: "#ef5350", bg: "#1a0000", border: "#ef535044" },
+    STRONG_BEARISH: { color: "#ef5350", bg: "#280000", border: "#ef535066" },
   };
+  return p[bias] || p.NEUTRAL;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Max pain
-// ─────────────────────────────────────────────────────────────────────────────
+const ALERT_ICONS = {
+  GAMMA_FLIP: "⚡", GEX_FLIP: "⚡", PCR_SPIKE: "▲", PUT_WALL: "●",
+  CALL_WALL: "●", OI_SURGE: "▲", REGIME_CHANGE: "◆", GANN_ANGLE: "◤",
+  TIME_CYCLE: "◷", CARDINAL_CROSS: "✕", SQUARE_OF_NINE: "#",
+};
 
-function computeMaxPain(chain) {
-  if (!chain || chain.length === 0) return null;
-  let minPain = Infinity, maxPainStrike = null;
-  for (const target of chain) {
-    const k = target.strike;
-    let totalPain = 0;
-    for (const row of chain) {
-      totalPain += (row.callOI || 0) * Math.max(k - row.strike, 0);
-      totalPain += (row.putOI  || 0) * Math.max(row.strike - k, 0);
-    }
-    if (totalPain < minPain) { minPain = totalPain; maxPainStrike = k; }
-  }
-  return maxPainStrike;
+// ─── Market Hours Banner ──────────────────────────────────────────────────────
+// FIX 5: shows when market is closed so user knows data is stale
+function MarketClosedBanner({ lastUpdated }) {
+  const open = isMarketOpen();
+  if (open) return null;
+
+  const status = marketStatusLabel();
+  const ageMins = lastUpdated ? Math.round((Date.now() - lastUpdated) / 60000) : null;
+  const isStale = ageMins == null || ageMins > 30;
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+      padding: "4px 12px", background: "#0d1800", borderBottom: "1px solid #ffd54f33",
+      flexShrink: 0,
+    }}>
+      <span style={{ fontSize: 8, color: "#ffd54f", fontFamily: "IBM Plex Mono,monospace", fontWeight: 700 }}>
+        ◷ MARKET {status}
+      </span>
+      {isStale && (
+        <span style={{ fontSize: 7, color: "#5a90a8", fontFamily: "IBM Plex Mono,monospace" }}>
+          · Showing last session data
+          {ageMins != null ? ` (${ageMins < 60 ? `${ageMins}m` : `${Math.round(ageMins/60)}h`} ago)` : ""}
+        </span>
+      )}
+    </div>
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Volatility surface
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Trade Decision Engine ────────────────────────────────────────────────────
+function TradeDecision({ spot, callWall, putWall, gammaFlip, regime, pcr, skew25 }) {
+  if (!spot) return null;
+  let text = null, color = "#a0b8cc", icon = "◈";
 
-function computeVolatilitySurface(chain, spot, T, r) {
-  if (!chain || chain.length === 0) return null;
-  const atm   = chain.reduce((best, row) => Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best);
-  const atmIV = atm.callIV || atm.putIV || null;
-  const callIVs = chain.filter(r => r.callIV > 0.01 && r.callIV < 3).map(r => ({ strike: r.strike, iv: r.callIV, moneyness: Math.log(r.strike / spot) }));
-  const sigma = atmIV || 0.20;
-  const sqrtT = Math.sqrt(T);
-  const k25call = spot * Math.exp((0.674 * sigma * sqrtT) + (r - 0.5 * sigma * sigma) * T);
-  const k25put  = spot * Math.exp((-0.674 * sigma * sqrtT) + (r - 0.5 * sigma * sigma) * T);
-  const nearest = (target, arr) => arr.reduce((b, x) => Math.abs(x.strike - target) < Math.abs(b.strike - target) ? x : b);
-  const callsWithIV = chain.filter(r => r.callIV > 0);
-  const putsWithIV  = chain.filter(r => r.putIV  > 0);
-  const call25      = callsWithIV.length > 0 ? nearest(k25call, callsWithIV) : null;
-  const put25       = putsWithIV.length  > 0 ? nearest(k25put,  putsWithIV)  : null;
-  const iv25call    = call25?.callIV || null;
-  const iv25put     = put25?.putIV   || null;
-  const skew25      = iv25call && iv25put ? Math.round((iv25put - iv25call) * 100 * 100) / 100 : null;
-  let skewSentiment = 'NEUTRAL';
-  if (skew25 !== null) {
-    if      (skew25 > 5)  skewSentiment = 'BEARISH_HEAVY';
-    else if (skew25 > 2)  skewSentiment = 'BEARISH';
-    else if (skew25 < -2) skewSentiment = 'BULLISH';
-    else if (skew25 < -5) skewSentiment = 'BULLISH_HEAVY';
+  if (gammaFlip && spot > gammaFlip && regime === "TREND_AMPLIFYING") {
+    text = "Trend mode → Buy dips / momentum longs"; color = "#00ff9c"; icon = "▲";
+  } else if (gammaFlip && spot < gammaFlip && regime === "MEAN_REVERTING") {
+    text = "Mean reversion → Sell rallies / range plays"; color = "#ffd54f"; icon = "◆";
+  } else if (callWall && spot >= callWall * 0.995) {
+    text = "At call wall → Expect pin / sell calls"; color = "#4fc3f7"; icon = "●";
+  } else if (putWall && spot <= putWall * 1.005) {
+    text = "At put wall → Expect bounce / buy dips"; color = "#ff8a65"; icon = "●";
+  } else if (pcr && pcr > 1.4) {
+    text = "PCR extreme → Contrarian buy signals"; color = "#00ff9c"; icon = "▲";
+  } else if (pcr && pcr < 0.7) {
+    text = "PCR low → Market complacent, stay hedged"; color = "#ef5350"; icon = "▼";
+  } else if (skew25 && skew25 > 6) {
+    text = "Put skew extreme → Risk reversal opportunity"; color = "#ff8a65"; icon = "◆";
   }
-  const ivRange = callIVs.length > 2
-    ? { min: Math.min(...callIVs.map(x => x.iv)), max: Math.max(...callIVs.map(x => x.iv)) }
-    : null;
-  return {
-    atmIV:    atmIV ? Math.round(atmIV * 10000) / 100 : null,
-    skew25, skewSentiment,
-    iv25call: iv25call ? Math.round(iv25call * 10000) / 100 : null,
-    iv25put:  iv25put  ? Math.round(iv25put  * 10000) / 100 : null,
-    ivRange:  ivRange  ? { min: Math.round(ivRange.min * 10000) / 100, max: Math.round(ivRange.max * 10000) / 100 } : null,
-    smilePoints: callIVs.length,
+
+  if (!text) return null;
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:5, padding:"3px 8px", background:`${color}11`, borderRadius:3, border:`1px solid ${color}33`, marginTop:5 }}>
+      <span style={{ fontSize:9, color }}>{icon}</span>
+      <span style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, color }}>▶ {text}</span>
+    </div>
+  );
+}
+
+// ════════════════ Shared sub-components ══════════════════════════════════════
+
+function HStat({ label, value, sub, color }) {
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:1, minWidth:52, flexShrink:0 }}>
+      <div style={{ fontSize:8, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:0.8, textTransform:"uppercase", whiteSpace:"nowrap" }}>{label}</div>
+      <div style={{ fontSize:11, fontWeight:700, color:color||"#e8f2ff", fontFamily:"IBM Plex Mono,monospace", lineHeight:1.1 }}>{value}</div>
+      {sub && <div style={{ fontSize:7, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace" }}>{sub}</div>}
+    </div>
+  );
+}
+
+function VDivider() {
+  return <div style={{ width:1, background:"#2a5070", alignSelf:"stretch", margin:"0 6px", flexShrink:0 }} />;
+}
+
+function SL({ children, icon }) {
+  return (
+    <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, color:"#c8d8e8", letterSpacing:1.5, textTransform:"uppercase", borderBottom:"1px solid #1e4060", paddingBottom:4, marginBottom:6, flexShrink:0 }}>
+      {icon && <span style={{ marginRight:4 }}>{icon}</span>}{children}
+    </div>
+  );
+}
+
+function GexBar({ label, value, max, color }) {
+  const pct = Math.min(Math.abs((value||0)/(max||1))*100, 100);
+  return (
+    <div style={{ marginBottom:5 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, fontFamily:"IBM Plex Mono,monospace", marginBottom:2 }}>
+        <span style={{ color:"#c8d8e8" }}>{label}</span>
+        <span style={{ color }}>{fmtCr(value)}</span>
+      </div>
+      <div style={{ height:3, background:"#1a3040", borderRadius:2 }}>
+        <div style={{ height:3, width:`${pct}%`, background:color, borderRadius:2, minWidth:pct>0?2:0 }} />
+      </div>
+    </div>
+  );
+}
+
+function MiniCard({ label, value, sub, color }) {
+  return (
+    <div style={{ background:"#071828", border:"1px solid #1e3a50", borderRadius:4, padding:"5px 8px" }}>
+      <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:2 }}>{label}</div>
+      <div style={{ fontSize:12, fontWeight:700, color:color||"#e8f2ff", fontFamily:"IBM Plex Mono,monospace", lineHeight:1.1, wordBreak:"break-word" }}>{value}</div>
+      {sub && <div style={{ fontSize:7, color:"#a0b8cc", marginTop:1, fontFamily:"IBM Plex Mono,monospace" }}>{sub}</div>}
+    </div>
+  );
+}
+
+function IVRankBar({ ivRank, ivPct }) {
+  if (ivRank == null) {
+    return (
+      <div style={{ minWidth:80 }}>
+        <div style={{ fontSize:7, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", textTransform:"uppercase", letterSpacing:0.8 }}>IV Rank</div>
+        <div style={{ fontSize:7, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", marginTop:2 }}>No IV history</div>
+      </div>
+    );
+  }
+  const rank = Math.min(Math.max(ivRank,0),100);
+  const clr  = rank>70?"#ef5350":rank>40?"#ffd54f":"#00ff9c";
+  return (
+    <div style={{ minWidth:80 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", fontSize:7, fontFamily:"IBM Plex Mono,monospace", marginBottom:2 }}>
+        <span style={{ color:"#c8d8e8", textTransform:"uppercase", letterSpacing:0.8 }}>IV Rank</span>
+        <span style={{ color:clr, fontWeight:700 }}>{fmt2(rank)}</span>
+      </div>
+      <div style={{ height:4, background:"#1a3040", borderRadius:2 }}>
+        <div style={{ height:4, width:`${rank}%`, minWidth:rank>0?2:0, background:clr, borderRadius:2 }} />
+      </div>
+      {ivPct!=null && <div style={{ fontSize:6, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace", marginTop:1 }}>%ile: {fmt2(ivPct)}</div>}
+    </div>
+  );
+}
+
+function StrategyTag({ signal }) {
+  const label = typeof signal==="string"?signal:(signal?.strategy||"");
+  const colors = {
+    SELL_PREMIUM:     { bg:"#002210", color:"#00ff9c", border:"#00ff9c33" },
+    BUY_OPTIONS:      { bg:"#001828", color:"#4fc3f7", border:"#4fc3f733" },
+    BUY_PREMIUM:      { bg:"#001828", color:"#4fc3f7", border:"#4fc3f733" },
+    GAMMA_SQUEEZE:    { bg:"#1a1000", color:"#ffd54f", border:"#ffd54f33" },
+    GAMMA_WALL:       { bg:"#1a1000", color:"#ffd54f", border:"#ffd54f33" },
+    SKEW_TRADE:       { bg:"#1a0a00", color:"#ff8a65", border:"#ff8a6533" },
+    UNUSUAL_ACTIVITY: { bg:"#1a0018", color:"#ff5cff", border:"#ff5cff33" },
+    UNUSUAL_OI:       { bg:"#1a0018", color:"#ff5cff", border:"#ff5cff33" },
+    DEFENSIVE:        { bg:"#1a0000", color:"#ef5350", border:"#ef535033" },
+    IV_CRUSH:         { bg:"#1a0000", color:"#ef5350", border:"#ef535033" },
   };
+  const c = colors[label]||{ bg:"#1a3040", color:"#a8c8e0", border:"#4a9abb33" };
+  return (
+    <span style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, padding:"1px 5px", borderRadius:2, background:c.bg, color:c.color, border:`1px solid ${c.border}`, whiteSpace:"nowrap" }}>
+      {label.replace(/_/g," ")}
+    </span>
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Market structure
-// ─────────────────────────────────────────────────────────────────────────────
-
-function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) {
-  const atm             = chain.reduce((best, row) => Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best);
-  const straddlePrice   = (atm.callLTP || 0) + (atm.putLTP || 0);
-  const expectedMoveAbs = straddlePrice * 0.84;
-  const expectedMovePct = expectedMoveAbs / spot * 100;
-  let vrp = null;
-  if (atmIV && hv20) vrp = (atmIV - hv20) * 100;
-  let ivEnvironment = 'NORMAL';
-  if (vrp !== null) {
-    if      (vrp >  8) ivEnvironment = 'RICH_SELL_PREMIUM';
-    else if (vrp >  4) ivEnvironment = 'ELEVATED';
-    else if (vrp < -4) ivEnvironment = 'CHEAP_BUY_OPTIONS';
-    else if (vrp < -8) ivEnvironment = 'VERY_CHEAP';
-  }
-  let eventRiskScore = 0;
-  if (atmIV && historicalIVs && historicalIVs.length > 10) {
-    const avgIV = historicalIVs.reduce((a, b) => a + b, 0) / historicalIVs.length;
-    eventRiskScore = Math.min(100, Math.max(0, ((atmIV - avgIV) / avgIV) * 100));
-  }
-  return {
-    straddlePrice:    Math.round(straddlePrice   * 100) / 100,
-    expectedMoveAbs:  Math.round(expectedMoveAbs * 100) / 100,
-    expectedMovePct:  Math.round(expectedMovePct * 100) / 100,
-    vrp:              vrp !== null ? Math.round(vrp * 100) / 100 : null,
-    ivEnvironment,
-    eventRiskScore:   Math.round(eventRiskScore),
-    supportFromOI:    null,
-    resistanceFromOI: null,
-  };
+function PanelWrap({ children, borderColor }) {
+  return (
+    <div style={{ background:"#060f1c", border:`1px solid ${borderColor||"#1c3a58"}`, borderRadius:6, padding:"10px 12px", flex:"1 1 0", minWidth:0, minHeight:0, overflowY:"auto", display:"flex", flexDirection:"column" }}>
+      {children}
+    </div>
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Strategy radar
-// ─────────────────────────────────────────────────────────────────────────────
-
-function computeStrategyRadar({ ivRank, ivPercentile, vrp, skew25, pcr, gex, ivEnvironment, oi }) {
-  const signals = [];
-  if (ivRank > 70 || ivEnvironment === 'RICH_SELL_PREMIUM')
-    signals.push({ strategy: 'SELL_PREMIUM', confidence: Math.min(100, ivRank || 70), note: `IV rank ${ivRank}% — options expensive. Consider credit spreads, iron condors.`, direction: 'NEUTRAL' });
-  if (ivRank < 30 || ivEnvironment === 'CHEAP_BUY_OPTIONS')
-    signals.push({ strategy: 'BUY_OPTIONS', confidence: Math.min(100, 100 - (ivRank || 50)), note: `IV rank ${ivRank}% — options cheap. Consider straddles before events.`, direction: 'NEUTRAL' });
-  if (skew25 !== null && skew25 > 6)
-    signals.push({ strategy: 'SKEW_TRADE', confidence: Math.min(100, skew25 * 10), note: `25-delta skew ${skew25}% — puts very expensive. Bull risk reversal has edge.`, direction: 'BULLISH' });
-  if (pcr !== null && pcr > 1.4 && gex && gex.regime === 'TREND_AMPLIFYING')
-    signals.push({ strategy: 'DEFENSIVE', confidence: 80, note: `PCR ${pcr} + negative GEX — dealer hedging amplifies downside. Hedge longs.`, direction: 'BEARISH' });
-  if (gex && gex.gammaFlip && gex.gammaFlip > 0)
-    signals.push({ strategy: 'GAMMA_WALL', confidence: 70, note: `Gamma flip at ₹${gex.gammaFlip} — expect pin or rejection near this strike.`, direction: 'NEUTRAL' });
-  if (oi && oi.unusualCount > 3)
-    signals.push({ strategy: 'UNUSUAL_ACTIVITY', confidence: 75, note: `${oi.unusualCount} unusual OI alerts — institutional positioning detected.`, direction: 'WATCH' });
-  return signals.sort((a, b) => b.confidence - a.confidence).slice(0, 5);
+function EmptyState({ symbol }) {
+  return (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:10 }}>
+      <div style={{ fontSize:28, opacity:0.2 }}>◤</div>
+      <div style={{ fontFamily:"IBM Plex Mono,monospace", fontSize:10, color:"#c8d8e8", textAlign:"center" }}>
+        {symbol?`Waiting for data on ${symbol}…`:"Select a symbol"}
+      </div>
+    </div>
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FIX 4 — Options score: smoother PCR adjustment to reduce refresh-to-refresh jitter
-// ─────────────────────────────────────────────────────────────────────────────
+// ════════════════ Alert Card ══════════════════════════════════════════════════
 
-function computeOptionsScore({ oi, gex, volatility, structure, strategy }) {
-  let score = 50;
-  const factors = [];
-
-  if (oi && oi.pcr !== null) {
-    // FIX 4: sigmoid-style clamp — small PCR changes near 1.0 don't flip the score
-    // Maps PCR to [-15, +15] range with a smooth curve rather than linear step
-    const pcrDev = oi.pcr - 1.0;
-    const pcrAdj = -15 * (2 / (1 + Math.exp(-2 * pcrDev)) - 1); // smooth S-curve
-    score += Math.round(pcrAdj);
-    factors.push(`PCR ${oi.pcr} → ${oi.pcrSentiment.replace(/_/g,' ').toLowerCase()}`);
-  }
-
-  if (gex) {
-    if (gex.regime === 'MEAN_REVERTING') { score += 5; factors.push('GEX positive — mean-reverting regime'); }
-    else { score -= 8; factors.push('GEX negative — trend-amplifying, higher vol expected'); }
-    if (gex.netGEX < -50) { score -= 5; factors.push(`Large negative GEX ₹${gex.netGEX}Cr`); }
-  }
-
-  if (volatility && volatility.ivRank !== null) {
-    if      (volatility.ivRank > 75) { score -= 5; factors.push(`IV rank ${volatility.ivRank}% — elevated`); }
-    else if (volatility.ivRank < 25) { score += 3; factors.push(`IV rank ${volatility.ivRank}% — cheap options`); }
-  }
-
-  if (volatility && volatility.skewSentiment) {
-    if      (volatility.skewSentiment === 'BEARISH_HEAVY') { score -= 10; factors.push('Put skew extreme'); }
-    else if (volatility.skewSentiment === 'BEARISH')       { score -= 5;  factors.push('Bearish IV skew'); }
-    else if (volatility.skewSentiment === 'BULLISH')       { score += 5;  factors.push('Bullish IV skew'); }
-  }
-
-  if (oi && oi.premiumBias === 'PUT_DOMINATED')   { score -= 5; factors.push(`Net premium: puts dominating ₹${oi.netPremiumFlow}L`); }
-  else if (oi && oi.premiumBias === 'CALL_DOMINATED') { score += 5; factors.push('Net premium: calls dominating'); }
-
-  if (oi && oi.unusualCount > 2) factors.push(`${oi.unusualCount} unusual OI spikes`);
-  if (structure && structure.eventRiskScore > 60) { score -= 5; factors.push(`Event risk ${structure.eventRiskScore}/100`); }
-
-  const topStrategy = strategy && strategy[0];
-  if (topStrategy) factors.push(`Top signal: ${topStrategy.strategy.replace(/_/g,' ').toLowerCase()}`);
-
-  score = Math.round(Math.max(0, Math.min(100, score)));
-  const bias       = score >= 60 ? 'BULLISH' : score <= 40 ? 'BEARISH' : 'NEUTRAL';
-  const confidence = Math.round(Math.abs(score - 50) * 2);
-  return { score, bias, confidence, factors };
+function AlertCard({ alerts }) {
+  const ref = useRef(null);
+  useEffect(()=>{ if(ref.current) ref.current.scrollTop=0; },[alerts?.length]);
+  return (
+    <div style={{ background:"#071828", border:"1px solid #1c3a58", borderRadius:5, padding:"5px 10px", minWidth:200, maxWidth:280, flexShrink:0 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:3 }}>
+        <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, color:"#c8d8e8", letterSpacing:1.2, textTransform:"uppercase" }}>⚡ Alerts</div>
+        {alerts?.length>0 && <span style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", padding:"1px 4px", borderRadius:2, background:"#1a0000", color:"#ef5350", fontWeight:700 }}>{alerts.length}</span>}
+      </div>
+      <div ref={ref} style={{ maxHeight:62, overflowY:"auto" }}>
+        {!alerts?.length
+          ? <div style={{ fontSize:7, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace" }}>◌ No alerts</div>
+          : alerts.slice(0,5).map((a,i)=>{
+              const isHigh=a.priority==="HIGH";
+              const color=isHigh?"#ef5350":a.priority==="MEDIUM"?"#ffd54f":"#a8c8e0";
+              const age=a.ts?Math.round((Date.now()-a.ts)/1000):null;
+              return (
+                <div key={i} style={{ display:"flex", gap:4, padding:"2px 0", borderBottom:i<Math.min(alerts.length,5)-1?"1px solid #1a3040":"none", animation:isHigh?"alertPulse 1.5s infinite":"none" }}>
+                  <span style={{ fontSize:8, flexShrink:0 }}>{ALERT_ICONS[a.type]||"◈"}</span>
+                  <div style={{ flex:1, fontSize:7, color, fontFamily:"IBM Plex Mono,monospace", fontWeight:isHigh?700:400, lineHeight:1.3 }}>{a.message||a.detail||String(a)}</div>
+                  {age!=null && <span style={{ fontSize:6, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace", flexShrink:0 }}>{age<60?`${age}s`:`${Math.round(age/60)}m`}</span>}
+                </div>
+              );
+            })
+        }
+      </div>
+    </div>
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main entry point
-// ─────────────────────────────────────────────────────────────────────────────
+// ════════════════ OI Chain Viewer ═════════════════════════════════════════════
 
-/**
- * @param {object}   opts
- * @param {object}   opts.prevVolMap  Optional — { [strike_ce]: vol, [strike_pe]: vol }
- *                                    Pass from optionsIntegration for delta-based net flow.
- */
-function analyzeOptionsChain({
-  symbol, spotPrice, chain, expiryDate,
-  historicalIVs = [], closes = [], lotSize = 1, riskFreeRate = INDIA_RF,
-  prevVolMap = null,  // FIX 3: optional prev volume map for delta flow
-}) {
-  if (!chain || chain.length === 0 || !spotPrice)
-    return { symbol, error: 'Insufficient data', score: null, bias: null };
+function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
+  const [view,setView]           = useState("near");
+  const [scrollIdx,setScrollIdx] = useState(0);
+  const ROWS=7;
+  const nearLabel=(activeSymbol||"").toUpperCase().includes("BANK")?"±10%":"±8%";
 
-  const expiry = new Date(expiryDate);
-  const now    = new Date();
-  const T      = Math.max(0, (expiry - now) / (1000 * 60 * 60 * 24 * CALENDAR_DAYS_YEAR));
-
-  const enrichedChain = chain.map(row => {
-    const out = { ...row };
-    if (!out.callIV && out.callLTP > 0.01)
-      out.callIV = solveIV(out.callLTP, { S: spotPrice, K: row.strike, T, r: riskFreeRate, type: 'call' });
-    if (!out.putIV && out.putLTP > 0.01)
-      out.putIV  = solveIV(out.putLTP,  { S: spotPrice, K: row.strike, T, r: riskFreeRate, type: 'put'  });
-    return out;
+  const sortRows=(arr)=>[...(arr||[])].sort((a,b)=>{
+    const da=Math.abs(a.strike-spot), db=Math.abs(b.strike-spot);
+    if(da!==db) return da-db;
+    return (a.type||"").toUpperCase()==="CALL"?-1:1;
   });
 
-  const atmRow = enrichedChain.reduce((best, row) =>
-    Math.abs(row.strike - spotPrice) < Math.abs(best.strike - spotPrice) ? row : best);
-  const atmIV  = atmRow.callIV || atmRow.putIV;
-  const hv20   = historicalVolatility(closes, 20);
-  const hv60   = historicalVolatility(closes, 60);
+  const rows=sortRows(view==="near"?nearATMSignals:tailRiskSignals);
+  const visible=rows.slice(scrollIdx,scrollIdx+ROWS);
+  const canUp=scrollIdx>0, canDn=scrollIdx+ROWS<rows.length;
 
-  // FIX 1: pass hv20/hv60 as fallback so ivRank is never null
-  const { ivRank, ivPercentile, synthetic: ivSynthetic } = ivRankAndPercentile(atmIV, historicalIVs, hv20, hv60);
-
-  const gex        = computeGEX(enrichedChain, spotPrice, T, riskFreeRate, lotSize);
-  const dealerExp  = computeDealerExposures(enrichedChain, spotPrice, T, riskFreeRate, lotSize);
-
-  // FIX 3: pass prevVolMap through to analyzeOI
-  const oi         = analyzeOI(enrichedChain, spotPrice, prevVolMap);
-
-  const volSurface = computeVolatilitySurface(enrichedChain, spotPrice, T, riskFreeRate);
-  const vrp        = atmIV && hv20 ? (atmIV - hv20) * 100 : null;
-  const structure  = computeMarketStructure({ chain: enrichedChain, spot: spotPrice, T, atmIV, hv20, historicalIVs });
-  if (gex) { structure.supportFromOI = gex.putWall; structure.resistanceFromOI = gex.callWall; }
-
-  const strategy   = computeStrategyRadar({ ivRank, ivPercentile, vrp, skew25: volSurface?.skew25 || null, pcr: oi?.pcr || null, gex, ivEnvironment: structure?.ivEnvironment, oi });
-
-  const volatility = {
-    atmIV:         atmIV ? Math.round(atmIV * 10000) / 100 : null,
-    hv20:          hv20  ? Math.round(hv20  * 10000) / 100 : null,
-    hv60:          hv60  ? Math.round(hv60  * 10000) / 100 : null,
-    vrp:           vrp   ? Math.round(vrp   * 100)   / 100 : null,
-    ivRank, ivPercentile, ivSynthetic,  // FIX 1: expose synthetic flag
-    ivEnvironment: structure.ivEnvironment,
-    skewSentiment: volSurface?.skewSentiment || null,
-    skew25:        volSurface?.skew25        || null,
-  };
-
-  const { score, bias, confidence, factors } = computeOptionsScore({ oi, gex, volatility, structure, strategy });
-
-  // FIX 2: compute both call theta and straddle theta clearly
-  const atmCallGreeks = computeGreeks({ S: spotPrice, K: atmRow.strike, T, r: riskFreeRate, sigma: atmIV || 0.20, type: 'call' });
-  const atmPutGreeks  = computeGreeks({ S: spotPrice, K: atmRow.strike, T, r: riskFreeRate, sigma: atmIV || 0.20, type: 'put' });
-
-  return {
-    symbol, spotPrice, expiryDate,
-    T:         Math.round(T * 365),
-    updatedAt: new Date().toISOString(),
-    score, bias, confidence, factors,
-    volatility, volSurface, gex, dealerExposures: dealerExp, oi, structure, strategy,
-    atmStrike: atmRow.strike,
-    atmGreeks: {
-      delta:         Math.round(atmCallGreeks.delta * 1000) / 1000,
-      gamma:         Math.round(atmCallGreeks.gamma * 10000) / 10000,
-      // FIX 2: both labelled clearly so frontend uses the right one
-      thetaCall:     Math.round(atmCallGreeks.theta * 100) / 100,   // single-leg call
-      thetaPut:      Math.round(atmPutGreeks.theta  * 100) / 100,   // single-leg put
-      thetaStraddle: Math.round((atmCallGreeks.theta + atmPutGreeks.theta) * 100) / 100, // combined
-      // Legacy key kept for backward compat — always single-leg call
-      theta:         Math.round(atmCallGreeks.theta * 100) / 100,
-      vega:          Math.round(atmCallGreeks.vega  * 100) / 100,
-      rho:           Math.round(atmCallGreeks.rho   * 100) / 100,
-    },
-  };
+  return (
+    <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0 }}>
+      <div style={{ display:"flex", gap:4, marginBottom:5 }}>
+        {[{ key:"near", label:`NEAR ATM ${nearLabel}`, color:"#4fc3f7" },{ key:"tail", label:"FII HEDGE / TAIL", color:"#d890f8" }].map(t=>(
+          <button key={t.key} onClick={()=>{ setView(t.key); setScrollIdx(0); }}
+            style={{ flex:1, fontSize:7, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, letterSpacing:0.7, padding:"3px 2px", borderRadius:3, cursor:"pointer",
+              background:view===t.key?`${t.color}15`:"transparent", border:`1px solid ${view===t.key?t.color+"55":"#1a3040"}`, color:view===t.key?t.color:"#5a90a8" }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"28px 52px 1fr 1fr 44px", gap:3, fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:"#5a90a8", letterSpacing:0.7, textTransform:"uppercase", paddingBottom:3, borderBottom:"1px solid #1a3040", marginBottom:2, flexShrink:0 }}>
+        <span/><span>STRIKE</span><span style={{ textAlign:"right" }}>OI</span><span style={{ textAlign:"right" }}>VOL</span><span style={{ textAlign:"right" }}>DIST%</span>
+      </div>
+      <div style={{ flex:1, overflow:"hidden" }}>
+        {rows.length===0
+          ? <div style={{ fontSize:7, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", textAlign:"center", padding:"10px 0" }}>◌ No data</div>
+          : visible.map((u,i)=>{
+              const isCE=(u.type||"").toUpperCase()==="CALL";
+              const dist=(spot&&spot>0&&u.strike>0)?+((u.strike-spot)/spot*100).toFixed(1):null;
+              const typeC=isCE?"#4fc3f7":"#ff8a65";
+              const oiChg=u.oiChange||0;
+              return (
+                <div key={`${u.strike}-${u.type}-${i}`} style={{ display:"grid", gridTemplateColumns:"28px 52px 1fr 1fr 44px", gap:3, padding:"3px 2px", background:i%2===0?"#071828":"transparent", borderRadius:2, alignItems:"center" }}>
+                  <span style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, padding:"1px 2px", borderRadius:2, background:`${typeC}15`, color:typeC, border:`1px solid ${typeC}33`, textAlign:"center" }}>{isCE?"CE":"PE"}</span>
+                  <span style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, color:"#e8f2ff" }}>{fmtInt(u.strike)}</span>
+                  <span style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:"#c8d8e8", textAlign:"right" }}>
+                    {(u.oi||0).toLocaleString("en-IN")}
+                    {oiChg!==0&&<span style={{ fontSize:6, color:oiChg>0?"#00ff9c":"#ef5350", marginLeft:2 }}>{oiChg>0?"▲":"▼"}</span>}
+                  </span>
+                  <span style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:"#ff5cff", textAlign:"right" }}>{(u.vol||0).toLocaleString("en-IN")}</span>
+                  <span style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, textAlign:"right", color:dist!=null?(dist>0?"#4fc3f7":"#ff8a65"):"#5a90a8" }}>
+                    {dist!=null?`${dist>0?"+":""}${dist}%`:"—"}
+                  </span>
+                </div>
+              );
+            })
+        }
+      </div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", paddingTop:4, borderTop:"1px solid #1a3040", marginTop:4, flexShrink:0 }}>
+        <span style={{ fontSize:7, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace" }}>
+          {rows.length>0?`${scrollIdx+1}–${Math.min(scrollIdx+ROWS,rows.length)} / ${rows.length}`:"0"}
+        </span>
+        <div style={{ display:"flex", gap:3 }}>
+          <button onClick={()=>setScrollIdx(Math.max(0,scrollIdx-ROWS))} disabled={!canUp}
+            style={{ fontSize:9, padding:"1px 6px", borderRadius:2, background:canUp?"#1a3040":"transparent", border:`1px solid ${canUp?"#2a5070":"#1a2030"}`, color:canUp?"#c8d8e8":"#2a4050", cursor:canUp?"pointer":"default", fontFamily:"IBM Plex Mono,monospace" }}>▲</button>
+          <button onClick={()=>setScrollIdx(Math.min(rows.length-ROWS,scrollIdx+ROWS))} disabled={!canDn}
+            style={{ fontSize:9, padding:"1px 6px", borderRadius:2, background:canDn?"#1a3040":"transparent", border:`1px solid ${canDn?"#2a5070":"#1a2030"}`, color:canDn?"#c8d8e8":"#2a4050", cursor:canDn?"pointer":"default", fontFamily:"IBM Plex Mono,monospace" }}>▼</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ingestChainData shim — forwards to optionsIntegration
-// ─────────────────────────────────────────────────────────────────────────────
+// ════════════════ GEX Panel ═══════════════════════════════════════════════════
 
-function ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize) {
-  try {
-    const { ingestChainData: real } = require("./optionsIntegration");
-    real(symbol, spotPrice, chainData, expiryDate, lotSize);
-  } catch (e) {
-    // non-critical — swallow silently
+function GEXPanel({ gex, dealerExposures }) {
+  const gexCallVal = gex.callGEX ?? null;
+  const gexPutVal  = gex.putGEX  ?? null;
+  const gexMax = Math.max(
+    Math.abs(gex.netGEX  || 0),
+    Math.abs(gexCallVal  || 0),
+    Math.abs(gexPutVal   || 0),
+    1
+  );
+  const gexBias   = gex.netGEX > 0 ? "Dealers long gamma — market stabilized"
+                  : gex.netGEX < 0 ? "Dealers short gamma — volatile, trend-amplifying"
+                  : "Neutral dealer positioning";
+  const gexBiasC  = gex.netGEX > 0 ? "#00ff9c" : gex.netGEX < 0 ? "#ef5350" : "#ffd54f";
+
+  // FIX 2: read vanna/charm ONLY from dealerExposures (vex/chex).
+  // gex object never has .vanna/.charm — the old fallback was always hitting
+  // dealerExposures anyway, but via a mismatched key that caused unit confusion.
+  const vanna = dealerExposures?.vex  ?? null;
+  const charm = dealerExposures?.chex ?? null;
+
+  return (
+    <PanelWrap>
+      <SL>Dealer GEX</SL>
+      <GexBar label="Net GEX"  value={gex.netGEX}  max={gexMax} color={gex.netGEX>=0?"#00ff9c":"#ef5350"} />
+      <GexBar label="Call GEX" value={gexCallVal}   max={gexMax} color="#4fc3f7" />
+      <GexBar label="Put GEX"  value={gexPutVal}    max={gexMax} color="#ff8a65" />
+      <div style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:gexBiasC, margin:"4px 0 8px", lineHeight:1.4, padding:"3px 6px", background:`${gexBiasC}10`, borderRadius:3, border:`1px solid ${gexBiasC}22` }}>◈ {gexBias}</div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5 }}>
+        <MiniCard label="GAMMA FLIP" value={gex.gammaFlip ? gex.gammaFlip.toLocaleString("en-IN") : "—"} sub="spot level" color="#ffd54f" />
+        <MiniCard label="REGIME"     value={gex.regime ? gex.regime.replace(/_/g," ") : "—"} color={gex.regime==="MEAN_REVERTING"?"#00ff9c":"#ef5350"} />
+        <MiniCard label="CALL WALL"  value={gex.callWall ? gex.callWall.toLocaleString("en-IN") : "—"} sub="resistance" color="#4fc3f7" />
+        <MiniCard label="PUT WALL"   value={gex.putWall  ? gex.putWall.toLocaleString("en-IN")  : "—"} sub="support"    color="#ff8a65" />
+      </div>
+      {(vanna != null || charm != null) && (<>
+        <div style={{ borderTop:"1px solid #1a3040", margin:"8px 0 4px" }}/>
+        <SL>2nd Order</SL>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5 }}>
+          <MiniCard label="VANNA" value={fmtCr(vanna)} sub="Δ vs vol"   color="#ff5cff" />
+          <MiniCard label="CHARM" value={fmtCr(charm)} sub="time decay" color="#ffd54f" />
+        </div>
+      </>)}
+      {gex.topStrikes?.length > 0 && (<>
+        <div style={{ borderTop:"1px solid #1a3040", margin:"8px 0 4px" }}/>
+        <SL>Top GEX Strikes</SL>
+        {gex.topStrikes.slice(0,4).map((s,i) => (
+          <div key={i} style={{ display:"flex", justifyContent:"space-between", fontSize:8, fontFamily:"IBM Plex Mono,monospace", padding:"2px 0", borderBottom:"1px solid #0d2030" }}>
+            <span style={{ color:"#c8d8e8" }}>{fmtInt(s.strike)}</span>
+            <span style={{ color:s.netGEX>=0?"#00ff9c":"#ef5350", fontWeight:700 }}>{fmtCr(s.netGEX)}</span>
+          </div>
+        ))}
+      </>)}
+    </PanelWrap>
+  );
+}
+
+// ════════════════ OI Panel ════════════════════════════════════════════════════
+
+function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
+  const oiSummary = oi.pcr > 1.2 ? "Put dominance → bullish (mm hedge)"
+                  : oi.pcr < 0.8 ? "Call dominance → market complacent"
+                  : oi.pcr != null ? "Balanced PCR → neutral" : null;
+  const oiColor = oi.pcr > 1.2 ? "#00ff9c" : oi.pcr < 0.8 ? "#ef5350" : "#ffd54f";
+
+  // FIX 3: use adaptive fmtOILakhs for Total OI
+  // FIX 4: net flow is in Lakhs (analyzeOI divides by 1e5), use fmtL not fmtCr
+  return (
+    <PanelWrap>
+      <SL>OI Intelligence</SL>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5, marginBottom:5 }}>
+        <MiniCard label="PCR"      value={fmt2(oi.pcr)} sub="put/call" color={oi.pcr>1.2?"#00ff9c":oi.pcr<0.8?"#ef5350":"#ffd54f"} />
+        <MiniCard label="MAX PAIN" value={oi.maxPain ? oi.maxPain.toLocaleString("en-IN") : "—"} sub="expiry" color="#4fc3f7" />
+        <MiniCard label="TOTAL OI" value={fmtOILakhs(oi.totalCallOI, oi.totalPutOI)} />
+        <MiniCard
+          label="NET FLOW"
+          value={oi.netPremiumFlow != null ? fmtL(oi.netPremiumFlow) : "—"}
+          color={oi.netPremiumFlow > 0 ? "#00ff9c" : "#ef5350"}
+        />
+      </div>
+      {oiSummary && (
+        <div style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:oiColor, marginBottom:6, padding:"3px 6px", background:`${oiColor}10`, borderRadius:3, border:`1px solid ${oiColor}22` }}>◈ {oiSummary}</div>
+      )}
+      <OIChainViewer
+        nearATMSignals={nearATMSignals}
+        tailRiskSignals={tailRiskSignals}
+        spot={spot}
+        activeSymbol={activeSymbol}
+      />
+    </PanelWrap>
+  );
+}
+
+// ════════════════ Gann Panel ══════════════════════════════════════════════════
+
+function GannPanel({ gann }) {
+  const now = new Date(), utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const ist = new Date(utcMs + 5.5 * 3600000);
+  const day = ist.getDay();
+  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const isWeekend = day === 0 || day === 6;
+  const hh = String(ist.getHours()).padStart(2,"0");
+  const mm = String(ist.getMinutes()).padStart(2,"0");
+
+  if (!gann) return (
+    <PanelWrap>
+      <SL icon="◤">Gann Analysis</SL>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:8, padding:"16px 0" }}>
+        <div style={{ fontSize:22, opacity:0.2 }}>◤</div>
+        <div style={{ fontSize:8, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace" }}>◌ Requesting…</div>
+      </div>
+    </PanelWrap>
+  );
+
+  if (gann.marketClosed || (!gann.signal && gann.error)) return (
+    <PanelWrap borderColor="#1a3040">
+      <SL icon="◤">Gann Analysis</SL>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:10, padding:"16px 8px" }}>
+        <div style={{ fontSize:28, opacity:0.15 }}>◤</div>
+        <div style={{ fontSize:9, fontWeight:700, color:"#ffd54f", fontFamily:"IBM Plex Mono,monospace", textAlign:"center", letterSpacing:1 }}>
+          {isWeekend ? `MARKET CLOSED — ${days[day].toUpperCase()}` : gann._marketStatus || "MARKET CLOSED"}
+        </div>
+        <div style={{ fontSize:8, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", textAlign:"center", lineHeight:1.7 }}>
+          {isWeekend ? "Gann data will load\nMon 9:15 AM IST" : "Data loads at\n9:15 AM IST"}
+        </div>
+        <div style={{ fontSize:7, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace" }}>{hh}:{mm} IST · {days[day]}</div>
+        {gann.symbol && <div style={{ fontSize:7, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace", padding:"2px 6px", border:"1px solid #1a3040", borderRadius:2 }}>{gann.symbol}</div>}
+      </div>
+    </PanelWrap>
+  );
+
+  const sig    = gann.signal || {}, son = gann.squareOfNine || {};
+  const fan    = gann.priceOnUpFan || gann.priceOnDownFan || null;
+  const cycles = (gann.timeCycles || []).slice(0,5);
+  const gAlerts  = (gann.alerts || []).filter(a => a.priority === "HIGH").slice(0,2);
+  const levels   = gann.keyLevels || {}, cardinal = gann.cardinalCross || {};
+  const gBias    = sig.bias || "NEUTRAL", gScore = sig.score ?? null;
+  const gc       = gannPalette(gBias);
+  const proxC    = { IMMINENT:"#ef5350", THIS_WEEK:"#ffd54f", THIS_FORTNIGHT:"#ff8a65", THIS_MONTH:"#4fc3f7" };
+  const cycC     = { EXTREME:"#ef5350", MAJOR:"#ff8a65", SIGNIFICANT:"#ffd54f", MINOR:"#4a9abb" };
+  const isStale  = gann._usingCachedLTP || gann._marketStatus;
+
+  return (
+    <PanelWrap borderColor={gc.border}>
+      <SL icon="◤">Gann Analysis</SL>
+      {isStale && (
+        <div style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:"#ffd54f", background:"#1a1000", border:"1px solid #ffd54f22", borderRadius:3, padding:"2px 6px", marginBottom:6, textAlign:"center" }}>
+          ◷ Last known price · {gann._marketStatus || "Market closed"}
+        </div>
+      )}
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, padding:"6px 8px", background:gc.bg, borderRadius:4, border:`1px solid ${gc.border}` }}>
+        <div style={{ textAlign:"center", minWidth:40 }}>
+          <div style={{ fontSize:22, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace", lineHeight:1 }}>{gScore != null ? Math.round(gScore) : "—"}</div>
+          <div style={{ fontSize:7, color:gc.color, fontFamily:"IBM Plex Mono,monospace", opacity:0.7 }}>/100</div>
+        </div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace" }}>{gBias.replace(/_/g," ")}</div>
+          {sig.summary && <div style={{ fontSize:8, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace", lineHeight:1.3 }}>{sig.summary.replace(/^Gann: [A-Z]+ \(score \d+\/100\)\.\s?/,"")}</div>}
+        </div>
+        {cardinal?.inCardinalZone?.strength === "ON_CARDINAL" && (
+          <span style={{ fontSize:7, padding:"1px 4px", borderRadius:2, background:"#1a0800", border:"1px solid #ffd54f44", color:"#ffd54f", fontFamily:"IBM Plex Mono,monospace" }}>CARDINAL</span>
+        )}
+      </div>
+      {(levels.supports?.length > 0 || levels.resistances?.length > 0) && (
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5, marginBottom:8 }}>
+          <div style={{ background:"#071828", border:"1px solid #00ff9c22", borderRadius:4, padding:"5px 7px" }}>
+            <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>SUPPORTS</div>
+            {(levels.supports||[]).slice(0,3).map((s,i) => (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", fontSize:8, fontFamily:"IBM Plex Mono,monospace", padding:"1px 0" }}>
+                <span style={{ color:"#00ff9c" }}>S{i+1} {fmtInt(s.price)}</span>
+                <span style={{ color:"#c8d8e8", fontSize:7 }}>{s.source?.includes("Nine")?"SoN":s.source?.includes("Cardinal")?"Card":"—"}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ background:"#071828", border:"1px solid #ef535022", borderRadius:4, padding:"5px 7px" }}>
+            <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>RESISTANCES</div>
+            {(levels.resistances||[]).slice(0,3).map((r,i) => (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", fontSize:8, fontFamily:"IBM Plex Mono,monospace", padding:"1px 0" }}>
+                <span style={{ color:"#ef5350" }}>R{i+1} {fmtInt(r.price)}</span>
+                <span style={{ color:"#c8d8e8", fontSize:7 }}>{r.source?.includes("Nine")?"SoN":r.source?.includes("Cardinal")?"Card":"—"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {son?.positionOnSquare && (
+        <div style={{ marginBottom:6 }}>
+          <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>SQUARE OF NINE</div>
+          <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
+            <span style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#4fc3f7" }}>{son.angleOnSquare?.toFixed(1)}° on square</span>
+            <span style={{ fontSize:7, padding:"1px 4px", borderRadius:2, fontFamily:"IBM Plex Mono,monospace",
+              background:son.positionOnSquare.strength==="EXTREME"?"#1a0000":son.positionOnSquare.strength==="STRONG"?"#1a0800":"#0a1020",
+              color:son.positionOnSquare.strength==="EXTREME"?"#ef5350":son.positionOnSquare.strength==="STRONG"?"#ffd54f":"#4a9abb" }}>
+              {son.positionOnSquare.strength}
+            </span>
+          </div>
+          <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:2 }}>{son.positionOnSquare.label}</div>
+        </div>
+      )}
+      {fan && (
+        <div style={{ marginBottom:6, padding:"5px 7px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>
+          <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginBottom:2 }}>GANN FAN</div>
+          <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:fan.aboveMasterAngle?"#00ff9c":"#ef5350", fontWeight:700 }}>
+            {fan.aboveMasterAngle?"▲ Above":"▼ Below"} 1×1 master
+            {fan.criticalLevel != null && <span style={{ color:"#a8c8e0", fontWeight:400 }}> @ ₹{fmtInt(fan.criticalLevel)}</span>}
+          </div>
+        </div>
+      )}
+      {cycles.length > 0 && (
+        <div style={{ marginBottom:6 }}>
+          <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>TIME CYCLES</div>
+          {cycles.map((c,i) => (
+            <div key={i} style={{ display:"flex", justifyContent:"space-between", fontSize:8, fontFamily:"IBM Plex Mono,monospace", padding:"2px 0", borderBottom:"1px solid #1a3040" }}>
+              <span style={{ color:cycC[c.cycleStrength]||"#4a9abb", flex:1, paddingRight:4, lineHeight:1.3 }}>{c.label}</span>
+              <span style={{ color:proxC[c.proximity]||"#4a9abb", whiteSpace:"nowrap", fontSize:7 }}>
+                {c.daysFromToday===0?"TODAY":c.daysFromToday<0?`${Math.abs(c.daysFromToday)}d ago`:`+${c.daysFromToday}d`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {gAlerts.length > 0 && (
+        <div>
+          <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>HIGH PRIORITY</div>
+          {gAlerts.map((a,i) => (
+            <div key={i} style={{ padding:"4px 6px", background:"#1a0000", border:"1px solid #ef535033", borderRadius:3, marginBottom:3, fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#ef5350", fontWeight:700 }}>{a.message}</div>
+          ))}
+        </div>
+      )}
+      {gann.headline && (
+        <div style={{ fontSize:8, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:4, lineHeight:1.4, padding:"4px 6px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>{gann.headline}</div>
+      )}
+    </PanelWrap>
+  );
+}
+
+// ════════════════ Market Structure Panel ══════════════════════════════════════
+
+function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol, spot, callWall, putWall, gammaFlip, maxPain, pcr, skew25 }) {
+  const dCall  = callWall  ? calcPct(callWall,  spot) : null;
+  const dPut   = putWall   ? calcPct(spot, putWall)   : null;
+  const dGamma = gammaFlip ? calcPct(gammaFlip, spot) : null;
+  const aboveGF = gammaFlip ? spot > gammaFlip : null;
+
+  let rangePct = null;
+  if (callWall && putWall && spot) {
+    rangePct = Math.round(((spot - putWall) / (callWall - putWall)) * 100);
+    rangePct = Math.max(0, Math.min(100, rangePct));
   }
+
+  let zoneLabel, zoneColor;
+  if      (callWall  && spot >= callWall  * 0.99) { zoneLabel = "At Call Wall — resistance"; zoneColor = "#4fc3f7"; }
+  else if (putWall   && spot <= putWall   * 1.01) { zoneLabel = "At Put Wall — support";     zoneColor = "#ff8a65"; }
+  else if (gammaFlip && spot >= gammaFlip)         { zoneLabel = "Above Gamma Flip — trend";  zoneColor = "#00ff9c"; }
+  else if (gammaFlip && spot <  gammaFlip)         { zoneLabel = "Below Gamma Flip — MR";     zoneColor = "#ffd54f"; }
+  else                                              { zoneLabel = "Between walls";             zoneColor = "#4a9abb"; }
+
+  return (
+    <PanelWrap>
+      <SL>Market Structure</SL>
+      {gannData && !gannData.marketClosed && (
+        <div style={{ marginBottom:6 }}><GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={false} /></div>
+      )}
+      {spot && (
+        <div style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 7px", borderRadius:3, marginBottom:6, background:`${zoneColor}11`, border:`1px solid ${zoneColor}33` }}>
+          <span style={{ width:5, height:5, borderRadius:"50%", background:zoneColor, display:"inline-block" }} />
+          <span style={{ fontSize:8, color:zoneColor, fontFamily:"IBM Plex Mono,monospace", fontWeight:700 }}>{zoneLabel}</span>
+        </div>
+      )}
+      {spot && (
+        <div style={{ marginBottom:8 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:"#e8f2ff", fontFamily:"IBM Plex Mono,monospace", marginBottom:3 }}>₹{fmtInt(spot)}</div>
+          {rangePct !== null && (<>
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:"#5a90a8", marginBottom:2 }}>
+              <span>PUT {fmtInt(putWall)}</span>
+              <span style={{ color:"#e8f2ff" }}>{rangePct}% in range</span>
+              <span>CALL {fmtInt(callWall)}</span>
+            </div>
+            <div style={{ height:5, background:"#1a3040", borderRadius:3, position:"relative" }}>
+              <div style={{ height:5, width:`${rangePct}%`, background:"linear-gradient(90deg, #ff8a6566, #ffd54f66)", borderRadius:3 }} />
+              <div style={{ position:"absolute", left:`${rangePct}%`, top:-1, width:2, height:7, background:"#e8f2ff", borderRadius:1, transform:"translateX(-50%)" }} />
+            </div>
+          </>)}
+        </div>
+      )}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5, marginBottom:8 }}>
+        <MiniCard label="SUPPORT (OI)"   value={structure.supportFromOI    ? structure.supportFromOI.toLocaleString("en-IN")    : "—"} sub="put OI wall"  color="#00ff9c" />
+        <MiniCard label="RESIST (OI)"    value={structure.resistanceFromOI ? structure.resistanceFromOI.toLocaleString("en-IN") : "—"} sub="call OI wall" color="#ef5350" />
+        {gannData?.keyLevels && !gannData.marketClosed && (<>
+          <MiniCard label="SUPPORT (GANN)" value={gannData.keyLevels.supports?.[0]?.price    ? gannData.keyLevels.supports[0].price.toLocaleString("en-IN")    : "—"} sub={gannData.keyLevels.supports?.[0]?.source    || "SoN"} color="#00ff9c" />
+          <MiniCard label="RESIST (GANN)"  value={gannData.keyLevels.resistances?.[0]?.price ? gannData.keyLevels.resistances[0].price.toLocaleString("en-IN") : "—"} sub={gannData.keyLevels.resistances?.[0]?.source || "SoN"} color="#ef5350" />
+        </>)}
+      </div>
+      {spot && (
+        <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace" }}>
+          {callWall  && dCall  != null && <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0", borderBottom:"1px solid #1a3040" }}><span style={{ color:"#c8d8e8" }}>↑ Call Wall</span><span style={{ color:"#4fc3f7", fontWeight:700 }}>+{Math.abs(dCall).toFixed(1)}% ₹{fmtInt(callWall-spot)}</span></div>}
+          {putWall   && dPut   != null && <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0", borderBottom:"1px solid #1a3040" }}><span style={{ color:"#c8d8e8" }}>↓ Put Wall</span><span style={{ color:"#ff8a65", fontWeight:700 }}>-{Math.abs(dPut).toFixed(1)}% ₹{fmtInt(spot-putWall)}</span></div>}
+          {gammaFlip && dGamma != null && <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0", borderBottom:"1px solid #1a3040" }}><span style={{ color:"#c8d8e8" }}>γ Flip</span><span style={{ color:aboveGF?"#00ff9c":"#ffd54f", fontWeight:700 }}>{aboveGF?"+":"-"}{Math.abs(dGamma).toFixed(1)}% ₹{fmtInt(gammaFlip)}</span></div>}
+          {maxPain   && <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0", borderBottom:"1px solid #1a3040" }}><span style={{ color:"#c8d8e8" }}>⊗ Max Pain</span><span style={{ color:"#a8c8e0", fontWeight:700 }}>₹{fmtInt(maxPain)}</span></div>}
+          {pcr != null && <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0", borderBottom:"1px solid #1a3040" }}><span style={{ color:"#c8d8e8" }}>⊕ PCR</span><span style={{ color:pcr>1.2?"#00ff9c":pcr<0.8?"#ef5350":"#ffd54f", fontWeight:700 }}>{pcr.toFixed(2)} — {pcr>1.2?"bullish":pcr<0.8?"bearish":"neutral"}</span></div>}
+          {spot && callWall && <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0" }}><span style={{ color:"#c8d8e8" }}>Breakout</span><span style={{ color:spot>callWall*0.99?"#00ff9c":"#ef5350", fontWeight:700 }}>{spot>callWall*0.99?"High — at resistance":"Low — below call wall"}</span></div>}
+        </div>
+      )}
+      {structure.ivEnvironment && (
+        <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#a0b8cc", marginTop:6 }}>
+          IV env: <span style={{ color:"#ffd54f" }}>{structure.ivEnvironment.replace(/_/g," ")}</span>
+        </div>
+      )}
+      {structure.straddlePrice != null && (
+        <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, fontFamily:"IBM Plex Mono,monospace", padding:"5px 0", borderTop:"1px solid #1a3040", marginTop:6 }}>
+          <span style={{ color:"#c8d8e8" }}>ATM Straddle</span>
+          <span style={{ color:"#e8f2ff", fontWeight:700 }}>₹{fmt2(structure.straddlePrice)}</span>
+        </div>
+      )}
+      {gannData?.keyLevels?.masterAngle != null && !gannData.marketClosed && (
+        <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, fontFamily:"IBM Plex Mono,monospace", padding:"5px 0", borderTop:"1px solid #1a3040" }}>
+          <span style={{ color:"#c8d8e8" }}>Gann 1×1</span>
+          <span style={{ color:"#ffd54f", fontWeight:700 }}>₹{Math.round(gannData.keyLevels.masterAngle).toLocaleString("en-IN")}</span>
+        </div>
+      )}
+    </PanelWrap>
+  );
 }
 
-module.exports = {
-  analyzeOptionsChain,
-  ingestChainData,
-  bsPrice,
-  computeGreeks,
-  solveIV,
-  historicalVolatility,
-  ivRankAndPercentile,
-  computeGEX,
-  computeDealerExposures,
-  analyzeOI,
-  computeMaxPain,
-  computeVolatilitySurface,
-  computeMarketStructure,
-  computeStrategyRadar,
-  computeOptionsScore,
-  normCDF,
-  normPDF,
-};
+// ════════════════ Main Page ═══════════════════════════════════════════════════
+
+export default function OptionsIntelligencePage({ socket }) {
+  const [data,setData]               = useState({});
+  const [gannMap,setGannMap]         = useState({});
+  const [liveAlerts,setLiveAlerts]   = useState([]);
+  const [activeSymbol,setActiveSymbol] = useState(null);
+  const [symbolList,setSymbolList]   = useState([]);
+  const [lastUpdated,setLastUpdated] = useState(null);
+  const [tick,setTick]               = useState(0);
+
+  // FIX 5: clock tick for market-hours banner and age display
+  useEffect(() => { const t = setInterval(() => setTick(n => n+1), 1000); return () => clearInterval(t); }, []);
+
+  useEffect(() => { if (!socket) return; socket.emit("request-intel-snapshot"); }, [socket]);
+
+  const requestGann = useCallback((sym, ltp) => {
+    if (!socket || !sym) return;
+    socket.emit("get-gann-analysis", { symbol: toGannSym(sym), ltp });
+  }, [socket]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const onIntel = (payload) => {
+      if (!payload) return;
+      const sym = payload.symbol || "UNKNOWN";
+      setSymbolList(prev => prev.includes(sym) ? prev : [sym, ...prev].slice(0, 40));
+      setActiveSymbol(prev => {
+        if (!prev) setTimeout(() => requestGann(sym, (payload?.data || payload)?.ltp || null), 100);
+        return prev || sym;
+      });
+      setData(prev => ({ ...prev, [sym]: payload }));
+      setLastUpdated(Date.now());
+    };
+
+    const onGann = (analysis) => {
+      if (!analysis?.symbol) return;
+      setGannMap(prev => ({ ...prev, [analysis.symbol.toUpperCase()]: analysis }));
+    };
+
+    const onGannAlert = (alert) => {
+      if (!alert?.symbol) return;
+      (alert.alerts || []).forEach(a => {
+        setLiveAlerts(prev => [{ ...a, symbol: alert.symbol, ts: Date.now() }, ...prev].slice(0, 30));
+      });
+      setGannMap(prev => {
+        const ex = prev[alert.symbol.toUpperCase()];
+        if (!ex) return prev;
+        return { ...prev, [alert.symbol.toUpperCase()]: { ...ex, alerts: [...(alert.alerts||[]), ...(ex.alerts||[]).filter(a => a.priority !== "HIGH")] } };
+      });
+    };
+
+    const onMarketAlert = (alert) => {
+      if (!alert) return;
+      setLiveAlerts(prev => [{ ...alert, ts: Date.now() }, ...prev].slice(0, 30));
+    };
+
+    socket.on("options-intelligence", onIntel);
+    socket.on("gann-analysis",        onGann);
+    socket.on("gann-alert",           onGannAlert);
+    socket.on("market-alert",         onMarketAlert);
+    return () => {
+      socket.off("options-intelligence", onIntel);
+      socket.off("gann-analysis",        onGann);
+      socket.off("gann-alert",           onGannAlert);
+      socket.off("market-alert",         onMarketAlert);
+    };
+  }, [socket, requestGann]);
+
+  const handleSymbolChange = (sym) => {
+    setActiveSymbol(sym);
+    const payload = data[sym], d = payload?.data || payload || {};
+    requestGann(sym, d?.ltp || d?.spot || null);
+  };
+
+  const current  = data[activeSymbol] || null;
+  const d        = current?.data || current || null;
+  const score    = d?.score ?? null;
+  const bias     = d?.bias ?? "NEUTRAL";
+  const band     = score != null ? ScoreBand(score) : null;
+  const vol      = d?.volatility      || {};
+  const greeks   = d?.atmGreeks       || {};
+  const gex      = d?.gex             || {};
+  const dealerExp = d?.dealerExposures || {};
+  const oi       = d?.oi              || {};
+  const structure = d?.structure      || {};
+  const strategy  = d?.strategy       || [];
+
+  const gannData = activeSymbol
+    ? (gannMap[toGannSym(activeSymbol)] || gannMap[activeSymbol] || gannMap[activeSymbol?.toUpperCase()] || null)
+    : null;
+
+  const gannBadgeMap = {};
+  if (activeSymbol && gannData && !gannData.marketClosed) {
+    const gs = gannData.signal || {}, gl = gannData.keyLevels || {};
+    gannBadgeMap[activeSymbol] = {
+      bias:       gs.bias || "NEUTRAL",
+      support:    gl.supports?.[0]?.price    ?? null,
+      resistance: gl.resistances?.[0]?.price ?? null,
+      angle:      gannData.squareOfNine?.angleOnSquare ?? null,
+    };
+  }
+
+  const spot      = d?.spot || d?.ltp || structure?.spot || null;
+  const oiNear    = oi.unusualOI || [];
+  const oiTail    = oi.unusualOITailRisk || [];
+  const hasDedicatedFields = oiNear.length > 0 || oiTail.length > 0;
+  const nearATMPct = (activeSymbol || "").toUpperCase().includes("BANK") ? 10 : 8;
+  let nearATMSignals, tailRiskSignals;
+  if (hasDedicatedFields) {
+    nearATMSignals = oiNear; tailRiskSignals = oiTail;
+  } else {
+    const allUnusual = oi.unusualOI || [];
+    nearATMSignals = filterByProximity(allUnusual, spot, activeSymbol, nearATMPct);
+    const nearSet  = new Set(nearATMSignals.map(u => `${u.strike}-${u.type}`));
+    tailRiskSignals = allUnusual.filter(u => !nearSet.has(`${u.strike}-${u.type}`));
+  }
+
+  const atmIV    = normaliseIV(vol.atmIV ?? vol.iv ?? vol.atm_iv ?? vol.atmIv ?? vol.ATM_IV ?? null);
+  const hv20     = vol.hv20 ?? vol.hv_20 ?? vol.HV20 ?? vol.Hv20 ?? null;
+  const hv60     = vol.hv60 ?? vol.hv_60 ?? vol.HV60 ?? vol.Hv60 ?? null;
+  const vrp      = vol.vrp  ?? vol.vRp   ?? vol.VRP  ?? null;
+  const skew25   = vol.skew25 ?? null;
+  const lambda   = greeks.lambda ?? greeks.leverage ?? null;
+  const lambdaDisplay = (lambda != null && lambda !== 0) ? fmt2(lambda) : "—";
+  const gammaDisplay  = (greeks.gamma && greeks.gamma !== 0) ? greeks.gamma.toFixed(4) : "—";
+  const deltaVal      = greeks.delta ?? null;
+  const deltaDisplay  = deltaVal != null ? fmt2(deltaVal) : "—";
+  const deltaColor    = deltaVal == null ? "#e8f2ff" : Math.abs(deltaVal) > 0.85 ? "#ffd54f" : deltaVal > 0 ? "#00ff9c" : "#ef5350";
+  const ageSec        = lastUpdated ? Math.round((Date.now() - lastUpdated) / 1000) : null;
+  const hv20Display   = hv20 != null ? (hv20 < 3 ? (hv20*100).toFixed(1) : Number(hv20).toFixed(1)) + "%" : "—";
+  const hv60Display   = hv60 != null ? (hv60 < 3 ? (hv60*100).toFixed(1) : Number(hv60).toFixed(1)) + "%" : "—";
+  const vrpDisplay    = vrp  != null ? `${vrp > 0 ? "+" : ""}${fmt2(vrp)}%` : "—";
+
+  return (
+    <>
+      <style>{`@keyframes alertPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`}</style>
+      <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"#020d1c", overflow:"hidden" }}>
+
+        {/* Toolbar */}
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 12px", borderBottom:"1px solid #1c3a58", flexShrink:0, background:"#060f1c", minHeight:36 }}>
+          <span style={{ fontFamily:"IBM Plex Mono,monospace", fontSize:9, fontWeight:700, color:"#00cfff", letterSpacing:1, flexShrink:0 }}>⚡ OPTIONS INTEL</span>
+          <div style={{ display:"flex", gap:3, overflowX:"auto", flex:1 }}>
+            {symbolList.length === 0 && <span style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#c8d8e8" }}>◌ Waiting…</span>}
+            {symbolList.slice(0,20).map(sym => (
+              <button key={sym} onClick={() => handleSymbolChange(sym)}
+                style={{ background:activeSymbol===sym?"#00cfff22":"transparent", border:`1px solid ${activeSymbol===sym?"#00cfff66":"#1c3a58"}`, borderRadius:2, padding:"1px 7px", cursor:"pointer", fontFamily:"IBM Plex Mono,monospace", fontSize:8, fontWeight:700, color:activeSymbol===sym?"#00cfff":"#5a90a8", flexShrink:0 }}>
+                {sym}
+              </button>
+            ))}
+          </div>
+          {d && <AlertCard alerts={liveAlerts} />}
+          {ageSec != null && (
+            <span style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", color: ageSec > 120 ? "#ffd54f" : "#a0b8cc", flexShrink:0 }}>
+              ↻ {ageSec < 60 ? `${ageSec}s` : `${Math.round(ageSec/60)}m`}
+            </span>
+          )}
+        </div>
+
+        {/* FIX 5: Market closed banner — shown below toolbar when market is shut */}
+        <MarketClosedBanner lastUpdated={lastUpdated} />
+
+        {!d ? <EmptyState symbol={activeSymbol} /> : (
+          <div style={{ flex:1, display:"flex", flexDirection:"column", padding:8, gap:8, overflow:"hidden", minHeight:0 }}>
+
+            {/* Score Card */}
+            <div style={{ flexShrink:0, background:band?.bg||"#060f1c", border:`1px solid ${band?.color||"#1c3a58"}44`, borderRadius:6, padding:"8px 14px" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <div style={{ display:"flex", flexDirection:"column", alignItems:"center", minWidth:52, flexShrink:0 }}>
+                  <div style={{ fontSize:34, fontWeight:700, fontFamily:"IBM Plex Mono,monospace", color:band?.color||"#4a9abb", lineHeight:1 }}>{score != null ? Math.round(score) : "—"}</div>
+                  <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, color:band?.color||"#6aA0b8", letterSpacing:0.8 }}>{band?.label||"NO DATA"}</div>
+                </div>
+                <div style={{ flexShrink:0, minWidth:120 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}>
+                    <span style={{ fontFamily:"IBM Plex Mono,monospace", fontSize:13, fontWeight:700, color:"#e8f2ff" }}>{activeSymbol}</span>
+                    <span style={{ fontSize:9, color:band?.color, fontFamily:"IBM Plex Mono,monospace" }}>{bias}</span>
+                    {gannData && !gannData.marketClosed && <GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={true} />}
+                  </div>
+                  <div style={{ display:"flex", gap:3, flexWrap:"wrap" }}>
+                    {strategy.slice(0,4).map((s,i) => <StrategyTag key={i} signal={s} />)}
+                  </div>
+                </div>
+                <VDivider />
+                <div style={{ display:"flex", gap:10, alignItems:"flex-start", flex:1, overflowX:"auto", flexWrap:"nowrap" }}>
+                  {spot && <HStat label="Spot" value={`₹${fmtInt(spot)}`} sub={gex.callWall&&gex.putWall?`${Math.max(0,Math.min(100,Math.round(((spot-gex.putWall)/(gex.callWall-gex.putWall))*100)))}% range`:""} color="#e8f2ff" />}
+                  <HStat label="Exp Move" value={structure.expectedMoveAbs ? `±${fmt2(structure.expectedMoveAbs)}` : "—"} sub="1σ" color="#4fc3f7" />
+                  <HStat label="Evt Risk" value={structure.eventRiskScore != null ? Math.round(structure.eventRiskScore) : "0"} sub="0–100" color={structure.eventRiskScore > 60 ? "#ef5350" : structure.eventRiskScore > 0 ? "#ffd54f" : "#5a90a8"} />
+                  <VDivider />
+                  <HStat label="ATM IV" value={atmIV != null ? `${atmIV.toFixed(1)}%` : "—"} color="#00cfff" />
+                  <HStat label="VRP"    value={vrpDisplay} sub="IV−HV20" color={vrp != null ? (vrp > 0 ? "#ff8a65" : "#00ff9c") : "#4a9abb"} />
+                  <HStat label="HV 20"  value={hv20Display} />
+                  <HStat label="HV 60"  value={hv60Display} />
+                  <IVRankBar ivRank={vol.ivRank} ivPct={vol.ivPercentile} />
+                  <VDivider />
+                  <HStat label="Delta"  value={deltaDisplay}  color={deltaColor} />
+                  <HStat label="Gamma"  value={gammaDisplay}  color={gammaDisplay === "—" ? "#5a90a8" : "#e8f2ff"} />
+                  <HStat label="Theta"  value={greeks.theta != null ? fmt2(greeks.theta) : "—"} sub="₹/day" color="#ff8a65" />
+                  <HStat label="Vega"   value={fmt2(greeks.vega)} sub="1%IV" color="#4fc3f7" />
+                  <HStat label="Lambda" value={lambdaDisplay} sub="lev" />
+                  <HStat label="Rho"    value={fmt2(greeks.rho)} />
+                </div>
+              </div>
+              <TradeDecision spot={spot} callWall={gex.callWall} putWall={gex.putWall} gammaFlip={gex.gammaFlip} regime={gex.regime} pcr={oi.pcr} skew25={skew25} />
+            </div>
+
+            {/* 4 Panels */}
+            <div style={{ flex:1, display:"flex", gap:8, minHeight:0 }}>
+              <GEXPanel gex={gex} dealerExposures={dealerExp} />
+              <OIPanel oi={oi} nearATMSignals={nearATMSignals} tailRiskSignals={tailRiskSignals} spot={spot} activeSymbol={activeSymbol} />
+              <GannPanel gann={gannData} />
+              <MarketStructurePanel structure={structure} gannData={gannData} gannBadgeMap={gannBadgeMap} activeSymbol={activeSymbol} spot={spot} callWall={gex.callWall} putWall={gex.putWall} gammaFlip={gex.gammaFlip} maxPain={oi.maxPain} pcr={oi.pcr} skew25={skew25} />
+            </div>
+
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
