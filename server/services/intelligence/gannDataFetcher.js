@@ -138,7 +138,13 @@ async function fetchCandles(symbol) {
 
 // ─── Main fetch loop ──────────────────────────────────────────────────────────
 async function fetchAndIngestAll() {
-  // Guard: if map is empty warn loudly but proceed with what we have
+  // ── Market hours guard ──────────────────────────────────────────
+  const { isMarketOpen, marketStatus } = require("./marketHours");
+  if (!isMarketOpen()) {
+    console.log(`📐 Gann fetcher: skipping — market is ${marketStatus()}`);
+    return;
+  }
+  // ── existing code below ─────────────────────────────────────────
   const mapSize = Object.keys(_instrumentMap).length;
   if (mapSize === 0) {
     console.warn("📐 Gann fetcher: instrument map is EMPTY — all fetches will fail. Check server.js wiring.");

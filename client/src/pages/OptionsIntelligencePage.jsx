@@ -438,10 +438,30 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
 // ════════════════ Gann Panel ══════════════════════════════════════════════════
 
 function GannPanel({ gann }) {
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const ist = new Date(utcMs + 5.5 * 3600000);
+  const day = ist.getDay();
+  const isWeekend = day === 0 || day === 6;
+  const dayName = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][day];
+
   if (!gann) return (
     <PanelWrap>
       <SL icon="◤">Gann Analysis</SL>
-      <div style={{ fontSize: 8, color: "#c8d8e8", fontFamily: "IBM Plex Mono,monospace", textAlign: "center", padding: "16px 0" }}>◌ Awaiting Gann data…</div>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:8, padding:"16px 0" }}>
+        <div style={{ fontSize:22, opacity:0.25 }}>◤</div>
+        <div style={{ fontSize:9, color:"#ffd54f", fontFamily:"IBM Plex Mono,monospace", fontWeight:700, textAlign:"center" }}>
+          {isWeekend ? `MARKET CLOSED — ${dayName}` : "MARKET CLOSED"}
+        </div>
+        <div style={{ fontSize:8, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", textAlign:"center", lineHeight:1.5 }}>
+          {isWeekend
+            ? "Gann data will load\nMon 9:15 AM IST"
+            : "Pre-market — data loads\nat 9:15 AM IST"}
+        </div>
+        <div style={{ fontSize:7, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace", textAlign:"center" }}>
+          {ist.getHours()}:{String(ist.getMinutes()).padStart(2,"0")} IST
+        </div>
+      </div>
     </PanelWrap>
   );
 
