@@ -5,7 +5,7 @@ if (process.env.NODE_ENV !== "production") {
 
 const express = require("express");
 const http    = require("http");
-const { Server } = require("socket.io");
+// FIX: removed "const { Server } = require('socket.io')" — websocket.js owns the io instance now
 const path    = require("path");
 const fs      = require("fs");
 const axios   = require("axios");
@@ -31,10 +31,22 @@ const {
   getWindowLabel,
 } = require("./database");
 
+// FIX: attachSocketIO replaces "new Server(server, ...)"
+// It creates the Socket.io instance AND registers:
+//   - options-intelligence snapshot replay on every "connection"
+//   - "request-intel-snapshot" on-demand replay handler
+//   - "request-option-chain" room subscription handler
+//   - "ping"/"pong" heartbeat
+//   - disconnect/error logging
+const { attachSocketIO } = require("./api/websocket");
+
 const app    = express();
 const server = http.createServer(app);
 
-const io = new Server(server, { cors: { origin: "*" } });
+// FIX: was "new Server(server, { cors: { origin: '*' } })"
+// Now websocket.js owns the io instance — returned here so all existing
+// io.emit() / io.on() calls below continue to work unchanged.
+const io = attachSocketIO(server);
 
 app.use(cors());
 app.use(express.json());
@@ -57,7 +69,6 @@ let upstoxTokenExpiry = null;
 // ── Instrument master cache ───────────────────────────────────────────────────
 let instrumentMap = {};
 
-// FIX: returns a Promise so callers can chain .then() and guarantee map is loaded
 async function loadInstrumentMaster() {
   // ── 1. Try disk cache (valid for 24 h) ──────────────────────────────────────
   try {
@@ -66,7 +77,6 @@ async function loadInstrumentMaster() {
       if (cached._ts && Date.now() - cached._ts < 24 * 60 * 60 * 1000) {
         instrumentMap = cached.map || {};
         console.log(`✅ Instrument master loaded from cache: ${Object.keys(instrumentMap).length} symbols`);
-        // Push map into Gann fetcher immediately — no race condition possible here
         _pushMapToGann(instrumentMap);
         return;
       }
@@ -97,7 +107,6 @@ async function loadInstrumentMaster() {
     _pushMapToGann(map);
   } catch (e) {
     console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
-    // ── 3. Fallback: top-50 Nifty stocks with known ISIN keys ─────────────────
     instrumentMap = {
       "RELIANCE":   "NSE_EQ|INE002A01018",
       "TCS":        "NSE_EQ|INE467B01029",
@@ -156,11 +165,6 @@ async function loadInstrumentMaster() {
   }
 }
 
-/**
- * FIX: single helper that pushes the map into gannDataFetcher.
- * Called after the map is fully populated — whether from cache, CDN, or fallback.
- * This eliminates the race condition where Gann fetcher started before map loaded.
- */
 function _pushMapToGann(map) {
   try {
     require("./services/intelligence/gannDataFetcher").setInstrumentMap(map);
@@ -215,15 +219,11 @@ function clearToken() {
 // ── Startup sequence ──────────────────────────────────────────────────────────
 loadToken();
 
-// FIX: loadInstrumentMaster resolves before coordinator starts,
-// so gannDataFetcher always has real ISIN instrument keys, not fallback keys.
-// startCoordinator is called inside the .then() — nothing starts until map is ready.
 loadInstrumentMaster()
   .catch((e) => {
     console.warn("⚠️ loadInstrumentMaster threw unexpectedly:", e.message);
   })
   .finally(() => {
-    // Wire OI tick handler BEFORE startStreamer
     setOITickHandler(handleOITick);
 
     if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
@@ -231,12 +231,8 @@ loadInstrumentMaster()
     }
 
     startNSEOIListener(io, () => upstoxAccessToken);
-
     startBSEListener(io);
     startNSEDealsListener(io);
-
-    // FIX: coordinator (which calls startGannDataFetcher) starts AFTER
-    // instrument map is fully loaded and pushed to gannDataFetcher.
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
 
     const PORT = process.env.PORT || 10000;

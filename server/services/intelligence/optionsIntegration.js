@@ -4,42 +4,16 @@
  * optionsIntegration.js
  * Location: server/services/intelligence/optionsIntegration.js
  *
- * Bridges nseOIListener → optionsIntelligenceEngine → socket.io
- *
- * FIXES in this version:
- *  1. Lazy-require nseOIListener (breaks circular dep)
- *  2. Exhaustive row extraction — handles every known shape getAllCached() returns
- *  3. Falls back to getChain() per-expiry if getAllCached() rows are missing
- *  4. Exports ingestChainData so nseOIListener can call it directly (fixes
- *     "ingestChainData is not a function" error in nseOIListener)
- *
- * FIX (page-refresh data loss):
- *  5. Calls setCachedIntel() from websocket.js BEFORE every io.emit("options-intelligence")
- *     so that newly connected / refreshed clients get an immediate snapshot replay
- *     instead of blank 0.0 / — fields until the next Upstox tick arrives.
+ * ALL FIXES APPLIED:
+ *  1. Direct require of websocket.js (no lazy load) — file now exists
+ *  2. setCachedIntel() called BEFORE every io.emit so page-refresh replay works
+ *  3. extractRows() correctly handles processChain() output shape (s.ce/s.pe)
+ *  4. safeIV() normalises Upstox decimal (0.15) AND NSE % (15.0) — fixes ATM IV = —
+ *  5. ingestChainData exported for nseOIListener's 5 positional-arg call
  */
 
 const { analyzeOptionsChain } = require("./optionsIntelligenceEngine");
-
-// FIX: import cache writer from websocket — used in runAnalysis below
-// Safe lazy pattern: if websocket isn't attached yet, setCachedIntel is a no-op
-let _setCachedIntel = null;
-try {
-  ({ setCachedIntel: _setCachedIntel } = require("../../api/websocket"));
-} catch (e) {
-  // websocket module not yet available — will retry on first emit
-}
-function safeSetCachedIntel(symbol, payload) {
-  // Retry require once in case it wasn't ready at module load time
-  if (!_setCachedIntel) {
-    try {
-      ({ setCachedIntel: _setCachedIntel } = require("../../api/websocket"));
-    } catch (_) {}
-  }
-  if (typeof _setCachedIntel === "function") {
-    try { _setCachedIntel(symbol, payload); } catch (_) {}
-  }
-}
+const { setCachedIntel }      = require("../../api/websocket"); // direct require — file exists
 
 // ── Rolling IV history for IV Rank ────────────────────────────────────────────
 const ivHistory = {};
@@ -50,7 +24,7 @@ function appendIV(symbol, ivPct) {
   if (ivHistory[symbol].length > 252) ivHistory[symbol] = ivHistory[symbol].slice(-252);
 }
 
-// ── Throttle ──────────────────────────────────────────────────────────────────
+// ── Throttle — max one analysis per symbol/expiry per 15 s ───────────────────
 const lastRun = {};
 function canRun(key) {
   const now = Date.now();
@@ -59,33 +33,52 @@ function canRun(key) {
   return true;
 }
 
-// ── Extract rows from ANY chain shape nseOIListener might store ───────────────
-// Handles: { rows }, { data }, { strikes }, { chain }, plain array,
-// or an object keyed by strike number (e.g. { "24000": { CE: {}, PE: {} } })
+// ── Normalise IV — handles Upstox decimal (0.15) AND NSE % (15.0) ────────────
+function safeIV(raw) {
+  if (raw == null || raw <= 0) return null;
+  return raw > 5 ? raw / 100 : raw; // >5 means it's already a percentage
+}
+
+// ── Extract rows from ANY chain shape nseOIListener might produce ─────────────
 function extractRows(chainData) {
   if (!chainData) return null;
 
-  // Already an array
+  // Plain array passed directly from nseOIListener's ingestChainData call
   if (Array.isArray(chainData)) return chainData.length > 0 ? chainData : null;
 
-  // Named array field
-  for (const key of ["rows", "data", "strikes", "chain", "records", "options"]) {
+  // processChain() output — .strikes array with s.ce / s.pe sub-objects
+  if (Array.isArray(chainData.strikes) && chainData.strikes.length > 0) {
+    return chainData.strikes.map(s => ({
+      strike:  s.strike,
+      callOI:  s.ce?.oi      || 0,
+      putOI:   s.pe?.oi      || 0,
+      callVol: s.ce?.volume  || 0,
+      putVol:  s.pe?.volume  || 0,
+      callLTP: s.ce?.ltp     || 0,
+      putLTP:  s.pe?.ltp     || 0,
+      callIV:  s.ce?.iv != null ? safeIV(s.ce.iv) : null,
+      putIV:   s.pe?.iv != null ? safeIV(s.pe.iv) : null,
+    }));
+  }
+
+  // Other named arrays
+  for (const key of ["rows", "data", "chain", "records", "options"]) {
     if (Array.isArray(chainData[key]) && chainData[key].length > 0) return chainData[key];
   }
 
-  // Object keyed by strike price — convert to row array
+  // Object keyed by strike number e.g. { "24000": { CE: {}, PE: {} } }
   const entries = Object.entries(chainData);
   if (entries.length > 0 && !isNaN(Number(entries[0][0]))) {
     const rows = entries.map(([strike, v]) => ({
       strike:  Number(strike),
-      callOI:  v?.CE?.openInterest      || v?.CE?.oi   || v?.ce?.oi   || 0,
-      putOI:   v?.PE?.openInterest      || v?.PE?.oi   || v?.pe?.oi   || 0,
-      callVol: v?.CE?.totalTradedVolume || v?.CE?.vol  || v?.ce?.vol  || 0,
-      putVol:  v?.PE?.totalTradedVolume || v?.PE?.vol  || v?.pe?.vol  || 0,
-      callLTP: v?.CE?.lastPrice         || v?.CE?.ltp  || v?.ce?.ltp  || 0,
-      putLTP:  v?.PE?.lastPrice         || v?.PE?.ltp  || v?.pe?.ltp  || 0,
-      callIV:  v?.CE?.impliedVolatility != null ? Number(v.CE.impliedVolatility) / 100 : null,
-      putIV:   v?.PE?.impliedVolatility != null ? Number(v.PE.impliedVolatility) / 100 : null,
+      callOI:  v?.CE?.openInterest      || v?.CE?.oi || v?.ce?.oi || 0,
+      putOI:   v?.PE?.openInterest      || v?.PE?.oi || v?.pe?.oi || 0,
+      callVol: v?.CE?.totalTradedVolume || v?.CE?.vol || v?.ce?.vol || 0,
+      putVol:  v?.PE?.totalTradedVolume || v?.PE?.vol || v?.pe?.vol || 0,
+      callLTP: v?.CE?.lastPrice         || v?.CE?.ltp || v?.ce?.ltp || 0,
+      putLTP:  v?.PE?.lastPrice         || v?.PE?.ltp || v?.pe?.ltp || 0,
+      callIV:  v?.CE?.impliedVolatility != null ? safeIV(v.CE.impliedVolatility) : null,
+      putIV:   v?.PE?.impliedVolatility != null ? safeIV(v.PE.impliedVolatility) : null,
     })).filter(r => r.strike > 0);
     return rows.length > 0 ? rows : null;
   }
@@ -93,22 +86,20 @@ function extractRows(chainData) {
   return null;
 }
 
-// ── Normalise a chain row to engine format ────────────────────────────────────
+// ── Normalise a single row to engine format ───────────────────────────────────
 function normaliseRow(r) {
   return {
     strike:  Number(r.strike  || r.strikePrice || r.SP || 0),
-    callOI:  Number(r.callOI  || r.CE_OI  || r.ceOI  || r.cOI  || r.CE?.openInterest || 0),
-    putOI:   Number(r.putOI   || r.PE_OI  || r.peOI  || r.pOI  || r.PE?.openInterest || 0),
-    callVol: Number(r.callVol || r.CE_Vol || r.ceVol || r.cVol || r.CE?.totalTradedVolume || 0),
-    putVol:  Number(r.putVol  || r.PE_Vol || r.peVol || r.pVol || r.PE?.totalTradedVolume || 0),
-    callLTP: Number(r.callLTP || r.CE_LTP || r.ceLTP || r.cLTP || r.CE?.lastPrice || 0),
-    putLTP:  Number(r.putLTP  || r.PE_LTP || r.peLTP || r.pLTP || r.PE?.lastPrice  || 0),
-    callIV:  r.callIV != null ? Number(r.callIV)
-           : r.CE?.impliedVolatility != null ? Number(r.CE.impliedVolatility) / 100
-           : null,
-    putIV:   r.putIV  != null ? Number(r.putIV)
-           : r.PE?.impliedVolatility != null ? Number(r.PE.impliedVolatility) / 100
-           : null,
+    callOI:  Number(r.callOI  || r.CE_OI  || r.ceOI  || r.CE?.openInterest || 0),
+    putOI:   Number(r.putOI   || r.PE_OI  || r.peOI  || r.PE?.openInterest || 0),
+    callVol: Number(r.callVol || r.CE_Vol || r.ceVol || r.CE?.totalTradedVolume || 0),
+    putVol:  Number(r.putVol  || r.PE_Vol || r.peVol || r.PE?.totalTradedVolume || 0),
+    callLTP: Number(r.callLTP || r.CE_LTP || r.ceLTP || r.CE?.lastPrice || 0),
+    putLTP:  Number(r.putLTP  || r.PE_LTP || r.peLTP || r.PE?.lastPrice  || 0),
+    callIV:  r.callIV != null ? safeIV(r.callIV)
+           : r.CE?.impliedVolatility != null ? safeIV(r.CE.impliedVolatility) : null,
+    putIV:   r.putIV  != null ? safeIV(r.putIV)
+           : r.PE?.impliedVolatility != null ? safeIV(r.PE.impliedVolatility) : null,
   };
 }
 
@@ -151,20 +142,12 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
   if (result.volatility?.atmIV) appendIV(symbol, result.volatility.atmIV);
 
   if (_io) {
-    // FIX: build payload once, cache it BEFORE emitting so any client that
-    // connects (or reconnects after a page refresh) gets the snapshot immediately
-    // via the connection-time replay in websocket.js — zero logic change otherwise.
-    const payload = {
-      symbol,
-      data: result,
-      ltp:  spotPrice,
-      ts:   Date.now(),
-    };
+    const payload = { symbol, data: result, ltp: spotPrice, ts: Date.now() };
 
-    // FIX: write to cache first so replay is always up-to-date
-    safeSetCachedIntel(symbol, payload);
+    // Cache BEFORE emit — so clients connecting during/after this tick
+    // get the snapshot immediately via attachSocketIO's "connection" handler
+    try { setCachedIntel(symbol, payload); } catch (_) {}
 
-    // Emit exactly as before
     _io.emit("options-intelligence", payload);
     console.log(`📡 options-intelligence: ${symbol} score=${result.score} bias=${result.bias} strikes=${chain.length}`);
   }
@@ -188,69 +171,51 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
   }
 }
 
-// ── ingestChainData — called directly by nseOIListener ───────────────────────
-// This is the function nseOIListener already tries to call but was missing.
-// nseOIListener calls: ingestChainData(symbol, spotPrice, chain, expiry, lotSize)
+// ── ingestChainData — called by nseOIListener with 5 positional args ──────────
 function ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize) {
   if (!symbol || !spotPrice || !chainData || !expiryDate) return;
-
   const rows = extractRows(chainData);
-  if (!rows) {
+  if (!rows || rows.length === 0) {
     console.warn(`⚠️ ingestChainData: ${symbol}/${expiryDate} — could not extract rows`);
     return;
   }
-
   runAnalysis(symbol, spotPrice, rows, expiryDate, lotSize || 1);
 }
 
-// ── Poll fallback — reads getAllCached() every 15s ────────────────────────────
+// ── Poll fallback — reads nseOIListener cache every 15s ──────────────────────
 function poll() {
   let nseOI;
-  try {
-    nseOI = require("./nseOIListener");
-  } catch (e) {
-    return;
-  }
+  try { nseOI = require("./nseOIListener"); } catch (e) { return; }
 
-  // Try getChain() per expiry first (more reliable than getAllCached shape)
   const hasGetChain    = typeof nseOI.getChain    === "function";
   const hasGetExpiries = typeof nseOI.getExpiries === "function";
   const hasGetAll      = typeof nseOI.getAllCached === "function";
 
   if (hasGetChain && hasGetExpiries) {
-    // Best path: use getChain(symbol, expiry) directly
     const symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"];
     for (const symbol of symbols) {
       let expiries = [];
       try { expiries = nseOI.getExpiries(symbol) || []; } catch (_) {}
       if (!expiries.length) continue;
 
-      // Get spotPrice from getAllCached if available
       let spotPrice = 0;
       if (hasGetAll) {
         try {
           const all = nseOI.getAllCached();
-          spotPrice = all?.[symbol]?.spotPrice || all?.[symbol]?.spot || 0;
+          spotPrice = all?.[symbol]?.spotPrice || 0;
         } catch (_) {}
       }
       if (!spotPrice) continue;
 
-      const sorted = [...expiries].sort();
-      for (const expiry of sorted.slice(0, 3)) {
+      for (const expiry of [...expiries].sort().slice(0, 3)) {
         let chainData;
         try { chainData = nseOI.getChain(symbol, expiry); } catch (_) { continue; }
         if (!chainData) continue;
-
         const rows = extractRows(chainData);
-        if (rows) {
+        if (rows && rows.length > 0) {
           runAnalysis(symbol, spotPrice, rows, expiry, 1);
         } else {
-          // chainData itself might be the processed result with metadata
-          // Try reading its raw sub-fields
-          const sub = chainData.rows || chainData.data || chainData.strikes
-                   || chainData.chain || chainData.records;
-          if (sub) runAnalysis(symbol, spotPrice, sub, expiry, 1);
-          else console.warn(`⚠️ optionsIntegration: ${symbol}/${expiry} — getChain shape unknown, keys: ${Object.keys(chainData || {}).join(",")}`);
+          console.warn(`⚠️ optionsIntegration poll: ${symbol}/${expiry} — no rows (keys: ${Object.keys(chainData || {}).join(",")})`);
         }
       }
     }
@@ -263,26 +228,20 @@ function poll() {
   try { all = nseOI.getAllCached(); } catch (e) { return; }
   if (!all || typeof all !== "object") return;
 
-  const symbols = Object.keys(all);
-  console.log(`📊 optionsIntegration poll: ${symbols.length} symbols [${symbols.join(", ")}]`);
-
   for (const [symbol, payload] of Object.entries(all)) {
     if (!payload) continue;
-    const spotPrice = payload.spotPrice || payload.spot || 0;
+    const spotPrice = payload.spotPrice || 0;
     const lotSize   = payload.lotSize   || 1;
     const chains    = payload.chains    || {};
     const expiries  = payload.expiries  || Object.keys(chains);
     if (!spotPrice || !expiries.length) continue;
 
-    const sorted = [...expiries].sort();
-    for (const expiry of sorted.slice(0, 3)) {
+    for (const expiry of [...expiries].sort().slice(0, 3)) {
       const chainData = chains[expiry];
       if (!chainData) continue;
       const rows = extractRows(chainData);
-      if (rows) {
+      if (rows && rows.length > 0) {
         runAnalysis(symbol, spotPrice, rows, expiry, lotSize);
-      } else {
-        console.warn(`⚠️ optionsIntegration: ${symbol}/${expiry} — unknown shape, keys: ${Object.keys(chainData || {}).join(",")}`);
       }
     }
   }
@@ -292,17 +251,9 @@ function poll() {
 function startOptionsIntegration(io, { ingestOptionsSignal } = {}) {
   _io = io;
   _ingestOptionsSignal = ingestOptionsSignal;
-
-  // First poll at 25s — after nseOIListener has completed its first fetch
   setTimeout(poll, 25_000);
-
-  // Then every 15s
   setInterval(poll, 15_000);
-
   console.log("📊 Options Integration: polling every 15s (first run in 25s)");
 }
 
-module.exports = {
-  startOptionsIntegration,
-  ingestChainData,   // ← nseOIListener calls this directly
-};
+module.exports = { startOptionsIntegration, ingestChainData };
