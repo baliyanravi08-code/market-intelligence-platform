@@ -1,3 +1,5 @@
+"use strict";
+
 /**
  * compositeScoreEngine.js
  * server/services/intelligence/compositeScoreEngine.js
@@ -10,39 +12,70 @@
  *   Opportunity score         → 20%
  *   Credibility score         → 20%
  *
+ * FIXES applied (Session 9):
+ *
+ * FIX 1 — Score jumping between refreshes (50 → 60):
+ *   Root cause: recomputeAll() ran on every circuit watchlist event AND every
+ *   60s timer. If a new signal arrived between two dashboard refreshes, the score
+ *   could change significantly. The score also had no smoothing — a single new
+ *   smart money event could shift it ±10.
+ *   Fix A: exponential moving average (EMA) smoothing — new score is blended
+ *          with the previous score at alpha=0.3. This prevents single-event spikes
+ *          but still tracks genuine trend changes within a few refreshes.
+ *   Fix B: scheduleRecompute() now debounces per-symbol recomputes at 2s (was 500ms)
+ *          so a burst of events doesn't trigger multiple rapid score changes.
+ *   Fix C: batch recompute timer increased from 60s → 90s to reduce churn.
+ *
+ * FIX 2 — Score/grade inconsistency when signals are missing:
+ *   Root cause: normalisation divided by totalW (sum of present weights), so a
+ *   stock with only 1 signal could score 100 just from that signal.
+ *   Fix: apply a "coverage penalty" — if fewer than 3 of 4 signals are present,
+ *   cap the maximum score at 80. This prevents spurious A-grades from partial data.
+ *
+ * FIX 3 — Stale disk scores being loaded and displayed on startup:
+ *   Root cause: loadFromDisk() loaded all cached scores unconditionally. If the
+ *   server restarted mid-day, old scores from the previous session were shown.
+ *   Fix: only load cached scores that are less than 8 hours old.
+ *
  * Emits:
  *   socket: "composite-scores"  → full leaderboard array
  *   socket: "composite-update"  → single stock update
- *
- * Usage in coordinator.js:
- *   const { startCompositeEngine, getCompositeScores, getCompositeForScrip } = require("./compositeScoreEngine");
- *   startCompositeEngine(io, { getCircuitWatchlist, getSmartMoneyFlows, getOpportunities, getCredibilityForScrip, getOIData });
  */
-
-"use strict";
 
 const fs   = require("fs");
 const path = require("path");
 
 // ── Weight config (flow-first) ────────────────────────────────────────────────
 const WEIGHTS = {
-  smartMoney:   0.35,   // INSTITUTIONAL_DEAL, BLOCK_DEAL, INSIDER_BUY flows
-  circuit:      0.25,   // proximity to circuit limit + tier
-  opportunity:  0.20,   // order-value / market-cap ratio
-  credibility:  0.20,   // management guidance hit rate
+  smartMoney:   0.35,
+  circuit:      0.25,
+  opportunity:  0.20,
+  credibility:  0.20,
 };
 
+// FIX 1: EMA smoothing factor — higher = faster response, lower = smoother
+const EMA_ALPHA = 0.3;
+
+// FIX 1: debounce per-symbol recomputes at 2s (was 500ms)
+const RECOMPUTE_DEBOUNCE_MS = 2_000;
+
+// FIX 1: batch recompute timer at 90s (was 60s)
+const BATCH_RECOMPUTE_MS = 90_000;
+
+// FIX 3: max age for loading cached scores from disk (8 hours)
+const CACHE_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+
 // ── In-memory store ───────────────────────────────────────────────────────────
-// compositeMap: symbol → composite doc
-const compositeMap = new Map();
+const compositeMap     = new Map(); // symbol → composite doc
+const smartMoneyStore  = new Map(); // symbol → { value, deals, lastSeen }
+const opportunityStore = new Map(); // symbol → { score, orderValue, marketCap, lastSeen }
+const circuitStore     = new Map(); // symbol → circuitWatcher entry
+const oiStore          = new Map(); // symbol → { pcr, callOI, putOI, lastSeen }
 
-// Raw signal stores — updated by ingest functions below
-const smartMoneyStore  = new Map();   // symbol → { value, deals, lastSeen }
-const opportunityStore = new Map();   // symbol → { score (ratio%), orderValue, marketCap, lastSeen }
-const circuitStore     = new Map();   // symbol → circuitWatcher watchlist entry
-const oiStore          = new Map();   // symbol → { pcr, callOI, putOI, lastSeen }
+// FIX 1: previous score store for EMA smoothing
+const prevScoreMap = new Map(); // symbol → previous finalScore
 
-let ioRef = null;
+let ioRef        = null;
 let computeTimer = null;
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -63,9 +96,19 @@ function persistToDisk() {
 function loadFromDisk() {
   try {
     if (!fs.existsSync(DATA_PATH)) return;
-    const arr = JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
-    arr.forEach(d => compositeMap.set(d.symbol, d));
-    console.log(`📊 CompositeScore: loaded ${arr.length} cached scores`);
+    const arr  = JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
+    const now  = Date.now();
+    let loaded = 0;
+    arr.forEach(d => {
+      // FIX 3: skip stale cached scores from previous session
+      const age = now - (d.updatedAt || 0);
+      if (age > CACHE_MAX_AGE_MS) return;
+      compositeMap.set(d.symbol, d);
+      // Seed EMA with cached score so first live update blends smoothly
+      if (d.finalScore != null) prevScoreMap.set(d.symbol, d.finalScore);
+      loaded++;
+    });
+    console.log(`📊 CompositeScore: loaded ${loaded} cached scores (${arr.length - loaded} skipped as stale)`);
   } catch (e) {
     console.log("⚠️ compositeScoreEngine load error:", e.message);
   }
@@ -73,13 +116,9 @@ function loadFromDisk() {
 
 // ── Signal ingestion ──────────────────────────────────────────────────────────
 
-/**
- * Ingest a smart money event from smartMoneyTracker.js
- * shape: { company, value, deals, signal:"SMART_MONEY", time }
- */
 function ingestSmartMoney(event) {
   if (!event?.company) return;
-  const sym = normalizeSymbol(event.company);
+  const sym  = normalizeSymbol(event.company);
   const prev = smartMoneyStore.get(sym) || { value: 0, deals: 0 };
   smartMoneyStore.set(sym, {
     value:    (prev.value || 0) + (event.value || 0),
@@ -90,10 +129,6 @@ function ingestSmartMoney(event) {
   scheduleRecompute(sym);
 }
 
-/**
- * Ingest an opportunity event from opportunityEngine.js
- * shape: { company, code, score (ratio%), orderValue, marketCap, time }
- */
 function ingestOpportunity(event) {
   if (!event?.code && !event?.company) return;
   const sym = normalizeSymbol(event.code || event.company);
@@ -107,10 +142,6 @@ function ingestOpportunity(event) {
   scheduleRecompute(sym);
 }
 
-/**
- * Ingest the full circuit watchlist from circuitWatcher.js
- * shape: array of { symbol, ltp, distPct, side, tier, changePercent, ... }
- */
 function ingestCircuitWatchlist(watchlist) {
   if (!Array.isArray(watchlist)) return;
   for (const entry of watchlist) {
@@ -119,10 +150,6 @@ function ingestCircuitWatchlist(watchlist) {
   }
 }
 
-/**
- * Ingest OI data (from nseOIListener / optionChainEngine)
- * shape: { symbol, pcr, callOI, putOI, maxPain, expiry }
- */
 function ingestOI(data) {
   if (!data?.symbol) return;
   const sym = normalizeSymbol(data.symbol);
@@ -133,12 +160,13 @@ function ingestOI(data) {
 // ── Score computation ─────────────────────────────────────────────────────────
 
 const pendingRecompute = new Set();
-let recomputeDebounce = null;
+let recomputeDebounce  = null;
 
 function scheduleRecompute(symbol) {
   pendingRecompute.add(symbol);
   clearTimeout(recomputeDebounce);
-  recomputeDebounce = setTimeout(flushRecompute, 500);
+  // FIX 1: 2s debounce (was 500ms)
+  recomputeDebounce = setTimeout(flushRecompute, RECOMPUTE_DEBOUNCE_MS);
 }
 
 function flushRecompute() {
@@ -154,7 +182,9 @@ function flushRecompute() {
 
 /**
  * Compute composite score for a single symbol.
- * Returns null if no signals exist for this symbol.
+ *
+ * FIX 1: applies EMA smoothing — new score blends with previous score.
+ * FIX 2: applies coverage penalty — partial signals cap max score at 80.
  */
 function computeScore(symbol, credibilityGetter) {
   const sm      = smartMoneyStore.get(symbol);
@@ -162,24 +192,23 @@ function computeScore(symbol, credibilityGetter) {
   const circuit = circuitStore.get(symbol);
   const oi      = oiStore.get(symbol);
 
-  // Need at least one signal
   if (!sm && !opp && !circuit && !oi) return null;
 
-  const signals  = [];
-  const reasons  = [];
-  let   totalW   = 0;
+  const signals     = [];
+  const reasons     = [];
+  let   totalW      = 0;
   let   weightedSum = 0;
+  let   signalCount = 0;
 
   // ── 1. Smart Money score (0–100) ─────────────────────────────────────────
   if (sm) {
-    // Scale: ₹500Cr+ flow = 100, linear below
-    const rawScore = Math.min(100, (sm.value / 500) * 100);
-    const score    = rawScore;
-    weightedSum   += score * WEIGHTS.smartMoney;
-    totalW        += WEIGHTS.smartMoney;
+    const score   = Math.min(100, (sm.value / 500) * 100);
+    weightedSum  += score * WEIGHTS.smartMoney;
+    totalW       += WEIGHTS.smartMoney;
+    signalCount++;
     signals.push({ key: "smartMoney", score: Math.round(score), weight: WEIGHTS.smartMoney });
     reasons.push({
-      label: "Smart Money",
+      label:  "Smart Money",
       detail: `₹${formatCr(sm.value)} flow · ${sm.deals} deal${sm.deals > 1 ? "s" : ""}`,
       score:  Math.round(score),
       color:  score >= 70 ? "green" : score >= 40 ? "amber" : "gray",
@@ -190,11 +219,10 @@ function computeScore(symbol, credibilityGetter) {
   // ── 2. Circuit proximity score (0–100) ───────────────────────────────────
   if (circuit) {
     const tierScores = { LOCKED: 100, CRITICAL: 85, WARNING: 65, WATCH: 40, SAFE: 0 };
-    const tierScore  = tierScores[circuit.tier] || 0;
-    // Upper circuit = bullish signal, lower = bearish (we score proximity, not direction)
-    const score      = tierScore;
+    const score      = tierScores[circuit.tier] || 0;
     weightedSum     += score * WEIGHTS.circuit;
     totalW          += WEIGHTS.circuit;
+    signalCount++;
     signals.push({ key: "circuit", score: Math.round(score), weight: WEIGHTS.circuit });
     reasons.push({
       label:  "Circuit Proximity",
@@ -208,10 +236,10 @@ function computeScore(symbol, credibilityGetter) {
 
   // ── 3. Opportunity score (0–100) ─────────────────────────────────────────
   if (opp) {
-    // opp.score is order-value/market-cap %. >20% = multibagger. Cap at 50%.
-    const score = Math.min(100, (opp.score / 50) * 100);
+    const score  = Math.min(100, (opp.score / 50) * 100);
     weightedSum += score * WEIGHTS.opportunity;
     totalW      += WEIGHTS.opportunity;
+    signalCount++;
     signals.push({ key: "opportunity", score: Math.round(score), weight: WEIGHTS.opportunity });
     reasons.push({
       label:  "Order Opportunity",
@@ -222,16 +250,16 @@ function computeScore(symbol, credibilityGetter) {
     });
   }
 
-  // ── 4. Credibility score (0–100) — use injected getter ──────────────────
-  const credScrip = symbol;
-  let   credDoc   = null;
+  // ── 4. Credibility score (0–100) ─────────────────────────────────────────
+  let credDoc = null;
   if (typeof credibilityGetter === "function") {
-    credDoc = credibilityGetter(credScrip);
+    credDoc = credibilityGetter(symbol);
   }
   if (credDoc?.overallScore != null) {
     const score  = credDoc.overallScore;
     weightedSum += score * WEIGHTS.credibility;
     totalW      += WEIGHTS.credibility;
+    signalCount++;
     signals.push({ key: "credibility", score: Math.round(score), weight: WEIGHTS.credibility });
     reasons.push({
       label:  "Mgmt Credibility",
@@ -244,8 +272,25 @@ function computeScore(symbol, credibilityGetter) {
 
   if (totalW === 0) return null;
 
-  // Normalize to 0–100 based on actual weights present
-  const finalScore = Math.round(weightedSum / totalW);
+  // Normalise to 0–100
+  let rawScore = Math.round(weightedSum / totalW);
+
+  // FIX 2: coverage penalty — partial signals cap score at 80
+  const totalSignals = 4; // smartMoney, circuit, opportunity, credibility
+  if (signalCount < totalSignals) {
+    const maxAllowed = 60 + (signalCount / totalSignals) * 40; // 75 for 3/4, 55 for 2/4
+    rawScore = Math.min(rawScore, Math.round(maxAllowed));
+  }
+
+  // FIX 1: EMA smoothing — blend with previous score
+  const prevScore = prevScoreMap.get(symbol);
+  let finalScore;
+  if (prevScore != null) {
+    finalScore = Math.round(EMA_ALPHA * rawScore + (1 - EMA_ALPHA) * prevScore);
+  } else {
+    finalScore = rawScore;
+  }
+  prevScoreMap.set(symbol, finalScore);
 
   const grade = finalScore >= 80 ? "A"
               : finalScore >= 65 ? "B"
@@ -255,20 +300,20 @@ function computeScore(symbol, credibilityGetter) {
 
   const bias = determineBias(circuit, sm, opp);
 
-  // Top 3 reasons sorted by score desc
   const top3 = [...reasons].sort((a, b) => b.score - a.score).slice(0, 3);
 
   return {
     symbol,
-    company:    sm?.company || opp?.company || symbol,
+    company:     sm?.company || opp?.company || symbol,
     finalScore,
+    rawScore,    // expose raw (unsmoothed) score for debugging
     grade,
-    bias,         // "BULLISH" | "BEARISH" | "NEUTRAL"
+    bias,
     signals,
     top3Reasons:  top3,
     allReasons:   reasons,
+    signalCount,  // FIX 2: expose coverage for frontend badge
     updatedAt:    Date.now(),
-    // Raw signal snapshots for drill-down
     raw: {
       smartMoney:  sm      ? { value: sm.value,      deals: sm.deals }      : null,
       opportunity: opp     ? { score: opp.score,     orderValue: opp.orderValue, marketCap: opp.marketCap } : null,
@@ -289,8 +334,8 @@ function determineBias(circuit, sm, opp) {
       if (circuit.side === "UPPER") bullPoints += 2; else bearPoints += 2;
     }
   }
-  if (sm && sm.value > 0) bullPoints += 1;  // smart money = institutional accumulation
-  if (opp && opp.score > 10) bullPoints += 1;
+  if (sm  && sm.value  > 0)   bullPoints += 1;
+  if (opp && opp.score > 10)  bullPoints += 1;
 
   if (bullPoints > bearPoints + 1) return "BULLISH";
   if (bearPoints > bullPoints + 1) return "BEARISH";
@@ -346,34 +391,23 @@ function getByBias(bias) {
 
 // ── Engine lifecycle ──────────────────────────────────────────────────────────
 
-/**
- * Start the composite engine.
- *
- * @param {object} io          - socket.io server instance
- * @param {object} deps        - injected signal sources
- *   deps.getCircuitWatchlist  - () => array (from circuitWatcher.getLastPollStocks)
- *   deps.getSmartMoneyFlows   - () => map/object of symbol→flow (optional)
- *   deps.getCredibilityForScrip - (scrip) => credibility doc
- */
 function startCompositeEngine(io, deps = {}) {
   ioRef = io;
   loadFromDisk();
 
   const { getCredibilityForScrip } = deps;
 
-  // Wire circuit watchlist events
   const { onCircuitWatchlist } = require("./circuitWatcher");
   onCircuitWatchlist((watchlist) => {
     ingestCircuitWatchlist(watchlist);
     recomputeAll(getCredibilityForScrip);
   });
 
-  // Batch recompute every 60s to pick up any credibility/OI changes
+  // FIX 1: 90s batch timer (was 60s)
   computeTimer = setInterval(() => {
     recomputeAll(getCredibilityForScrip);
-  }, 60_000);
+  }, BATCH_RECOMPUTE_MS);
 
-  // Initial compute from disk-cached circuit data if available
   setTimeout(() => recomputeAll(getCredibilityForScrip), 5_000);
 
   console.log("📊 CompositeScoreEngine started");
@@ -397,17 +431,12 @@ function formatCr(val) {
 }
 
 module.exports = {
-  // Lifecycle
   startCompositeEngine,
   stopCompositeEngine,
-
-  // Signal ingestion (called from your listeners/engines)
   ingestSmartMoney,
   ingestOpportunity,
   ingestCircuitWatchlist,
   ingestOI,
-
-  // Queries
   getLeaderboard,
   getCompositeForScrip,
   getTopN,

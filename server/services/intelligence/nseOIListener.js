@@ -4,43 +4,33 @@
  * nseOIListener.js
  * Place at: server/services/intelligence/nseOIListener.js
  *
- * REWRITTEN 07 Apr 2026 — Session 4:
- * - Switched from NSE direct API (blocked on Render) to Upstox /v2/option/chain
- * - Expiries fetched from Upstox /v2/option/contract (live, always correct)
- * - Works on Render, works on weekends (no market-hours gate on expiry fetch)
- * - Processes: PCR, max pain, support/resistance, OI signals, IV
- * - Emits: option-chain-update, option-expiries, option-oi-tick
- * - Replays cached data to newly connected clients immediately
+ * FIXES applied (Session 8 → Session 9):
  *
- * UPDATED: 09 Apr 2026 — Session 6:
- * - Wired ingestChainData from optionsIntegration after each successful chain poll
- * - Feeds Options Intelligence Engine with live chain data automatically
+ * FIX 1 — OI jumping between refreshes (460L → 2691L):
+ *   Root cause: totalCEOI / totalPEOI were re-summed from scratch each poll,
+ *   so early polls (partial data) showed tiny OI while later polls showed full OI.
+ *   Fix: persist and MERGE OI into a running strikeOIMap per expiry. Each poll
+ *   only updates strikes it receives — previously unseen strikes keep their last
+ *   known OI. This gives a stable, monotonically-growing OI view during the session.
  *
- * UPDATED: 10 Apr 2026 — Session 7:
- * - Two-tier unusual OI detection in processChain():
- *     Tier 1 (nearATM)  — strikes within ±8% of spot with high OI + volume spike
- *     Tier 2 (tailRisk) — far-OTM strikes with OI anomalous vs adjacent strikes
- *   Tier 2 uses relative OI (vs neighbors), not absolute threshold, so deep OTM
- *   strikes are only flagged when they genuinely stand out — not just because
- *   put writers have been accumulating all series.
- *   Both tiers are emitted separately so the frontend can render them with
- *   appropriate context labels.
+ * FIX 2 — Net Flow swinging wildly (-4.7K → -151.8K Cr):
+ *   Root cause: netPremiumFlow was recalculated from current ltp×volume every poll.
+ *   Volume accumulates all day but LTP changes tick-by-tick, so the product
+ *   explodes as the session progresses.
+ *   Fix: track a sessionNetFlow that is accumulated DELTA (change in vol × ltp)
+ *   per poll, not a full recalculation. Reset at session open (09:15 IST).
  *
- * FIX: 11 Apr 2026 — Session 8:
- * - ingestChainData() was being called with a single object argument instead of
- *   5 positional arguments. optionsIntegration expects:
- *     ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize)
- *   Previously called as:
- *     ingestChainData({ symbol, spotPrice, expiryDate, lotSize, chain })
- *   This meant symbol=whole object, spotPrice=undefined, chainData=undefined —
- *   so GEX / IV / PCR / OI fields were always 0 / "—" in the dashboard.
+ * FIX 3 — ingestChainData() called with object instead of positional args:
+ *   (Already fixed in Session 8 — preserved here.)
+ *
+ * FIX 4 — Stale cache replayed to new clients showing old OI:
+ *   Added cache age check — only replay if updatedAt < 4h ago.
  */
 
 const axios = require("axios");
 const fs    = require("fs");
 const path  = require("path");
 
-// ── Options Intelligence Engine integration ───────────────────────────────────
 const { ingestChainData } = require("./optionsIntegration");
 
 const CACHE_FILE = path.join(__dirname, "../../data/optionChainCache.json");
@@ -55,20 +45,58 @@ let failCount   = 0;
 const MAX_FAILS          = 5;
 const POLL_INTERVAL_MS   = 60_000;
 const EXPIRY_REFRESH_MS  = 4 * 60 * 60 * 1000;
+const CACHE_MAX_AGE_MS   = 4 * 60 * 60 * 1000; // FIX 4: don't replay stale cache
 
 const cache = {};
+
+// FIX 1: Running OI map — strikeOIMap[underlying][expiry][strike] = { ceOI, peOI }
+const strikeOIMap = {};
+
+// FIX 2: Session net flow accumulator
+// sessionFlow[underlying][expiry] = { netFlow (₹L), lastVolMap: { strike_ceVol, strike_peVol } }
+const sessionFlowMap  = {};
+let   sessionDate     = null; // "YYYY-MM-DD" — reset flows when date changes
 
 const UNDERLYINGS = [
   { name: "NIFTY",     upstoxKey: "NSE_INDEX|Nifty 50",   lotSize: 75 },
   { name: "BANKNIFTY", upstoxKey: "NSE_INDEX|Nifty Bank",  lotSize: 35 },
 ];
 
-// ── Auth header ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Session helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns "YYYY-MM-DD" for today in IST.
+ * Used to detect a new trading session and reset accumulators.
+ */
+function todayIST() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+
+/**
+ * If the calendar date has changed since last poll, reset all session accumulators.
+ * This ensures Net Flow starts at 0 each trading day.
+ */
+function maybeResetSession() {
+  const today = todayIST();
+  if (sessionDate !== today) {
+    sessionDate = today;
+    for (const key of Object.keys(sessionFlowMap)) delete sessionFlowMap[key];
+    console.log(`🔄 OI: new session ${today} — net flow accumulators reset`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth header
+// ─────────────────────────────────────────────────────────────────────────────
 function authHeaders(token) {
   return { Authorization: `Bearer ${token}`, Accept: "application/json" };
 }
 
-// ── Fetch all expiry dates ────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Fetch expiry dates
+// ─────────────────────────────────────────────────────────────────────────────
 async function fetchExpiries(upstoxKey, token) {
   const res = await axios.get(
     "https://api.upstox.com/v2/option/contract",
@@ -83,7 +111,9 @@ async function fetchExpiries(upstoxKey, token) {
   return dates;
 }
 
-// ── Fetch option chain for one underlying + expiry ────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Fetch option chain for one underlying + expiry
+// ─────────────────────────────────────────────────────────────────────────────
 async function fetchChain(upstoxKey, expiry, token) {
   const res = await axios.get(
     "https://api.upstox.com/v2/option/chain",
@@ -96,35 +126,104 @@ async function fetchChain(upstoxKey, expiry, token) {
   return res.data?.data || [];
 }
 
-// ── Two-tier unusual OI detection ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX 1: Merge incoming OI into the running strikeOIMap
+// ─────────────────────────────────────────────────────────────────────────────
 /**
- * Tier 1 — Near ATM (within nearPct% of spot):
- *   Flag if OI > oiThreshold AND (volume > volThreshold OR oiChange > oiChangePct%).
- *   These are actionable support/resistance levels.
- *
- * Tier 2 — Far OTM (beyond nearPct% of spot):
- *   Flag only if OI is anomalous RELATIVE TO ADJACENT STRIKES.
- *   Method: compare each strike's OI to the median OI of its ±3 neighbours.
- *   If ratio > neighborMultiple AND absolute OI > minAbsOI, it's unusual.
- *   This avoids flagging slow-accumulating OI that's just "been there all series".
- *   Practical meaning: someone is actively building a position at this strike
- *   beyond what the surrounding chain looks like — institutional hedge / tail risk.
- *
- * Returns { nearATM: [], tailRisk: [] }
+ * Merges newly polled OI values into the persistent strikeOIMap.
+ * Strikes not present in this poll retain their previous OI values.
+ * Returns merged { ceOI, peOI } totals across all strikes.
  */
+function mergeOI(name, expiry, rawStrikes) {
+  if (!strikeOIMap[name])          strikeOIMap[name] = {};
+  if (!strikeOIMap[name][expiry])  strikeOIMap[name][expiry] = {};
+
+  const map = strikeOIMap[name][expiry];
+
+  for (const s of rawStrikes) {
+    const k    = s.strike_price;
+    const ceOI = s.call_options?.market_data?.oi || 0;
+    const peOI = s.put_options?.market_data?.oi  || 0;
+
+    // Only update if new value > 0 (exchange sometimes sends 0 mid-session for a strike)
+    if (!map[k]) map[k] = { ceOI: 0, peOI: 0 };
+    if (ceOI > 0) map[k].ceOI = ceOI;
+    if (peOI > 0) map[k].peOI = peOI;
+  }
+
+  // Return stable totals from the merged map
+  let totalCEOI = 0, totalPEOI = 0;
+  for (const v of Object.values(map)) {
+    totalCEOI += v.ceOI;
+    totalPEOI += v.peOI;
+  }
+  return { totalCEOI, totalPEOI };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX 2: Session net flow accumulator
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Computes the delta net premium flow since the last poll, and adds it to the
+ * running session total.
+ *
+ * netPremiumFlow = Σ (putVol × putLTP) - Σ (callVol × callLTP)
+ *
+ * Instead of recalculating from scratch (which explodes as volume builds),
+ * we compute the CHANGE in volume since last poll, multiply by current LTP,
+ * and add that delta to the session total.
+ *
+ * Returns the cumulative session net flow in ₹ Lakh (L).
+ */
+function accumulateNetFlow(name, expiry, rawStrikes) {
+  const key = `${name}__${expiry}`;
+  if (!sessionFlowMap[key]) {
+    sessionFlowMap[key] = { netFlow: 0, lastVolMap: {} };
+  }
+  const state = sessionFlowMap[key];
+
+  let deltaFlow = 0;
+
+  for (const s of rawStrikes) {
+    const k       = s.strike_price;
+    const ceLTP   = s.call_options?.market_data?.ltp    || 0;
+    const peLTP   = s.put_options?.market_data?.ltp     || 0;
+    const ceVol   = s.call_options?.market_data?.volume || 0;
+    const peVol   = s.put_options?.market_data?.volume  || 0;
+
+    const prevCeVol = state.lastVolMap[`${k}_ce`] || 0;
+    const prevPeVol = state.lastVolMap[`${k}_pe`] || 0;
+
+    const ceVolDelta = Math.max(0, ceVol - prevCeVol); // volume only goes up
+    const peVolDelta = Math.max(0, peVol - prevPeVol);
+
+    // Net flow: put premium traded minus call premium traded (₹)
+    deltaFlow += (peVolDelta * peLTP) - (ceVolDelta * ceLTP);
+
+    state.lastVolMap[`${k}_ce`] = ceVol;
+    state.lastVolMap[`${k}_pe`] = peVol;
+  }
+
+  // Accumulate into session total (convert ₹ → ₹L = divide by 1e5)
+  state.netFlow += deltaFlow / 1e5;
+
+  return Math.round(state.netFlow * 10) / 10; // round to 1 decimal ₹L
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Two-tier unusual OI detection (unchanged from Session 8)
+// ─────────────────────────────────────────────────────────────────────────────
 function detectUnusualOI(strikes, spotPrice, symbol) {
   if (!strikes?.length || !spotPrice) return { nearATM: [], tailRisk: [] };
 
-  const isBankNifty = (symbol || "").toUpperCase().includes("BANK");
-
-  // Config — slightly wider bounds for BANKNIFTY which is more volatile
-  const nearPct         = isBankNifty ? 0.10 : 0.08;   // ±8% near ATM, ±10% for BN
-  const oiThreshold     = isBankNifty ? 50_000 : 30_000; // min OI to be "notable"
-  const volThreshold    = isBankNifty ? 20_000 : 10_000;
-  const oiChangePct     = 0.15;  // 15% OI change = notable movement
-  const neighborWindow  = 3;     // look at ±3 strikes for relative comparison
-  const neighborMultiple = 3.5;  // OI must be 3.5× neighbor median to be unusual
-  const minAbsOI        = isBankNifty ? 100_000 : 50_000; // min absolute OI for far-OTM flag
+  const isBankNifty      = (symbol || "").toUpperCase().includes("BANK");
+  const nearPct          = isBankNifty ? 0.10 : 0.08;
+  const oiThreshold      = isBankNifty ? 50_000 : 30_000;
+  const volThreshold     = isBankNifty ? 20_000 : 10_000;
+  const oiChangePct      = 0.15;
+  const neighborWindow   = 3;
+  const neighborMultiple = 3.5;
+  const minAbsOI         = isBankNifty ? 100_000 : 50_000;
 
   const lo = spotPrice * (1 - nearPct);
   const hi = spotPrice * (1 + nearPct);
@@ -132,7 +231,6 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
   const nearATM  = [];
   const tailRisk = [];
 
-  // Pre-compute per-strike combined OI for neighbour comparison
   const oiByIndex = strikes.map(s => (s.ce?.oi || 0) + (s.pe?.oi || 0));
 
   for (let i = 0; i < strikes.length; i++) {
@@ -145,37 +243,30 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
     const ceChg  = s.ce?.oiChange || 0;
     const peChg  = s.pe?.oiChange || 0;
 
-    const isCall  = ceOI > peOI;
-    const side    = isCall ? "CALL" : "PUT";
-    const oi      = isCall ? ceOI  : peOI;
-    const vol     = isCall ? ceVol : peVol;
-    const oiChg   = isCall ? ceChg : peChg;
-    const ltp     = isCall ? (s.ce?.ltp || 0) : (s.pe?.ltp || 0);
-    const iv      = isCall ? (s.ce?.iv  || 0) : (s.pe?.iv  || 0);
-    const prevOI  = oi - oiChg;
+    const isCall   = ceOI > peOI;
+    const side     = isCall ? "CALL" : "PUT";
+    const oi       = isCall ? ceOI  : peOI;
+    const vol      = isCall ? ceVol : peVol;
+    const oiChg    = isCall ? ceChg : peChg;
+    const ltp      = isCall ? (s.ce?.ltp || 0) : (s.pe?.ltp || 0);
+    const iv       = isCall ? (s.ce?.iv  || 0) : (s.pe?.iv  || 0);
+    const prevOI   = oi - oiChg;
     const oiChgPct = prevOI > 0 ? Math.abs(oiChg / prevOI) : 0;
 
     if (strike >= lo && strike <= hi) {
-      // ── Tier 1: Near ATM ──────────────────────────────────────────────────
       if (oi >= oiThreshold && (vol >= volThreshold || oiChgPct >= oiChangePct)) {
         nearATM.push({
           strike,
-          type:     side,
-          oi,
-          vol,
-          oiChange: oiChg,
+          type: side, oi, vol, oiChange: oiChg,
           oiChgPct: +(oiChgPct * 100).toFixed(1),
-          ltp,
-          iv:       +(iv * 100).toFixed(2), // normalise to %
-          distPct:  +((strike - spotPrice) / spotPrice * 100).toFixed(1),
-          tier:     "nearATM",
+          ltp, iv: +(iv * 100).toFixed(2),
+          distPct: +((strike - spotPrice) / spotPrice * 100).toFixed(1),
+          tier: "nearATM",
         });
       }
     } else {
-      // ── Tier 2: Far OTM — relative-to-neighbors test ─────────────────────
-      if (oi < minAbsOI) continue; // skip tiny absolute OI regardless
+      if (oi < minAbsOI) continue;
 
-      // Gather neighbour OIs (±neighborWindow strikes, excluding self)
       const start       = Math.max(0, i - neighborWindow);
       const end         = Math.min(strikes.length - 1, i + neighborWindow);
       const neighborOIs = [];
@@ -184,7 +275,6 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
       }
       if (!neighborOIs.length) continue;
 
-      // Median of neighbours
       neighborOIs.sort((a, b) => a - b);
       const mid      = Math.floor(neighborOIs.length / 2);
       const medianOI = neighborOIs.length % 2 === 0
@@ -192,11 +282,9 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
         : neighborOIs[mid];
 
       if (medianOI <= 0) continue;
-
       const ratio = oi / medianOI;
-      if (ratio < neighborMultiple) continue; // not anomalous enough
+      if (ratio < neighborMultiple) continue;
 
-      // Classify what this likely means
       const distPct = (strike - spotPrice) / spotPrice * 100;
       let interpretation;
       if (side === "PUT" && distPct < -8) {
@@ -208,24 +296,18 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
       }
 
       tailRisk.push({
-        strike,
-        type:     side,
-        oi,
-        vol,
-        oiChange:         oiChg,
-        oiChgPct:         +(oiChgPct * 100).toFixed(1),
+        strike, type: side, oi, vol, oiChange: oiChg,
+        oiChgPct: +(oiChgPct * 100).toFixed(1),
         neighborMedianOI: Math.round(medianOI),
-        neighborRatio:    +ratio.toFixed(1),
-        ltp,
-        iv:       +(iv * 100).toFixed(2),
-        distPct:  +distPct.toFixed(1),
+        neighborRatio: +ratio.toFixed(1),
+        ltp, iv: +(iv * 100).toFixed(2),
+        distPct: +distPct.toFixed(1),
         interpretation,
         tier: "tailRisk",
       });
     }
   }
 
-  // Sort: near ATM by absolute OI desc, tail risk by neighbor ratio desc
   nearATM.sort((a, b)  => b.oi - a.oi);
   tailRisk.sort((a, b) => b.neighborRatio - a.neighborRatio);
 
@@ -235,49 +317,51 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
   };
 }
 
-// ── Process raw Upstox chain into structured format ───────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Process raw Upstox chain into structured format
+// ─────────────────────────────────────────────────────────────────────────────
 function processChain(name, expiry, rawStrikes, spotPrice) {
   if (!rawStrikes.length) return null;
 
   const sorted = [...rawStrikes].sort((a, b) => a.strike_price - b.strike_price);
 
-  let totalCEOI = 0, totalPEOI = 0;
-  let maxCEOI = 0, maxPEOI = 0;
-  let maxCEStrike = 0, maxPEStrike = 0;
+  // FIX 1: use merged stable OI totals instead of recalculating from scratch
+  const { totalCEOI, totalPEOI } = mergeOI(name, expiry, rawStrikes);
 
-  for (const s of sorted) {
-    const ceOI = s.call_options?.market_data?.oi || 0;
-    const peOI = s.put_options?.market_data?.oi  || 0;
-    totalCEOI += ceOI;
-    totalPEOI += peOI;
-    if (ceOI > maxCEOI) { maxCEOI = ceOI; maxCEStrike = s.strike_price; }
-    if (peOI > maxPEOI) { maxPEOI = peOI; maxPEStrike = s.strike_price; }
+  // FIX 2: accumulate session net flow as delta, not full recalc
+  const sessionNetFlow = accumulateNetFlow(name, expiry, rawStrikes);
+
+  // Max CE/PE OI strikes (from stable merged map)
+  const mergedMap = strikeOIMap[name]?.[expiry] || {};
+  let maxCEOI = 0, maxPEOI = 0, maxCEStrike = 0, maxPEStrike = 0;
+  for (const [k, v] of Object.entries(mergedMap)) {
+    if (v.ceOI > maxCEOI) { maxCEOI = v.ceOI; maxCEStrike = Number(k); }
+    if (v.peOI > maxPEOI) { maxPEOI = v.peOI; maxPEStrike = Number(k); }
   }
 
   const pcr = totalCEOI > 0 ? +(totalPEOI / totalCEOI).toFixed(3) : 0;
 
-  // Max pain
+  // Max pain — computed from merged OI for stability
   let maxPainStrike = 0;
   let minPain = Infinity;
-  for (const target of sorted) {
+  const mergedEntries = Object.entries(mergedMap).map(([k, v]) => ({ strike: Number(k), ...v }));
+  for (const target of mergedEntries) {
     let pain = 0;
-    for (const s of sorted) {
-      const ceOI = s.call_options?.market_data?.oi || 0;
-      const peOI = s.put_options?.market_data?.oi  || 0;
-      if (s.strike_price < target.strike_price) pain += ceOI * (target.strike_price - s.strike_price);
-      if (s.strike_price > target.strike_price) pain += peOI * (s.strike_price - target.strike_price);
+    for (const s of mergedEntries) {
+      if (s.strike < target.strike) pain += s.ceOI * (target.strike - s.strike);
+      if (s.strike > target.strike) pain += s.peOI * (s.strike - target.strike);
     }
-    if (pain < minPain) { minPain = pain; maxPainStrike = target.strike_price; }
+    if (pain < minPain) { minPain = pain; maxPainStrike = target.strike; }
   }
 
   // ATM strike
-  const atmStrike = sorted.reduce((best, s) =>
-    Math.abs(s.strike_price - spotPrice) < Math.abs(best - spotPrice)
+  const atmStrike = sorted.reduce(
+    (best, s) => Math.abs(s.strike_price - spotPrice) < Math.abs(best - spotPrice)
       ? s.strike_price : best,
     sorted[0]?.strike_price || 0
   );
 
-  // OI-based support / resistance (max OI below / above spot)
+  // OI-based support / resistance
   const below = sorted.filter(s => s.strike_price <= spotPrice);
   const above = sorted.filter(s => s.strike_price >= spotPrice);
 
@@ -300,8 +384,11 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
     const ceGreeks = s.call_options?.option_greeks || {};
     const peGreeks = s.put_options?.option_greeks  || {};
 
-    const ceOI       = ceData.oi      || 0;
-    const peOI       = peData.oi      || 0;
+    // FIX 1: Use merged stable OI, fall back to live if merged not yet available
+    const mergedStrike = mergedMap[s.strike_price] || {};
+    const ceOI         = mergedStrike.ceOI ?? (ceData.oi || 0);
+    const peOI         = mergedStrike.peOI ?? (peData.oi || 0);
+
     const cePrevOI   = ceData.prev_oi || 0;
     const pePrevOI   = peData.prev_oi || 0;
     const ceOIChange = ceOI - cePrevOI;
@@ -343,7 +430,7 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
     };
   });
 
-  // Alerts — signal-based, near ATM only (within 5% of spot)
+  // Alerts — signal-based, near ATM only
   const alerts = strikes
     .filter(s => Math.abs(s.strike - spotPrice) / spotPrice < 0.05)
     .filter(s => s.ce.signal !== "neutral" || s.pe.signal !== "neutral")
@@ -355,9 +442,7 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
     }))
     .slice(0, 10);
 
-  // ── PATCH: two-tier unusual OI ────────────────────────────────────────────
   const { nearATM: unusualNearATM, tailRisk: unusualTailRisk } = detectUnusualOI(strikes, spotPrice, name);
-  // ─────────────────────────────────────────────────────────────────────────
 
   return {
     underlying:    name,
@@ -367,19 +452,21 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
     maxPainStrike,
     support,
     resistance,
-    totalCEOI,
-    totalPEOI,
+    totalCEOI,   // FIX 1: stable merged total
+    totalPEOI,   // FIX 1: stable merged total
+    netFlow:     sessionNetFlow, // FIX 2: session-accumulated delta flow
     atmStrike,
     strikes,
     alerts,
-    // Two-tier unusual OI — both fields are arrays, both always present
-    unusualOI:         unusualNearATM,   // near ATM: actionable S/R
-    unusualOITailRisk: unusualTailRisk,  // far OTM: institutional / tail risk
+    unusualOI:         unusualNearATM,
+    unusualOITailRisk: unusualTailRisk,
     updatedAt: Date.now(),
   };
 }
 
-// ── OI signal detection ───────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// OI signal detection
+// ─────────────────────────────────────────────────────────────────────────────
 function getSignal(oi, prevOI, ltp, closePrc) {
   const oiUp    = oi > prevOI * 1.02;
   const oiDown  = oi < prevOI * 0.98;
@@ -393,7 +480,9 @@ function getSignal(oi, prevOI, ltp, closePrc) {
   return "neutral";
 }
 
-// ── Refresh expiry lists ──────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Refresh expiry lists
+// ─────────────────────────────────────────────────────────────────────────────
 async function refreshExpiries(token) {
   for (const u of UNDERLYINGS) {
     try {
@@ -409,12 +498,17 @@ async function refreshExpiries(token) {
   }
 }
 
-// ── Poll chains ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Poll chains
+// ─────────────────────────────────────────────────────────────────────────────
 async function pollChains() {
   if (disabled) return;
 
   const token = tokenGetter?.();
   if (!token) return;
+
+  // FIX 2: check for new session before polling
+  maybeResetSession();
 
   let anySuccess = false;
 
@@ -443,14 +537,11 @@ async function pollChains() {
           ioRef.emit("option-chain-update", { underlying: u.name, expiry, data: processed });
         }
 
-        // FIX: was previously called as ingestChainData({ symbol, spotPrice, ... })
-        // i.e. a single object — but optionsIntegration expects 5 positional args:
-        //   ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize)
-        // Corrected to pass positional args so the engine actually receives the data.
+        // FIX 3: positional args (was: single object — fixed in Session 8, preserved)
         try {
           ingestChainData(
-            u.name,       // symbol     — was: whole object
-            spotPrice,    // spotPrice  — was: undefined
+            u.name,
+            spotPrice,
             raw.map(s => ({
               strike:  s.strike_price,
               callOI:  s.call_options?.market_data?.oi       || 0,
@@ -461,20 +552,21 @@ async function pollChains() {
               putLTP:  s.put_options?.market_data?.ltp       || 0,
               callIV:  s.call_options?.option_greeks?.iv     || 0,
               putIV:   s.put_options?.option_greeks?.iv      || 0,
-            })),          // chainData  — was: undefined
-            expiry,       // expiryDate — was: undefined
-            u.lotSize || 1, // lotSize  — was: undefined
+            })),
+            expiry,
+            u.lotSize || 1,
           );
         } catch (err) {
           console.warn(`⚠️ OI Intel ingest error for ${u.name}:`, err.message);
         }
 
-        // Log includes tail risk count so we can verify it's working
         const tailCount = processed.unusualOITailRisk?.length || 0;
         const nearCount = processed.unusualOI?.length || 0;
         console.log(
           `📊 OI: ${u.name} ${expiry} — PCR=${processed.pcr} Spot=₹${spotPrice} ` +
-          `Strikes=${raw.length} | UnusualOI: ${nearCount} near-ATM, ${tailCount} tail-risk`
+          `TotalOI=${((processed.totalCEOI + processed.totalPEOI) / 1e5).toFixed(1)}L ` +
+          `NetFlow=₹${processed.netFlow}L | ` +
+          `UnusualOI: ${nearCount} near-ATM, ${tailCount} tail-risk`
         );
         anySuccess = true;
 
@@ -497,7 +589,9 @@ async function pollChains() {
   }
 }
 
-// ── WebSocket OI tick handler ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// WebSocket OI tick handler
+// ─────────────────────────────────────────────────────────────────────────────
 function handleOITick(instrumentKey, feedData) {
   const mFF = feedData?.marketFF;
   if (!mFF || !ioRef) return;
@@ -509,7 +603,9 @@ function handleOITick(instrumentKey, feedData) {
   });
 }
 
-// ── Public accessors ──────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Public accessors
+// ─────────────────────────────────────────────────────────────────────────────
 function getExpiries(underlying)      { return cache[underlying]?.expiries || []; }
 function getChain(underlying, expiry) { return cache[underlying]?.chains?.[expiry] || null; }
 function getAllCached()                { return cache; }
@@ -520,7 +616,9 @@ function addUnderlying(name, instrumentKey, lotSize) {
   console.log(`➕ OI: added underlying ${name}`);
 }
 
-// ── Persist slim cache ────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Persist slim cache
+// ─────────────────────────────────────────────────────────────────────────────
 function persistCache() {
   try {
     const dir = path.dirname(CACHE_FILE);
@@ -539,6 +637,7 @@ function persistCache() {
             resistance:        chain.resistance,
             totalCEOI:         chain.totalCEOI,
             totalPEOI:         chain.totalPEOI,
+            netFlow:           chain.netFlow,       // FIX 2: persist session flow
             atmStrike:         chain.atmStrike,
             spotPrice:         chain.spotPrice,
             updatedAt:         chain.updatedAt,
@@ -561,7 +660,9 @@ function persistCache() {
   }
 }
 
-// ── Load cache from disk ──────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Load cache from disk
+// ─────────────────────────────────────────────────────────────────────────────
 function loadCache() {
   try {
     if (!fs.existsSync(CACHE_FILE)) return;
@@ -581,7 +682,9 @@ function loadCache() {
   }
 }
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Start
+// ─────────────────────────────────────────────────────────────────────────────
 function startNSEOIListener(io, tGetter) {
   ioRef       = io;
   tokenGetter = tGetter;
@@ -589,9 +692,14 @@ function startNSEOIListener(io, tGetter) {
   console.log("🔭 NSE OI Listener starting (Upstox source)...");
 
   loadCache();
+  maybeResetSession(); // FIX 2: initialise session date on startup
 
   io.on("connection", socket => {
     for (const [name, data] of Object.entries(cache)) {
+      // FIX 4: don't replay stale cache to new clients
+      const age = Date.now() - (data.updatedAt || 0);
+      if (age > CACHE_MAX_AGE_MS) continue;
+
       if (data.expiries?.length) {
         socket.emit("option-expiries", { underlying: name, expiries: data.expiries });
       }
