@@ -308,7 +308,9 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
           ? <div style={{ fontSize: 7, color: "#5a90a8", fontFamily: "IBM Plex Mono,monospace", textAlign: "center", padding: "10px 0" }}>◌ No data</div>
           : visible.map((u, i) => {
               const isCE  = (u.type || "").toUpperCase() === "CALL";
-              const dist  = spot ? calcPct(u.strike, spot) : null;
+              const dist = (spot && spot > 0 && u.strike > 0)
+    ? +((u.strike - spot) / spot * 100).toFixed(1)
+    : null;
               const typeC = isCE ? "#4fc3f7" : "#ff8a65";
               const oiChg = u.oiChange || 0;
               return (

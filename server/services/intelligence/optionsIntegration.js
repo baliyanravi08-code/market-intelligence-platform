@@ -4,16 +4,19 @@
  * optionsIntegration.js
  * Location: server/services/intelligence/optionsIntegration.js
  *
- * ALL FIXES APPLIED:
- *  1. Direct require of websocket.js (no lazy load) — file now exists
- *  2. setCachedIntel() called BEFORE every io.emit so page-refresh replay works
+ * FIXES APPLIED:
+ *  1. Direct require of websocket.js (no lazy load)
+ *  2. setCachedIntel() called BEFORE every io.emit
  *  3. extractRows() correctly handles processChain() output shape (s.ce/s.pe)
- *  4. safeIV() normalises Upstox decimal (0.15) AND NSE % (15.0) — fixes ATM IV = —
+ *  4. safeIV() normalises Upstox decimal (0.15) AND NSE % (15.0)
  *  5. ingestChainData exported for nseOIListener's 5 positional-arg call
+ *  6. FIX: HV closes array — uses ivHistory proxy instead of empty []
+ *  7. FIX: buildNearATMRows — injects ALL CE+PE strikes near spot into
+ *          result.oi.unusualOI so the Near ATM table shows both sides
  */
 
 const { analyzeOptionsChain } = require("./optionsIntelligenceEngine");
-const { setCachedIntel }      = require("../../api/websocket"); // direct require — file exists
+const { setCachedIntel }      = require("../../api/websocket");
 
 // ── Rolling IV history for IV Rank ────────────────────────────────────────────
 const ivHistory = {};
@@ -36,17 +39,15 @@ function canRun(key) {
 // ── Normalise IV — handles Upstox decimal (0.15) AND NSE % (15.0) ────────────
 function safeIV(raw) {
   if (raw == null || raw <= 0) return null;
-  return raw > 5 ? raw / 100 : raw; // >5 means it's already a percentage
+  return raw > 5 ? raw / 100 : raw;
 }
 
 // ── Extract rows from ANY chain shape nseOIListener might produce ─────────────
 function extractRows(chainData) {
   if (!chainData) return null;
 
-  // Plain array passed directly from nseOIListener's ingestChainData call
   if (Array.isArray(chainData)) return chainData.length > 0 ? chainData : null;
 
-  // processChain() output — .strikes array with s.ce / s.pe sub-objects
   if (Array.isArray(chainData.strikes) && chainData.strikes.length > 0) {
     return chainData.strikes.map(s => ({
       strike:  s.strike,
@@ -61,12 +62,10 @@ function extractRows(chainData) {
     }));
   }
 
-  // Other named arrays
   for (const key of ["rows", "data", "chain", "records", "options"]) {
     if (Array.isArray(chainData[key]) && chainData[key].length > 0) return chainData[key];
   }
 
-  // Object keyed by strike number e.g. { "24000": { CE: {}, PE: {} } }
   const entries = Object.entries(chainData);
   if (entries.length > 0 && !isNaN(Number(entries[0][0]))) {
     const rows = entries.map(([strike, v]) => ({
@@ -103,6 +102,51 @@ function normaliseRow(r) {
   };
 }
 
+// ── FIX 7: Build near-ATM rows for OI table (CE + PE, all strikes) ────────────
+// This replaces the engine's unusualOI (which only flags statistically unusual
+// strikes) with ALL strikes within ±pct of spot, so both CE and PE show up
+// in the Near ATM table every time.
+function buildNearATMRows(chain, spot, pct = 8) {
+  if (!chain || !spot || spot <= 0) return [];
+  const lo = spot * (1 - pct / 100);
+  const hi = spot * (1 + pct / 100);
+  const rows = [];
+
+  // Sort by proximity to spot so table renders closest strikes first
+  const nearStrikes = chain
+    .filter(r => r.strike >= lo && r.strike <= hi)
+    .sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot));
+
+  for (const r of nearStrikes) {
+    // Always emit CE row if any CE data exists
+    if (r.callOI > 0 || r.callVol > 0) {
+      rows.push({
+        strike: r.strike,
+        type:   "call",
+        oi:     r.callOI  || 0,
+        vol:    r.callVol || 0,
+        ltp:    r.callLTP || 0,
+        iv:     r.callIV  || null,
+        note:   "Near ATM call",
+      });
+    }
+    // Always emit PE row if any PE data exists
+    if (r.putOI > 0 || r.putVol > 0) {
+      rows.push({
+        strike: r.strike,
+        type:   "put",
+        oi:     r.putOI  || 0,
+        vol:    r.putVol || 0,
+        ltp:    r.putLTP || 0,
+        iv:     r.putIV  || null,
+        note:   "Near ATM put",
+      });
+    }
+  }
+
+  return rows;
+}
+
 // ── Core analysis runner ──────────────────────────────────────────────────────
 let _io = null;
 let _ingestOptionsSignal = null;
@@ -120,6 +164,14 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
     return;
   }
 
+  // FIX 6: Pass closing price proxy from IV history so HV 20/60 can compute.
+  // Using spot * (1 - iv) as a rough daily-close proxy. Self-corrects as
+  // ivHistory fills up over the trading session.
+  const ivHist = ivHistory[symbol] || [];
+  const closesProxy = ivHist.length > 20
+    ? ivHist.map(iv => spotPrice * (1 - iv))
+    : [];
+
   let result;
   try {
     result = analyzeOptionsChain({
@@ -127,8 +179,8 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
       spotPrice,
       chain,
       expiryDate,
-      historicalIVs: ivHistory[symbol] || [],
-      closes:        [],
+      historicalIVs: ivHist,
+      closes:        closesProxy,   // ← was always [] before
       lotSize:       lotSize || 1,
       riskFreeRate:  0.065,
     });
@@ -139,17 +191,34 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
 
   if (!result || result.error) return;
 
+  // FIX 7: Inject full near-ATM CE+PE rows so the dashboard table is never
+  // empty and always shows both sides of the chain.
+  const nearPct = symbol.toUpperCase().includes("BANK") ? 10 : 8;
+  const nearATMRows    = buildNearATMRows(chain, spotPrice, nearPct);
+  const nearSet        = new Set(nearATMRows.map(r => `${r.strike}-${r.type}`));
+  // Tail risk = rows the engine flagged as unusual that fall outside near-ATM
+  const engineUnusual  = result.oi?.unusualOI || [];
+  const tailRiskRows   = engineUnusual.filter(r => !nearSet.has(`${r.strike}-${r.type}`));
+
+  if (result.oi) {
+    result.oi.unusualOI         = nearATMRows;   // near-ATM table
+    result.oi.unusualOITailRisk = tailRiskRows;  // FII/tail table
+  }
+
   if (result.volatility?.atmIV) appendIV(symbol, result.volatility.atmIV);
 
   if (_io) {
     const payload = { symbol, data: result, ltp: spotPrice, ts: Date.now() };
 
-    // Cache BEFORE emit — so clients connecting during/after this tick
-    // get the snapshot immediately via attachSocketIO's "connection" handler
     try { setCachedIntel(symbol, payload); } catch (_) {}
 
     _io.emit("options-intelligence", payload);
-    console.log(`📡 options-intelligence: ${symbol} score=${result.score} bias=${result.bias} strikes=${chain.length}`);
+    console.log(
+      `📡 options-intelligence: ${symbol}` +
+      ` score=${result.score} bias=${result.bias}` +
+      ` strikes=${chain.length}` +
+      ` nearATM=${nearATMRows.length} tail=${tailRiskRows.length}`
+    );
   }
 
   if (typeof _ingestOptionsSignal === "function") {
@@ -215,14 +284,16 @@ function poll() {
         if (rows && rows.length > 0) {
           runAnalysis(symbol, spotPrice, rows, expiry, 1);
         } else {
-          console.warn(`⚠️ optionsIntegration poll: ${symbol}/${expiry} — no rows (keys: ${Object.keys(chainData || {}).join(",")})`);
+          console.warn(
+            `⚠️ optionsIntegration poll: ${symbol}/${expiry}` +
+            ` — no rows (keys: ${Object.keys(chainData || {}).join(",")})`
+          );
         }
       }
     }
     return;
   }
 
-  // Fallback: getAllCached()
   if (!hasGetAll) return;
   let all;
   try { all = nseOI.getAllCached(); } catch (e) { return; }

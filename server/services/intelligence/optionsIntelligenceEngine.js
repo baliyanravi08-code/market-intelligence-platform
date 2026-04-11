@@ -198,10 +198,10 @@ function computeDealerExposures(chain, spot, T, r, lotSize = 1) {
     chex += (cCharm * callOI - pCharm * putOI) * lotSize;
   }
   return {
-    dex:  Math.round(dex / 1e5) / 10,
-    vex:  Math.round(vex * 100) / 100,
-    chex: Math.round(chex * 100) / 100,
-  };
+    dex:  Math.round(dex  / 1e7) / 10,
+    vex:  Math.round(vex  / 1e5) / 10,
+    chex: Math.round(chex / 1e5) / 10,
+};
 }
 
 function analyzeOI(chain, spot) {
