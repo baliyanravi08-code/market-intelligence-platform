@@ -1,24 +1,26 @@
+"use strict";
+
 /**
  * coordinator.js
  * Location: server/coordinator.js
  *
  * FIXES (this session):
- *  1. startGannDataFetcher() removed from here — now called by server.js AFTER
+ *  1. startGannDataFetcher() removed from here — called by server.js AFTER
  *     loadInstrumentMaster() resolves, eliminating the race condition.
- *  2. startGannIntegration wired to REAL onNewLTP + setGannSignal callbacks
- *     so Gann analysis re-runs on each price tick and feeds composite score.
- *  3. startOptionsIntegration confirmed wired; options-intelligence socket events
- *     now emit correctly when OI data arrives.
- *  4. LTP registry: upstoxStream ticks are captured in an in-process Map so
- *     Gann, composite, and options engines always have the latest price.
+ *  2. startGannIntegration wired to REAL onNewLTP + setGannSignal callbacks.
+ *  3. startOptionsIntegration confirmed wired.
+ *  4. LTP registry: upstoxStream ticks captured in an in-process Map.
+ *  5. FIX: ws.setGannIntegration() called after startGannIntegration so
+ *     websocket.js can forward "get-gann-analysis" socket events to the
+ *     Gann engine even when the client connects before gannIntegration
+ *     registers its own socket listeners.
  */
-
-"use strict";
 
 const fs   = require("fs");
 const path = require("path");
 
 const { startGannIntegration }   = require("./services/intelligence/gannIntegration");
+const ws                         = require("./api/websocket");           // FIX 5
 const { startDeliveryAnalyzer, onDeliverySpike }   = require("./services/intelligence/deliveryAnalyzer");
 const { startCircuitWatcher, onCircuitAlert, onCircuitWatchlist } = require("./services/intelligence/circuitWatcher");
 
@@ -28,22 +30,16 @@ const {
   ingestOpportunity,
   getLeaderboard,
   getCompositeForScrip,
-  setExternalSignal,     // FIX 2: used to feed Gann signal into composite score
+  setExternalSignal,
 } = require("./services/intelligence/compositeScoreEngine");
 
 const { getCredibilityForScrip } = require("./services/intelligence/credibilityEngine");
 const { startOptionsIntegration } = require("./services/intelligence/optionsIntegration");
 
 // ── LTP registry ──────────────────────────────────────────────────────────────
-// Populated by upstoxStream ticks via registerLTPTick().
-// Gann + composite engines read from this for latest price.
-const ltpRegistry = new Map();   // symbol (uppercase) → { ltp, ts }
-const ltpListeners = [];         // callbacks registered via onNewLTP()
+const ltpRegistry = new Map();
+const ltpListeners = [];
 
-/**
- * Call this from upstoxStream.js whenever a price tick arrives.
- * All registered listeners (Gann, composite, etc.) are called.
- */
 function registerLTPTick(symbol, ltp) {
   if (!symbol || !ltp || ltp <= 0) return;
   const sym = symbol.toUpperCase();
@@ -194,14 +190,29 @@ function sendStoredToClient(socket) {
     stored.orderBook.forEach(o => socket.emit("order_book_update", o));
     console.log(`📤 Sent ${stored.orderBook.length} stored orders to client`);
   }
-  if (stored.sectors.length      > 0) socket.emit("sector_alerts",      stored.sectors);
+  if (stored.sectors.length       > 0) socket.emit("sector_alerts",       stored.sectors);
   if (stored.opportunities.length > 0) stored.opportunities.forEach(o => socket.emit("opportunity_alert", o));
-  if (stored.megaOrders.length   > 0) stored.megaOrders.forEach(o => socket.emit("mega_order_alert", o));
-  if (stored.guidance.length     > 0) { socket.emit("guidance_stored", stored.guidance); console.log(`📤 Sent ${stored.guidance.length} stored guidance docs to client`); }
-  if (stored.credibility.length  > 0) { socket.emit("credibility_stored", stored.credibility); console.log(`📤 Sent ${stored.credibility.length} credibility scores to client`); }
-  if (stored.deliverySpikes.length > 0) { socket.emit("delivery-spikes", stored.deliverySpikes); console.log(`📤 Sent ${stored.deliverySpikes.length} delivery spikes to client`); }
-  if (stored.circuitAlerts.length  > 0) { socket.emit("circuit-alerts",  stored.circuitAlerts);  console.log(`📤 Sent ${stored.circuitAlerts.length} circuit alerts to client`); }
-  if (stored.circuitWatchlist.length > 0) { socket.emit("circuit-watchlist", stored.circuitWatchlist); console.log(`📤 Sent ${stored.circuitWatchlist.length} watchlist stocks to client`); }
+  if (stored.megaOrders.length    > 0) stored.megaOrders.forEach(o => socket.emit("mega_order_alert", o));
+  if (stored.guidance.length      > 0) {
+    socket.emit("guidance_stored", stored.guidance);
+    console.log(`📤 Sent ${stored.guidance.length} stored guidance docs to client`);
+  }
+  if (stored.credibility.length > 0) {
+    socket.emit("credibility_stored", stored.credibility);
+    console.log(`📤 Sent ${stored.credibility.length} credibility scores to client`);
+  }
+  if (stored.deliverySpikes.length > 0) {
+    socket.emit("delivery-spikes", stored.deliverySpikes);
+    console.log(`📤 Sent ${stored.deliverySpikes.length} delivery spikes to client`);
+  }
+  if (stored.circuitAlerts.length > 0) {
+    socket.emit("circuit-alerts", stored.circuitAlerts);
+    console.log(`📤 Sent ${stored.circuitAlerts.length} circuit alerts to client`);
+  }
+  if (stored.circuitWatchlist.length > 0) {
+    socket.emit("circuit-watchlist", stored.circuitWatchlist);
+    console.log(`📤 Sent ${stored.circuitWatchlist.length} watchlist stocks to client`);
+  }
 
   const leaderboard = getLeaderboard(100);
   if (leaderboard.length > 0) {
@@ -216,53 +227,44 @@ function getStored() { return stored; }
 function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   console.log("🚀 Coordinator Running");
 
-  // ── 1. Composite score engine ────────────────────────────────────────────────
+  // ── 1. Composite score engine ─────────────────────────────────────────────
   startCompositeEngine(io, { getCredibilityForScrip });
   console.log("⚡ Composite Score Engine started");
 
-  // ── 2. Options Intelligence ──────────────────────────────────────────────────
-  // startOptionsIntegration hooks into nseOIListener events and calls
-  // analyzeOptionsChain → emits "options-intelligence" socket event.
-  // ingestOpportunity feeds strong signals into the composite score engine.
+  // ── 2. Options Intelligence ───────────────────────────────────────────────
   startOptionsIntegration(io, { ingestOptionsSignal: ingestOpportunity });
   console.log("📊 Options Intelligence Engine started");
 
-  // ── 3. Gann Integration — FIX 2: wired to REAL callbacks ────────────────────
-  //
-  //  onNewLTP(cb): registers cb so it's called on every price tick.
-  //    Gann re-runs analysis (from 5-min cache) without hammering CPU.
-  //
-  //  setGannSignal(symbol, signal): feeds Gann's composite signal (0-100)
-  //    back into compositeScoreEngine so the leaderboard reflects Gann bias.
-  //    Requires compositeScoreEngine to export setExternalSignal() — add if missing:
-  //      module.exports.setExternalSignal = (symbol, key, signal) => { ... }
-  //
+  // ── 3. Gann Integration ───────────────────────────────────────────────────
+  const gannIntegration = require("./services/intelligence/gannIntegration");
+
   startGannIntegration(io, {
-    // FIX 2: real onNewLTP — pushes Gann updates on every LTP tick
     onNewLTP: (cb) => {
       ltpListeners.push(cb);
     },
-
-    // FIX 2: real setGannSignal — feeds Gann score into composite engine
     setGannSignal: (symbol, signal) => {
       if (!symbol || !signal) return;
-      // setExternalSignal may not exist yet — guard gracefully
       if (typeof setExternalSignal === "function") {
         setExternalSignal(symbol, "gann", signal);
       }
-      // Also broadcast updated composite score to all clients
       const updated = getCompositeForScrip(symbol);
       if (updated) io.emit("composite-update", updated);
     },
   });
+
+  // FIX 5: Wire gannIntegration into websocket.js so the "get-gann-analysis"
+  // socket handler in websocket.js can forward requests to the Gann engine.
+  // This covers the case where a client connects before gannIntegration's own
+  // registerSocketHandlers() fires on the "connection" event.
+  ws.setGannIntegration(gannIntegration);
+
   console.log("📐 Gann Integration started");
 
   // NOTE: startGannDataFetcher() is intentionally NOT called here.
   // server.js calls it inside loadInstrumentMaster().finally() so the
   // instrument map is fully loaded before Gann tries to fetch candles.
-  // See server.js → startCoordinator call sequence.
 
-  // ── 4. Socket handlers ───────────────────────────────────────────────────────
+  // ── 4. Socket handlers ────────────────────────────────────────────────────
   io.on("connection", (socket) => {
     sendStoredToClient(socket);
 
@@ -275,24 +277,21 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
       const score = getCompositeForScrip(symbol);
       if (score) socket.emit("composite-update", score);
     });
-
-    // FIX 2: client can request Gann analysis — gannIntegration registers this handler
-    // via registerSocketHandlers(), so no duplicate needed here.
   });
 
-  // ── 5. Heartbeat ─────────────────────────────────────────────────────────────
+  // ── 5. Heartbeat ──────────────────────────────────────────────────────────
   setInterval(() => {
     io.emit("system_event", { type: "heartbeat", time: new Date().toISOString() });
   }, 30_000);
 
-  // ── 6. Delivery analyzer ─────────────────────────────────────────────────────
+  // ── 6. Delivery analyzer ──────────────────────────────────────────────────
   startDeliveryAnalyzer(io);
   onDeliverySpike((spikes) => {
     persistDeliverySpike(spikes);
     console.log(`💾 Persisted ${spikes.length} delivery spike(s)`);
   });
 
-  // ── 7. Circuit watcher ────────────────────────────────────────────────────────
+  // ── 7. Circuit watcher ────────────────────────────────────────────────────
   startCircuitWatcher(io, tokenGetter, instrumentMapGetter);
   onCircuitAlert((alerts) => {
     persistCircuitAlerts(alerts);
@@ -305,10 +304,8 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
 
 module.exports = {
   startCoordinator,
-  // LTP registry — call registerLTPTick from upstoxStream.js
   registerLTPTick,
   getLatestLTP,
-  // Persist helpers
   persistRadar,
   persistOrderBook,
   persistSector,
