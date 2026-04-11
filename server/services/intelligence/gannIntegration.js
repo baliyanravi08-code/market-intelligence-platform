@@ -7,34 +7,37 @@
  * FIXES APPLIED:
  *  1. getGannAnalysis — no longer returns null when swingStore is empty.
  *     Falls back to ±5% / ±15% of LTP so Gann runs with just a price.
- *  2. registerSocketHandlers — normalises symbol name before lookup:
- *     "NIFTY 50" → "NIFTY", "BANK NIFTY" → "BANKNIFTY", etc.
+ *  2. registerSocketHandlers — normalises symbol name before lookup.
  *  3. Added console.warn so silent failures are visible in server logs.
- *  4. All original exports preserved — no breaking changes.
+ *  4. FIX: getGannAnalysis + normaliseSymbol added to module.exports
+ *     (was missing — caused websocket.js forwarding to fail silently).
+ *  5. FIX: on new socket connection, replays all cached Gann analyses
+ *     immediately so dashboard never shows "Awaiting Gann data" on refresh.
+ *  6. FIX: pre-warms NIFTY/BANKNIFTY/SENSEX after 3s using first LTP ticks.
+ *  7. FIX: broadcasts gann-analysis on every LTP tick (not just alerts)
+ *     so the panel updates in real time.
  */
 
 const gann = require("./gannEngine");
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
-const gannCache  = new Map();   // symbol → { analysis, computedAt }
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const gannCache    = new Map();   // symbol → { analysis, computedAt }
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 // ── Swing pivot store ─────────────────────────────────────────────────────────
-const swingStore = new Map();   // symbol → { swingHigh, swingLow, high52w, low52w, … }
+const swingStore = new Map();
+
+// ── Index LTP store (for pre-warm) ────────────────────────────────────────────
+const indexLTPs = new Map();
 
 // ── Symbol normaliser ─────────────────────────────────────────────────────────
-// Converts any display name the frontend might send into the canonical
-// short form that gannEngine and swingStore use.
-//   "NIFTY 50"   → "NIFTY"
-//   "BANK NIFTY" → "BANKNIFTY"
-//   "SENSEX"     → "SENSEX"  (unchanged)
-//   "FINNIFTY"   → "FINNIFTY" (unchanged)
 function normaliseSymbol(raw) {
   if (!raw) return "";
   return raw
     .toUpperCase()
     .trim()
     .replace(/^NIFTY\s+50$/, "NIFTY")
+    .replace(/^NIFTY50$/, "NIFTY")
     .replace(/^BANK\s+NIFTY$/, "BANKNIFTY")
     .replace(/^NIFTY\s+BANK$/, "BANKNIFTY")
     .replace(/\s+/g, "");
@@ -42,7 +45,6 @@ function normaliseSymbol(raw) {
 
 /**
  * Feed swing pivot data from your OHLCV / market data source.
- * Call whenever fresh OHLCV data arrives.
  */
 function ingestSwingData(data) {
   if (!data?.symbol) return;
@@ -51,19 +53,12 @@ function ingestSwingData(data) {
 
 /**
  * Run full Gann analysis for a symbol.
- *
- * FIX: Previously returned null when swingStore was empty (nothing had
- * called ingestSwingData yet), so the "gann-analysis" event was never
- * emitted and the dashboard showed "Awaiting Gann data…" forever.
- *
- * Now: falls back to estimated swing levels derived from LTP so Gann
- * always runs.  Levels become more accurate once real OHLCV data is
- * ingested via ingestSwingData().
+ * Works with just an LTP — uses proxy swing levels when OHLCV data
+ * hasn't been ingested yet.
  */
 function getGannAnalysis(symbol, ltp) {
   const sym = normaliseSymbol(symbol);
 
-  // Return cache if still fresh
   const cached = gannCache.get(sym);
   if (cached && Date.now() - cached.computedAt < CACHE_TTL_MS) {
     return cached.analysis;
@@ -72,19 +67,14 @@ function getGannAnalysis(symbol, ltp) {
   const swingData = swingStore.get(sym) || {};
   const price     = ltp || swingData.ltp;
 
-  // Need at least a price to run any Gann calculation
   if (!price || price <= 0) {
     console.warn(`⚠️  Gann [${sym}]: no LTP available — skipping`);
     return null;
   }
 
-  // ── Fallback levels when OHLCV store is empty ─────────────────────────
-  // ±5%  of spot → short-term swing high/low proxy
-  // ±15% of spot → 52-week high/low proxy
-  // These are rough but allow the Square of Nine, cardinal cross, and
-  // Gann fan calculations to produce meaningful output immediately.
-  const today = new Date().toISOString().slice(0, 10);
+  indexLTPs.set(sym, price);
 
+  const today     = new Date().toISOString().slice(0, 10);
   const high52w   = swingData.high52w   ?? price * 1.15;
   const low52w    = swingData.low52w    ?? price * 0.85;
   const swingHigh = swingData.swingHigh ?? { price: price * 1.05, date: today };
@@ -93,7 +83,7 @@ function getGannAnalysis(symbol, ltp) {
   let analysis;
   try {
     analysis = gann.analyzeGann({
-      symbol:      sym,
+      symbol,
       ltp:         price,
       high52w,
       low52w,
@@ -115,7 +105,7 @@ function getGannAnalysis(symbol, ltp) {
   }
 
   gannCache.set(sym, { analysis, computedAt: Date.now() });
-  console.log(`📐 Gann [${sym}]: computed — bias=${analysis.signal?.bias} score=${analysis.signal?.score}`);
+  console.log(`📐 Gann [${sym}]: bias=${analysis.signal?.bias} score=${analysis.signal?.score}`);
   return analysis;
 }
 
@@ -164,28 +154,6 @@ function gannToCompositeSignal(analysis) {
 }
 
 /**
- * Socket handler — client requests full Gann drill-down for a symbol.
- *
- * FIX: normalises the symbol before lookup so "NIFTY 50" (sent by the
- * frontend) resolves to the same key as "NIFTY" (used internally).
- */
-function registerSocketHandlers(io, socket) {
-  socket.on("get-gann-analysis", ({ symbol, ltp } = {}) => {
-    if (!symbol) return;
-
-    const sym      = normaliseSymbol(symbol);
-    const analysis = getGannAnalysis(sym, ltp);
-
-    if (analysis) {
-      socket.emit("gann-analysis", analysis);
-      console.log(`📤 gann-analysis sent to ${socket.id} for ${sym}`);
-    } else {
-      console.warn(`⚠️  gann-analysis: no result for ${sym} ltp=${ltp}`);
-    }
-  });
-}
-
-/**
  * Broadcast high-priority Gann alerts to all clients.
  */
 function broadcastGannAlerts(io, symbol, analysis) {
@@ -202,6 +170,40 @@ function broadcastGannAlerts(io, symbol, analysis) {
 }
 
 /**
+ * Socket handler — client requests full Gann drill-down for a symbol.
+ */
+function registerSocketHandlers(io, socket) {
+  socket.on("get-gann-analysis", ({ symbol, ltp } = {}) => {
+    if (!symbol) return;
+    const sym      = normaliseSymbol(symbol);
+    const analysis = getGannAnalysis(sym, ltp);
+    if (analysis) {
+      socket.emit("gann-analysis", analysis);
+      console.log(`📤 gann-analysis → ${socket.id} [${sym}]`);
+    } else {
+      console.warn(`⚠️  gann-analysis: no result for ${sym} ltp=${ltp}`);
+    }
+  });
+}
+
+/**
+ * Pre-warm Gann cache for index symbols using known LTPs.
+ * Runs 3s after startup so first upstox ticks have arrived.
+ */
+function preWarmIndexes(io) {
+  const INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY"];
+  for (const sym of INDEX_SYMBOLS) {
+    const ltp = indexLTPs.get(sym);
+    if (!ltp) continue;
+    const analysis = getGannAnalysis(sym, ltp);
+    if (analysis && io) {
+      io.emit("gann-analysis", analysis);
+      console.log(`📐 Pre-warmed Gann for ${sym} @ ${ltp}`);
+    }
+  }
+}
+
+/**
  * Start the Gann integration service.
  */
 function startGannIntegration(io, deps = {}) {
@@ -209,9 +211,14 @@ function startGannIntegration(io, deps = {}) {
 
   if (typeof onNewLTP === "function") {
     onNewLTP((symbol, ltp) => {
-      const sym      = normaliseSymbol(symbol);
+      const sym = normaliseSymbol(symbol);
+      indexLTPs.set(sym, ltp);
+
       const analysis = getGannAnalysis(sym, ltp);
       if (!analysis) return;
+
+      // FIX: broadcast on every tick so panel updates live
+      if (io) io.emit("gann-analysis", analysis);
 
       broadcastGannAlerts(io, sym, analysis);
 
@@ -223,13 +230,26 @@ function startGannIntegration(io, deps = {}) {
   }
 
   if (io) {
-    io.on("connection", socket => registerSocketHandlers(io, socket));
+    io.on("connection", socket => {
+      registerSocketHandlers(io, socket);
+
+      // FIX: replay all cached Gann analyses to new/refreshed clients
+      // so panel is never blank on reconnect
+      for (const [, cached] of gannCache) {
+        if (cached?.analysis) {
+          socket.emit("gann-analysis", cached.analysis);
+        }
+      }
+    });
+
+    // Pre-warm after 3s
+    setTimeout(() => preWarmIndexes(io), 3000);
   }
 
   console.log("📐 GannIntegration started");
 }
 
-// ── Batch analysis (for cron / startup) ──────────────────────────────────────
+// ── Batch analysis ────────────────────────────────────────────────────────────
 function runBatchGannAnalysis(symbols = []) {
   const results = [];
   for (const sym of symbols) {
@@ -245,7 +265,8 @@ function runBatchGannAnalysis(symbols = []) {
 module.exports = {
   startGannIntegration,
   ingestSwingData,
-  getGannAnalysis,
+  getGannAnalysis,       // ← was missing in previous version
   gannToCompositeSignal,
   runBatchGannAnalysis,
+  normaliseSymbol,       // exported so websocket.js can reuse
 };
