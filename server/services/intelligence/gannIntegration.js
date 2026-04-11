@@ -16,9 +16,21 @@
  *  6. FIX: pre-warms NIFTY/BANKNIFTY/SENSEX after 3s using first LTP ticks.
  *  7. FIX: broadcasts gann-analysis on every LTP tick (not just alerts)
  *     so the panel updates in real time.
+ *  8. FIX (latest): when ltp is null/undefined from client (e.g. weekend/
+ *     refresh), fall back to indexLTPs store before giving up. Also sends
+ *     { marketClosed: true } response when market is closed so frontend
+ *     can show proper message instead of blank panel.
  */
 
 const gann = require("./gannEngine");
+
+// ── Market hours (safe require — file may not exist yet) ──────────────────────
+let marketHours = null;
+try {
+  marketHours = require("./marketHours");
+} catch (_) {
+  console.warn("⚠️  marketHours.js not found — market hours gating disabled");
+}
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
 const gannCache    = new Map();   // symbol → { analysis, computedAt }
@@ -27,7 +39,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 // ── Swing pivot store ─────────────────────────────────────────────────────────
 const swingStore = new Map();
 
-// ── Index LTP store (for pre-warm) ────────────────────────────────────────────
+// ── Index LTP store (for pre-warm + weekend fallback) ────────────────────────
 const indexLTPs = new Map();
 
 // ── Symbol normaliser ─────────────────────────────────────────────────────────
@@ -53,25 +65,39 @@ function ingestSwingData(data) {
 
 /**
  * Run full Gann analysis for a symbol.
- * Works with just an LTP — uses proxy swing levels when OHLCV data
- * hasn't been ingested yet.
+ *
+ * FIX: ltp resolution order:
+ *   1. ltp arg from caller
+ *   2. indexLTPs store (populated by upstox ticks)
+ *   3. swingStore.ltp (last ingested OHLCV price)
+ *
+ * This means weekend refreshes still work as long as indexLTPs
+ * was populated at least once during the last market session.
  */
 function getGannAnalysis(symbol, ltp) {
   const sym = normaliseSymbol(symbol);
 
+  // ── Return cached result if fresh ─────────────────────────────────────────
   const cached = gannCache.get(sym);
   if (cached && Date.now() - cached.computedAt < CACHE_TTL_MS) {
     return cached.analysis;
   }
 
   const swingData = swingStore.get(sym) || {};
-  const price     = ltp || swingData.ltp;
+
+  // FIX: resolve price from all available sources
+  const price =
+    (ltp && ltp > 0 ? ltp : null) ||
+    indexLTPs.get(sym)            ||
+    swingData.ltp                 ||
+    null;
 
   if (!price || price <= 0) {
-    console.warn(`⚠️  Gann [${sym}]: no LTP available — skipping`);
+    console.warn(`⚠️  Gann [${sym}]: no LTP from any source — cannot analyse`);
     return null;
   }
 
+  // Store in indexLTPs so future calls without ltp still work
   indexLTPs.set(sym, price);
 
   const today     = new Date().toISOString().slice(0, 10);
@@ -104,8 +130,14 @@ function getGannAnalysis(symbol, ltp) {
     return null;
   }
 
+  // Tag with market status so frontend can show "using last known price"
+  if (marketHours && !marketHours.isMarketOpen()) {
+    analysis._marketStatus = marketHours.marketStatus();
+    analysis._usingCachedLTP = true;
+  }
+
   gannCache.set(sym, { analysis, computedAt: Date.now() });
-  console.log(`📐 Gann [${sym}]: bias=${analysis.signal?.bias} score=${analysis.signal?.score}`);
+  console.log(`📐 Gann [${sym}]: bias=${analysis.signal?.bias} score=${analysis.signal?.score} price=${price}`);
   return analysis;
 }
 
@@ -171,18 +203,35 @@ function broadcastGannAlerts(io, symbol, analysis) {
 
 /**
  * Socket handler — client requests full Gann drill-down for a symbol.
+ *
+ * FIX: if analysis returns null AND market is closed, send a
+ * { marketClosed: true } payload so the frontend panel can show
+ * a proper "Market Closed" message instead of staying blank.
  */
 function registerSocketHandlers(io, socket) {
   socket.on("get-gann-analysis", ({ symbol, ltp } = {}) => {
     if (!symbol) return;
     const sym      = normaliseSymbol(symbol);
     const analysis = getGannAnalysis(sym, ltp);
+
     if (analysis) {
       socket.emit("gann-analysis", analysis);
       console.log(`📤 gann-analysis → ${socket.id} [${sym}]`);
-    } else {
-      console.warn(`⚠️  gann-analysis: no result for ${sym} ltp=${ltp}`);
+      return;
     }
+
+    // FIX: no analysis available — tell frontend why
+    const isClosed = marketHours ? !marketHours.isMarketOpen() : false;
+    socket.emit("gann-analysis", {
+      symbol:       sym,
+      marketClosed: true,
+      _marketStatus: marketHours ? marketHours.marketStatus() : "UNKNOWN",
+      signal:       null,
+      error:        isClosed
+        ? "Market closed — Gann data will load at Mon 9:15 AM IST"
+        : `No data for ${sym}`,
+    });
+    console.warn(`⚠️  gann-analysis: no result for ${sym} ltp=${ltp} — sent marketClosed=${isClosed}`);
   });
 }
 
@@ -217,7 +266,7 @@ function startGannIntegration(io, deps = {}) {
       const analysis = getGannAnalysis(sym, ltp);
       if (!analysis) return;
 
-      // FIX: broadcast on every tick so panel updates live
+      // Broadcast on every tick so panel updates live
       if (io) io.emit("gann-analysis", analysis);
 
       broadcastGannAlerts(io, sym, analysis);
@@ -233,8 +282,7 @@ function startGannIntegration(io, deps = {}) {
     io.on("connection", socket => {
       registerSocketHandlers(io, socket);
 
-      // FIX: replay all cached Gann analyses to new/refreshed clients
-      // so panel is never blank on reconnect
+      // Replay all cached Gann analyses to new/refreshed clients
       for (const [, cached] of gannCache) {
         if (cached?.analysis) {
           socket.emit("gann-analysis", cached.analysis);
@@ -265,8 +313,8 @@ function runBatchGannAnalysis(symbols = []) {
 module.exports = {
   startGannIntegration,
   ingestSwingData,
-  getGannAnalysis,       // ← was missing in previous version
+  getGannAnalysis,
   gannToCompositeSignal,
   runBatchGannAnalysis,
-  normaliseSymbol,       // exported so websocket.js can reuse
+  normaliseSymbol,
 };

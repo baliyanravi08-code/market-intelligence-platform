@@ -1,4 +1,5 @@
 // GannBadge.jsx
+// Save as: client/src/components/GannBadge.jsx
 // compact=true  → tiny inline badge (Radar cards)
 // compact=false → expanded block card (Scores page)
 
@@ -19,25 +20,54 @@ export default function GannBadge({ symbol, gannMap, compact = true }) {
     BEARISH:        { color: "#ef5350", bg: "#1a0000", border: "#ef535044" },
     STRONG_BEARISH: { color: "#ef5350", bg: "#280000", border: "#ef535066" },
   };
-  const c = palette[bias] || palette.NEUTRAL;
+
+  const c         = palette[bias] || palette.NEUTRAL;
   const shortBias = bias.replace("STRONG_", "S·").replace(/_/g, "");
-  const tooltip = ["Gann: " + bias, support ? "S: " + Number(support).toFixed(0) : null, resist ? "R: " + Number(resist).toFixed(0) : null, angle ? angle + "°" : null].filter(Boolean).join(" · ");
+  const tooltip   = [
+    "Gann: " + bias,
+    support ? "S: " + Number(support).toFixed(0) : null,
+    resist  ? "R: " + Number(resist).toFixed(0)  : null,
+    angle   ? angle + "°"                         : null,
+  ].filter(Boolean).join(" · ");
 
   if (compact) {
     return (
-      <span title={tooltip} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "1px 6px", borderRadius: 3, background: c.bg, border: "1px solid " + c.border, fontSize: 10, fontWeight: 700, color: c.color, fontFamily: "'IBM Plex Mono', monospace", cursor: "default", flexShrink: 0 }}>
+      <span
+        title={tooltip}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 3,
+          padding: "1px 6px", borderRadius: 3,
+          background: c.bg, border: "1px solid " + c.border,
+          fontSize: 10, fontWeight: 700, color: c.color,
+          fontFamily: "'IBM Plex Mono', monospace",
+          cursor: "default", flexShrink: 0,
+        }}
+      >
         📐{shortBias}
-        {angle != null && <span style={{ fontSize: 8, opacity: 0.7 }}>{angle}°</span>}
+        {angle != null && (
+          <span style={{ fontSize: 8, opacity: 0.7 }}>{angle}°</span>
+        )}
       </span>
     );
   }
 
   return (
-    <div style={{ background: c.bg, border: "1px solid " + c.border, borderRadius: 6, padding: "8px 10px", display: "inline-flex", flexDirection: "column", gap: 4, minWidth: 110 }}>
-      <div style={{ fontSize: 8, color: "#1a5070", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1 }}>GANN</div>
+    <div
+      style={{
+        background: c.bg, border: "1px solid " + c.border,
+        borderRadius: 6, padding: "8px 10px",
+        display: "inline-flex", flexDirection: "column",
+        gap: 4, minWidth: 110,
+      }}
+    >
+      <div style={{ fontSize: 8, color: "#1a5070", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1 }}>
+        GANN
+      </div>
       <div style={{ fontSize: 11, fontWeight: 700, color: c.color, fontFamily: "IBM Plex Mono,monospace" }}>
         📐 {bias.replace(/_/g, " ")}
-        {angle != null && <span style={{ fontSize: 9, marginLeft: 5, opacity: 0.7 }}>{angle}°</span>}
+        {angle != null && (
+          <span style={{ fontSize: 9, marginLeft: 5, opacity: 0.7 }}>{angle}°</span>
+        )}
       </div>
       {(support != null || resist != null) && (
         <div style={{ display: "flex", gap: 10, fontSize: 9, fontFamily: "IBM Plex Mono,monospace" }}>
