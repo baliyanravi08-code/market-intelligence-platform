@@ -21,6 +21,13 @@
  *
  * FIX 4 — computeOptionsScore() score changing by ±10 on every refresh:
  *   PCR score adjustment uses sigmoid-style clamp instead of linear step.
+ *
+ * FIX 5 — Mixed IV signal conflict (IV Rank high + VRP negative simultaneously):
+ *   computeMarketStructure() now detects MIXED_IV environment when IV Rank >= 70
+ *   but VRP < -4 (IV cheap vs realized). computeStrategyRadar() resolves the
+ *   conflict — emits a single MIXED_IV signal instead of both SELL_PREMIUM and
+ *   BUY_OPTIONS. computeOptionsScore() handles MIXED_IV as neutral (no penalty
+ *   or reward). Dashboard badge will show "MIXED IV" in amber.
  */
 
 const SQRT_2PI           = Math.sqrt(2 * Math.PI);
@@ -197,20 +204,6 @@ function computeGEX(chain, spot, T, r, lotSize = 1) {
   let netGEX = 0, callGEX = 0, putGEX = 0;
   const strikeGEX = [];
 
-  // OI from Upstox is in raw contracts (individual units).
-  // GEX formula: gamma × (OI_in_lots) × spot²
-  // OI_in_lots = raw_contracts / lotSize
-  // So: gamma × (rawOI / lotSize) × lotSize × spot² = gamma × rawOI × spot²
-  // lotSize cancels — do NOT multiply by lotSize again.
-  // Result in ₹. Divide by 1e7 to get Cr.
-  //
-  // Verification with real NIFTY data:
-  //   gamma=0.0006, callOI=2,134,210 contracts, spot=24050
-  //   GEX = 0.0006 × 2,134,210 × 24050² / 1e7
-  //       = 0.0006 × 2,134,210 × 578,402,500 / 1e7
-  //       ≈ 74.1 Cr  ← realistic
-  //   (vs old formula with ×75: 74.1 × 75 = 5,557 Cr ← way too large)
-
   for (const row of chain) {
     const { strike, callOI = 0, putOI = 0, callIV, putIV } = row;
     if (!strike || strike <= 0) continue;
@@ -218,7 +211,6 @@ function computeGEX(chain, spot, T, r, lotSize = 1) {
     const pivSafe    = putIV  || 0.20;
     const callGreeks = computeGreeks({ S: spot, K: strike, T, r, sigma: civSafe, type: 'call' });
     const putGreeks  = computeGreeks({ S: spot, K: strike, T, r, sigma: pivSafe, type: 'put'  });
-    // OI already in contracts — spot² gives ₹ exposure, /1e7 → Cr
     const cgex = callGreeks.gamma * callOI * spot * spot;
     const pgex = putGreeks.gamma  * putOI  * spot * spot;
     callGEX += cgex;
@@ -260,7 +252,6 @@ function computeDealerExposures(chain, spot, T, r, lotSize = 1) {
     const pivSafe = putIV  || 0.20;
     const cDelta  = computeGreeks({ S: spot, K: strike, T, r, sigma: civSafe, type: 'call' }).delta;
     const pDelta  = computeGreeks({ S: spot, K: strike, T, r, sigma: pivSafe, type: 'put'  }).delta;
-    // OI is in raw contracts — lotSize cancels (same reason as computeGEX)
     dex += (cDelta * callOI - pDelta * putOI) * spot;
     const { d1: cd1, d2: cd2 } = bsPrice({ S: spot, K: strike, T, r, sigma: civSafe, type: 'call' });
     const { d1: pd1, d2: pd2 } = bsPrice({ S: spot, K: strike, T, r, sigma: pivSafe, type: 'put'  });
@@ -402,6 +393,7 @@ function computeVolatilitySurface(chain, spot, T, r) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Market structure
+// FIX 5a: detect MIXED_IV when IV Rank is high but VRP is negative
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) {
@@ -411,13 +403,25 @@ function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) 
   const expectedMovePct = expectedMoveAbs / spot * 100;
   let vrp = null;
   if (atmIV && hv20) vrp = (atmIV - hv20) * 100;
+
+  // FIX 5a: resolve MIXED_IV before assigning environment
   let ivEnvironment = 'NORMAL';
   if (vrp !== null) {
-    if      (vrp >  8) ivEnvironment = 'RICH_SELL_PREMIUM';
-    else if (vrp >  4) ivEnvironment = 'ELEVATED';
-    else if (vrp < -4) ivEnvironment = 'CHEAP_BUY_OPTIONS';
-    else if (vrp < -8) ivEnvironment = 'VERY_CHEAP';
+    // Compute current IV Rank to check for conflict
+    const { ivRank: currentIVRank } = ivRankAndPercentile(atmIV, historicalIVs, hv20, null);
+    const isHighRank = currentIVRank >= 70;  // expensive vs history
+    const isCheapVRP = vrp < -4;             // cheap vs realized vol
+    const isRichVRP  = vrp > 4;              // expensive vs realized vol
+
+    if (isHighRank && isCheapVRP) {
+      // Conflict: IV Rank says sell, VRP says buy — emit MIXED_IV
+      ivEnvironment = 'MIXED_IV';
+    } else if (vrp >  8) ivEnvironment = 'RICH_SELL_PREMIUM';
+    else if    (vrp >  4) ivEnvironment = 'ELEVATED';
+    else if    (vrp < -8) ivEnvironment = 'VERY_CHEAP';
+    else if    (vrp < -4) ivEnvironment = 'CHEAP_BUY_OPTIONS';
   }
+
   let eventRiskScore = 0;
   if (atmIV && historicalIVs && historicalIVs.length > 10) {
     const avgIV = historicalIVs.reduce((a, b) => a + b, 0) / historicalIVs.length;
@@ -437,14 +441,29 @@ function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Strategy radar
+// FIX 5b: resolve conflicting SELL_PREMIUM + BUY_OPTIONS into single MIXED_IV
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeStrategyRadar({ ivRank, ivPercentile, vrp, skew25, pcr, gex, ivEnvironment, oi }) {
   const signals = [];
-  if (ivRank > 70 || ivEnvironment === 'RICH_SELL_PREMIUM')
-    signals.push({ strategy: 'SELL_PREMIUM', confidence: Math.min(100, ivRank || 70), note: `IV rank ${ivRank}% — options expensive. Consider credit spreads, iron condors.`, direction: 'NEUTRAL' });
-  if (ivRank < 30 || ivEnvironment === 'CHEAP_BUY_OPTIONS')
-    signals.push({ strategy: 'BUY_OPTIONS', confidence: Math.min(100, 100 - (ivRank || 50)), note: `IV rank ${ivRank}% — options cheap. Consider straddles before events.`, direction: 'NEUTRAL' });
+
+  // FIX 5b: MIXED_IV takes priority — suppress both SELL_PREMIUM and BUY_OPTIONS
+  if (ivEnvironment === 'MIXED_IV') {
+    signals.push({
+      strategy:   'MIXED_IV',
+      confidence: 60,
+      note: `IV Rank ${ivRank}% (high vs history) but VRP ${vrp != null ? Math.round(vrp) : '?'}% (cheap vs realized vol). ` +
+            `Avoid selling premium — realized vol may spike. Wait for VRP to turn positive before credit strategies.`,
+      direction: 'NEUTRAL',
+    });
+  } else {
+    // Normal path — only one of these fires at a time
+    if (ivRank > 70 || ivEnvironment === 'RICH_SELL_PREMIUM')
+      signals.push({ strategy: 'SELL_PREMIUM', confidence: Math.min(100, ivRank || 70), note: `IV rank ${ivRank}% — options expensive. Consider credit spreads, iron condors.`, direction: 'NEUTRAL' });
+    if (ivRank < 30 || ivEnvironment === 'CHEAP_BUY_OPTIONS')
+      signals.push({ strategy: 'BUY_OPTIONS', confidence: Math.min(100, 100 - (ivRank || 50)), note: `IV rank ${ivRank}% — options cheap. Consider straddles before events.`, direction: 'NEUTRAL' });
+  }
+
   if (skew25 !== null && skew25 > 6)
     signals.push({ strategy: 'SKEW_TRADE', confidence: Math.min(100, skew25 * 10), note: `25-delta skew ${skew25}% — puts very expensive. Bull risk reversal has edge.`, direction: 'BULLISH' });
   if (pcr !== null && pcr > 1.4 && gex && gex.regime === 'TREND_AMPLIFYING')
@@ -453,11 +472,13 @@ function computeStrategyRadar({ ivRank, ivPercentile, vrp, skew25, pcr, gex, ivE
     signals.push({ strategy: 'GAMMA_WALL', confidence: 70, note: `Gamma flip at ₹${gex.gammaFlip} — expect pin or rejection near this strike.`, direction: 'NEUTRAL' });
   if (oi && oi.unusualCount > 3)
     signals.push({ strategy: 'UNUSUAL_ACTIVITY', confidence: 75, note: `${oi.unusualCount} unusual OI alerts — institutional positioning detected.`, direction: 'WATCH' });
+
   return signals.sort((a, b) => b.confidence - a.confidence).slice(0, 5);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FIX 4 — Options score: smoother PCR adjustment
+// FIX 5c — MIXED_IV: treat as neutral, no penalty or reward
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeOptionsScore({ oi, gex, volatility, structure, strategy }) {
@@ -478,8 +499,16 @@ function computeOptionsScore({ oi, gex, volatility, structure, strategy }) {
   }
 
   if (volatility && volatility.ivRank !== null) {
-    if      (volatility.ivRank > 75) { score -= 5; factors.push(`IV rank ${volatility.ivRank}% — elevated`); }
-    else if (volatility.ivRank < 25) { score += 3; factors.push(`IV rank ${volatility.ivRank}% — cheap options`); }
+    // FIX 5c: MIXED_IV — skip IV rank scoring, it's contradictory
+    if (volatility.ivEnvironment === 'MIXED_IV') {
+      factors.push(`IV environment MIXED — rank ${volatility.ivRank}% high but cheap vs realized vol (VRP ${volatility.vrp}%). Neutral score impact.`);
+    } else if (volatility.ivRank > 75) {
+      score -= 5;
+      factors.push(`IV rank ${volatility.ivRank}% — elevated`);
+    } else if (volatility.ivRank < 25) {
+      score += 3;
+      factors.push(`IV rank ${volatility.ivRank}% — cheap options`);
+    }
   }
 
   if (volatility && volatility.skewSentiment) {

@@ -33,6 +33,13 @@
 //   with no indication. Now shows a market-closed banner when the socket
 //   reports closed state or when the last update is > 4 hours stale.
 //   Uses the same IST logic as server/services/intelligence/marketHours.js.
+//
+// FIX 6 — Mixed IV signal conflict (IV Rank high + VRP negative):
+//   Root cause: engine emitted both SELL_PREMIUM and BUY_OPTIONS tags when
+//   IV Rank was high but VRP was deeply negative. Engine now emits MIXED_IV
+//   instead. Frontend: StrategyTag renders MIXED_IV in amber with ⚡ icon.
+//   MarketStructurePanel: "MIXED IV" displayed in amber instead of two
+//   conflicting environment labels.
 // ══════════════════════════════════════════════════════════════
 
 import { useEffect, useState, useCallback, useRef } from "react";
@@ -76,7 +83,6 @@ function fmtInt(n) { return n == null ? "—" : Math.round(Number(n)).toLocaleSt
 /**
  * FIX 1: fmtCr — engine already returns values in Cr (e.g. 35.3, 6.8).
  * Only add "K Cr" suffix if the value itself is >= 1000 Cr (extremely rare).
- * Previous threshold of 1000 caused double-scaling on refresh.
  */
 function fmtCr(n) {
   if (n == null) return "—";
@@ -88,7 +94,6 @@ function fmtCr(n) {
 
 /**
  * FIX 4: Net premium flow comes from analyzeOI() already divided by 1e5 → Lakhs.
- * Display with "L" suffix, not "Cr".
  */
 function fmtL(n) {
   if (n == null) return "—";
@@ -99,14 +104,12 @@ function fmtL(n) {
 
 /**
  * FIX 3: Total OI adaptive formatter.
- * Engine returns totalCallOI + totalPutOI as raw lot counts (e.g. 46,070,000).
- * Divide by 1e5 → Lakhs. But if already pre-scaled (< 10,000), display directly.
  */
 function fmtOILakhs(totalCallOI, totalPutOI) {
   const t = (totalCallOI || 0) + (totalPutOI || 0);
   if (!t) return "—";
-  if (t > 1e6) return (t / 1e5).toFixed(1) + "L";  // raw lots → Lakhs
-  if (t > 1)   return t.toFixed(1) + "L";           // pre-scaled
+  if (t > 1e6) return (t / 1e5).toFixed(1) + "L";
+  if (t > 1)   return t.toFixed(1) + "L";
   return "—";
 }
 
@@ -161,7 +164,6 @@ const ALERT_ICONS = {
 };
 
 // ─── Market Hours Banner ──────────────────────────────────────────────────────
-// FIX 5: shows when market is closed so user knows data is stale
 function MarketClosedBanner({ lastUpdated }) {
   const open = isMarketOpen();
   if (open) return null;
@@ -293,12 +295,15 @@ function IVRankBar({ ivRank, ivPct }) {
   );
 }
 
+// ─── FIX 6: StrategyTag — added MIXED_IV style in amber ──────────────────────
 function StrategyTag({ signal }) {
   const label = typeof signal==="string"?signal:(signal?.strategy||"");
   const colors = {
     SELL_PREMIUM:     { bg:"#002210", color:"#00ff9c", border:"#00ff9c33" },
     BUY_OPTIONS:      { bg:"#001828", color:"#4fc3f7", border:"#4fc3f733" },
     BUY_PREMIUM:      { bg:"#001828", color:"#4fc3f7", border:"#4fc3f733" },
+    // FIX 6: MIXED_IV — amber to signal caution, neither bullish nor bearish
+    MIXED_IV:         { bg:"#1a1000", color:"#ffd54f", border:"#ffd54f55" },
     GAMMA_SQUEEZE:    { bg:"#1a1000", color:"#ffd54f", border:"#ffd54f33" },
     GAMMA_WALL:       { bg:"#1a1000", color:"#ffd54f", border:"#ffd54f33" },
     SKEW_TRADE:       { bg:"#1a0a00", color:"#ff8a65", border:"#ff8a6533" },
@@ -308,9 +313,11 @@ function StrategyTag({ signal }) {
     IV_CRUSH:         { bg:"#1a0000", color:"#ef5350", border:"#ef535033" },
   };
   const c = colors[label]||{ bg:"#1a3040", color:"#a8c8e0", border:"#4a9abb33" };
+  // FIX 6: MIXED_IV gets a warning icon prefix
+  const prefix = label === "MIXED_IV" ? "⚡ " : "";
   return (
     <span style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, padding:"1px 5px", borderRadius:2, background:c.bg, color:c.color, border:`1px solid ${c.border}`, whiteSpace:"nowrap" }}>
-      {label.replace(/_/g," ")}
+      {prefix}{label.replace(/_/g," ")}
     </span>
   );
 }
@@ -455,8 +462,6 @@ function GEXPanel({ gex, dealerExposures }) {
   const gexBiasC  = gex.netGEX > 0 ? "#00ff9c" : gex.netGEX < 0 ? "#ef5350" : "#ffd54f";
 
   // FIX 2: read vanna/charm ONLY from dealerExposures (vex/chex).
-  // gex object never has .vanna/.charm — the old fallback was always hitting
-  // dealerExposures anyway, but via a mismatched key that caused unit confusion.
   const vanna = dealerExposures?.vex  ?? null;
   const charm = dealerExposures?.chex ?? null;
 
@@ -503,8 +508,6 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
                   : oi.pcr != null ? "Balanced PCR → neutral" : null;
   const oiColor = oi.pcr > 1.2 ? "#00ff9c" : oi.pcr < 0.8 ? "#ef5350" : "#ffd54f";
 
-  // FIX 3: use adaptive fmtOILakhs for Total OI
-  // FIX 4: net flow is in Lakhs (analyzeOI divides by 1e5), use fmtL not fmtCr
   return (
     <PanelWrap>
       <SL>OI Intelligence</SL>
@@ -675,6 +678,7 @@ function GannPanel({ gann }) {
 }
 
 // ════════════════ Market Structure Panel ══════════════════════════════════════
+// FIX 6: ivEnvironment label — MIXED_IV shown in amber with explanation tooltip
 
 function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol, spot, callWall, putWall, gammaFlip, maxPain, pcr, skew25 }) {
   const dCall  = callWall  ? calcPct(callWall,  spot) : null;
@@ -694,6 +698,19 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
   else if (gammaFlip && spot >= gammaFlip)         { zoneLabel = "Above Gamma Flip — trend";  zoneColor = "#00ff9c"; }
   else if (gammaFlip && spot <  gammaFlip)         { zoneLabel = "Below Gamma Flip — MR";     zoneColor = "#ffd54f"; }
   else                                              { zoneLabel = "Between walls";             zoneColor = "#4a9abb"; }
+
+  // FIX 6: map ivEnvironment to display label + color
+  const ivEnvDisplay = {
+    RICH_SELL_PREMIUM: { label: "RICH — SELL PREMIUM",  color: "#ef5350" },
+    ELEVATED:          { label: "ELEVATED",              color: "#ff8a65" },
+    NORMAL:            { label: "NORMAL",                color: "#a0b8cc" },
+    CHEAP_BUY_OPTIONS: { label: "CHEAP — BUY OPTIONS",  color: "#00ff9c" },
+    VERY_CHEAP:        { label: "VERY CHEAP",            color: "#00ff9c" },
+    // FIX 6: MIXED_IV — amber, clearly distinct from both buy and sell
+    MIXED_IV:          { label: "⚡ MIXED IV",           color: "#ffd54f" },
+  };
+  const ivEnv     = structure.ivEnvironment || "NORMAL";
+  const ivDisplay = ivEnvDisplay[ivEnv] || { label: ivEnv.replace(/_/g," "), color: "#a0b8cc" };
 
   return (
     <PanelWrap>
@@ -741,11 +758,21 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
           {spot && callWall && <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0" }}><span style={{ color:"#c8d8e8" }}>Breakout</span><span style={{ color:spot>callWall*0.99?"#00ff9c":"#ef5350", fontWeight:700 }}>{spot>callWall*0.99?"High — at resistance":"Low — below call wall"}</span></div>}
         </div>
       )}
+
+      {/* FIX 6: IV environment — MIXED_IV shown in amber with ⚡ prefix */}
       {structure.ivEnvironment && (
-        <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#a0b8cc", marginTop:6 }}>
-          IV env: <span style={{ color:"#ffd54f" }}>{structure.ivEnvironment.replace(/_/g," ")}</span>
+        <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#a0b8cc", marginTop:6, display:"flex", alignItems:"center", gap:4 }}>
+          <span>IV env:</span>
+          <span style={{ color: ivDisplay.color, fontWeight: 700 }}>{ivDisplay.label}</span>
         </div>
       )}
+      {/* FIX 6: if MIXED_IV, show brief explanation below */}
+      {ivEnv === "MIXED_IV" && (
+        <div style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:"#ffd54f99", marginTop:3, lineHeight:1.5, padding:"3px 6px", background:"#1a100033", borderRadius:3, border:"1px solid #ffd54f22" }}>
+          IV Rank high vs history but cheap vs realized vol. Avoid premium selling — wait for VRP to turn positive.
+        </div>
+      )}
+
       {structure.straddlePrice != null && (
         <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, fontFamily:"IBM Plex Mono,monospace", padding:"5px 0", borderTop:"1px solid #1a3040", marginTop:6 }}>
           <span style={{ color:"#c8d8e8" }}>ATM Straddle</span>
@@ -773,7 +800,6 @@ export default function OptionsIntelligencePage({ socket }) {
   const [lastUpdated,setLastUpdated] = useState(null);
   const [tick,setTick]               = useState(0);
 
-  // FIX 5: clock tick for market-hours banner and age display
   useEffect(() => { const t = setInterval(() => setTick(n => n+1), 1000); return () => clearInterval(t); }, []);
 
   useEffect(() => { if (!socket) return; socket.emit("request-intel-snapshot"); }, [socket]);
@@ -922,7 +948,7 @@ export default function OptionsIntelligencePage({ socket }) {
           )}
         </div>
 
-        {/* FIX 5: Market closed banner — shown below toolbar when market is shut */}
+        {/* Market closed banner */}
         <MarketClosedBanner lastUpdated={lastUpdated} />
 
         {!d ? <EmptyState symbol={activeSymbol} /> : (
