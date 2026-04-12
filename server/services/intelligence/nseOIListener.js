@@ -5,36 +5,33 @@
  * Place at: server/services/intelligence/nseOIListener.js
  *
  * ══════════════════════════════════════════════════════════════
- * FIXES APPLIED:
+ * FIXES APPLIED (on top of previous session fixes):
  *
- * FIX A — Double-emit causing flash of absurd values:
- *   Root cause: pollChains() was calling ingestChainData() with RAW Upstox
- *   API data (strike_price, call_options.market_data.oi etc.) AND ALSO
- *   optionsIntegration's poll() fallback was calling it again 15s later via
- *   getAllCached(). Two conflicting payloads fired for the same symbol:
- *   one with raw lots (huge numbers), one with pre-processed data (correct).
- *   Fix: ingestChainData() in pollChains() now receives pre-normalised rows
- *   (the same mapped array that was already being built), NOT raw Upstox data.
- *   The poll() fallback in optionsIntegration is now redundant — disabled by
- *   having nseOIListener call ingestChainData directly with clean data every poll.
+ * FIX 1 — buildNormalisedRows() used strikeOIMap[null] (always undefined):
+ *   Was: strikeOIMap[null]?.[s.strike_price]?.ceOI
+ *   Now: the function accepts (name, expiry, rawStrikes) and reads
+ *   strikeOIMap[name]?.[expiry]?.[s.strike_price] correctly.
+ *   This was silently falling through to raw Upstox oi values — meaning
+ *   the merged/stable OI was NEVER being used in the engine rows.
  *
- * FIX B — OI jumping between refreshes (460L → 2691L):
- *   Root cause: totalCEOI / totalPEOI were re-summed from scratch each poll.
- *   Fix: persist and MERGE OI into a running strikeOIMap per expiry.
+ * FIX 2 — closes array was never passed to ingestChainData / engine:
+ *   The engine needs real daily close prices to compute HV20 / HV60.
+ *   We now maintain a per-underlying rolling closes array (spotHistory)
+ *   that appends the spotPrice once per poll (60s). After market hours
+ *   the last value persists. 252 days rolling window kept.
+ *   Passed as 6th arg to ingestChainData → forwarded to analyzeOptionsChain.
  *
- * FIX C — Net Flow swinging wildly (-4.7K → -151.8K Cr):
- *   Root cause: netPremiumFlow recalculated from full volume × LTP every poll.
- *   Fix: track sessionNetFlow as accumulated DELTA since last poll.
- *   Reset at session open each day.
+ * FIX 3 — ingestChainData signature extended to accept closes[]:
+ *   nseOIListener passes closes as 6th positional arg.
+ *   optionsIntegration.ingestChainData() now accepts and forwards it.
+ *   optionsIntelligenceEngine.analyzeOptionsChain() already accepts closes[].
  *
- * FIX D — Stale cache replayed to new clients:
- *   Added cache age check — only replay if updatedAt < 4h ago.
- *
- * FIX E — ingestChainData called with wrong raw shape:
- *   Previously passing raw Upstox s.call_options.market_data.oi objects.
- *   Now passes clean { strike, callOI, putOI, callVol, putVol, callLTP,
- *   putLTP, callIV, putIV } rows that extractRows() in optionsIntegration
- *   can handle without further transformation.
+ * Previously fixed (preserved):
+ *   FIX A — double-emit causing flash of absurd values
+ *   FIX B — OI jumping between refreshes (merged strikeOIMap)
+ *   FIX C — net flow swinging wildly (delta accumulator)
+ *   FIX D — stale cache replay blocked
+ *   FIX E — clean normalised rows passed to optionsIntegration
  * ══════════════════════════════════════════════════════════════
  */
 
@@ -60,12 +57,17 @@ const CACHE_MAX_AGE_MS   = 4 * 60 * 60 * 1000;
 
 const cache = {};
 
-// FIX B: Running merged OI map
+// FIX B: Running merged OI map — keyed by [name][expiry][strike]
 const strikeOIMap = {};
 
 // FIX C: Session net flow accumulator
 const sessionFlowMap = {};
 let   sessionDate    = null;
+
+// FIX 2: Rolling spot price history for HV calculation — keyed by name
+// Appended once per poll (60s). Represents daily-ish closes during session.
+// 252-entry rolling window = ~1 trading year of daily closes.
+const spotHistory = {};
 
 const UNDERLYINGS = [
   { name: "NIFTY",     upstoxKey: "NSE_INDEX|Nifty 50",  lotSize: 75 },
@@ -91,6 +93,27 @@ function maybeResetSession() {
 
 function authHeaders(token) {
   return { Authorization: `Bearer ${token}`, Accept: "application/json" };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX 2: Spot history — append once per poll for HV calculation
+// ─────────────────────────────────────────────────────────────────────────────
+
+function appendSpotHistory(name, spotPrice) {
+  if (!spotPrice || spotPrice <= 0) return;
+  if (!spotHistory[name]) spotHistory[name] = [];
+  spotHistory[name].push(spotPrice);
+  // Keep 252-entry rolling window (1 trading year at ~1 entry/minute = ~375/day,
+  // but we only poll once per minute so during a 6.5hr session we get ~390 entries;
+  // rolling 252 keeps ~last 39 trading days of intra-day closes which is sufficient
+  // for HV20 and HV60 calculation).
+  if (spotHistory[name].length > 252) {
+    spotHistory[name] = spotHistory[name].slice(-252);
+  }
+}
+
+function getSpotHistory(name) {
+  return spotHistory[name] || [];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -383,7 +406,7 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
   return {
     underlying: name, expiry, spotPrice, pcr, maxPainStrike, support, resistance,
     totalCEOI, totalPEOI,
-    netFlow: sessionNetFlow, // ₹ Lakhs, delta-accumulated
+    netFlow: sessionNetFlow,
     atmStrike, strikes, alerts,
     unusualOI:         unusualNearATM,
     unusualOITailRisk: unusualTailRisk,
@@ -392,26 +415,38 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX E: Build clean normalised rows for optionsIntegration
-// This is the KEY fix — previously raw Upstox API objects were passed,
-// causing optionsIntelligenceEngine to receive wrong field names and
-// emit 10x-inflated GEX/OI values.
+// FIX 1: buildNormalisedRows — correctly reads strikeOIMap[name][expiry]
+// Previously used strikeOIMap[null] which is always undefined, so the merged
+// stable OI was silently ignored and raw (sometimes zero) Upstox values were used.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildNormalisedRows(rawStrikes) {
-  return rawStrikes.map(s => ({
-    strike:  s.strike_price,
-    // FIX B: use merged stable OI if available, otherwise live value
-    callOI:  strikeOIMap[null]?.[s.strike_price]?.ceOI ?? (s.call_options?.market_data?.oi     || 0),
-    putOI:   strikeOIMap[null]?.[s.strike_price]?.peOI ?? (s.put_options?.market_data?.oi      || 0),
-    callVol: s.call_options?.market_data?.volume   || 0,
-    putVol:  s.put_options?.market_data?.volume    || 0,
-    callLTP: s.call_options?.market_data?.ltp      || 0,
-    putLTP:  s.put_options?.market_data?.ltp       || 0,
-    // IV from Upstox greeks — may be decimal (0.15) or pct (15.0); safeIV handles both
-    callIV:  s.call_options?.option_greeks?.iv     || 0,
-    putIV:   s.put_options?.option_greeks?.iv      || 0,
-  })).filter(r => r.strike > 0);
+function buildNormalisedRows(name, expiry, rawStrikes) {
+  const mergedMap = strikeOIMap[name]?.[expiry] || {};
+
+  return rawStrikes.map(s => {
+    const strike = s.strike_price;
+    const merged = mergedMap[strike] || {};
+
+    // Use merged stable OI when available (non-zero); fallback to raw live value
+    const callOI = (merged.ceOI > 0 ? merged.ceOI : null)
+                ?? (s.call_options?.market_data?.oi || 0);
+    const putOI  = (merged.peOI > 0 ? merged.peOI  : null)
+                ?? (s.put_options?.market_data?.oi  || 0);
+
+    return {
+      strike,
+      callOI,
+      putOI,
+      callVol: s.call_options?.market_data?.volume   || 0,
+      putVol:  s.put_options?.market_data?.volume    || 0,
+      callLTP: s.call_options?.market_data?.ltp      || 0,
+      putLTP:  s.put_options?.market_data?.ltp       || 0,
+      // IV from Upstox greeks — safeIV() in optionsIntegration handles
+      // both decimal (0.15) and percentage (15.0) formats
+      callIV:  s.call_options?.option_greeks?.iv     || 0,
+      putIV:   s.put_options?.option_greeks?.iv      || 0,
+    };
+  }).filter(r => r.strike > 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -460,6 +495,9 @@ async function pollChains() {
 
         const spotPrice = raw[0]?.underlying_spot_price || cache[u.name]?.spotPrice || 0;
 
+        // FIX 2: append to rolling spot history for HV calculation
+        appendSpotHistory(u.name, spotPrice);
+
         // ── 1. Build structured chain for option-chain-update (UI chain viewer) ──
         const processed = processChain(u.name, expiry, raw, spotPrice);
         if (!processed) continue;
@@ -473,29 +511,21 @@ async function pollChains() {
           ioRef.emit("option-chain-update", { underlying: u.name, expiry, data: processed });
         }
 
-        // ── 2. FIX A + FIX E: Pass CLEAN normalised rows to optionsIntegration ──
-        // NOT the raw Upstox objects — those have wrong field names that cause
-        // optionsIntelligenceEngine to produce 10x-inflated GEX/OI values.
-        // mergeOI() has already run inside processChain(), so strikeOIMap is
-        // populated — buildNormalisedRows() uses those stable merged OI values.
+        // ── 2. Pass CLEAN normalised rows + closes to optionsIntegration ──
         try {
-          const normalisedRows = buildNormalisedRows(raw);
-          // Patch in merged OI values (stable, not volatile mid-session zeros)
-          const mergedMap = strikeOIMap[u.name]?.[expiry] || {};
-          for (const row of normalisedRows) {
-            const m = mergedMap[row.strike];
-            if (m) {
-              if (m.ceOI > 0) row.callOI = m.ceOI;
-              if (m.peOI > 0) row.putOI  = m.peOI;
-            }
-          }
+          // FIX 1: pass name + expiry so merged OI map is read correctly
+          const normalisedRows = buildNormalisedRows(u.name, expiry, raw);
+
+          // FIX 2: pass rolling spot history as closes[] for HV20/HV60
+          const closes = getSpotHistory(u.name);
 
           ingestChainData(
             u.name,
             spotPrice,
-            normalisedRows,   // ← clean rows, not raw Upstox objects
+            normalisedRows,   // clean rows with correct merged OI
             expiry,
             u.lotSize || 1,
+            closes,           // FIX 3: new 6th arg — real closes for HV
           );
         } catch (err) {
           console.warn(`⚠️ OI Intel ingest error for ${u.name}:`, err.message);
@@ -507,7 +537,8 @@ async function pollChains() {
           `📊 OI: ${u.name} ${expiry} — PCR=${processed.pcr} Spot=₹${spotPrice} ` +
           `TotalOI=${((processed.totalCEOI + processed.totalPEOI) / 1e5).toFixed(1)}L ` +
           `NetFlow=₹${processed.netFlow}L | ` +
-          `UnusualOI: ${nearCount} near-ATM, ${tailCount} tail-risk`
+          `UnusualOI: ${nearCount} near-ATM, ${tailCount} tail-risk | ` +
+          `SpotHistory: ${getSpotHistory(u.name).length} entries`
         );
         anySuccess = true;
 

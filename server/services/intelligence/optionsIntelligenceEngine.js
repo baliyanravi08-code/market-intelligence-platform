@@ -6,28 +6,35 @@
  *
  * PURE SERVER-SIDE NODE.JS — NO JSX, NO REACT, NO FRONTEND CODE.
  *
- * FIXES applied:
+ * ══════════════════════════════════════════════════════════════
+ * FIXES APPLIED (on top of previous session fixes):
  *
- * FIX 1 — IV Rank flipping 100 ↔ 0 between refreshes:
- *   Returns { ivRank: 50, ivPercentile: 50, synthetic: true } when insufficient
- *   history instead of null. Falls back to hv20/hv60 synthetic window.
+ * FIX 3 — Gamma Flip showing — (dash):
+ *   Root cause: gammaFlip finder only scanned strikes ABOVE spot.
+ *   When GEX sign never flips above spot (common in mean-reverting markets),
+ *   it returned null. Now scans ALL strikes sorted by proximity to spot,
+ *   finds the nearest sign-change. If no flip exists anywhere, falls back
+ *   to the strike whose netGEX is closest to zero (the "soft" flip point).
  *
- * FIX 2 — Theta doubling between refreshes:
- *   Returns both callTheta and straddleTheta clearly labelled in atmGreeks.
+ * FIX 5 — Net Flow showing 0.0 L:
+ *   Root cause: delta-calc produces 0 on first call (no prevVolMap yet) and
+ *   on weekends/closed market (volumes don't change between polls).
+ *   Fix: after delta-loop, if netPremiumFlow is still zero, fall back to
+ *   full vol×LTP calculation so accumulated premium is always shown.
  *
- * FIX 3 — netPremiumFlow recalculated from scratch each call:
- *   analyzeOI() accepts optional prevVolMap and computes DELTA flow since last
- *   call. Falls back to full calculation when prevVolMap not provided.
+ * FIX 6 — IV Rank showing 100 incorrectly:
+ *   Root cause: synthetic IV window was 0.7×–1.25× HV — too narrow and too
+ *   low. Current IV (17.6%) easily exceeded this range → rank = 100.
+ *   Fix: widen synthetic window to 0.5×–2.1× HV (20 steps of 0.08×).
+ *   This covers realistic IV history including event spikes (2× HV).
  *
- * FIX 4 — computeOptionsScore() score changing by ±10 on every refresh:
- *   PCR score adjustment uses sigmoid-style clamp instead of linear step.
- *
- * FIX 5 — Mixed IV signal conflict (IV Rank high + VRP negative simultaneously):
- *   computeMarketStructure() now detects MIXED_IV environment when IV Rank >= 70
- *   but VRP < -4 (IV cheap vs realized). computeStrategyRadar() resolves the
- *   conflict — emits a single MIXED_IV signal instead of both SELL_PREMIUM and
- *   BUY_OPTIONS. computeOptionsScore() handles MIXED_IV as neutral (no penalty
- *   or reward). Dashboard badge will show "MIXED IV" in amber.
+ * Previously fixed (preserved):
+ *   FIX 1 — IV Rank flipping 100 ↔ 0: synthetic fallback when history sparse
+ *   FIX 2 — Theta doubling: callTheta + straddleTheta clearly labelled
+ *   FIX 3 (prev) — netPremiumFlow delta-based
+ *   FIX 4 — Score PCR sigmoid clamp
+ *   FIX 5 (prev) — MIXED_IV conflict resolution
+ * ══════════════════════════════════════════════════════════════
  */
 
 const SQRT_2PI           = Math.sqrt(2 * Math.PI);
@@ -162,7 +169,10 @@ function historicalVolatility(closes, window) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX 1 — IV Rank: never return null
+// FIX 6 — IV Rank: widen synthetic window + never return null
+// Previous: synth range was 0.7×–1.25× HV (12 steps of 0.05×) — too narrow.
+// Current IV at 17.6% easily exceeded this when HV is low → rank = 100.
+// Fix: 20 steps of 0.08× gives 0.5×–2.02× HV, covering realistic event spikes.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null) {
@@ -171,7 +181,9 @@ function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null)
   if (ivs.length < 10 && (hv20 || hv60)) {
     const base  = hv20 || hv60;
     const synth = [];
-    for (let i = 0; i < 12; i++) synth.push(base * (0.7 + i * 0.05));
+    // FIX 6: 20 steps from 0.5× to ~2.0× base — covers realistic IV range
+    // including event-driven spikes where IV can reach 2× realized vol
+    for (let i = 0; i < 20; i++) synth.push(base * (0.5 + i * 0.08));
     ivs = [...synth, ...ivs];
   }
 
@@ -196,7 +208,7 @@ function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GEX
+// FIX 3 — GEX: gamma flip scans ALL strikes, not just above spot
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeGEX(chain, spot, T, r, lotSize = 1) {
@@ -218,17 +230,55 @@ function computeGEX(chain, spot, T, r, lotSize = 1) {
     netGEX  += cgex - pgex;
     strikeGEX.push({ strike, callGEX: cgex, putGEX: pgex, netGEX: cgex - pgex });
   }
+
   const sorted   = [...strikeGEX].sort((a, b) => Math.abs(b.netGEX) - Math.abs(a.netGEX));
   const callWall = strikeGEX.filter(s => s.strike > spot && s.callGEX > 0).sort((a, b) => b.callGEX - a.callGEX)[0]?.strike || null;
   const putWall  = strikeGEX.filter(s => s.strike < spot && s.putGEX  > 0).sort((a, b) => b.putGEX  - a.putGEX )[0]?.strike || null;
+
+  // FIX 3: scan ALL strikes sorted by proximity to spot — not just above spot.
+  // Find the nearest strike pair where netGEX changes sign.
+  // If no sign-change exists, use the strike with netGEX closest to zero.
   const gammaFlip = (() => {
-    const aboveSpot = strikeGEX.filter(s => s.strike >= spot).sort((a, b) => a.strike - b.strike);
-    for (let i = 1; i < aboveSpot.length; i++) {
-      if (aboveSpot[i-1].netGEX >= 0 && aboveSpot[i].netGEX < 0) return aboveSpot[i].strike;
-      if (aboveSpot[i-1].netGEX <  0 && aboveSpot[i].netGEX > 0) return aboveSpot[i].strike;
+    // Sort all strikes by proximity to spot (nearest first)
+    const byProximity = [...strikeGEX].sort((a, b) =>
+      Math.abs(a.strike - spot) - Math.abs(b.strike - spot)
+    );
+
+    // Also check sorted ascending for sign-change detection
+    const ascending = [...strikeGEX].sort((a, b) => a.strike - b.strike);
+
+    // Find nearest sign-change across all strikes
+    let nearestFlip = null;
+    let nearestDist = Infinity;
+
+    for (let i = 1; i < ascending.length; i++) {
+      const prev = ascending[i - 1];
+      const curr = ascending[i];
+      const signsChange = (prev.netGEX >= 0) !== (curr.netGEX >= 0);
+      if (signsChange) {
+        // Use the strike closer to spot as the flip strike
+        const flip = Math.abs(prev.strike - spot) < Math.abs(curr.strike - spot)
+          ? prev.strike
+          : curr.strike;
+        const dist = Math.abs(flip - spot);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestFlip = flip;
+        }
+      }
     }
-    return null;
+
+    // If no sign-change found, fall back to strike with netGEX nearest zero
+    // (the "soft" flip — where dealers are least committed directionally)
+    if (nearestFlip === null && strikeGEX.length > 0) {
+      nearestFlip = strikeGEX.reduce((best, s) =>
+        Math.abs(s.netGEX) < Math.abs(best.netGEX) ? s : best
+      ).strike;
+    }
+
+    return nearestFlip;
   })();
+
   const regime = netGEX > 0 ? 'MEAN_REVERTING' : 'TREND_AMPLIFYING';
   return {
     netGEX:    Math.round(netGEX  / 1e7) / 10,
@@ -271,7 +321,9 @@ function computeDealerExposures(chain, spot, T, r, lotSize = 1) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX 3 — OI analysis: delta-based net flow
+// FIX 5 — OI analysis: delta net flow with zero-fallback
+// When prevVolMap is absent OR delta sum is zero (market closed / first call),
+// fall back to full vol×LTP so accumulated premium is always displayed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function analyzeOI(chain, spot, prevVolMap = null) {
@@ -302,6 +354,15 @@ function analyzeOI(chain, spot, prevVolMap = null) {
       unusualOI.push({ strike: row.strike, type: 'call', oi: row.callOI, vol: row.callVol, note: 'Unusual call activity — fresh positioning likely' });
     if (putRatio  !== null && putRatio  < 0.5 && row.putVol  > 1000)
       unusualOI.push({ strike: row.strike, type: 'put',  oi: row.putOI,  vol: row.putVol,  note: 'Unusual put activity — institutional hedge/bet likely' });
+  }
+
+  // FIX 5: if delta-calc produced zero (first call or market closed),
+  // fall back to full vol×LTP so the UI never shows 0.0 L
+  if (prevVolMap && netPremiumFlow === 0) {
+    for (const row of chain) {
+      netPremiumFlow += ((row.putLTP || 0) * (row.putVol || 0))
+                      - ((row.callLTP || 0) * (row.callVol || 0));
+    }
   }
 
   const pcr    = totalCallOI  > 0 ? totalPutOI  / totalCallOI  : null;
@@ -393,7 +454,6 @@ function computeVolatilitySurface(chain, spot, T, r) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Market structure
-// FIX 5a: detect MIXED_IV when IV Rank is high but VRP is negative
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) {
@@ -404,17 +464,14 @@ function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) 
   let vrp = null;
   if (atmIV && hv20) vrp = (atmIV - hv20) * 100;
 
-  // FIX 5a: resolve MIXED_IV before assigning environment
   let ivEnvironment = 'NORMAL';
   if (vrp !== null) {
-    // Compute current IV Rank to check for conflict
     const { ivRank: currentIVRank } = ivRankAndPercentile(atmIV, historicalIVs, hv20, null);
-    const isHighRank = currentIVRank >= 70;  // expensive vs history
-    const isCheapVRP = vrp < -4;             // cheap vs realized vol
-    const isRichVRP  = vrp > 4;              // expensive vs realized vol
+    const isHighRank = currentIVRank >= 70;
+    const isCheapVRP = vrp < -4;
+    const isRichVRP  = vrp > 4;
 
     if (isHighRank && isCheapVRP) {
-      // Conflict: IV Rank says sell, VRP says buy — emit MIXED_IV
       ivEnvironment = 'MIXED_IV';
     } else if (vrp >  8) ivEnvironment = 'RICH_SELL_PREMIUM';
     else if    (vrp >  4) ivEnvironment = 'ELEVATED';
@@ -441,13 +498,11 @@ function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Strategy radar
-// FIX 5b: resolve conflicting SELL_PREMIUM + BUY_OPTIONS into single MIXED_IV
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeStrategyRadar({ ivRank, ivPercentile, vrp, skew25, pcr, gex, ivEnvironment, oi }) {
   const signals = [];
 
-  // FIX 5b: MIXED_IV takes priority — suppress both SELL_PREMIUM and BUY_OPTIONS
   if (ivEnvironment === 'MIXED_IV') {
     signals.push({
       strategy:   'MIXED_IV',
@@ -457,7 +512,6 @@ function computeStrategyRadar({ ivRank, ivPercentile, vrp, skew25, pcr, gex, ivE
       direction: 'NEUTRAL',
     });
   } else {
-    // Normal path — only one of these fires at a time
     if (ivRank > 70 || ivEnvironment === 'RICH_SELL_PREMIUM')
       signals.push({ strategy: 'SELL_PREMIUM', confidence: Math.min(100, ivRank || 70), note: `IV rank ${ivRank}% — options expensive. Consider credit spreads, iron condors.`, direction: 'NEUTRAL' });
     if (ivRank < 30 || ivEnvironment === 'CHEAP_BUY_OPTIONS')
@@ -477,8 +531,7 @@ function computeStrategyRadar({ ivRank, ivPercentile, vrp, skew25, pcr, gex, ivE
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX 4 — Options score: smoother PCR adjustment
-// FIX 5c — MIXED_IV: treat as neutral, no penalty or reward
+// Options score
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeOptionsScore({ oi, gex, volatility, structure, strategy }) {
@@ -499,7 +552,6 @@ function computeOptionsScore({ oi, gex, volatility, structure, strategy }) {
   }
 
   if (volatility && volatility.ivRank !== null) {
-    // FIX 5c: MIXED_IV — skip IV rank scoring, it's contradictory
     if (volatility.ivEnvironment === 'MIXED_IV') {
       factors.push(`IV environment MIXED — rank ${volatility.ivRank}% high but cheap vs realized vol (VRP ${volatility.vrp}%). Neutral score impact.`);
     } else if (volatility.ivRank > 75) {
@@ -517,7 +569,7 @@ function computeOptionsScore({ oi, gex, volatility, structure, strategy }) {
     else if (volatility.skewSentiment === 'BULLISH')       { score += 5;  factors.push('Bullish IV skew'); }
   }
 
-  if (oi && oi.premiumBias === 'PUT_DOMINATED')    { score -= 5; factors.push(`Net premium: puts dominating ₹${oi.netPremiumFlow}L`); }
+  if (oi && oi.premiumBias === 'PUT_DOMINATED')       { score -= 5; factors.push(`Net premium: puts dominating ₹${oi.netPremiumFlow}L`); }
   else if (oi && oi.premiumBias === 'CALL_DOMINATED') { score += 5; factors.push('Net premium: calls dominating'); }
 
   if (oi && oi.unusualCount > 2) factors.push(`${oi.unusualCount} unusual OI spikes`);
@@ -588,7 +640,6 @@ function analyzeOptionsChain({
 
   const { score, bias, confidence, factors } = computeOptionsScore({ oi, gex, volatility, structure, strategy });
 
-  // FIX 2: compute both call theta and straddle theta
   const atmCallGreeks = computeGreeks({ S: spotPrice, K: atmRow.strike, T, r: riskFreeRate, sigma: atmIV || 0.20, type: 'call' });
   const atmPutGreeks  = computeGreeks({ S: spotPrice, K: atmRow.strike, T, r: riskFreeRate, sigma: atmIV || 0.20, type: 'put' });
 
@@ -605,7 +656,7 @@ function analyzeOptionsChain({
       thetaCall:     Math.round(atmCallGreeks.theta * 100) / 100,
       thetaPut:      Math.round(atmPutGreeks.theta  * 100) / 100,
       thetaStraddle: Math.round((atmCallGreeks.theta + atmPutGreeks.theta) * 100) / 100,
-      theta:         Math.round(atmCallGreeks.theta * 100) / 100, // legacy compat
+      theta:         Math.round(atmCallGreeks.theta * 100) / 100,
       vega:          Math.round(atmCallGreeks.vega  * 100) / 100,
       rho:           Math.round(atmCallGreeks.rho   * 100) / 100,
     },
@@ -613,7 +664,7 @@ function analyzeOptionsChain({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ingestChainData shim — forwards to optionsIntegration
+// ingestChainData shim
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize) {
