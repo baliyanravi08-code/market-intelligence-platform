@@ -1,83 +1,164 @@
-"use strict";
+// GannBadge.jsx
+// client/src/components/GannBadge.jsx
 
 /**
- * marketHours.js
- * server/services/intelligence/marketHours.js
+ * GannBadge — shows a compact Gann bias badge inline in the score card,
+ * or a full badge with support/resistance levels in the Market Structure panel.
  *
- * Single source of truth for Indian market hours.
- * NSE/BSE Hours: Mon–Fri, 09:00 – 15:45 IST (with buffer)
+ * Props:
+ *   symbol    {string}  — active symbol, e.g. "NIFTY 50"
+ *   gannMap   {object}  — map of symbol → { bias, support, resistance, angle }
+ *   compact   {boolean} — true = pill badge only, false = full badge with levels
  */
 
-const MARKET_OPEN_H  = 9;
-const MARKET_OPEN_M  = 0;    // allow from 09:00 (pre-open)
-const MARKET_CLOSE_H = 15;
-const MARKET_CLOSE_M = 45;   // buffer past 15:30
+const BIAS_STYLES = {
+  STRONG_BULLISH: { color: "#00ff9c", bg: "#003318", border: "#00ff9c55", label: "STRONG BULL" },
+  BULLISH:        { color: "#00ff9c", bg: "#002210", border: "#00ff9c33", label: "BULLISH"     },
+  NEUTRAL:        { color: "#ffd54f", bg: "#1a1500", border: "#ffd54f33", label: "NEUTRAL"     },
+  BEARISH:        { color: "#ef5350", bg: "#1a0000", border: "#ef535033", label: "BEARISH"     },
+  STRONG_BEARISH: { color: "#ef5350", bg: "#280000", border: "#ef535055", label: "STRONG BEAR" },
+};
 
-/**
- * Returns current IST time parts.
- */
-function nowIST() {
-  const now   = new Date();
-  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
-  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
-  const ist   = new Date(istMs);
-  return {
-    day:     ist.getDay(),     // 0=Sun, 6=Sat
-    hours:   ist.getHours(),
-    minutes: ist.getMinutes(),
-    date:    ist.toISOString().slice(0, 10),
-    ist,
-  };
+function fmtInt(n) {
+  if (n == null) return "—";
+  return Math.round(Number(n)).toLocaleString("en-IN");
 }
 
-/**
- * Returns true if the market is currently open.
- * Mon–Fri, 09:00–15:45 IST only.
- */
-function isMarketOpen() {
-  const { day, hours, minutes } = nowIST();
-  if (day === 0 || day === 6) return false;
-  const total = hours * 60 + minutes;
-  const open  = MARKET_OPEN_H  * 60 + MARKET_OPEN_M;
-  const close = MARKET_CLOSE_H * 60 + MARKET_CLOSE_M;
-  return total >= open && total <= close;
-}
-
-/**
- * Returns true if today is a weekday (Mon–Fri).
- */
-function isWeekday() {
-  const { day } = nowIST();
-  return day >= 1 && day <= 5;
-}
-
-/**
- * Returns minutes until next market open (from now, IST).
- * Returns 0 if market is already open.
- */
-function minutesUntilOpen() {
-  if (isMarketOpen()) return 0;
-  const { day, hours, minutes } = nowIST();
-  if (isWeekday()) {
-    const totalNow  = hours * 60 + minutes;
-    const totalOpen = MARKET_OPEN_H * 60 + MARKET_OPEN_M;
-    if (totalNow < totalOpen) return totalOpen - totalNow;
+export default function GannBadge({ symbol, gannMap, compact = false }) {
+  // Always return a valid element — never undefined/null at top level
+  if (!symbol || !gannMap) {
+    return compact ? null : <span />;
   }
-  return 999;
-}
 
-/**
- * Returns a human-readable status string.
- */
-function marketStatus() {
-  const { day, hours, minutes } = nowIST();
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  if (day === 0 || day === 6) return `CLOSED (${days[day]} — weekend)`;
-  if (isMarketOpen())         return `OPEN (${hours}:${String(minutes).padStart(2, "0")} IST)`;
-  const total = hours * 60 + minutes;
-  const open  = MARKET_OPEN_H * 60 + MARKET_OPEN_M;
-  if (total < open) return `PRE-MARKET (opens 09:00 IST)`;
-  return `CLOSED (after hours — ${hours}:${String(minutes).padStart(2, "0")} IST)`;
-}
+  const entry = gannMap[symbol] || gannMap[symbol?.toUpperCase()] || null;
 
-module.exports = { isMarketOpen, isWeekday, minutesUntilOpen, marketStatus, nowIST };
+  if (!entry) {
+    return compact ? null : <span />;
+  }
+
+  const bias  = entry.bias || "NEUTRAL";
+  const style = BIAS_STYLES[bias] || BIAS_STYLES.NEUTRAL;
+
+  // ── Compact pill (used in score card header) ─────────────────────────────
+  if (compact) {
+    return (
+      <span style={{
+        display:        "inline-flex",
+        alignItems:     "center",
+        gap:            3,
+        fontSize:       7,
+        fontFamily:     "IBM Plex Mono, monospace",
+        fontWeight:     700,
+        padding:        "1px 5px",
+        borderRadius:   2,
+        background:     style.bg,
+        color:          style.color,
+        border:         `1px solid ${style.border}`,
+        whiteSpace:     "nowrap",
+        letterSpacing:  0.5,
+        flexShrink:     0,
+      }}>
+        <span style={{ fontSize: 8 }}>◤</span>
+        {style.label}
+        {entry.angle != null && (
+          <span style={{ color: style.color, opacity: 0.7, marginLeft: 2 }}>
+            {entry.angle.toFixed(1)}°
+          </span>
+        )}
+      </span>
+    );
+  }
+
+  // ── Full badge (used in Market Structure panel) ──────────────────────────
+  return (
+    <div style={{
+      background:   style.bg,
+      border:       `1px solid ${style.border}`,
+      borderRadius: 4,
+      padding:      "5px 8px",
+    }}>
+      {/* Header row */}
+      <div style={{
+        display:        "flex",
+        alignItems:     "center",
+        justifyContent: "space-between",
+        marginBottom:   4,
+      }}>
+        <div style={{
+          display:    "flex",
+          alignItems: "center",
+          gap:        5,
+        }}>
+          <span style={{ fontSize: 10, color: style.color }}>◤</span>
+          <span style={{
+            fontSize:      8,
+            fontFamily:    "IBM Plex Mono, monospace",
+            fontWeight:    700,
+            color:         style.color,
+            letterSpacing: 1,
+          }}>
+            GANN · {style.label}
+          </span>
+        </div>
+        {entry.angle != null && (
+          <span style={{
+            fontSize:   7,
+            fontFamily: "IBM Plex Mono, monospace",
+            color:      style.color,
+            opacity:    0.75,
+          }}>
+            {entry.angle.toFixed(1)}° on square
+          </span>
+        )}
+      </div>
+
+      {/* Support / Resistance row */}
+      {(entry.support != null || entry.resistance != null) && (
+        <div style={{ display: "flex", gap: 8 }}>
+          {entry.support != null && (
+            <div style={{ flex: 1 }}>
+              <div style={{
+                fontSize:      6,
+                color:         "#c8d8e8",
+                fontFamily:    "IBM Plex Mono, monospace",
+                letterSpacing: 0.8,
+                marginBottom:  1,
+              }}>
+                SUPPORT
+              </div>
+              <div style={{
+                fontSize:   9,
+                fontWeight: 700,
+                color:      "#00ff9c",
+                fontFamily: "IBM Plex Mono, monospace",
+              }}>
+                ₹{fmtInt(entry.support)}
+              </div>
+            </div>
+          )}
+          {entry.resistance != null && (
+            <div style={{ flex: 1 }}>
+              <div style={{
+                fontSize:      6,
+                color:         "#c8d8e8",
+                fontFamily:    "IBM Plex Mono, monospace",
+                letterSpacing: 0.8,
+                marginBottom:  1,
+              }}>
+                RESISTANCE
+              </div>
+              <div style={{
+                fontSize:   9,
+                fontWeight: 700,
+                color:      "#ef5350",
+                fontFamily: "IBM Plex Mono, monospace",
+              }}>
+                ₹{fmtInt(entry.resistance)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
