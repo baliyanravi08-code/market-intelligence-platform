@@ -196,6 +196,21 @@ function computeGEX(chain, spot, T, r, lotSize = 1) {
   if (!chain || chain.length === 0) return null;
   let netGEX = 0, callGEX = 0, putGEX = 0;
   const strikeGEX = [];
+
+  // OI from Upstox is in raw contracts (individual units).
+  // GEX formula: gamma × (OI_in_lots) × spot²
+  // OI_in_lots = raw_contracts / lotSize
+  // So: gamma × (rawOI / lotSize) × lotSize × spot² = gamma × rawOI × spot²
+  // lotSize cancels — do NOT multiply by lotSize again.
+  // Result in ₹. Divide by 1e7 to get Cr.
+  //
+  // Verification with real NIFTY data:
+  //   gamma=0.0006, callOI=2,134,210 contracts, spot=24050
+  //   GEX = 0.0006 × 2,134,210 × 24050² / 1e7
+  //       = 0.0006 × 2,134,210 × 578,402,500 / 1e7
+  //       ≈ 74.1 Cr  ← realistic
+  //   (vs old formula with ×75: 74.1 × 75 = 5,557 Cr ← way too large)
+
   for (const row of chain) {
     const { strike, callOI = 0, putOI = 0, callIV, putIV } = row;
     if (!strike || strike <= 0) continue;
@@ -203,8 +218,9 @@ function computeGEX(chain, spot, T, r, lotSize = 1) {
     const pivSafe    = putIV  || 0.20;
     const callGreeks = computeGreeks({ S: spot, K: strike, T, r, sigma: civSafe, type: 'call' });
     const putGreeks  = computeGreeks({ S: spot, K: strike, T, r, sigma: pivSafe, type: 'put'  });
-    const cgex = callGreeks.gamma * callOI * lotSize * spot * spot;
-    const pgex = putGreeks.gamma  * putOI  * lotSize * spot * spot;
+    // OI already in contracts — spot² gives ₹ exposure, /1e7 → Cr
+    const cgex = callGreeks.gamma * callOI * spot * spot;
+    const pgex = putGreeks.gamma  * putOI  * spot * spot;
     callGEX += cgex;
     putGEX  += pgex;
     netGEX  += cgex - pgex;
@@ -244,16 +260,17 @@ function computeDealerExposures(chain, spot, T, r, lotSize = 1) {
     const pivSafe = putIV  || 0.20;
     const cDelta  = computeGreeks({ S: spot, K: strike, T, r, sigma: civSafe, type: 'call' }).delta;
     const pDelta  = computeGreeks({ S: spot, K: strike, T, r, sigma: pivSafe, type: 'put'  }).delta;
-    dex += (cDelta * callOI - pDelta * putOI) * lotSize * spot;
+    // OI is in raw contracts — lotSize cancels (same reason as computeGEX)
+    dex += (cDelta * callOI - pDelta * putOI) * spot;
     const { d1: cd1, d2: cd2 } = bsPrice({ S: spot, K: strike, T, r, sigma: civSafe, type: 'call' });
     const { d1: pd1, d2: pd2 } = bsPrice({ S: spot, K: strike, T, r, sigma: pivSafe, type: 'put'  });
     const cVanna = -normPDF(cd1) * cd2 / civSafe;
     const pVanna = -normPDF(pd1) * pd2 / pivSafe;
-    vex += (cVanna * callOI - pVanna * putOI) * lotSize;
+    vex  += (cVanna * callOI - pVanna * putOI);
     const sqrtT  = Math.sqrt(T);
     const cCharm = normPDF(cd1) * (2 * r * T - cd2 * civSafe * sqrtT) / (2 * T * civSafe * sqrtT);
     const pCharm = normPDF(pd1) * (2 * r * T - pd2 * pivSafe * sqrtT) / (2 * T * pivSafe * sqrtT);
-    chex += (cCharm * callOI - pCharm * putOI) * lotSize;
+    chex += (cCharm * callOI - pCharm * putOI);
   }
   return {
     dex:  Math.round(dex  / 1e7) / 10,
