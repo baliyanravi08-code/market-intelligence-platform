@@ -5,7 +5,6 @@ if (process.env.NODE_ENV !== "production") {
 
 const express = require("express");
 const http    = require("http");
-// FIX: removed "const { Server } = require('socket.io')" — websocket.js owns the io instance now
 const path    = require("path");
 const fs      = require("fs");
 const axios   = require("axios");
@@ -31,22 +30,14 @@ const {
   getWindowLabel,
 } = require("./database");
 
-// FIX: attachSocketIO replaces "new Server(server, ...)"
-// It creates the Socket.io instance AND registers:
-//   - options-intelligence snapshot replay on every "connection"
-//   - "request-intel-snapshot" on-demand replay handler
-//   - "request-option-chain" room subscription handler
-//   - "ping"/"pong" heartbeat
-//   - disconnect/error logging
 const { attachSocketIO } = require("./api/websocket");
+
+// ── FIX: real NIFTY/BANKNIFTY daily closes for HV20/HV60/VRP ─────────────────
+const { startIndexCandleFetcher } = require("./services/intelligence/indexCandleFetcher");
 
 const app    = express();
 const server = http.createServer(app);
-
-// FIX: was "new Server(server, { cors: { origin: '*' } })"
-// Now websocket.js owns the io instance — returned here so all existing
-// io.emit() / io.on() calls below continue to work unchanged.
-const io = attachSocketIO(server);
+const io     = attachSocketIO(server);
 
 app.use(cors());
 app.use(express.json());
@@ -234,6 +225,10 @@ loadInstrumentMaster()
     startBSEListener(io);
     startNSEDealsListener(io);
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
+
+    // ── FIX: fetch real NIFTY/BANKNIFTY closes so HV20, HV60, VRP show correctly
+    // Must run after token is loaded. Uses same Upstox token as gannDataFetcher.
+    startIndexCandleFetcher();
 
     const PORT = process.env.PORT || 10000;
     server.listen(PORT, () => {

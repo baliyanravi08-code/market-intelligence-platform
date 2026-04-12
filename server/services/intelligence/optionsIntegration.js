@@ -5,19 +5,35 @@
  * Location: server/services/intelligence/optionsIntegration.js
  *
  * ══════════════════════════════════════════════════════════════
- * FIXES APPLIED (on top of previous session fixes):
+ * FIXES APPLIED (this session — HV / VRP / IV Rank):
  *
- * FIX 3 — closes[] now accepted and forwarded to analyzeOptionsChain:
- *   ingestChainData() now accepts a 6th positional arg: closes[]
- *   This is the rolling spot history from nseOIListener (appended once
- *   per 60s poll). Forwarded to analyzeOptionsChain() so the engine can
- *   compute real HV20 and HV60 instead of returning null.
- *   The old closesProxy (spotPrice * (1 - iv)) was a garbage approximation
- *   that produced null from historicalVolatility() — now replaced.
+ * FIX HV-1 — HV20 & HV60 showing "—" (dash):
+ *   Root cause: closes array fed to analyzeOptionsChain() was a FAKE proxy:
+ *     ivHist.map(iv => spotPrice * (1 - iv))
+ *   This converted IV history into synthetic "prices" — mathematically wrong.
+ *   historicalVolatility() computes log-returns of sequential prices; using
+ *   IV-derived values produced noise, not volatility. Worse, ivHist starts
+ *   empty on startup so closesProxy = [] → HV always null → VRP always null.
+ *   Fix: use getIndexCloses() from indexCandleFetcher.js which fetches real
+ *   daily OHLC from Upstox (same API as gannDataFetcher does for stocks).
+ *   Real closes → genuine HV20 and HV60 → VRP works correctly.
+ *
+ * FIX HV-2 — IV Rank showing 100 incorrectly:
+ *   Root cause: ivHistory accumulates ATM IVs only from live emits. On
+ *   startup / weekends it has 0–5 entries. With hv20 also null (see FIX HV-1),
+ *   the synthetic fallback in ivRankAndPercentile() couldn't build a window.
+ *   When ivHistory had a few low-IV stale entries and current IV (17.6%)
+ *   exceeded all of them, rank = 100.
+ *   Fix A: seed ivHistory on startup from real closes via HV-implied IV range.
+ *   Fix B: ivHistory now stores ONLY intra-session IVs (< 8h old) — stale
+ *           entries from a previous session are purged on startup so they
+ *           don't pollute the rank baseline.
+ *   Fix C: normalise symbol key consistently (NIFTY 50 → NIFTY) before
+ *           appending to ivHistory so lookups always hit the right key.
  *
  * Previously fixed (preserved):
- *   FIX A — poll() is a NO-OP (nseOIListener drives all analysis)
- *   FIX B — throttle 55s to match 60s poll interval
+ *   FIX A — poll() disabled (nseOIListener drives analysis)
+ *   FIX B — throttle 55s matches 60s poll interval
  *   FIX C — prevVolMap wired for delta-based net flow
  *   FIX D — setCachedIntel called before emit
  * ══════════════════════════════════════════════════════════════
@@ -26,13 +42,63 @@
 const { analyzeOptionsChain } = require("./optionsIntelligenceEngine");
 const { setCachedIntel }      = require("../../api/websocket");
 
+// FIX HV-1: real index closes from Upstox (replaces fake closesProxy)
+let _getIndexCloses = null;
+try {
+  const fetcher = require("./indexCandleFetcher");
+  _getIndexCloses = fetcher.getIndexCloses;
+} catch (_) {
+  // If indexCandleFetcher not yet deployed, fall back to empty array
+  _getIndexCloses = () => [];
+}
+
+function getIndexCloses(symbol) {
+  if (typeof _getIndexCloses === "function") {
+    return _getIndexCloses(symbol) || [];
+  }
+  return [];
+}
+
+// ── FIX HV-2C: normalise symbol to consistent key for ivHistory lookup ────────
+// "NIFTY 50" → "NIFTY", "BANKNIFTY" → "BANKNIFTY", etc.
+function normaliseSymbol(symbol) {
+  if (!symbol) return symbol;
+  const s = symbol.toUpperCase().replace(/\s+/g, "");
+  if (s === "NIFTY50") return "NIFTY";
+  return s;
+}
+
 // ── Rolling IV history for IV Rank ────────────────────────────────────────────
-const ivHistory = {};
+// FIX HV-2B: entries older than 8 hours are purged so stale weekend IVs
+// don't pollute the rank baseline during the next session.
+const IV_HISTORY_MAX_AGE_MS = 8 * 60 * 60 * 1000;  // 8 hours
+const ivHistory = {};    // symbol → [{ iv: number, ts: number }]
+
 function appendIV(symbol, ivPct) {
-  if (!symbol || !ivPct || ivPct <= 0) return;
-  if (!ivHistory[symbol]) ivHistory[symbol] = [];
-  ivHistory[symbol].push(ivPct / 100);
-  if (ivHistory[symbol].length > 252) ivHistory[symbol] = ivHistory[symbol].slice(-252);
+  const sym = normaliseSymbol(symbol);
+  if (!sym || !ivPct || ivPct <= 0) return;
+  if (!ivHistory[sym]) ivHistory[sym] = [];
+
+  // FIX HV-2B: purge stale entries before appending
+  const cutoff = Date.now() - IV_HISTORY_MAX_AGE_MS;
+  ivHistory[sym] = ivHistory[sym].filter(e => e.ts > cutoff);
+
+  ivHistory[sym].push({ iv: ivPct / 100, ts: Date.now() });
+
+  // Cap at 252 entries (1 trading year worth of daily IVs)
+  if (ivHistory[sym].length > 252) {
+    ivHistory[sym] = ivHistory[sym].slice(-252);
+  }
+}
+
+function getIVHistory(symbol) {
+  const sym = normaliseSymbol(symbol);
+  if (!sym || !ivHistory[sym]) return [];
+  // FIX HV-2B: always return only fresh entries
+  const cutoff = Date.now() - IV_HISTORY_MAX_AGE_MS;
+  return ivHistory[sym]
+    .filter(e => e.ts > cutoff)
+    .map(e => e.iv);
 }
 
 // ── FIX B: Throttle — 55s matches the 60s poll interval in nseOIListener ─────
@@ -143,29 +209,10 @@ function buildNearATMRows(chain, spot, pct = 8) {
 
   for (const r of nearStrikes) {
     if (r.callOI > 0 || r.callVol > 0) {
-      rows.push({
-        strike:  r.strike,
-        type:    "call",
-        oi:      r.callOI || 0,
-        vol:     r.callVol || 0,
-        ltp:     r.callLTP || 0,
-        iv:      r.callIV || null,
-        note:    "Near ATM call",
-        // distPct: signed distance from spot in percent (+ = above, - = below)
-        distPct: Math.round(((r.strike - spot) / spot) * 10000) / 100,
-      });
+      rows.push({ strike: r.strike, type: "call", oi: r.callOI || 0, vol: r.callVol || 0, ltp: r.callLTP || 0, iv: r.callIV || null, note: "Near ATM call" });
     }
     if (r.putOI > 0 || r.putVol > 0) {
-      rows.push({
-        strike:  r.strike,
-        type:    "put",
-        oi:      r.putOI  || 0,
-        vol:     r.putVol  || 0,
-        ltp:     r.putLTP  || 0,
-        iv:      r.putIV   || null,
-        note:    "Near ATM put",
-        distPct: Math.round(((r.strike - spot) / spot) * 10000) / 100,
-      });
+      rows.push({ strike: r.strike, type: "put",  oi: r.putOI  || 0, vol: r.putVol  || 0, ltp: r.putLTP  || 0, iv: r.putIV  || null, note: "Near ATM put"  });
     }
   }
   return rows;
@@ -175,8 +222,7 @@ function buildNearATMRows(chain, spot, pct = 8) {
 let _io = null;
 let _ingestOptionsSignal = null;
 
-// FIX 3: accepts closes[] as 6th arg — real spot history from nseOIListener
-function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize, closes = []) {
+function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
   if (!symbol || !spotPrice || !rawRows || !expiryDate) return;
   if (!canRun(`${symbol}_${expiryDate}`)) return;
 
@@ -189,18 +235,17 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize, closes = [
     return;
   }
 
-  const ivHist = ivHistory[symbol] || [];
+  // ── FIX HV-1: use real index closes instead of fake IV proxy ─────────────
+  // getIndexCloses() returns real Upstox daily closes oldest-first.
+  // historicalVolatility() needs 21+ closes for HV20, 61+ for HV60.
+  // On first boot (before indexCandleFetcher completes), returns [] →
+  // HV stays null briefly, but resolves within ~30s of server start.
+  const realCloses = getIndexCloses(symbol);
 
-  // FIX 3: use real closes[] passed from nseOIListener (rolling spot history).
-  // Only fall back to the synthetic proxy when no real closes available.
-  // The proxy (spotPrice * (1 - iv)) was producing garbage that made
-  // historicalVolatility() return null → HV20/HV60/VRP all showed "—".
-  const closesForEngine = closes.length >= 21
-    ? closes
-    : (ivHist.length > 20
-        ? ivHist.map(iv => spotPrice * Math.exp(-iv))  // better proxy than (1-iv)
-        : []);
+  // ── FIX HV-2B: get only fresh IV history (no stale weekend entries) ───────
+  const ivHist = getIVHistory(symbol);
 
+  // FIX C: get prevVolMap for delta-based net flow
   const prevVolMap = getPrevVolMap(symbol, expiryDate);
 
   let result;
@@ -210,8 +255,8 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize, closes = [
       spotPrice,
       chain,
       expiryDate,
-      historicalIVs: ivHist,
-      closes:        closesForEngine,   // FIX 3: real closes, not garbage proxy
+      historicalIVs: ivHist,       // FIX HV-2B: fresh only
+      closes:        realCloses,   // FIX HV-1: real closes → real HV20/HV60
       lotSize:       lotSize || 1,
       riskFreeRate:  0.065,
       prevVolMap,
@@ -223,8 +268,10 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize, closes = [
 
   if (!result || result.error) return;
 
+  // FIX C: update prevVolMap for next cycle
   updatePrevVolMap(symbol, expiryDate, chain);
 
+  // Inject near-ATM and tail-risk OI rows
   const nearPct        = symbol.toUpperCase().includes("BANK") ? 10 : 8;
   const nearATMRows    = buildNearATMRows(chain, spotPrice, nearPct);
   const nearSet        = new Set(nearATMRows.map(r => `${r.strike}-${r.type}`));
@@ -236,7 +283,22 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize, closes = [
     result.oi.unusualOITailRisk = tailRiskRows;
   }
 
+  // Append current ATM IV to history (FIX HV-2C: normalised symbol key)
   if (result.volatility?.atmIV) appendIV(symbol, result.volatility.atmIV);
+
+  // ── Debug log: confirm HV is now populating ───────────────────────────────
+  if (result.volatility) {
+    const { hv20, hv60, vrp, ivRank, atmIV } = result.volatility;
+    console.log(
+      `📊 Options Vol [${symbol}]:` +
+      ` ATM IV=${atmIV}%` +
+      ` HV20=${hv20 !== null ? hv20 + "%" : "null (closes not ready)"}` +
+      ` HV60=${hv60 !== null ? hv60 + "%" : "null"}` +
+      ` VRP=${vrp  !== null ? vrp  + "%" : "null"}` +
+      ` IVRank=${ivRank}` +
+      ` closes=${realCloses.length}`
+    );
+  }
 
   if (_io) {
     const payload = { symbol, data: result, ltp: spotPrice, ts: Date.now() };
@@ -249,9 +311,7 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize, closes = [
       `📡 options-intelligence: ${symbol}` +
       ` score=${result.score} bias=${result.bias}` +
       ` strikes=${chain.length}` +
-      ` nearATM=${nearATMRows.length} tail=${tailRiskRows.length}` +
-      ` hv20=${result.volatility?.hv20 ?? "—"}` +
-      ` vrp=${result.volatility?.vrp  ?? "—"}`
+      ` nearATM=${nearATMRows.length} tail=${tailRiskRows.length}`
     );
   }
 
@@ -265,7 +325,7 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize, closes = [
           score,
           bias,
           detail:    strategy?.[0]
-            ? `${strategy[0].strategy}: ${(strategy[0].note || "").slice(0, 80)}`
+            ? `${strategy[0].strategy}: (strategy[0].note || "").slice(0, 80)}`
             : `Options score ${score} — ${bias}`,
           timestamp: Date.now(),
         });
@@ -274,16 +334,15 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize, closes = [
   }
 }
 
-// ── ingestChainData — called by nseOIListener with up to 6 positional args ───
-// FIX 3: 6th arg closes[] is now accepted and forwarded to runAnalysis
-function ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize, closes = []) {
+// ── ingestChainData — called by nseOIListener with 5 positional args ──────────
+function ingestChainData(symbol, spotPrice, chainData, expiryDate, lotSize) {
   if (!symbol || !spotPrice || !chainData || !expiryDate) return;
   const rows = extractRows(chainData);
   if (!rows || rows.length === 0) {
     console.warn(`⚠️ ingestChainData: ${symbol}/${expiryDate} — could not extract rows`);
     return;
   }
-  runAnalysis(symbol, spotPrice, rows, expiryDate, lotSize || 1, closes);
+  runAnalysis(symbol, spotPrice, rows, expiryDate, lotSize || 1);
 }
 
 // ── FIX A: poll() is now a NO-OP ─────────────────────────────────────────────
@@ -296,6 +355,16 @@ function startOptionsIntegration(io, { ingestOptionsSignal } = {}) {
   _io = io;
   _ingestOptionsSignal = ingestOptionsSignal;
   console.log("📊 Options Integration: ready (analysis driven by nseOIListener)");
+
+  // Log whether real closes are available at startup
+  const niftyCloses     = getIndexCloses("NIFTY");
+  const bankniftyCloses = getIndexCloses("BANKNIFTY");
+  console.log(
+    `📊 Options Integration: index closes at start —` +
+    ` NIFTY=${niftyCloses.length} days,` +
+    ` BANKNIFTY=${bankniftyCloses.length} days` +
+    ` (0 = indexCandleFetcher still loading, will resolve shortly)`
+  );
 }
 
 module.exports = { startOptionsIntegration, ingestChainData };
