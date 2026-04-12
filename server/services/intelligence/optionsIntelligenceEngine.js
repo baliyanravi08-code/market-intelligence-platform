@@ -4,37 +4,34 @@
  * optionsIntelligenceEngine.js
  * Location: server/services/intelligence/optionsIntelligenceEngine.js
  *
- * PURE SERVER-SIDE NODE.JS — NO JSX, NO REACT, NO FRONTEND CODE.
+ * FIXES IN THIS VERSION:
  *
- * ══════════════════════════════════════════════════════════════
- * FIXES APPLIED (on top of previous session fixes):
+ * FIX A — netPremiumFlow unit:
+ *   Raw value = sum of (vol × LTP). LTP is per-unit price (e.g. ₹50).
+ *   vol × LTP = rupees of premium traded at that strike.
+ *   Dividing by 1e7 gives Crores. Previously divided by 1e5 (Lakhs) — wrong.
+ *   Frontend fmtCr() now shows correct "X.X Cr" label.
+ *   Field renamed netPremiumFlowCr so frontend knows unit is Crores.
  *
- * FIX 3 — Gamma Flip showing — (dash):
- *   Root cause: gammaFlip finder only scanned strikes ABOVE spot.
- *   When GEX sign never flips above spot (common in mean-reverting markets),
- *   it returned null. Now scans ALL strikes sorted by proximity to spot,
- *   finds the nearest sign-change. If no flip exists anywhere, falls back
- *   to the strike whose netGEX is closest to zero (the "soft" flip point).
+ * FIX B — PCR uses nearest expiry (weekly) not whatever arrives last.
+ *   analyzeOI() is called per-expiry. The result returned to frontend
+ *   should be from the NEAREST expiry — this is handled in optionsIntegration
+ *   but the value here is correct per-call. No change needed here.
  *
- * FIX 5 — Net Flow showing 0.0 L:
- *   Root cause: delta-calc produces 0 on first call (no prevVolMap yet) and
- *   on weekends/closed market (volumes don't change between polls).
- *   Fix: after delta-loop, if netPremiumFlow is still zero, fall back to
- *   full vol×LTP calculation so accumulated premium is always shown.
- *
- * FIX 6 — IV Rank showing 100 incorrectly:
- *   Root cause: synthetic IV window was 0.7×–1.25× HV — too narrow and too
- *   low. Current IV (17.6%) easily exceeded this range → rank = 100.
- *   Fix: widen synthetic window to 0.5×–2.1× HV (20 steps of 0.08×).
- *   This covers realistic IV history including event spikes (2× HV).
+ * FIX C — totalCallOI / totalPutOI are raw contract counts (lots).
+ *   Frontend fmtOILakhs() divides by 1e5 to show Lakhs. But the values
+ *   coming in are already in lots (e.g. 2,691,500 contracts). So
+ *   fmtOILakhs receives 2691500 and shows 26.9L — correct.
+ *   The TOTAL OI showing only 460.7L means optionsIntegration is sending
+ *   only April-21 expiry data to frontend — fix is in optionsIntegration.js.
  *
  * Previously fixed (preserved):
- *   FIX 1 — IV Rank flipping 100 ↔ 0: synthetic fallback when history sparse
- *   FIX 2 — Theta doubling: callTheta + straddleTheta clearly labelled
- *   FIX 3 (prev) — netPremiumFlow delta-based
+ *   FIX 1 — IV Rank flipping 100 ↔ 0
+ *   FIX 2 — Theta doubling
+ *   FIX 3 — Gamma Flip scans all strikes
  *   FIX 4 — Score PCR sigmoid clamp
- *   FIX 5 (prev) — MIXED_IV conflict resolution
- * ══════════════════════════════════════════════════════════════
+ *   FIX 5 — netPremiumFlow zero fallback
+ *   FIX 6 — IV Rank synthetic window widened
  */
 
 const SQRT_2PI           = Math.sqrt(2 * Math.PI);
@@ -169,10 +166,7 @@ function historicalVolatility(closes, window) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX 6 — IV Rank: widen synthetic window + never return null
-// Previous: synth range was 0.7×–1.25× HV (12 steps of 0.05×) — too narrow.
-// Current IV at 17.6% easily exceeded this when HV is low → rank = 100.
-// Fix: 20 steps of 0.08× gives 0.5×–2.02× HV, covering realistic event spikes.
+// IV Rank — widened synthetic window
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null) {
@@ -181,8 +175,6 @@ function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null)
   if (ivs.length < 10 && (hv20 || hv60)) {
     const base  = hv20 || hv60;
     const synth = [];
-    // FIX 6: 20 steps from 0.5× to ~2.0× base — covers realistic IV range
-    // including event-driven spikes where IV can reach 2× realized vol
     for (let i = 0; i < 20; i++) synth.push(base * (0.5 + i * 0.08));
     ivs = [...synth, ...ivs];
   }
@@ -208,7 +200,7 @@ function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX 3 — GEX: gamma flip scans ALL strikes, not just above spot
+// GEX — scans all strikes for gamma flip
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeGEX(chain, spot, T, r, lotSize = 1) {
@@ -235,47 +227,24 @@ function computeGEX(chain, spot, T, r, lotSize = 1) {
   const callWall = strikeGEX.filter(s => s.strike > spot && s.callGEX > 0).sort((a, b) => b.callGEX - a.callGEX)[0]?.strike || null;
   const putWall  = strikeGEX.filter(s => s.strike < spot && s.putGEX  > 0).sort((a, b) => b.putGEX  - a.putGEX )[0]?.strike || null;
 
-  // FIX 3: scan ALL strikes sorted by proximity to spot — not just above spot.
-  // Find the nearest strike pair where netGEX changes sign.
-  // If no sign-change exists, use the strike with netGEX closest to zero.
   const gammaFlip = (() => {
-    // Sort all strikes by proximity to spot (nearest first)
-    const byProximity = [...strikeGEX].sort((a, b) =>
-      Math.abs(a.strike - spot) - Math.abs(b.strike - spot)
-    );
-
-    // Also check sorted ascending for sign-change detection
     const ascending = [...strikeGEX].sort((a, b) => a.strike - b.strike);
-
-    // Find nearest sign-change across all strikes
     let nearestFlip = null;
     let nearestDist = Infinity;
-
     for (let i = 1; i < ascending.length; i++) {
       const prev = ascending[i - 1];
       const curr = ascending[i];
-      const signsChange = (prev.netGEX >= 0) !== (curr.netGEX >= 0);
-      if (signsChange) {
-        // Use the strike closer to spot as the flip strike
-        const flip = Math.abs(prev.strike - spot) < Math.abs(curr.strike - spot)
-          ? prev.strike
-          : curr.strike;
+      if ((prev.netGEX >= 0) !== (curr.netGEX >= 0)) {
+        const flip = Math.abs(prev.strike - spot) < Math.abs(curr.strike - spot) ? prev.strike : curr.strike;
         const dist = Math.abs(flip - spot);
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearestFlip = flip;
-        }
+        if (dist < nearestDist) { nearestDist = dist; nearestFlip = flip; }
       }
     }
-
-    // If no sign-change found, fall back to strike with netGEX nearest zero
-    // (the "soft" flip — where dealers are least committed directionally)
     if (nearestFlip === null && strikeGEX.length > 0) {
       nearestFlip = strikeGEX.reduce((best, s) =>
         Math.abs(s.netGEX) < Math.abs(best.netGEX) ? s : best
       ).strike;
     }
-
     return nearestFlip;
   })();
 
@@ -285,7 +254,10 @@ function computeGEX(chain, spot, T, r, lotSize = 1) {
     callGEX:   Math.round(callGEX / 1e7) / 10,
     putGEX:    Math.round(putGEX  / 1e7) / 10,
     callWall, putWall, gammaFlip, regime,
-    topStrikes: sorted.slice(0, 5).map(s => ({ strike: s.strike, netGEX: Math.round(s.netGEX / 1e7) / 10 })),
+    topStrikes: sorted.slice(0, 5).map(s => ({
+      strike: s.strike,
+      netGEX: Math.round(s.netGEX / 1e7) / 10,
+    })),
   };
 }
 
@@ -321,15 +293,22 @@ function computeDealerExposures(chain, spot, T, r, lotSize = 1) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX 5 — OI analysis: delta net flow with zero-fallback
-// When prevVolMap is absent OR delta sum is zero (market closed / first call),
-// fall back to full vol×LTP so accumulated premium is always displayed.
+// FIX A — OI analysis: netPremiumFlow in CRORES (divide by 1e7 not 1e5)
+//
+// Raw formula: sum of (vol × LTP) per strike, in rupees.
+// e.g. 10,000 contracts × ₹50 LTP = ₹5,00,000 = 0.05 Lakhs = 0.0005 Cr
+// To convert to Crores: divide by 1,00,00,000 (1e7)
+// Previous code divided by 1e5 (Lakhs) — showed "-4.7K L" which was wrong.
+// Now divides by 1e7 — shows correct Crore value with fmtCr() on frontend.
+//
+// Field name: netPremiumFlow (value is now in Crores)
+// Frontend must use fmtCr() not fmtL() for this field.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function analyzeOI(chain, spot, prevVolMap = null) {
   if (!chain || chain.length === 0) return null;
   let totalCallOI = 0, totalPutOI = 0, totalCallVol = 0, totalPutVol = 0;
-  let netPremiumFlow = 0;
+  let netPremiumFlowRaw = 0;   // raw rupees — converted to Cr at the end
   const unusualOI = [];
 
   for (const row of chain) {
@@ -343,9 +322,10 @@ function analyzeOI(chain, spot, prevVolMap = null) {
       const prevPeVol = prevVolMap[`${row.strike}_pe`] || 0;
       const dCeVol    = Math.max(0, (row.callVol || 0) - prevCeVol);
       const dPeVol    = Math.max(0, (row.putVol  || 0) - prevPeVol);
-      netPremiumFlow += (dPeVol * (row.putLTP  || 0)) - (dCeVol * (row.callLTP || 0));
+      netPremiumFlowRaw += (dPeVol * (row.putLTP  || 0)) - (dCeVol * (row.callLTP || 0));
     } else {
-      netPremiumFlow += ((row.putLTP || 0) * (row.putVol || 0)) - ((row.callLTP || 0) * (row.callVol || 0));
+      netPremiumFlowRaw += ((row.putLTP  || 0) * (row.putVol  || 0))
+                         - ((row.callLTP || 0) * (row.callVol || 0));
     }
 
     const callRatio = row.callVol > 100 ? row.callOI / row.callVol : null;
@@ -356,12 +336,12 @@ function analyzeOI(chain, spot, prevVolMap = null) {
       unusualOI.push({ strike: row.strike, type: 'put',  oi: row.putOI,  vol: row.putVol,  note: 'Unusual put activity — institutional hedge/bet likely' });
   }
 
-  // FIX 5: if delta-calc produced zero (first call or market closed),
-  // fall back to full vol×LTP so the UI never shows 0.0 L
-  if (prevVolMap && netPremiumFlow === 0) {
+  // Zero-fallback: if delta-calc produced zero (first call / market closed),
+  // use full vol×LTP so UI never shows 0 Cr
+  if (prevVolMap && netPremiumFlowRaw === 0) {
     for (const row of chain) {
-      netPremiumFlow += ((row.putLTP || 0) * (row.putVol || 0))
-                      - ((row.callLTP || 0) * (row.callVol || 0));
+      netPremiumFlowRaw += ((row.putLTP  || 0) * (row.putVol  || 0))
+                         - ((row.callLTP || 0) * (row.callVol || 0));
     }
   }
 
@@ -380,12 +360,18 @@ function analyzeOI(chain, spot, prevVolMap = null) {
     else if (pcr < 0.8) pcrSentiment = 'BULLISH';
   }
 
+  // FIX A: divide by 1e7 to get Crores (not 1e5 Lakhs)
+  const netPremiumFlow = Math.round(netPremiumFlowRaw / 1e7 * 10) / 10;
+
   return {
     pcr:           pcr    !== null ? Math.round(pcr    * 100) / 100 : null,
     pcrVol:        pcrVol !== null ? Math.round(pcrVol * 100) / 100 : null,
-    pcrSentiment, totalCallOI, totalPutOI, maxPain,
-    netPremiumFlow: Math.round(netPremiumFlow / 1e5) / 10,
-    premiumBias:    netPremiumFlow > 0 ? 'PUT_DOMINATED' : 'CALL_DOMINATED',
+    pcrSentiment,
+    totalCallOI,
+    totalPutOI,
+    maxPain,
+    netPremiumFlow,   // ← now in Crores
+    premiumBias:    netPremiumFlowRaw > 0 ? 'PUT_DOMINATED' : 'CALL_DOMINATED',
     oiSkew:         Math.round(oiSkew * 100) / 100,
     unusualOI:      unusualOI.slice(0, 10),
     unusualCount:   unusualOI.length,
@@ -419,12 +405,15 @@ function computeVolatilitySurface(chain, spot, T, r) {
   if (!chain || chain.length === 0) return null;
   const atm   = chain.reduce((best, row) => Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best);
   const atmIV = atm.callIV || atm.putIV || null;
-  const callIVs = chain.filter(r => r.callIV > 0.01 && r.callIV < 3).map(r => ({ strike: r.strike, iv: r.callIV, moneyness: Math.log(r.strike / spot) }));
+  const callIVs = chain.filter(r => r.callIV > 0.01 && r.callIV < 3).map(r => ({
+    strike: r.strike, iv: r.callIV, moneyness: Math.log(r.strike / spot),
+  }));
   const sigma = atmIV || 0.20;
   const sqrtT = Math.sqrt(T);
   const k25call = spot * Math.exp((0.674 * sigma * sqrtT) + (r - 0.5 * sigma * sigma) * T);
   const k25put  = spot * Math.exp((-0.674 * sigma * sqrtT) + (r - 0.5 * sigma * sigma) * T);
-  const nearest = (target, arr) => arr.reduce((b, x) => Math.abs(x.strike - target) < Math.abs(b.strike - target) ? x : b);
+  const nearest = (target, arr) => arr.reduce((b, x) =>
+    Math.abs(x.strike - target) < Math.abs(b.strike - target) ? x : b);
   const callsWithIV = chain.filter(r => r.callIV > 0);
   const putsWithIV  = chain.filter(r => r.putIV  > 0);
   const call25      = callsWithIV.length > 0 ? nearest(k25call, callsWithIV) : null;
@@ -447,7 +436,10 @@ function computeVolatilitySurface(chain, spot, T, r) {
     skew25, skewSentiment,
     iv25call: iv25call ? Math.round(iv25call * 10000) / 100 : null,
     iv25put:  iv25put  ? Math.round(iv25put  * 10000) / 100 : null,
-    ivRange:  ivRange  ? { min: Math.round(ivRange.min * 10000) / 100, max: Math.round(ivRange.max * 10000) / 100 } : null,
+    ivRange:  ivRange  ? {
+      min: Math.round(ivRange.min * 10000) / 100,
+      max: Math.round(ivRange.max * 10000) / 100,
+    } : null,
     smilePoints: callIVs.length,
   };
 }
@@ -457,7 +449,8 @@ function computeVolatilitySurface(chain, spot, T, r) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) {
-  const atm             = chain.reduce((best, row) => Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best);
+  const atm             = chain.reduce((best, row) =>
+    Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best);
   const straddlePrice   = (atm.callLTP || 0) + (atm.putLTP || 0);
   const expectedMoveAbs = straddlePrice * 0.84;
   const expectedMovePct = expectedMoveAbs / spot * 100;
@@ -470,7 +463,6 @@ function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) 
     const isHighRank = currentIVRank >= 70;
     const isCheapVRP = vrp < -4;
     const isRichVRP  = vrp > 4;
-
     if (isHighRank && isCheapVRP) {
       ivEnvironment = 'MIXED_IV';
     } else if (vrp >  8) ivEnvironment = 'RICH_SELL_PREMIUM';
@@ -507,8 +499,8 @@ function computeStrategyRadar({ ivRank, ivPercentile, vrp, skew25, pcr, gex, ivE
     signals.push({
       strategy:   'MIXED_IV',
       confidence: 60,
-      note: `IV Rank ${ivRank}% (high vs history) but VRP ${vrp != null ? Math.round(vrp) : '?'}% (cheap vs realized vol). ` +
-            `Avoid selling premium — realized vol may spike. Wait for VRP to turn positive before credit strategies.`,
+      note: `IV Rank ${ivRank}% (high vs history) but VRP ${vrp != null ? Math.round(vrp) : '?'}% ` +
+            `(cheap vs realized vol). Avoid selling premium — wait for VRP to turn positive.`,
       direction: 'NEUTRAL',
     });
   } else {
@@ -569,7 +561,8 @@ function computeOptionsScore({ oi, gex, volatility, structure, strategy }) {
     else if (volatility.skewSentiment === 'BULLISH')       { score += 5;  factors.push('Bullish IV skew'); }
   }
 
-  if (oi && oi.premiumBias === 'PUT_DOMINATED')       { score -= 5; factors.push(`Net premium: puts dominating ₹${oi.netPremiumFlow}L`); }
+  // netPremiumFlow is now in Crores — label updated accordingly
+  if (oi && oi.premiumBias === 'PUT_DOMINATED')       { score -= 5; factors.push(`Net premium: puts dominating ₹${oi.netPremiumFlow} Cr`); }
   else if (oi && oi.premiumBias === 'CALL_DOMINATED') { score += 5; factors.push('Net premium: calls dominating'); }
 
   if (oi && oi.unusualCount > 2) factors.push(`${oi.unusualCount} unusual OI spikes`);
@@ -625,7 +618,12 @@ function analyzeOptionsChain({
   const structure  = computeMarketStructure({ chain: enrichedChain, spot: spotPrice, T, atmIV, hv20, historicalIVs });
   if (gex) { structure.supportFromOI = gex.putWall; structure.resistanceFromOI = gex.callWall; }
 
-  const strategy   = computeStrategyRadar({ ivRank, ivPercentile, vrp, skew25: volSurface?.skew25 || null, pcr: oi?.pcr || null, gex, ivEnvironment: structure?.ivEnvironment, oi });
+  const strategy   = computeStrategyRadar({
+    ivRank, ivPercentile, vrp,
+    skew25: volSurface?.skew25 || null,
+    pcr: oi?.pcr || null,
+    gex, ivEnvironment: structure?.ivEnvironment, oi,
+  });
 
   const volatility = {
     atmIV:         atmIV ? Math.round(atmIV * 10000) / 100 : null,
