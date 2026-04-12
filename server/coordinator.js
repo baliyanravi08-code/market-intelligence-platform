@@ -4,24 +4,18 @@
  * coordinator.js
  * Location: server/coordinator.js
  *
- * FIXES:
- *  1. startGannDataFetcher() not called here — server.js calls it after
- *     loadInstrumentMaster() resolves (no race condition).
- *  2. startGannIntegration wired to real onNewLTP + setGannSignal.
- *  3. startOptionsIntegration confirmed wired.
- *  4. LTP registry: upstoxStream ticks captured in ltpRegistry Map.
- *  5. FIX: ws.setGannIntegration() called after startGannIntegration so
- *     websocket.js can forward "get-gann-analysis" to the Gann engine
- *     even when clients connect before gannIntegration registers its own
- *     socket listeners.
+ * CHANGES:
+ *  - startGannIntegration() is now async (awaits MongoDB restore).
+ *    Called with .then()/.catch() so it doesn't block other services.
+ *  - All other logic unchanged.
  */
 
 const fs   = require("fs");
 const path = require("path");
 
 const { startGannIntegration }   = require("./services/intelligence/gannIntegration");
-const gannIntegration            = require("./services/intelligence/gannIntegration"); // FIX 5
-const ws                         = require("./api/websocket");                          // FIX 5
+const gannIntegration            = require("./services/intelligence/gannIntegration");
+const ws                         = require("./api/websocket");
 
 const { startDeliveryAnalyzer, onDeliverySpike }   = require("./services/intelligence/deliveryAnalyzer");
 const { startCircuitWatcher, onCircuitAlert, onCircuitWatchlist } = require("./services/intelligence/circuitWatcher");
@@ -233,7 +227,7 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   startOptionsIntegration(io, { ingestOptionsSignal: ingestOpportunity });
   console.log("📊 Options Intelligence Engine started");
 
-  // ── 3. Gann Integration ───────────────────────────────────────────────────
+  // ── 3. Gann Integration (async — restores MongoDB cache on startup) ───────
   startGannIntegration(io, {
     onNewLTP: (cb) => {
       ltpListeners.push(cb);
@@ -246,15 +240,18 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
       const updated = getCompositeForScrip(symbol);
       if (updated) io.emit("composite-update", updated);
     },
-  });
-
-  // FIX 5: wire gannIntegration into websocket.js so the "get-gann-analysis"
-  // handler in websocket.js can forward requests to the Gann engine.
-  // This covers clients that connect before gannIntegration's own
-  // registerSocketHandlers() fires on the "connection" event.
-  ws.setGannIntegration(gannIntegration);
-
-  console.log("📐 Gann Integration started");
+  })
+    .then(() => {
+      // Wire gannIntegration into websocket AFTER async startup completes
+      // so "get-gann-analysis" requests are served with restored MongoDB data
+      ws.setGannIntegration(gannIntegration);
+      console.log("📐 Gann Integration started (MongoDB cache restored)");
+    })
+    .catch(e => {
+      // Non-fatal — server still works, just won't have persisted Gann data
+      console.error("📐 Gann Integration start error:", e.message);
+      ws.setGannIntegration(gannIntegration);
+    });
 
   // ── 4. Socket handlers ────────────────────────────────────────────────────
   io.on("connection", (socket) => {

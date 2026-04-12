@@ -4,39 +4,44 @@
  * gannIntegration.js
  * server/services/intelligence/gannIntegration.js
  *
- * MARKET HOURS UPDATE:
- *   - Outside market hours (Mon–Fri 09:00–15:45 IST, or weekends):
- *       • No new Gann analysis is computed on LTP ticks.
- *       • The last computed analysis is preserved in gannCache indefinitely.
- *       • Socket "get-gann-analysis" requests return cached data tagged with
- *         _usingCachedLTP: true and _lastUpdatedAt: <ISO timestamp>.
- *       • onNewLTP callbacks are still registered but do NOT trigger computation.
- *   - During market hours: full live behaviour as before.
- *   - This eliminates all redundant CPU + API usage when market is closed.
+ * CHANGES vs previous version:
+ *   - MongoDB persistence: every computed analysis is saved to GannCache
+ *     collection immediately after computation.
+ *   - On startup: loadCacheFromDB() restores all previously saved analyses
+ *     into in-memory gannCache so the frontend gets data instantly, even
+ *     after a Render spin-down / server restart.
+ *   - Outside market hours: serves MongoDB-backed cache with
+ *     _usingCachedLTP: true — panel always shows last session's data.
+ *   - No behaviour change during market hours.
  */
 
 const gann = require("./gannEngine");
 const { isMarketOpen, marketStatus } = require("./marketHours");
 
-// ─── Cache ─────────────────────────────────────────────────────────────────────
-// TTL only applies during market hours. Outside hours, cache never expires.
-const gannCache    = new Map();   // symbol → { analysis, computedAt }
-const CACHE_TTL_MS = 5 * 60 * 1000;   // 5 min during market hours
+// ─── Lazy-load MongoDB model (safe if mongoose not connected yet) ─────────────
+let GannCacheModel = null;
+function getModel() {
+  if (!GannCacheModel) {
+    try {
+      GannCacheModel = require("../../models/GannCache");
+    } catch (e) {
+      console.warn("📐 GannCache model not available:", e.message);
+    }
+  }
+  return GannCacheModel;
+}
 
-// ─── Swing pivot store ─────────────────────────────────────────────────────────
+// ─── In-memory cache ──────────────────────────────────────────────────────────
+const gannCache    = new Map();   // symbol → { analysis, computedAt }
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+// ─── Swing pivot store ────────────────────────────────────────────────────────
 const swingStore = new Map();
 
-// ─── Index LTP store ───────────────────────────────────────────────────────────
-// Stores the LAST known LTP for each symbol, persisted across market open/close.
-// When market reopens, first tick updates this and triggers fresh analysis.
+// ─── Index LTP store ──────────────────────────────────────────────────────────
 const indexLTPs = new Map();
 
-// ─── Last market-close snapshot ────────────────────────────────────────────────
-// When market closes, we freeze the last analysis. This is what the frontend
-// shows during closed hours with a "Last known price" label.
-const closingSnapshot = new Map();  // symbol → { analysis, closedAt }
-
-// ─── Symbol normaliser ─────────────────────────────────────────────────────────
+// ─── Symbol normaliser ────────────────────────────────────────────────────────
 function normaliseSymbol(raw) {
   if (!raw) return "";
   return raw
@@ -49,58 +54,102 @@ function normaliseSymbol(raw) {
     .replace(/\s+/g, "");
 }
 
+// ─── MongoDB helpers ──────────────────────────────────────────────────────────
+
 /**
- * Feed swing pivot data from OHLCV / market data source.
+ * Persist one analysis entry to MongoDB (fire-and-forget, never throws).
  */
+async function saveToDb(sym, analysis, computedAt) {
+  const Model = getModel();
+  if (!Model) return;
+  try {
+    await Model.findOneAndUpdate(
+      { symbol: sym },
+      {
+        symbol:     sym,
+        analysis,
+        computedAt: new Date(computedAt),
+        ltp:        analysis.ltp   ?? null,
+        bias:       analysis.signal?.bias  ?? null,
+        score:      analysis.signal?.score ?? null,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  } catch (err) {
+    console.warn(`📐 GannCache DB write failed [${sym}]:`, err.message);
+  }
+}
+
+/**
+ * Load all persisted analyses from MongoDB into the in-memory gannCache.
+ * Called once on startup — restores data that survived a server restart.
+ */
+async function loadCacheFromDB() {
+  const Model = getModel();
+  if (!Model) {
+    console.warn("📐 GannCache: model unavailable — skipping DB restore");
+    return;
+  }
+  try {
+    const docs = await Model.find({}).lean();
+    if (!docs.length) {
+      console.log("📐 GannCache: no saved analyses in DB yet");
+      return;
+    }
+    for (const doc of docs) {
+      if (!doc.symbol || !doc.analysis) continue;
+      gannCache.set(doc.symbol, {
+        analysis:   doc.analysis,
+        computedAt: new Date(doc.computedAt).getTime(),
+      });
+      // Also restore LTP so market-open computation has a starting price
+      if (doc.ltp) indexLTPs.set(doc.symbol, doc.ltp);
+    }
+    console.log(`📐 GannCache: restored ${docs.length} analyses from MongoDB`);
+  } catch (err) {
+    console.warn("📐 GannCache: DB restore failed —", err.message);
+  }
+}
+
+// ─── Core ─────────────────────────────────────────────────────────────────────
+
 function ingestSwingData(data) {
   if (!data?.symbol) return;
   swingStore.set(normaliseSymbol(data.symbol), data);
 }
 
 /**
- * Run full Gann analysis for a symbol.
+ * Run or serve Gann analysis for a symbol.
  *
- * Outside market hours:
- *   - Returns the last cached analysis tagged with market-closed metadata.
- *   - Does NOT recompute — no wasted CPU.
- *   - If no cache exists at all, returns null (first ever run hasn't happened).
- *
- * During market hours:
- *   - Recomputes if cache is stale (> 5 min).
- *   - Tags result normally (no _usingCachedLTP flag).
+ * Outside market hours → serve last cached result (in-memory or MongoDB-restored)
+ *                        tagged with _usingCachedLTP: true.
+ * During market hours  → recompute if stale, save to MongoDB, broadcast.
  */
 function getGannAnalysis(symbol, ltp) {
   const sym    = normaliseSymbol(symbol);
   const closed = !isMarketOpen();
   const cached = gannCache.get(sym);
 
-  // ── OUTSIDE MARKET HOURS: serve last cached result as-is ─────────────────
+  // ── OUTSIDE MARKET HOURS ──────────────────────────────────────────────────
   if (closed) {
     if (cached?.analysis) {
-      // Tag it so frontend shows "Last known price · Market closed"
-      const tagged = {
+      return {
         ...cached.analysis,
         _usingCachedLTP: true,
         _marketStatus:   marketStatus(),
         _lastUpdatedAt:  new Date(cached.computedAt).toISOString(),
       };
-      return tagged;
     }
-    // No cache at all — market was never open since server started
     console.warn(`⚠️  Gann [${sym}]: market closed and no cached data available`);
     return null;
   }
 
   // ── DURING MARKET HOURS ───────────────────────────────────────────────────
-
-  // Return fresh cache if still valid
   if (cached && Date.now() - cached.computedAt < CACHE_TTL_MS) {
     return cached.analysis;
   }
 
   const swingData = swingStore.get(sym) || {};
-
-  // Resolve LTP: argument → indexLTPs store → swingStore
   const price =
     (ltp && ltp > 0 ? ltp : null) ||
     indexLTPs.get(sym)            ||
@@ -112,7 +161,6 @@ function getGannAnalysis(symbol, ltp) {
     return null;
   }
 
-  // Persist so future closed-hour requests still have the last price
   indexLTPs.set(sym, price);
 
   const today     = new Date().toISOString().slice(0, 10);
@@ -145,18 +193,20 @@ function getGannAnalysis(symbol, ltp) {
     return null;
   }
 
-  // Store in cache
-  gannCache.set(sym, { analysis, computedAt: Date.now() });
+  const computedAt = Date.now();
+  gannCache.set(sym, { analysis, computedAt });
+
+  // ── Persist to MongoDB (non-blocking) ────────────────────────────────────
+  saveToDb(sym, analysis, computedAt);
+
   console.log(`📐 Gann [${sym}]: bias=${analysis.signal?.bias} score=${analysis.signal?.score} price=${price}`);
   return analysis;
 }
 
-/**
- * Convert Gann analysis into a composite score contribution (0–100).
- */
+// ─── Composite signal ─────────────────────────────────────────────────────────
+
 function gannToCompositeSignal(analysis) {
   if (!analysis?.signal) return null;
-
   const { signal, alerts, timeCycles: cycles } = analysis;
   let score = signal.score;
 
@@ -195,13 +245,11 @@ function gannToCompositeSignal(analysis) {
   };
 }
 
-/**
- * Broadcast high-priority Gann alerts to all clients.
- * Only fires during market hours.
- */
+// ─── Alerts ───────────────────────────────────────────────────────────────────
+
 function broadcastGannAlerts(io, symbol, analysis) {
   if (!io || !analysis?.alerts?.length) return;
-  if (!isMarketOpen()) return;  // no alerts when market is closed
+  if (!isMarketOpen()) return;
   const highAlerts = analysis.alerts.filter(a => a.priority === "HIGH");
   if (highAlerts.length > 0) {
     io.emit("gann-alert", {
@@ -213,12 +261,8 @@ function broadcastGannAlerts(io, symbol, analysis) {
   }
 }
 
-/**
- * Socket handler — client requests Gann analysis for a symbol.
- *
- * Outside market hours: returns cached data with market-closed metadata.
- * Frontend GannPanel renders this as "Last known price · Market closed".
- */
+// ─── Socket handlers ──────────────────────────────────────────────────────────
+
 function registerSocketHandlers(io, socket) {
   socket.on("get-gann-analysis", ({ symbol, ltp } = {}) => {
     if (!symbol) return;
@@ -228,15 +272,10 @@ function registerSocketHandlers(io, socket) {
 
     if (analysis) {
       socket.emit("gann-analysis", analysis);
-      if (closed) {
-        console.log(`📤 gann-analysis (cached/closed) → ${socket.id} [${sym}]`);
-      } else {
-        console.log(`📤 gann-analysis (live) → ${socket.id} [${sym}]`);
-      }
+      console.log(`📤 gann-analysis (${closed ? "cached/closed" : "live"}) → ${socket.id} [${sym}]`);
       return;
     }
 
-    // No data at all (server never ran during market hours)
     socket.emit("gann-analysis", {
       symbol:        sym,
       marketClosed:  closed,
@@ -250,10 +289,8 @@ function registerSocketHandlers(io, socket) {
   });
 }
 
-/**
- * Pre-warm Gann cache for index symbols using known LTPs.
- * Only runs if market is open.
- */
+// ─── Pre-warm ─────────────────────────────────────────────────────────────────
+
 function preWarmIndexes(io) {
   if (!isMarketOpen()) {
     console.log(`📐 Gann pre-warm: market is ${marketStatus()} — skipping`);
@@ -271,34 +308,32 @@ function preWarmIndexes(io) {
   }
 }
 
+// ─── Start ────────────────────────────────────────────────────────────────────
+
 /**
- * Start the Gann integration service.
+ * startGannIntegration — call this from coordinator.js.
  *
- * LTP tick behaviour:
- *   - During market hours  → update indexLTPs, recompute analysis, broadcast.
- *   - Outside market hours → update indexLTPs (store last price) but do NOT
- *     recompute or broadcast. Zero wasted work.
+ * NEW: loadCacheFromDB() is called first so MongoDB-persisted analyses
+ * are available immediately, even before the first LTP tick arrives.
+ * The frontend will show last session's data with "Last known price" banner
+ * instead of a blank panel after a server restart.
  */
-function startGannIntegration(io, deps = {}) {
+async function startGannIntegration(io, deps = {}) {
+  // ── Restore persisted cache from MongoDB ─────────────────────────────────
+  await loadCacheFromDB();
+
   const { onNewLTP, setGannSignal } = deps;
 
   if (typeof onNewLTP === "function") {
     onNewLTP((symbol, ltp) => {
       const sym = normaliseSymbol(symbol);
-
-      // Always store the latest LTP so we have it when market reopens
       indexLTPs.set(sym, ltp);
-
-      // Outside market hours: store price but skip computation entirely
       if (!isMarketOpen()) return;
 
-      // During market hours: full live analysis + broadcast
       const analysis = getGannAnalysis(sym, ltp);
       if (!analysis) return;
 
-      // Broadcast live analysis to all clients
       if (io) io.emit("gann-analysis", analysis);
-
       broadcastGannAlerts(io, sym, analysis);
 
       if (typeof setGannSignal === "function") {
@@ -312,13 +347,10 @@ function startGannIntegration(io, deps = {}) {
     io.on("connection", socket => {
       registerSocketHandlers(io, socket);
 
-      // Replay all cached Gann analyses to new/refreshed clients.
-      // Outside market hours these are tagged with _usingCachedLTP: true
-      // so the frontend shows the "Last known price" indicator.
+      // Replay all cached analyses to new/reconnecting clients
       for (const [sym, cached] of gannCache) {
         if (!cached?.analysis) continue;
-
-        const closed = !isMarketOpen();
+        const closed  = !isMarketOpen();
         const payload = closed
           ? {
               ...cached.analysis,
@@ -327,21 +359,18 @@ function startGannIntegration(io, deps = {}) {
               _lastUpdatedAt:  new Date(cached.computedAt).toISOString(),
             }
           : cached.analysis;
-
         socket.emit("gann-analysis", payload);
       }
     });
 
-    // Pre-warm after 3s — only effective if market is open
     setTimeout(() => preWarmIndexes(io), 3000);
   }
 
   console.log("📐 GannIntegration started");
 }
 
-/**
- * Batch analysis — only useful during market hours.
- */
+// ─── Batch ────────────────────────────────────────────────────────────────────
+
 function runBatchGannAnalysis(symbols = []) {
   if (!isMarketOpen()) {
     console.log("📐 Gann batch: market closed — returning cached data");
