@@ -1,80 +1,83 @@
-// GannBadge.jsx
-// Save as: client/src/components/GannBadge.jsx
-// compact=true  → tiny inline badge (Radar cards)
-// compact=false → expanded block card (Scores page)
+"use strict";
 
-export default function GannBadge({ symbol, gannMap, compact = true }) {
-  if (!symbol || !gannMap) return null;
-  const g = gannMap[symbol] || gannMap[symbol?.toUpperCase()];
-  if (!g) return null;
+/**
+ * marketHours.js
+ * server/services/intelligence/marketHours.js
+ *
+ * Single source of truth for Indian market hours.
+ * NSE/BSE Hours: Mon–Fri, 09:00 – 15:45 IST (with buffer)
+ */
 
-  const bias    = g.bias || g.signal || "NEUTRAL";
-  const support = g.support ?? g.s1 ?? null;
-  const resist  = g.resistance ?? g.r1 ?? null;
-  const angle   = g.angle ?? g.gannAngle ?? null;
+const MARKET_OPEN_H  = 9;
+const MARKET_OPEN_M  = 0;    // allow from 09:00 (pre-open)
+const MARKET_CLOSE_H = 15;
+const MARKET_CLOSE_M = 45;   // buffer past 15:30
 
-  const palette = {
-    STRONG_BULLISH: { color: "#00ff9c", bg: "#003318", border: "#00ff9c66" },
-    BULLISH:        { color: "#00ff9c", bg: "#002210", border: "#00ff9c44" },
-    NEUTRAL:        { color: "#ffd54f", bg: "#1a1500", border: "#ffd54f44" },
-    BEARISH:        { color: "#ef5350", bg: "#1a0000", border: "#ef535044" },
-    STRONG_BEARISH: { color: "#ef5350", bg: "#280000", border: "#ef535066" },
+/**
+ * Returns current IST time parts.
+ */
+function nowIST() {
+  const now   = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  const ist   = new Date(istMs);
+  return {
+    day:     ist.getDay(),     // 0=Sun, 6=Sat
+    hours:   ist.getHours(),
+    minutes: ist.getMinutes(),
+    date:    ist.toISOString().slice(0, 10),
+    ist,
   };
-
-  const c         = palette[bias] || palette.NEUTRAL;
-  const shortBias = bias.replace("STRONG_", "S·").replace(/_/g, "");
-  const tooltip   = [
-    "Gann: " + bias,
-    support ? "S: " + Number(support).toFixed(0) : null,
-    resist  ? "R: " + Number(resist).toFixed(0)  : null,
-    angle   ? angle + "°"                         : null,
-  ].filter(Boolean).join(" · ");
-
-  if (compact) {
-    return (
-      <span
-        title={tooltip}
-        style={{
-          display: "inline-flex", alignItems: "center", gap: 3,
-          padding: "1px 6px", borderRadius: 3,
-          background: c.bg, border: "1px solid " + c.border,
-          fontSize: 10, fontWeight: 700, color: c.color,
-          fontFamily: "'IBM Plex Mono', monospace",
-          cursor: "default", flexShrink: 0,
-        }}
-      >
-        📐{shortBias}
-        {angle != null && (
-          <span style={{ fontSize: 8, opacity: 0.7 }}>{angle}°</span>
-        )}
-      </span>
-    );
-  }
-
-  return (
-    <div
-      style={{
-        background: c.bg, border: "1px solid " + c.border,
-        borderRadius: 6, padding: "8px 10px",
-        display: "inline-flex", flexDirection: "column",
-        gap: 4, minWidth: 110,
-      }}
-    >
-      <div style={{ fontSize: 8, color: "#1a5070", fontFamily: "IBM Plex Mono,monospace", letterSpacing: 1 }}>
-        GANN
-      </div>
-      <div style={{ fontSize: 11, fontWeight: 700, color: c.color, fontFamily: "IBM Plex Mono,monospace" }}>
-        📐 {bias.replace(/_/g, " ")}
-        {angle != null && (
-          <span style={{ fontSize: 9, marginLeft: 5, opacity: 0.7 }}>{angle}°</span>
-        )}
-      </div>
-      {(support != null || resist != null) && (
-        <div style={{ display: "flex", gap: 10, fontSize: 9, fontFamily: "IBM Plex Mono,monospace" }}>
-          {support != null && <span style={{ color: "#00ff9c" }}>S {Number(support).toFixed(0)}</span>}
-          {resist  != null && <span style={{ color: "#ef5350" }}>R {Number(resist).toFixed(0)}</span>}
-        </div>
-      )}
-    </div>
-  );
 }
+
+/**
+ * Returns true if the market is currently open.
+ * Mon–Fri, 09:00–15:45 IST only.
+ */
+function isMarketOpen() {
+  const { day, hours, minutes } = nowIST();
+  if (day === 0 || day === 6) return false;
+  const total = hours * 60 + minutes;
+  const open  = MARKET_OPEN_H  * 60 + MARKET_OPEN_M;
+  const close = MARKET_CLOSE_H * 60 + MARKET_CLOSE_M;
+  return total >= open && total <= close;
+}
+
+/**
+ * Returns true if today is a weekday (Mon–Fri).
+ */
+function isWeekday() {
+  const { day } = nowIST();
+  return day >= 1 && day <= 5;
+}
+
+/**
+ * Returns minutes until next market open (from now, IST).
+ * Returns 0 if market is already open.
+ */
+function minutesUntilOpen() {
+  if (isMarketOpen()) return 0;
+  const { day, hours, minutes } = nowIST();
+  if (isWeekday()) {
+    const totalNow  = hours * 60 + minutes;
+    const totalOpen = MARKET_OPEN_H * 60 + MARKET_OPEN_M;
+    if (totalNow < totalOpen) return totalOpen - totalNow;
+  }
+  return 999;
+}
+
+/**
+ * Returns a human-readable status string.
+ */
+function marketStatus() {
+  const { day, hours, minutes } = nowIST();
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  if (day === 0 || day === 6) return `CLOSED (${days[day]} — weekend)`;
+  if (isMarketOpen())         return `OPEN (${hours}:${String(minutes).padStart(2, "0")} IST)`;
+  const total = hours * 60 + minutes;
+  const open  = MARKET_OPEN_H * 60 + MARKET_OPEN_M;
+  if (total < open) return `PRE-MARKET (opens 09:00 IST)`;
+  return `CLOSED (after hours — ${hours}:${String(minutes).padStart(2, "0")} IST)`;
+}
+
+module.exports = { isMarketOpen, isWeekday, minutesUntilOpen, marketStatus, nowIST };

@@ -4,42 +4,17 @@
 // ══════════════════════════════════════════════════════════════
 // FIXES APPLIED:
 //
-// FIX 1 — fmtCr() double-scaling flash (330K Cr instead of 35.3 Cr):
-//   Root cause: threshold was >= 1000, so a value like 35.3 Cr never triggered
-//   "K Cr", but during a refresh cycle a briefly-inflated raw value like 35300
-//   DID trigger it → showed "35.3K Cr". Engine already returns values in Cr.
-//   Fix: raise threshold to >= 100000 (values that are genuinely ≥ 1 lakh Cr
-//   don't exist in practice for GEX). Keep suffix logic correct.
-//
-// FIX 2 — Vanna/Charm wrong fallback source in GEXPanel:
-//   Root cause: `gex.vanna ?? dealerExposures?.vex` — gex never has .vanna,
-//   so it ALWAYS fell back to vex/chex (raw dealer units, different scale).
-//   Fix: use ONLY dealerExposures.vex / dealerExposures.chex directly.
-//
-// FIX 3 — Total OI double-divide:
-//   Root cause: `(totalCallOI + totalPutOI) / 1e5` was applied even when the
-//   engine had already returned raw lots. During refresh, a briefly-large raw
-//   value (e.g. 269,150,000) → 2691.5L instead of correct 460.7L.
-//   Fix: adaptive scale — if combined OI > 1e6 treat as raw lots (÷1e5),
-//   otherwise treat as already-scaled (display directly as L).
-//
-// FIX 4 — netPremiumFlow unit mismatch:
-//   Root cause: analyzeOI() returns netPremiumFlow already divided by 1e5
-//   (result is in Lakhs), but the dashboard was passing it through fmtCr()
-//   which labelled it "Cr". Now displayed with correct "L" label.
-//
-// FIX 5 — Market hours awareness:
-//   Root cause: during closed hours the dashboard showed stale/zero values
-//   with no indication. Now shows a market-closed banner when the socket
-//   reports closed state or when the last update is > 4 hours stale.
-//   Uses the same IST logic as server/services/intelligence/marketHours.js.
-//
-// FIX 6 — Mixed IV signal conflict (IV Rank high + VRP negative):
-//   Root cause: engine emitted both SELL_PREMIUM and BUY_OPTIONS tags when
-//   IV Rank was high but VRP was deeply negative. Engine now emits MIXED_IV
-//   instead. Frontend: StrategyTag renders MIXED_IV in amber with ⚡ icon.
-//   MarketStructurePanel: "MIXED IV" displayed in amber instead of two
-//   conflicting environment labels.
+// FIX 1 — fmtCr() double-scaling flash (330K Cr instead of 35.3 Cr)
+// FIX 2 — Vanna/Charm wrong fallback source in GEXPanel
+// FIX 3 — Total OI double-divide
+// FIX 4 — netPremiumFlow unit mismatch
+// FIX 5 — Market hours awareness
+// FIX 6 — Mixed IV signal conflict (IV Rank high + VRP negative)
+// FIX 7 — GannPanel: show last known price + full analysis outside
+//          market hours instead of blank "MARKET CLOSED" screen.
+//          Outside hours, panel shows cached data with amber banner:
+//          "◷ Last known price · CLOSED (after hours 16:02 IST) · 15:38 IST · Fri"
+//          Only shows empty placeholder if server has NEVER fetched data.
 // ══════════════════════════════════════════════════════════════
 
 import { useEffect, useState, useCallback, useRef } from "react";
@@ -80,10 +55,6 @@ function marketStatusLabel() {
 function fmt2(n)   { return n == null ? "—" : Number(n).toFixed(2); }
 function fmtInt(n) { return n == null ? "—" : Math.round(Number(n)).toLocaleString("en-IN"); }
 
-/**
- * FIX 1: fmtCr — engine already returns values in Cr (e.g. 35.3, 6.8).
- * Only add "K Cr" suffix if the value itself is >= 1000 Cr (extremely rare).
- */
 function fmtCr(n) {
   if (n == null) return "—";
   const abs = Math.abs(n);
@@ -92,9 +63,6 @@ function fmtCr(n) {
   return "0 Cr";
 }
 
-/**
- * FIX 4: Net premium flow comes from analyzeOI() already divided by 1e5 → Lakhs.
- */
 function fmtL(n) {
   if (n == null) return "—";
   const abs = Math.abs(n);
@@ -102,9 +70,6 @@ function fmtL(n) {
   return Number(n).toFixed(1) + " L";
 }
 
-/**
- * FIX 3: Total OI adaptive formatter.
- */
 function fmtOILakhs(totalCallOI, totalPutOI) {
   const t = (totalCallOI || 0) + (totalPutOI || 0);
   if (!t) return "—";
@@ -295,14 +260,12 @@ function IVRankBar({ ivRank, ivPct }) {
   );
 }
 
-// ─── FIX 6: StrategyTag — added MIXED_IV style in amber ──────────────────────
 function StrategyTag({ signal }) {
   const label = typeof signal==="string"?signal:(signal?.strategy||"");
   const colors = {
     SELL_PREMIUM:     { bg:"#002210", color:"#00ff9c", border:"#00ff9c33" },
     BUY_OPTIONS:      { bg:"#001828", color:"#4fc3f7", border:"#4fc3f733" },
     BUY_PREMIUM:      { bg:"#001828", color:"#4fc3f7", border:"#4fc3f733" },
-    // FIX 6: MIXED_IV — amber to signal caution, neither bullish nor bearish
     MIXED_IV:         { bg:"#1a1000", color:"#ffd54f", border:"#ffd54f55" },
     GAMMA_SQUEEZE:    { bg:"#1a1000", color:"#ffd54f", border:"#ffd54f33" },
     GAMMA_WALL:       { bg:"#1a1000", color:"#ffd54f", border:"#ffd54f33" },
@@ -313,7 +276,6 @@ function StrategyTag({ signal }) {
     IV_CRUSH:         { bg:"#1a0000", color:"#ef5350", border:"#ef535033" },
   };
   const c = colors[label]||{ bg:"#1a3040", color:"#a8c8e0", border:"#4a9abb33" };
-  // FIX 6: MIXED_IV gets a warning icon prefix
   const prefix = label === "MIXED_IV" ? "⚡ " : "";
   return (
     <span style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, padding:"1px 5px", borderRadius:2, background:c.bg, color:c.color, border:`1px solid ${c.border}`, whiteSpace:"nowrap" }}>
@@ -460,8 +422,6 @@ function GEXPanel({ gex, dealerExposures }) {
                   : gex.netGEX < 0 ? "Dealers short gamma — volatile, trend-amplifying"
                   : "Neutral dealer positioning";
   const gexBiasC  = gex.netGEX > 0 ? "#00ff9c" : gex.netGEX < 0 ? "#ef5350" : "#ffd54f";
-
-  // FIX 2: read vanna/charm ONLY from dealerExposures (vex/chex).
   const vanna = dealerExposures?.vex  ?? null;
   const charm = dealerExposures?.chex ?? null;
 
@@ -535,16 +495,20 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
 }
 
 // ════════════════ Gann Panel ══════════════════════════════════════════════════
+// FIX 7: Outside market hours, show FULL cached analysis with amber banner
+// instead of blank "MARKET CLOSED" screen. Only shows empty placeholder when
+// server has genuinely never fetched data (no cache exists at all).
 
 function GannPanel({ gann }) {
-  const now = new Date(), utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
-  const ist = new Date(utcMs + 5.5 * 3600000);
-  const day = ist.getDay();
-  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const isWeekend = day === 0 || day === 6;
-  const hh = String(ist.getHours()).padStart(2,"0");
-  const mm = String(ist.getMinutes()).padStart(2,"0");
+  const now   = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const ist   = new Date(utcMs + 5.5 * 3600000);
+  const day   = ist.getDay();
+  const days  = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const hh    = String(ist.getHours()).padStart(2,"0");
+  const mm    = String(ist.getMinutes()).padStart(2,"0");
 
+  // ── Still requesting ──────────────────────────────────────────────────────
   if (!gann) return (
     <PanelWrap>
       <SL icon="◤">Gann Analysis</SL>
@@ -555,55 +519,113 @@ function GannPanel({ gann }) {
     </PanelWrap>
   );
 
-  if (gann.marketClosed || (!gann.signal && gann.error)) return (
+  // ── No analysis data at all (server never ran during market hours) ─────────
+  // Only show empty placeholder when there truly is no signal AND no cache.
+  // _usingCachedLTP means we DO have cached data — fall through to full panel.
+  const hasSignal = !!(gann.signal && !gann.error);
+  const noCacheAtAll = !hasSignal && !gann._usingCachedLTP;
+
+  if (noCacheAtAll && (gann.marketClosed || gann.error)) return (
     <PanelWrap borderColor="#1a3040">
       <SL icon="◤">Gann Analysis</SL>
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:10, padding:"16px 8px" }}>
         <div style={{ fontSize:28, opacity:0.15 }}>◤</div>
         <div style={{ fontSize:9, fontWeight:700, color:"#ffd54f", fontFamily:"IBM Plex Mono,monospace", textAlign:"center", letterSpacing:1 }}>
-          {isWeekend ? `MARKET CLOSED — ${days[day].toUpperCase()}` : gann._marketStatus || "MARKET CLOSED"}
+          {day === 0 || day === 6
+            ? `MARKET CLOSED — ${days[day].toUpperCase()}`
+            : gann._marketStatus || "MARKET CLOSED"}
         </div>
         <div style={{ fontSize:8, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", textAlign:"center", lineHeight:1.7 }}>
-          {isWeekend ? "Gann data will load\nMon 9:15 AM IST" : "Data loads at\n9:15 AM IST"}
+          {day === 0 || day === 6
+            ? "Gann data will load\nMon 9:00 AM IST"
+            : "Data loads at\n9:00 AM IST"}
         </div>
-        <div style={{ fontSize:7, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace" }}>{hh}:{mm} IST · {days[day]}</div>
-        {gann.symbol && <div style={{ fontSize:7, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace", padding:"2px 6px", border:"1px solid #1a3040", borderRadius:2 }}>{gann.symbol}</div>}
+        <div style={{ fontSize:7, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace" }}>
+          {hh}:{mm} IST · {days[day]}
+        </div>
+        {gann.symbol && (
+          <div style={{ fontSize:7, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace", padding:"2px 6px", border:"1px solid #1a3040", borderRadius:2 }}>
+            {gann.symbol}
+          </div>
+        )}
       </div>
     </PanelWrap>
   );
 
-  const sig    = gann.signal || {}, son = gann.squareOfNine || {};
-  const fan    = gann.priceOnUpFan || gann.priceOnDownFan || null;
-  const cycles = (gann.timeCycles || []).slice(0,5);
-  const gAlerts  = (gann.alerts || []).filter(a => a.priority === "HIGH").slice(0,2);
-  const levels   = gann.keyLevels || {}, cardinal = gann.cardinalCross || {};
-  const gBias    = sig.bias || "NEUTRAL", gScore = sig.score ?? null;
-  const gc       = gannPalette(gBias);
-  const proxC    = { IMMINENT:"#ef5350", THIS_WEEK:"#ffd54f", THIS_FORTNIGHT:"#ff8a65", THIS_MONTH:"#4fc3f7" };
-  const cycC     = { EXTREME:"#ef5350", MAJOR:"#ff8a65", SIGNIFICANT:"#ffd54f", MINOR:"#4a9abb" };
-  const isStale  = gann._usingCachedLTP || gann._marketStatus;
+  // ── Full panel — live OR last-known-price (cached outside market hours) ────
+  const sig     = gann.signal || {};
+  const son     = gann.squareOfNine || {};
+  const fan     = gann.priceOnUpFan || gann.priceOnDownFan || null;
+  const cycles  = (gann.timeCycles || []).slice(0, 5);
+  const gAlerts = (gann.alerts || []).filter(a => a.priority === "HIGH").slice(0, 2);
+  const levels  = gann.keyLevels || {};
+  const cardinal = gann.cardinalCross || {};
+  const gBias   = sig.bias || "NEUTRAL";
+  const gScore  = sig.score ?? null;
+  const gc      = gannPalette(gBias);
+  const proxC   = { IMMINENT:"#ef5350", THIS_WEEK:"#ffd54f", THIS_FORTNIGHT:"#ff8a65", THIS_MONTH:"#4fc3f7" };
+  const cycC    = { EXTREME:"#ef5350", MAJOR:"#ff8a65", SIGNIFICANT:"#ffd54f", MINOR:"#4a9abb" };
+
+  // Build "last updated at HH:MM IST · Day" from _lastUpdatedAt ISO string
+  let lastUpdateLabel = null;
+  if (gann._lastUpdatedAt) {
+    try {
+      const updIST = new Date(new Date(gann._lastUpdatedAt).getTime() + 5.5 * 3600000);
+      const uh  = String(updIST.getUTCHours()).padStart(2, "0");
+      const um  = String(updIST.getUTCMinutes()).padStart(2, "0");
+      const uday = days[updIST.getUTCDay()];
+      lastUpdateLabel = `${uh}:${um} IST · ${uday}`;
+    } catch (_) {}
+  }
+
+  // Show stale banner when: explicitly cached, OR market is closed with a status tag
+  const showStaleBanner = gann._usingCachedLTP || (!isMarketOpen() && gann._marketStatus);
 
   return (
     <PanelWrap borderColor={gc.border}>
       <SL icon="◤">Gann Analysis</SL>
-      {isStale && (
-        <div style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:"#ffd54f", background:"#1a1000", border:"1px solid #ffd54f22", borderRadius:3, padding:"2px 6px", marginBottom:6, textAlign:"center" }}>
-          ◷ Last known price · {gann._marketStatus || "Market closed"}
+
+      {/* ── FIX 7: Last known price banner (replaces blank screen) ── */}
+      {showStaleBanner && (
+        <div style={{
+          display:"flex", alignItems:"center", justifyContent:"space-between",
+          fontSize:7, fontFamily:"IBM Plex Mono,monospace",
+          color:"#ffd54f", background:"#1a1000",
+          border:"1px solid #ffd54f33", borderRadius:3,
+          padding:"3px 8px", marginBottom:6, gap:6,
+        }}>
+          <span style={{ whiteSpace:"nowrap" }}>◷ Last known price</span>
+          <span style={{ color:"#a08020", textAlign:"right", lineHeight:1.4 }}>
+            {gann._marketStatus || marketStatusLabel()}
+            {lastUpdateLabel ? ` · ${lastUpdateLabel}` : ""}
+          </span>
         </div>
       )}
+
+      {/* ── Score + bias header ── */}
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, padding:"6px 8px", background:gc.bg, borderRadius:4, border:`1px solid ${gc.border}` }}>
         <div style={{ textAlign:"center", minWidth:40 }}>
-          <div style={{ fontSize:22, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace", lineHeight:1 }}>{gScore != null ? Math.round(gScore) : "—"}</div>
+          <div style={{ fontSize:22, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace", lineHeight:1 }}>
+            {gScore != null ? Math.round(gScore) : "—"}
+          </div>
           <div style={{ fontSize:7, color:gc.color, fontFamily:"IBM Plex Mono,monospace", opacity:0.7 }}>/100</div>
         </div>
         <div style={{ flex:1 }}>
-          <div style={{ fontSize:11, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace" }}>{gBias.replace(/_/g," ")}</div>
-          {sig.summary && <div style={{ fontSize:8, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace", lineHeight:1.3 }}>{sig.summary.replace(/^Gann: [A-Z]+ \(score \d+\/100\)\.\s?/,"")}</div>}
+          <div style={{ fontSize:11, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace" }}>
+            {gBias.replace(/_/g," ")}
+          </div>
+          {sig.summary && (
+            <div style={{ fontSize:8, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace", lineHeight:1.3 }}>
+              {sig.summary.replace(/^Gann: [A-Z]+ \(score \d+\/100\)\.\s?/,"")}
+            </div>
+          )}
         </div>
         {cardinal?.inCardinalZone?.strength === "ON_CARDINAL" && (
           <span style={{ fontSize:7, padding:"1px 4px", borderRadius:2, background:"#1a0800", border:"1px solid #ffd54f44", color:"#ffd54f", fontFamily:"IBM Plex Mono,monospace" }}>CARDINAL</span>
         )}
       </div>
+
+      {/* ── Key levels ── */}
       {(levels.supports?.length > 0 || levels.resistances?.length > 0) && (
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5, marginBottom:8 }}>
           <div style={{ background:"#071828", border:"1px solid #00ff9c22", borderRadius:4, padding:"5px 7px" }}>
@@ -626,29 +648,41 @@ function GannPanel({ gann }) {
           </div>
         </div>
       )}
+
+      {/* ── Square of Nine ── */}
       {son?.positionOnSquare && (
         <div style={{ marginBottom:6 }}>
           <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>SQUARE OF NINE</div>
           <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
-            <span style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#4fc3f7" }}>{son.angleOnSquare?.toFixed(1)}° on square</span>
+            <span style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#4fc3f7" }}>
+              {son.angleOnSquare?.toFixed(1)}° on square
+            </span>
             <span style={{ fontSize:7, padding:"1px 4px", borderRadius:2, fontFamily:"IBM Plex Mono,monospace",
               background:son.positionOnSquare.strength==="EXTREME"?"#1a0000":son.positionOnSquare.strength==="STRONG"?"#1a0800":"#0a1020",
               color:son.positionOnSquare.strength==="EXTREME"?"#ef5350":son.positionOnSquare.strength==="STRONG"?"#ffd54f":"#4a9abb" }}>
               {son.positionOnSquare.strength}
             </span>
           </div>
-          <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:2 }}>{son.positionOnSquare.label}</div>
+          <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:2 }}>
+            {son.positionOnSquare.label}
+          </div>
         </div>
       )}
+
+      {/* ── Gann Fan ── */}
       {fan && (
         <div style={{ marginBottom:6, padding:"5px 7px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>
           <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginBottom:2 }}>GANN FAN</div>
           <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:fan.aboveMasterAngle?"#00ff9c":"#ef5350", fontWeight:700 }}>
             {fan.aboveMasterAngle?"▲ Above":"▼ Below"} 1×1 master
-            {fan.criticalLevel != null && <span style={{ color:"#a8c8e0", fontWeight:400 }}> @ ₹{fmtInt(fan.criticalLevel)}</span>}
+            {fan.criticalLevel != null && (
+              <span style={{ color:"#a8c8e0", fontWeight:400 }}> @ ₹{fmtInt(fan.criticalLevel)}</span>
+            )}
           </div>
         </div>
       )}
+
+      {/* ── Time Cycles ── */}
       {cycles.length > 0 && (
         <div style={{ marginBottom:6 }}>
           <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>TIME CYCLES</div>
@@ -662,23 +696,38 @@ function GannPanel({ gann }) {
           ))}
         </div>
       )}
+
+      {/* ── High priority alerts ── */}
       {gAlerts.length > 0 && (
         <div>
           <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>HIGH PRIORITY</div>
           {gAlerts.map((a,i) => (
-            <div key={i} style={{ padding:"4px 6px", background:"#1a0000", border:"1px solid #ef535033", borderRadius:3, marginBottom:3, fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#ef5350", fontWeight:700 }}>{a.message}</div>
+            <div key={i} style={{ padding:"4px 6px", background:"#1a0000", border:"1px solid #ef535033", borderRadius:3, marginBottom:3, fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#ef5350", fontWeight:700 }}>
+              {a.message}
+            </div>
           ))}
         </div>
       )}
+
+      {/* ── Headline ── */}
       {gann.headline && (
-        <div style={{ fontSize:8, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:4, lineHeight:1.4, padding:"4px 6px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>{gann.headline}</div>
+        <div style={{ fontSize:8, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:4, lineHeight:1.4, padding:"4px 6px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>
+          {gann.headline}
+        </div>
+      )}
+
+      {/* ── Last LTP row (shown only when using cached data) ── */}
+      {gann._usingCachedLTP && gann.ltp && (
+        <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, fontFamily:"IBM Plex Mono,monospace", padding:"5px 0", borderTop:"1px solid #1a3040", marginTop:6 }}>
+          <span style={{ color:"#c8d8e8" }}>Last LTP</span>
+          <span style={{ color:"#ffd54f", fontWeight:700 }}>₹{fmtInt(gann.ltp)}</span>
+        </div>
       )}
     </PanelWrap>
   );
 }
 
 // ════════════════ Market Structure Panel ══════════════════════════════════════
-// FIX 6: ivEnvironment label — MIXED_IV shown in amber with explanation tooltip
 
 function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol, spot, callWall, putWall, gammaFlip, maxPain, pcr, skew25 }) {
   const dCall  = callWall  ? calcPct(callWall,  spot) : null;
@@ -699,23 +748,25 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
   else if (gammaFlip && spot <  gammaFlip)         { zoneLabel = "Below Gamma Flip — MR";     zoneColor = "#ffd54f"; }
   else                                              { zoneLabel = "Between walls";             zoneColor = "#4a9abb"; }
 
-  // FIX 6: map ivEnvironment to display label + color
   const ivEnvDisplay = {
     RICH_SELL_PREMIUM: { label: "RICH — SELL PREMIUM",  color: "#ef5350" },
     ELEVATED:          { label: "ELEVATED",              color: "#ff8a65" },
     NORMAL:            { label: "NORMAL",                color: "#a0b8cc" },
     CHEAP_BUY_OPTIONS: { label: "CHEAP — BUY OPTIONS",  color: "#00ff9c" },
     VERY_CHEAP:        { label: "VERY CHEAP",            color: "#00ff9c" },
-    // FIX 6: MIXED_IV — amber, clearly distinct from both buy and sell
     MIXED_IV:          { label: "⚡ MIXED IV",           color: "#ffd54f" },
   };
   const ivEnv     = structure.ivEnvironment || "NORMAL";
   const ivDisplay = ivEnvDisplay[ivEnv] || { label: ivEnv.replace(/_/g," "), color: "#a0b8cc" };
 
+  // FIX 7: show Gann badge + levels even when using cached data outside hours
+  const gannHasData = gannData && (gannData.signal || gannData._usingCachedLTP);
+  const gannHasLevels = gannData?.keyLevels && gannHasData;
+
   return (
     <PanelWrap>
       <SL>Market Structure</SL>
-      {gannData && !gannData.marketClosed && (
+      {gannHasData && (
         <div style={{ marginBottom:6 }}><GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={false} /></div>
       )}
       {spot && (
@@ -743,7 +794,7 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5, marginBottom:8 }}>
         <MiniCard label="SUPPORT (OI)"   value={structure.supportFromOI    ? structure.supportFromOI.toLocaleString("en-IN")    : "—"} sub="put OI wall"  color="#00ff9c" />
         <MiniCard label="RESIST (OI)"    value={structure.resistanceFromOI ? structure.resistanceFromOI.toLocaleString("en-IN") : "—"} sub="call OI wall" color="#ef5350" />
-        {gannData?.keyLevels && !gannData.marketClosed && (<>
+        {gannHasLevels && (<>
           <MiniCard label="SUPPORT (GANN)" value={gannData.keyLevels.supports?.[0]?.price    ? gannData.keyLevels.supports[0].price.toLocaleString("en-IN")    : "—"} sub={gannData.keyLevels.supports?.[0]?.source    || "SoN"} color="#00ff9c" />
           <MiniCard label="RESIST (GANN)"  value={gannData.keyLevels.resistances?.[0]?.price ? gannData.keyLevels.resistances[0].price.toLocaleString("en-IN") : "—"} sub={gannData.keyLevels.resistances?.[0]?.source || "SoN"} color="#ef5350" />
         </>)}
@@ -758,30 +809,26 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
           {spot && callWall && <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0" }}><span style={{ color:"#c8d8e8" }}>Breakout</span><span style={{ color:spot>callWall*0.99?"#00ff9c":"#ef5350", fontWeight:700 }}>{spot>callWall*0.99?"High — at resistance":"Low — below call wall"}</span></div>}
         </div>
       )}
-
-      {/* FIX 6: IV environment — MIXED_IV shown in amber with ⚡ prefix */}
       {structure.ivEnvironment && (
         <div style={{ fontSize:8, fontFamily:"IBM Plex Mono,monospace", color:"#a0b8cc", marginTop:6, display:"flex", alignItems:"center", gap:4 }}>
           <span>IV env:</span>
           <span style={{ color: ivDisplay.color, fontWeight: 700 }}>{ivDisplay.label}</span>
         </div>
       )}
-      {/* FIX 6: if MIXED_IV, show brief explanation below */}
       {ivEnv === "MIXED_IV" && (
         <div style={{ fontSize:7, fontFamily:"IBM Plex Mono,monospace", color:"#ffd54f99", marginTop:3, lineHeight:1.5, padding:"3px 6px", background:"#1a100033", borderRadius:3, border:"1px solid #ffd54f22" }}>
           IV Rank high vs history but cheap vs realized vol. Avoid premium selling — wait for VRP to turn positive.
         </div>
       )}
-
       {structure.straddlePrice != null && (
         <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, fontFamily:"IBM Plex Mono,monospace", padding:"5px 0", borderTop:"1px solid #1a3040", marginTop:6 }}>
           <span style={{ color:"#c8d8e8" }}>ATM Straddle</span>
           <span style={{ color:"#e8f2ff", fontWeight:700 }}>₹{fmt2(structure.straddlePrice)}</span>
         </div>
       )}
-      {gannData?.keyLevels?.masterAngle != null && !gannData.marketClosed && (
+      {gannHasLevels && gannData.keyLevels.masterAngle != null && (
         <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, fontFamily:"IBM Plex Mono,monospace", padding:"5px 0", borderTop:"1px solid #1a3040" }}>
-          <span style={{ color:"#c8d8e8" }}>Gann 1×1</span>
+          <span style={{ color:"#c8d8e8" }}>Gann 1×1{gannData._usingCachedLTP ? " ◷" : ""}</span>
           <span style={{ color:"#ffd54f", fontWeight:700 }}>₹{Math.round(gannData.keyLevels.masterAngle).toLocaleString("en-IN")}</span>
         </div>
       )}
@@ -881,8 +928,9 @@ export default function OptionsIntelligencePage({ socket }) {
     ? (gannMap[toGannSym(activeSymbol)] || gannMap[activeSymbol] || gannMap[activeSymbol?.toUpperCase()] || null)
     : null;
 
+  // FIX 7: build badge map even when using cached data outside market hours
   const gannBadgeMap = {};
-  if (activeSymbol && gannData && !gannData.marketClosed) {
+  if (activeSymbol && gannData && (gannData.signal || gannData._usingCachedLTP)) {
     const gs = gannData.signal || {}, gl = gannData.keyLevels || {};
     gannBadgeMap[activeSymbol] = {
       bias:       gs.bias || "NEUTRAL",
@@ -965,7 +1013,10 @@ export default function OptionsIntelligencePage({ socket }) {
                   <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}>
                     <span style={{ fontFamily:"IBM Plex Mono,monospace", fontSize:13, fontWeight:700, color:"#e8f2ff" }}>{activeSymbol}</span>
                     <span style={{ fontSize:9, color:band?.color, fontFamily:"IBM Plex Mono,monospace" }}>{bias}</span>
-                    {gannData && !gannData.marketClosed && <GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={true} />}
+                    {/* FIX 7: show badge even with cached data */}
+                    {gannData && (gannData.signal || gannData._usingCachedLTP) && (
+                      <GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={true} />
+                    )}
                   </div>
                   <div style={{ display:"flex", gap:3, flexWrap:"wrap" }}>
                     {strategy.slice(0,4).map((s,i) => <StrategyTag key={i} signal={s} />)}

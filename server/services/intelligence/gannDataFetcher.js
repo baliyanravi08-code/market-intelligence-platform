@@ -4,24 +4,21 @@
  * gannDataFetcher.js
  * Location: server/services/intelligence/gannDataFetcher.js
  *
- * FIX (this session):
- *   The original code used setTimeout(fetchAndIngestAll, 15000) at startup.
- *   This caused a race condition: the 15s delay was not long enough for
- *   loadInstrumentMaster() to finish fetching 2452 symbols from the Upstox CDN,
- *   so all 200 stocks got fallback keys like "NSE_EQ|AMBALALSA" → HTTP 400.
- *
- *   Fix: startGannDataFetcher() no longer fires the initial fetch itself.
- *   server.js calls loadInstrumentMaster().finally(() => startGannDataFetcher())
- *   so the map is guaranteed to be populated before fetchAndIngestAll() runs.
- *   startGannDataFetcher() now only:
- *     1. Calls fetchAndIngestAll() immediately (map is ready by the time it's called).
- *     2. Schedules the daily 09:00 AM IST refresh.
+ * MARKET HOURS UPDATE:
+ *   - fetchAndIngestAll() only runs Mon–Fri 09:00–15:45 IST.
+ *   - Outside market hours: skips all HTTP calls, zero data usage.
+ *   - Last LTP is preserved in swingStore / gannIntegration cache,
+ *     so the frontend still shows last known Gann values.
+ *   - Daily scheduler fires at 09:00 IST (not 09:30) so first fetch
+ *     lands before significant market movement.
+ *   - No polling loop during closed hours — completely silent.
  */
 
 const fs   = require("fs");
 const path = require("path");
 
 const { ingestSwingData } = require("./gannIntegration");
+const { isMarketOpen, marketStatus } = require("./marketHours");
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const MCAP_DB_PATH  = path.join(__dirname, "../../data/marketCapDB.json");
@@ -42,9 +39,6 @@ function getToken() {
 }
 
 // ─── Instrument map ───────────────────────────────────────────────────────────
-// FIX: starts as empty map. server.js calls setInstrumentMap() synchronously
-// BEFORE startGannDataFetcher() is called, so by the time fetchAndIngestAll()
-// runs the map is fully populated with real ISIN instrument keys.
 let _instrumentMap = {};
 
 function setInstrumentMap(map) {
@@ -55,7 +49,6 @@ function setInstrumentMap(map) {
 }
 
 function getInstrumentKey(symbol) {
-  // Use real ISIN key from master; only fall back if genuinely missing
   const key = _instrumentMap[symbol];
   if (!key) {
     console.warn(`📐 Gann fetcher: no instrument key for ${symbol} — skipping`);
@@ -66,7 +59,6 @@ function getInstrumentKey(symbol) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 function fmtDate(d) { return d.toISOString().slice(0, 10); }
 
 /**
@@ -104,14 +96,14 @@ function computeLevels(candles) {
   }
 
   if (swingHigh.price === -Infinity) swingHigh = { price: high52w, date: high52wDate.slice(0, 10) };
-  if (swingLow.price  ===  Infinity) swingLow  = { price: low52w,  date: low52wDate.slice(0, 10)  };
+  if (swingLow.price  ===  Infinity) swingLow  = { price: low52w,  date: low52wDate.slice(0, 10) };
 
   return { high52w, low52w, swingHigh, swingLow };
 }
 
 // ─── Upstox candle fetch ──────────────────────────────────────────────────────
 async function fetchCandles(symbol) {
-  const token    = getToken();
+  const token = getToken();
   if (!token) throw new Error("No Upstox token available");
 
   const instrKey = getInstrumentKey(symbol);
@@ -133,21 +125,27 @@ async function fetchCandles(symbol) {
 
   const json = await res.json();
   const raw  = json?.data?.candles || [];
-  return raw.map(([ts, o, h, l, c, v]) => ({ timestamp: ts, open: o, high: h, low: l, close: c, volume: v }));
+  return raw.map(([ts, o, h, l, c, v]) => ({
+    timestamp: ts, open: o, high: h, low: l, close: c, volume: v,
+  }));
 }
 
 // ─── Main fetch loop ──────────────────────────────────────────────────────────
 async function fetchAndIngestAll() {
-  // ── Market hours guard ──────────────────────────────────────────
-  const { isMarketOpen, marketStatus } = require("./marketHours");
+  // ── MARKET HOURS GUARD ────────────────────────────────────────────────────
+  // Only fetch during Mon–Fri 09:00–15:45 IST. Outside these hours we do
+  // nothing — the frontend shows the last cached Gann values with a
+  // "Last known price" indicator. Zero data usage when market is closed.
   if (!isMarketOpen()) {
-    console.log(`📐 Gann fetcher: skipping — market is ${marketStatus()}`);
+    const status = marketStatus();
+    console.log(`📐 Gann fetcher: market is ${status} — skipping fetch, preserving last values`);
     return;
   }
-  // ── existing code below ─────────────────────────────────────────
+
+  // ── Instrument map check ──────────────────────────────────────────────────
   const mapSize = Object.keys(_instrumentMap).length;
   if (mapSize === 0) {
-    console.warn("📐 Gann fetcher: instrument map is EMPTY — all fetches will fail. Check server.js wiring.");
+    console.warn("📐 Gann fetcher: instrument map is EMPTY — all fetches will fail.");
   } else {
     console.log(`📐 Gann fetcher: instrument map has ${mapSize} symbols — starting data pull`);
   }
@@ -164,11 +162,17 @@ async function fetchAndIngestAll() {
     .filter(e => e.symbol && e.lastPrice > 0)
     .slice(0, MAX_STOCKS);
 
-  console.log(`📐 Gann fetcher: starting data pull for ${entries.length} NSE stocks…`);
+  console.log(`📐 Gann fetcher: pulling data for ${entries.length} NSE stocks…`);
 
   let ok = 0, fail = 0;
 
   for (const entry of entries) {
+    // Re-check market hours on each iteration — stop mid-loop if market closes
+    if (!isMarketOpen()) {
+      console.log(`📐 Gann fetcher: market closed mid-run — stopping at ${ok} stocks`);
+      break;
+    }
+
     const { symbol, lastPrice, name } = entry;
     try {
       const candles = await fetchCandles(symbol);
@@ -202,34 +206,62 @@ async function fetchAndIngestAll() {
 
 // ─── Scheduler ────────────────────────────────────────────────────────────────
 /**
- * FIX: No longer contains a setTimeout() for the initial fetch.
- * server.js calls startGannDataFetcher() after loadInstrumentMaster() resolves,
- * so we can call fetchAndIngestAll() immediately — the map is ready.
+ * Starts the Gann data fetcher.
+ *
+ * Behaviour:
+ *   - If market is open NOW → run immediately (server restarted during hours).
+ *   - If market is closed → skip initial run, schedule only the 09:00 IST daily refresh.
+ *   - Daily refresh fires every Mon–Fri at 09:00 IST (03:30 UTC).
+ *   - After 15:45 IST the fetcher goes completely silent until next morning.
+ *   - Zero HTTP calls outside market hours.
  */
 function startGannDataFetcher() {
-  // Kick off immediately — map is guaranteed populated by caller
-  fetchAndIngestAll().catch(e =>
-    console.error("📐 Gann fetcher initial run error:", e.message)
-  );
+  // Only run immediately if market is actually open right now
+  if (isMarketOpen()) {
+    console.log(`📐 Gann fetcher: market is open — starting initial data pull`);
+    fetchAndIngestAll().catch(e =>
+      console.error("📐 Gann fetcher initial run error:", e.message)
+    );
+  } else {
+    console.log(`📐 Gann fetcher: market is ${marketStatus()} — skipping initial fetch`);
+  }
 
-  // Schedule daily refresh at 09:00 AM IST (03:30 UTC)
-  function scheduleDailyRefresh() {
-    const now     = new Date();
-    const nextRun = new Date();
-    nextRun.setUTCHours(3, 30, 0, 0);
-    if (nextRun <= now) nextRun.setUTCDate(nextRun.getUTCDate() + 1);
+  // Schedule daily refresh at 09:00 IST (03:30 UTC) every weekday
+  scheduleDailyRefresh();
+}
 
-    const msUntil = nextRun - now;
-    console.log(`📐 Gann fetcher: next daily refresh in ${Math.round(msUntil / 60000)} min`);
+function scheduleDailyRefresh() {
+  const now     = new Date();
+  const nextRun = new Date();
 
-    setTimeout(() => {
+  // Target 03:30 UTC = 09:00 IST
+  nextRun.setUTCHours(3, 30, 0, 0);
+
+  // If 09:00 IST already passed today, schedule for tomorrow
+  if (nextRun <= now) {
+    nextRun.setUTCDate(nextRun.getUTCDate() + 1);
+  }
+
+  // Skip to Monday if next run lands on weekend
+  const nextDay = nextRun.getUTCDay();
+  if (nextDay === 0) nextRun.setUTCDate(nextRun.getUTCDate() + 1); // Sun → Mon
+  if (nextDay === 6) nextRun.setUTCDate(nextRun.getUTCDate() + 2); // Sat → Mon
+
+  const msUntil = nextRun - now;
+  const minsUntil = Math.round(msUntil / 60000);
+  console.log(`📐 Gann fetcher: next daily refresh in ${minsUntil} min (${nextRun.toISOString()})`);
+
+  setTimeout(() => {
+    // Double-check it's actually a market day before fetching
+    if (isMarketOpen()) {
       fetchAndIngestAll()
         .catch(e => console.error("📐 Gann fetcher daily error:", e.message))
         .finally(() => scheduleDailyRefresh());
-    }, msUntil);
-  }
-
-  scheduleDailyRefresh();
+    } else {
+      console.log(`📐 Gann fetcher: daily trigger fired but market is ${marketStatus()} — skipping`);
+      scheduleDailyRefresh();
+    }
+  }, msUntil);
 }
 
 module.exports = { startGannDataFetcher, fetchAndIngestAll, setInstrumentMap };
