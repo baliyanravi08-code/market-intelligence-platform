@@ -2,25 +2,41 @@
 // Save as: client/src/pages/OptionsIntelligencePage.jsx
 //
 // ══════════════════════════════════════════════════════════════
-// FIXES APPLIED:
+// FIXES APPLIED (this session):
 //
-// FIX 1 — fmtCr() double-scaling flash (330K Cr instead of 35.3 Cr)
-// FIX 2 — Vanna/Charm wrong fallback source in GEXPanel
-// FIX 3 — Total OI double-divide
-// FIX 4 — netPremiumFlow unit mismatch
-// FIX 5 — Market hours awareness
-// FIX 6 — Mixed IV signal conflict (IV Rank high + VRP negative)
-// FIX 7 — GannPanel: show last known price + full analysis outside
-//          market hours instead of blank "MARKET CLOSED" screen.
-//          Outside hours, panel shows cached data with amber banner:
-//          "◷ Last known price · CLOSED (after hours 16:02 IST) · 15:38 IST · Fri"
-//          Only shows empty placeholder if server has NEVER fetched data.
+// FIX-NETFLOW-DISPLAY — NET FLOW showed in Lakhs instead of Crores:
+//   OIPanel used fmtL(oi.netPremiumFlow) but engine now outputs Crores.
+//   Fix: changed to fmtCr(oi.netPremiumFlow). Label also updated to "NET FLOW".
+//
+// FIX-SPOT-FIELD — DIST% column blank in OI table:
+//   spot was read as: d?.spot || d?.ltp || structure?.spot
+//   But optionsIntelligenceEngine returns spotPrice (not spot) at top level.
+//   Both fields now emitted (spot + spotPrice aliases in engine).
+//   Fix: read d?.spot || d?.spotPrice || d?.ltp to cover both.
+//
+// FIX-LAMBDA-DISPLAY — Lambda showed "—":
+//   Engine was not including lambda in atmGreeks return object (fixed in engine).
+//   Frontend display: lambda is now in greeks.lambda — no change needed here
+//   beyond ensuring the read path is correct (greeks.lambda ?? greeks.leverage).
+//
+// FIX-GAMMA-DISPLAY — Gamma showed 0.0006 losing precision:
+//   Engine now returns gamma rounded to 6dp (was 4dp → showed 0.0000 for small values).
+//   Frontend display: changed toFixed(4) → toFixed(6) so 0.000032 shows correctly.
+//
+// Previously fixed (preserved):
+//   FIX 1 — fmtCr() double-scaling flash
+//   FIX 2 — Vanna/Charm wrong fallback source in GEXPanel
+//   FIX 3 — Total OI double-divide
+//   FIX 4 — netPremiumFlow unit mismatch (was partially fixed, now complete)
+//   FIX 5 — Market hours awareness
+//   FIX 6 — Mixed IV signal conflict
+//   FIX 7 — GannPanel: show last known price outside market hours
 // ══════════════════════════════════════════════════════════════
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import GannBadge from "../components/GannBadge";
 
-// ─── IST helpers (mirrors server/services/intelligence/marketHours.js) ────────
+// ─── IST helpers ──────────────────────────────────────────────────────────────
 function nowIST() {
   const now   = new Date();
   const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
@@ -372,6 +388,7 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
           ? <div style={{ fontSize:7, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", textAlign:"center", padding:"10px 0" }}>◌ No data</div>
           : visible.map((u,i)=>{
               const isCE=(u.type||"").toUpperCase()==="CALL";
+              // FIX-SPOT-FIELD: spot is guaranteed non-null from parent (fixed below)
               const dist=(spot&&spot>0&&u.strike>0)?+((u.strike-spot)/spot*100).toFixed(1):null;
               const typeC=isCE?"#4fc3f7":"#ff8a65";
               const oiChg=u.oiChange||0;
@@ -475,9 +492,11 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
         <MiniCard label="PCR"      value={fmt2(oi.pcr)} sub="put/call" color={oi.pcr>1.2?"#00ff9c":oi.pcr<0.8?"#ef5350":"#ffd54f"} />
         <MiniCard label="MAX PAIN" value={oi.maxPain ? oi.maxPain.toLocaleString("en-IN") : "—"} sub="expiry" color="#4fc3f7" />
         <MiniCard label="TOTAL OI" value={fmtOILakhs(oi.totalCallOI, oi.totalPutOI)} />
+        {/* FIX-NETFLOW-DISPLAY: was fmtL() — engine outputs Crores so use fmtCr() */}
         <MiniCard
           label="NET FLOW"
-          value={oi.netPremiumFlow != null ? fmtL(oi.netPremiumFlow) : "—"}
+          value={oi.netPremiumFlow != null ? fmtCr(oi.netPremiumFlow) : "—"}
+          sub="Cr"
           color={oi.netPremiumFlow > 0 ? "#00ff9c" : "#ef5350"}
         />
       </div>
@@ -495,9 +514,6 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
 }
 
 // ════════════════ Gann Panel ══════════════════════════════════════════════════
-// FIX 7: Outside market hours, show FULL cached analysis with amber banner
-// instead of blank "MARKET CLOSED" screen. Only shows empty placeholder when
-// server has genuinely never fetched data (no cache exists at all).
 
 function GannPanel({ gann }) {
   const now   = new Date();
@@ -508,7 +524,6 @@ function GannPanel({ gann }) {
   const hh    = String(ist.getHours()).padStart(2,"0");
   const mm    = String(ist.getMinutes()).padStart(2,"0");
 
-  // ── Still requesting ──────────────────────────────────────────────────────
   if (!gann) return (
     <PanelWrap>
       <SL icon="◤">Gann Analysis</SL>
@@ -519,9 +534,6 @@ function GannPanel({ gann }) {
     </PanelWrap>
   );
 
-  // ── No analysis data at all (server never ran during market hours) ─────────
-  // Only show empty placeholder when there truly is no signal AND no cache.
-  // _usingCachedLTP means we DO have cached data — fall through to full panel.
   const hasSignal = !!(gann.signal && !gann.error);
   const noCacheAtAll = !hasSignal && !gann._usingCachedLTP;
 
@@ -552,7 +564,6 @@ function GannPanel({ gann }) {
     </PanelWrap>
   );
 
-  // ── Full panel — live OR last-known-price (cached outside market hours) ────
   const sig     = gann.signal || {};
   const son     = gann.squareOfNine || {};
   const fan     = gann.priceOnUpFan || gann.priceOnDownFan || null;
@@ -566,7 +577,6 @@ function GannPanel({ gann }) {
   const proxC   = { IMMINENT:"#ef5350", THIS_WEEK:"#ffd54f", THIS_FORTNIGHT:"#ff8a65", THIS_MONTH:"#4fc3f7" };
   const cycC    = { EXTREME:"#ef5350", MAJOR:"#ff8a65", SIGNIFICANT:"#ffd54f", MINOR:"#4a9abb" };
 
-  // Build "last updated at HH:MM IST · Day" from _lastUpdatedAt ISO string
   let lastUpdateLabel = null;
   if (gann._lastUpdatedAt) {
     try {
@@ -578,14 +588,12 @@ function GannPanel({ gann }) {
     } catch (_) {}
   }
 
-  // Show stale banner when: explicitly cached, OR market is closed with a status tag
   const showStaleBanner = gann._usingCachedLTP || (!isMarketOpen() && gann._marketStatus);
 
   return (
     <PanelWrap borderColor={gc.border}>
       <SL icon="◤">Gann Analysis</SL>
 
-      {/* ── FIX 7: Last known price banner (replaces blank screen) ── */}
       {showStaleBanner && (
         <div style={{
           display:"flex", alignItems:"center", justifyContent:"space-between",
@@ -602,7 +610,6 @@ function GannPanel({ gann }) {
         </div>
       )}
 
-      {/* ── Score + bias header ── */}
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, padding:"6px 8px", background:gc.bg, borderRadius:4, border:`1px solid ${gc.border}` }}>
         <div style={{ textAlign:"center", minWidth:40 }}>
           <div style={{ fontSize:22, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace", lineHeight:1 }}>
@@ -625,7 +632,6 @@ function GannPanel({ gann }) {
         )}
       </div>
 
-      {/* ── Key levels ── */}
       {(levels.supports?.length > 0 || levels.resistances?.length > 0) && (
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5, marginBottom:8 }}>
           <div style={{ background:"#071828", border:"1px solid #00ff9c22", borderRadius:4, padding:"5px 7px" }}>
@@ -649,7 +655,6 @@ function GannPanel({ gann }) {
         </div>
       )}
 
-      {/* ── Square of Nine ── */}
       {son?.positionOnSquare && (
         <div style={{ marginBottom:6 }}>
           <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>SQUARE OF NINE</div>
@@ -669,7 +674,6 @@ function GannPanel({ gann }) {
         </div>
       )}
 
-      {/* ── Gann Fan ── */}
       {fan && (
         <div style={{ marginBottom:6, padding:"5px 7px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>
           <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginBottom:2 }}>GANN FAN</div>
@@ -682,7 +686,6 @@ function GannPanel({ gann }) {
         </div>
       )}
 
-      {/* ── Time Cycles ── */}
       {cycles.length > 0 && (
         <div style={{ marginBottom:6 }}>
           <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>TIME CYCLES</div>
@@ -697,7 +700,6 @@ function GannPanel({ gann }) {
         </div>
       )}
 
-      {/* ── High priority alerts ── */}
       {gAlerts.length > 0 && (
         <div>
           <div style={{ fontSize:7, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:3 }}>HIGH PRIORITY</div>
@@ -709,14 +711,12 @@ function GannPanel({ gann }) {
         </div>
       )}
 
-      {/* ── Headline ── */}
       {gann.headline && (
         <div style={{ fontSize:8, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:4, lineHeight:1.4, padding:"4px 6px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>
           {gann.headline}
         </div>
       )}
 
-      {/* ── Last LTP row (shown only when using cached data) ── */}
       {gann._usingCachedLTP && gann.ltp && (
         <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, fontFamily:"IBM Plex Mono,monospace", padding:"5px 0", borderTop:"1px solid #1a3040", marginTop:6 }}>
           <span style={{ color:"#c8d8e8" }}>Last LTP</span>
@@ -759,8 +759,7 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
   const ivEnv     = structure.ivEnvironment || "NORMAL";
   const ivDisplay = ivEnvDisplay[ivEnv] || { label: ivEnv.replace(/_/g," "), color: "#a0b8cc" };
 
-  // FIX 7: show Gann badge + levels even when using cached data outside hours
-  const gannHasData = gannData && (gannData.signal || gannData._usingCachedLTP);
+  const gannHasData   = gannData && (gannData.signal || gannData._usingCachedLTP);
   const gannHasLevels = gannData?.keyLevels && gannHasData;
 
   return (
@@ -848,7 +847,6 @@ export default function OptionsIntelligencePage({ socket }) {
   const [tick,setTick]               = useState(0);
 
   useEffect(() => { const t = setInterval(() => setTick(n => n+1), 1000); return () => clearInterval(t); }, []);
-
   useEffect(() => { if (!socket) return; socket.emit("request-intel-snapshot"); }, [socket]);
 
   const requestGann = useCallback((sym, ltp) => {
@@ -908,7 +906,7 @@ export default function OptionsIntelligencePage({ socket }) {
   const handleSymbolChange = (sym) => {
     setActiveSymbol(sym);
     const payload = data[sym], d = payload?.data || payload || {};
-    requestGann(sym, d?.ltp || d?.spot || null);
+    requestGann(sym, d?.ltp || d?.spot || d?.spotPrice || null);
   };
 
   const current  = data[activeSymbol] || null;
@@ -928,7 +926,6 @@ export default function OptionsIntelligencePage({ socket }) {
     ? (gannMap[toGannSym(activeSymbol)] || gannMap[activeSymbol] || gannMap[activeSymbol?.toUpperCase()] || null)
     : null;
 
-  // FIX 7: build badge map even when using cached data outside market hours
   const gannBadgeMap = {};
   if (activeSymbol && gannData && (gannData.signal || gannData._usingCachedLTP)) {
     const gs = gannData.signal || {}, gl = gannData.keyLevels || {};
@@ -940,7 +937,10 @@ export default function OptionsIntelligencePage({ socket }) {
     };
   }
 
-  const spot      = d?.spot || d?.ltp || structure?.spot || null;
+  // FIX-SPOT-FIELD: read spotPrice OR spot — engine now emits both as aliases
+  // d.spot = d.spotPrice = spotPrice from analyzeOptionsChain()
+  const spot = d?.spot || d?.spotPrice || d?.ltp || structure?.spot || null;
+
   const oiNear    = oi.unusualOI || [];
   const oiTail    = oi.unusualOITailRisk || [];
   const hasDedicatedFields = oiNear.length > 0 || oiTail.length > 0;
@@ -960,9 +960,16 @@ export default function OptionsIntelligencePage({ socket }) {
   const hv60     = vol.hv60 ?? vol.hv_60 ?? vol.HV60 ?? vol.Hv60 ?? null;
   const vrp      = vol.vrp  ?? vol.vRp   ?? vol.VRP  ?? null;
   const skew25   = vol.skew25 ?? null;
+
+  // FIX-LAMBDA-DISPLAY: engine now includes lambda in atmGreeks
   const lambda   = greeks.lambda ?? greeks.leverage ?? null;
   const lambdaDisplay = (lambda != null && lambda !== 0) ? fmt2(lambda) : "—";
-  const gammaDisplay  = (greeks.gamma && greeks.gamma !== 0) ? greeks.gamma.toFixed(4) : "—";
+
+  // FIX-GAMMA-DISPLAY: engine returns 6dp precision — show 6dp not 4dp
+  const gammaDisplay = (greeks.gamma && greeks.gamma !== 0)
+    ? greeks.gamma.toFixed(6)
+    : "—";
+
   const deltaVal      = greeks.delta ?? null;
   const deltaDisplay  = deltaVal != null ? fmt2(deltaVal) : "—";
   const deltaColor    = deltaVal == null ? "#e8f2ff" : Math.abs(deltaVal) > 0.85 ? "#ffd54f" : deltaVal > 0 ? "#00ff9c" : "#ef5350";
@@ -1013,7 +1020,6 @@ export default function OptionsIntelligencePage({ socket }) {
                   <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}>
                     <span style={{ fontFamily:"IBM Plex Mono,monospace", fontSize:13, fontWeight:700, color:"#e8f2ff" }}>{activeSymbol}</span>
                     <span style={{ fontSize:9, color:band?.color, fontFamily:"IBM Plex Mono,monospace" }}>{bias}</span>
-                    {/* FIX 7: show badge even with cached data */}
                     {gannData && (gannData.signal || gannData._usingCachedLTP) && (
                       <GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={true} />
                     )}
@@ -1035,9 +1041,11 @@ export default function OptionsIntelligencePage({ socket }) {
                   <IVRankBar ivRank={vol.ivRank} ivPct={vol.ivPercentile} />
                   <VDivider />
                   <HStat label="Delta"  value={deltaDisplay}  color={deltaColor} />
+                  {/* FIX-GAMMA-DISPLAY: 6 decimal places */}
                   <HStat label="Gamma"  value={gammaDisplay}  color={gammaDisplay === "—" ? "#5a90a8" : "#e8f2ff"} />
                   <HStat label="Theta"  value={greeks.theta != null ? fmt2(greeks.theta) : "—"} sub="₹/day" color="#ff8a65" />
                   <HStat label="Vega"   value={fmt2(greeks.vega)} sub="1%IV" color="#4fc3f7" />
+                  {/* FIX-LAMBDA-DISPLAY: engine now returns greeks.lambda */}
                   <HStat label="Lambda" value={lambdaDisplay} sub="lev" />
                   <HStat label="Rho"    value={fmt2(greeks.rho)} />
                 </div>

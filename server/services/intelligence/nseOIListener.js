@@ -5,28 +5,31 @@
  * Place at: server/services/intelligence/nseOIListener.js
  *
  * ══════════════════════════════════════════════════════════════
- * FIXES APPLIED (on top of previous session fixes):
+ * FIXES APPLIED (this session):
  *
- * FIX 1 — buildNormalisedRows() used strikeOIMap[null] (always undefined):
- *   Was: strikeOIMap[null]?.[s.strike_price]?.ceOI
- *   Now: the function accepts (name, expiry, rawStrikes) and reads
- *   strikeOIMap[name]?.[expiry]?.[s.strike_price] correctly.
- *   This was silently falling through to raw Upstox oi values — meaning
- *   the merged/stable OI was NEVER being used in the engine rows.
+ * FIX-LOT-1 — accumulateNetFlow() missing lotSize:
+ *   Upstox volume = number of CONTRACTS (lots).
+ *   Notional value = volume × lotSize × LTP.
+ *   Previous code: deltaFlow += (peVolDelta * peLTP) - (ceVolDelta * ceLTP)
+ *   → Missing × lotSize → values were 75x too small for NIFTY.
+ *   Fix: pass lotSize into accumulateNetFlow, multiply deltaFlow by lotSize.
+ *   Divide by 1e7 (not 1e5) to get CRORES (matching optionsIntelligenceEngine).
  *
- * FIX 2 — closes array was never passed to ingestChainData / engine:
- *   The engine needs real daily close prices to compute HV20 / HV60.
- *   We now maintain a per-underlying rolling closes array (spotHistory)
- *   that appends the spotPrice once per poll (60s). After market hours
- *   the last value persists. 252 days rolling window kept.
- *   Passed as 6th arg to ingestChainData → forwarded to analyzeOptionsChain.
+ * FIX-LOT-2 — mergeOI() OI field name:
+ *   Upstox /v2/option/chain market_data may return open_interest OR oi.
+ *   Fix: read both, prefer whichever is non-zero.
  *
- * FIX 3 — ingestChainData signature extended to accept closes[]:
- *   nseOIListener passes closes as 6th positional arg.
- *   optionsIntegration.ingestChainData() now accepts and forwards it.
- *   optionsIntelligenceEngine.analyzeOptionsChain() already accepts closes[].
+ * FIX-LOT-3 — processChain() netFlow label:
+ *   netFlow is now in CRORES (÷ 1e7) not Lakhs (÷ 1e5).
+ *   Console log updated to show "Cr" unit.
+ *
+ * FIX-LOT-4 — buildNormalisedRows() OI field name:
+ *   Same dual-field read (open_interest || oi) for consistency.
  *
  * Previously fixed (preserved):
+ *   FIX 1 — buildNormalisedRows() used strikeOIMap[null]
+ *   FIX 2 — closes array (spotHistory) passed to ingestChainData
+ *   FIX 3 — ingestChainData signature extended to accept closes[]
  *   FIX A — double-emit causing flash of absurd values
  *   FIX B — OI jumping between refreshes (merged strikeOIMap)
  *   FIX C — net flow swinging wildly (delta accumulator)
@@ -64,9 +67,7 @@ const strikeOIMap = {};
 const sessionFlowMap = {};
 let   sessionDate    = null;
 
-// FIX 2: Rolling spot price history for HV calculation — keyed by name
-// Appended once per poll (60s). Represents daily-ish closes during session.
-// 252-entry rolling window = ~1 trading year of daily closes.
+// Rolling spot price history for HV calculation — keyed by name
 const spotHistory = {};
 
 const UNDERLYINGS = [
@@ -96,17 +97,13 @@ function authHeaders(token) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX 2: Spot history — append once per poll for HV calculation
+// Spot history for HV calculation
 // ─────────────────────────────────────────────────────────────────────────────
 
 function appendSpotHistory(name, spotPrice) {
   if (!spotPrice || spotPrice <= 0) return;
   if (!spotHistory[name]) spotHistory[name] = [];
   spotHistory[name].push(spotPrice);
-  // Keep 252-entry rolling window (1 trading year at ~1 entry/minute = ~375/day,
-  // but we only poll once per minute so during a 6.5hr session we get ~390 entries;
-  // rolling 252 keeps ~last 39 trading days of intra-day closes which is sufficient
-  // for HV20 and HV60 calculation).
   if (spotHistory[name].length > 252) {
     spotHistory[name] = spotHistory[name].slice(-252);
   }
@@ -139,6 +136,23 @@ async function fetchChain(upstoxKey, expiry, token) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FIX-LOT-2: Safe OI reader — Upstox may return open_interest OR oi
+// ─────────────────────────────────────────────────────────────────────────────
+
+function readOI(marketData) {
+  if (!marketData) return 0;
+  // Prefer open_interest (official Upstox v2 field name), fallback to oi
+  const v = marketData.open_interest ?? marketData.oi ?? 0;
+  return Number(v) || 0;
+}
+
+function readPrevOI(marketData) {
+  if (!marketData) return 0;
+  const v = marketData.prev_oi ?? marketData.prev_open_interest ?? 0;
+  return Number(v) || 0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FIX B: Merge OI into stable running map
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -149,10 +163,10 @@ function mergeOI(name, expiry, rawStrikes) {
 
   for (const s of rawStrikes) {
     const k    = s.strike_price;
-    const ceOI = s.call_options?.market_data?.oi || 0;
-    const peOI = s.put_options?.market_data?.oi  || 0;
+    // FIX-LOT-2: use readOI() to handle both field names
+    const ceOI = readOI(s.call_options?.market_data);
+    const peOI = readOI(s.put_options?.market_data);
     if (!map[k]) map[k] = { ceOI: 0, peOI: 0 };
-    // Only update if non-zero — exchange sometimes sends 0 mid-session
     if (ceOI > 0) map[k].ceOI = ceOI;
     if (peOI > 0) map[k].peOI = peOI;
   }
@@ -166,37 +180,46 @@ function mergeOI(name, expiry, rawStrikes) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX C: Session net flow accumulator (delta-based)
+// FIX-LOT-1 + FIX C: Session net flow accumulator (delta-based, lotSize-aware)
+//
+// Upstox volume = number of CONTRACTS (each contract = 1 lot).
+// Notional rupee value = contracts × lotSize × LTP.
+// Divide by 1e7 to get CRORES (same unit as optionsIntelligenceEngine FIX A).
+//
+// Previous: deltaFlow / 1e5 → Lakhs, missing × lotSize → 75x too small.
+// Fixed:    deltaFlow × lotSize / 1e7 → Crores, correct notional.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function accumulateNetFlow(name, expiry, rawStrikes) {
+function accumulateNetFlow(name, expiry, rawStrikes, lotSize) {
   const key = `${name}__${expiry}`;
   if (!sessionFlowMap[key]) sessionFlowMap[key] = { netFlow: 0, lastVolMap: {} };
-  const state = sessionFlowMap[key];
+  const state   = sessionFlowMap[key];
+  const lotSz   = lotSize || 1;   // FIX-LOT-1: use real lot size
 
   let deltaFlow = 0;
   for (const s of rawStrikes) {
-    const k       = s.strike_price;
-    const ceLTP   = s.call_options?.market_data?.ltp    || 0;
-    const peLTP   = s.put_options?.market_data?.ltp     || 0;
-    const ceVol   = s.call_options?.market_data?.volume || 0;
-    const peVol   = s.put_options?.market_data?.volume  || 0;
+    const k     = s.strike_price;
+    const ceLTP = s.call_options?.market_data?.ltp    || 0;
+    const peLTP = s.put_options?.market_data?.ltp     || 0;
+    const ceVol = s.call_options?.market_data?.volume || 0;
+    const peVol = s.put_options?.market_data?.volume  || 0;
 
     const prevCeVol = state.lastVolMap[`${k}_ce`] || 0;
     const prevPeVol = state.lastVolMap[`${k}_pe`] || 0;
 
-    // Only count NEW volume since last poll (volume is monotonically increasing)
+    // Only count NEW volume since last poll
     const ceVolDelta = Math.max(0, ceVol - prevCeVol);
     const peVolDelta = Math.max(0, peVol - prevPeVol);
 
-    deltaFlow += (peVolDelta * peLTP) - (ceVolDelta * ceLTP);
+    // FIX-LOT-1: multiply by lotSize to get actual notional rupees
+    deltaFlow += (peVolDelta * peLTP - ceVolDelta * ceLTP) * lotSz;
 
     state.lastVolMap[`${k}_ce`] = ceVol;
     state.lastVolMap[`${k}_pe`] = peVol;
   }
 
-  // Accumulate into session total — keep in ₹ Lakhs (÷1e5)
-  state.netFlow += deltaFlow / 1e5;
+  // FIX-LOT-1: divide by 1e7 → CRORES (was 1e5 → Lakhs, also missing lotSize)
+  state.netFlow += deltaFlow / 1e7;
   return Math.round(state.netFlow * 10) / 10;
 }
 
@@ -307,16 +330,17 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
 // processChain — builds structured chain for option-chain-update socket event
 // ─────────────────────────────────────────────────────────────────────────────
 
-function processChain(name, expiry, rawStrikes, spotPrice) {
+function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
   if (!rawStrikes.length) return null;
 
   const sorted = [...rawStrikes].sort((a, b) => a.strike_price - b.strike_price);
+  const lotSz  = lotSize || 1;
 
-  // FIX B: use merged stable OI totals
+  // FIX B: use merged stable OI totals (FIX-LOT-2: readOI used inside mergeOI)
   const { totalCEOI, totalPEOI } = mergeOI(name, expiry, rawStrikes);
 
-  // FIX C: accumulate session net flow as delta
-  const sessionNetFlow = accumulateNetFlow(name, expiry, rawStrikes);
+  // FIX-LOT-1: pass lotSize so net flow is in Crores
+  const sessionNetFlow = accumulateNetFlow(name, expiry, rawStrikes, lotSz);
 
   const mergedMap = strikeOIMap[name]?.[expiry] || {};
 
@@ -340,8 +364,8 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
 
   const below      = sorted.filter(s => s.strike_price <= spotPrice);
   const above      = sorted.filter(s => s.strike_price >= spotPrice);
-  const support    = below.length ? below.reduce((b, s) => (s.put_options?.market_data?.oi || 0) > (b.put_options?.market_data?.oi || 0) ? s : b).strike_price : 0;
-  const resistance = above.length ? above.reduce((b, s) => (s.call_options?.market_data?.oi || 0) > (b.call_options?.market_data?.oi || 0) ? s : b).strike_price : 0;
+  const support    = below.length ? below.reduce((b, s) => readOI(s.put_options?.market_data) > readOI(b.put_options?.market_data) ? s : b).strike_price : 0;
+  const resistance = above.length ? above.reduce((b, s) => readOI(s.call_options?.market_data) > readOI(b.call_options?.market_data) ? s : b).strike_price : 0;
 
   const strikes = sorted.map(s => {
     const ceData   = s.call_options?.market_data   || {};
@@ -349,10 +373,11 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
     const ceGreeks = s.call_options?.option_greeks || {};
     const peGreeks = s.put_options?.option_greeks  || {};
     const mergedStrike = mergedMap[s.strike_price] || {};
-    const ceOI         = mergedStrike.ceOI ?? (ceData.oi || 0);
-    const peOI         = mergedStrike.peOI ?? (peData.oi || 0);
-    const cePrevOI     = ceData.prev_oi || 0;
-    const pePrevOI     = peData.prev_oi || 0;
+    // FIX-LOT-2: use readOI for consistent field access
+    const ceOI         = mergedStrike.ceOI > 0 ? mergedStrike.ceOI : readOI(ceData);
+    const peOI         = mergedStrike.peOI > 0 ? mergedStrike.peOI : readOI(peData);
+    const cePrevOI     = readPrevOI(ceData);
+    const pePrevOI     = readPrevOI(peData);
 
     return {
       strike: s.strike_price,
@@ -406,7 +431,7 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
   return {
     underlying: name, expiry, spotPrice, pcr, maxPainStrike, support, resistance,
     totalCEOI, totalPEOI,
-    netFlow: sessionNetFlow,
+    netFlow: sessionNetFlow,   // FIX-LOT-1: now in CRORES
     atmStrike, strikes, alerts,
     unusualOI:         unusualNearATM,
     unusualOITailRisk: unusualTailRisk,
@@ -415,9 +440,7 @@ function processChain(name, expiry, rawStrikes, spotPrice) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX 1: buildNormalisedRows — correctly reads strikeOIMap[name][expiry]
-// Previously used strikeOIMap[null] which is always undefined, so the merged
-// stable OI was silently ignored and raw (sometimes zero) Upstox values were used.
+// FIX 1 + FIX-LOT-2: buildNormalisedRows
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildNormalisedRows(name, expiry, rawStrikes) {
@@ -427,11 +450,12 @@ function buildNormalisedRows(name, expiry, rawStrikes) {
     const strike = s.strike_price;
     const merged = mergedMap[strike] || {};
 
-    // Use merged stable OI when available (non-zero); fallback to raw live value
-    const callOI = (merged.ceOI > 0 ? merged.ceOI : null)
-                ?? (s.call_options?.market_data?.oi || 0);
-    const putOI  = (merged.peOI > 0 ? merged.peOI  : null)
-                ?? (s.put_options?.market_data?.oi  || 0);
+    // FIX-LOT-2: use readOI() for both field names
+    const rawCeOI = readOI(s.call_options?.market_data);
+    const rawPeOI = readOI(s.put_options?.market_data);
+
+    const callOI = (merged.ceOI > 0 ? merged.ceOI : null) ?? rawCeOI;
+    const putOI  = (merged.peOI > 0 ? merged.peOI  : null) ?? rawPeOI;
 
     return {
       strike,
@@ -441,8 +465,6 @@ function buildNormalisedRows(name, expiry, rawStrikes) {
       putVol:  s.put_options?.market_data?.volume    || 0,
       callLTP: s.call_options?.market_data?.ltp      || 0,
       putLTP:  s.put_options?.market_data?.ltp       || 0,
-      // IV from Upstox greeks — safeIV() in optionsIntegration handles
-      // both decimal (0.15) and percentage (15.0) formats
       callIV:  s.call_options?.option_greeks?.iv     || 0,
       putIV:   s.put_options?.option_greeks?.iv      || 0,
     };
@@ -495,11 +517,11 @@ async function pollChains() {
 
         const spotPrice = raw[0]?.underlying_spot_price || cache[u.name]?.spotPrice || 0;
 
-        // FIX 2: append to rolling spot history for HV calculation
         appendSpotHistory(u.name, spotPrice);
 
-        // ── 1. Build structured chain for option-chain-update (UI chain viewer) ──
-        const processed = processChain(u.name, expiry, raw, spotPrice);
+        // ── 1. Build structured chain for option-chain-update ──
+        // FIX-LOT-1: pass lotSize to processChain
+        const processed = processChain(u.name, expiry, raw, spotPrice, u.lotSize);
         if (!processed) continue;
 
         if (!cache[u.name]) cache[u.name] = { expiries: [], chains: {}, spotPrice: 0, updatedAt: 0 };
@@ -513,19 +535,16 @@ async function pollChains() {
 
         // ── 2. Pass CLEAN normalised rows + closes to optionsIntegration ──
         try {
-          // FIX 1: pass name + expiry so merged OI map is read correctly
           const normalisedRows = buildNormalisedRows(u.name, expiry, raw);
-
-          // FIX 2: pass rolling spot history as closes[] for HV20/HV60
-          const closes = getSpotHistory(u.name);
+          const closes         = getSpotHistory(u.name);
 
           ingestChainData(
             u.name,
             spotPrice,
-            normalisedRows,   // clean rows with correct merged OI
+            normalisedRows,
             expiry,
             u.lotSize || 1,
-            closes,           // FIX 3: new 6th arg — real closes for HV
+            closes,
           );
         } catch (err) {
           console.warn(`⚠️ OI Intel ingest error for ${u.name}:`, err.message);
@@ -533,12 +552,14 @@ async function pollChains() {
 
         const tailCount = processed.unusualOITailRisk?.length || 0;
         const nearCount = processed.unusualOI?.length         || 0;
+        const totalOI   = processed.totalCEOI + processed.totalPEOI;
+
+        // FIX-LOT-3: log shows Cr for netFlow
         console.log(
           `📊 OI: ${u.name} ${expiry} — PCR=${processed.pcr} Spot=₹${spotPrice} ` +
-          `TotalOI=${((processed.totalCEOI + processed.totalPEOI) / 1e5).toFixed(1)}L ` +
-          `NetFlow=₹${processed.netFlow}L | ` +
-          `UnusualOI: ${nearCount} near-ATM, ${tailCount} tail-risk | ` +
-          `SpotHistory: ${getSpotHistory(u.name).length} entries`
+          `TotalOI=${totalOI.toLocaleString("en-IN")} contracts ` +
+          `NetFlow=₹${processed.netFlow} Cr | ` +
+          `UnusualOI: ${nearCount} near-ATM, ${tailCount} tail-risk`
         );
         anySuccess = true;
 
@@ -665,7 +686,6 @@ function startNSEOIListener(io, tGetter) {
 
   io.on("connection", socket => {
     for (const [name, data] of Object.entries(cache)) {
-      // FIX D: don't replay stale cache
       const age = Date.now() - (data.updatedAt || 0);
       if (age > CACHE_MAX_AGE_MS) continue;
 

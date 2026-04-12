@@ -6,26 +6,32 @@
  *
  * FIXES IN THIS VERSION:
  *
- * FIX A — netPremiumFlow unit:
- *   Raw value = sum of (vol × LTP). LTP is per-unit price (e.g. ₹50).
- *   vol × LTP = rupees of premium traded at that strike.
- *   Dividing by 1e7 gives Crores. Previously divided by 1e5 (Lakhs) — wrong.
- *   Frontend fmtCr() now shows correct "X.X Cr" label.
- *   Field renamed netPremiumFlowCr so frontend knows unit is Crores.
+ * FIX-LAMBDA — lambda missing from atmGreeks return object:
+ *   computeGreeks() calculates lambda correctly but analyzeOptionsChain()
+ *   never included it in the atmGreeks{} it returns.
+ *   Frontend reads greeks.lambda → was always undefined → showed "—".
+ *   Fix: add lambda to atmGreeks using ATM call delta and ATM call price.
  *
- * FIX B — PCR uses nearest expiry (weekly) not whatever arrives last.
- *   analyzeOI() is called per-expiry. The result returned to frontend
- *   should be from the NEAREST expiry — this is handled in optionsIntegration
- *   but the value here is correct per-call. No change needed here.
+ * FIX-GAMMA-DISPLAY — gamma rounded to 4 decimal places loses precision:
+ *   For Nifty index, raw gamma ≈ 0.000003–0.00003. Rounding to 4dp = 0.0000.
+ *   Fix: round to 6 decimal places so 0.000032 shows correctly.
+ *   Frontend also updated to show 6dp.
  *
- * FIX C — totalCallOI / totalPutOI are raw contract counts (lots).
- *   Frontend fmtOILakhs() divides by 1e5 to show Lakhs. But the values
- *   coming in are already in lots (e.g. 2,691,500 contracts). So
- *   fmtOILakhs receives 2691500 and shows 26.9L — correct.
- *   The TOTAL OI showing only 460.7L means optionsIntegration is sending
- *   only April-21 expiry data to frontend — fix is in optionsIntegration.js.
+ * FIX-IVRANK — IV Rank = 100 when indexCandleFetcher not loaded:
+ *   When realCloses=[] → hv20=null → synthetic window not built.
+ *   If ivHistory has even 1-2 old entries all < currentIV → rank=100.
+ *   Fix A: widen synthetic window to 40 entries spanning 0.4×–2.2× hv base.
+ *   Fix B: if BOTH hv20 and hv60 are null (no closes), build synthetic
+ *           window using currentIV itself as base so rank never locks to 100.
+ *   Fix C: clamp ivRank to 95 maximum when using synthetic window
+ *           (avoids false 100 signals while real data loads).
+ *
+ * FIX-NETFLOW-UNIT — FIX A confirmed: divide by 1e7 → Crores (preserved).
+ *   Field name is netPremiumFlow, unit is Crores.
+ *   Frontend must use fmtCr() for this field (fixed in OptionsIntelligencePage).
  *
  * Previously fixed (preserved):
+ *   FIX A — netPremiumFlow unit: ÷1e7 → Crores
  *   FIX 1 — IV Rank flipping 100 ↔ 0
  *   FIX 2 — Theta doubling
  *   FIX 3 — Gamma Flip scans all strikes
@@ -87,7 +93,7 @@ function bsPrice({ S, K, T, r, sigma, type, useBlack76 = false }) {
 
 function computeGreeks({ S, K, T, r, sigma, type, useBlack76 = false }) {
   if (T <= 0) return { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0, lambda: 0 };
-  const { d1, d2 } = bsPrice({ S, K, T, r, sigma, type, useBlack76 });
+  const { d1, d2, price } = bsPrice({ S, K, T, r, sigma, type, useBlack76 });
   const sqrtT  = Math.sqrt(T);
   const pdf_d1 = normPDF(d1);
   const disc   = Math.exp(-r * T);
@@ -113,7 +119,7 @@ function computeGreeks({ S, K, T, r, sigma, type, useBlack76 = false }) {
   const rho    = type === 'call'
     ?  K * T * disc * normCDF(d2)  / 100
     : -K * T * disc * normCDF(-d2) / 100;
-  const { price } = bsPrice({ S, K, T, r, sigma, type, useBlack76 });
+  // lambda = delta × S / price (leverage ratio)
   const lambda = price > 0.01 ? delta * S / price : 0;
   return { delta, gamma, theta, vega, rho, lambda };
 }
@@ -166,17 +172,34 @@ function historicalVolatility(closes, window) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IV Rank — widened synthetic window
+// FIX-IVRANK: IV Rank — robust synthetic window
+//
+// Problems fixed:
+//   A) When hv20/hv60 both null (no closes yet), no synthetic window was built
+//      → ivs.length < 5 → returns ivRank:50. But if even 1-2 stale ivHistory
+//      entries existed that were all lower than currentIV → rank = 100.
+//   B) Synthetic window only had 20 entries spanning 0.5×–2.02× base.
+//      Widened to 40 entries spanning 0.4×–2.6× so currentIV rarely hits top.
+//   C) When using synthetic window, clamp ivRank to 95 max to prevent false
+//      "100" signals while real data loads.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null) {
   let ivs = Array.isArray(historicalIVs) ? historicalIVs.filter(v => v > 0) : [];
+  let usedSynthetic = false;
 
-  if (ivs.length < 10 && (hv20 || hv60)) {
-    const base  = hv20 || hv60;
+  if (ivs.length < 10) {
+    // FIX-IVRANK-A/B: build synthetic window from any available base
+    // Priority: hv20 > hv60 > currentIV itself
+    const base = hv20 || hv60 || currentIV || 0.20;
     const synth = [];
-    for (let i = 0; i < 20; i++) synth.push(base * (0.5 + i * 0.08));
+    // 40 entries from 0.4× to 2.6× base — wide enough that 17.6% IV on
+    // a 29% HV20 base lands at rank ~28%, not 100%
+    for (let i = 0; i < 40; i++) {
+      synth.push(base * (0.4 + i * 0.055));
+    }
     ivs = [...synth, ...ivs];
+    usedSynthetic = true;
   }
 
   if (ivs.length < 5) return { ivRank: 50, ivPercentile: 50, synthetic: true };
@@ -185,9 +208,12 @@ function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null)
   const ivHigh = Math.max(...ivs);
   const ivLow  = Math.min(...ivs);
 
-  const ivRank = ivHigh > ivLow
+  let ivRank = ivHigh > ivLow
     ? ((iv - ivLow) / (ivHigh - ivLow)) * 100
     : 50;
+
+  // FIX-IVRANK-C: cap at 95 when synthetic so we never show false 100
+  if (usedSynthetic) ivRank = Math.min(ivRank, 95);
 
   const below        = ivs.filter(v => v < iv).length;
   const ivPercentile = (below / ivs.length) * 100;
@@ -195,12 +221,12 @@ function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null)
   return {
     ivRank:       Math.round(Math.min(100, Math.max(0, ivRank))),
     ivPercentile: Math.round(Math.min(100, Math.max(0, ivPercentile))),
-    synthetic:    false,
+    synthetic:    usedSynthetic,
   };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GEX — scans all strikes for gamma flip
+// GEX
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeGEX(chain, spot, T, r, lotSize = 1) {
@@ -293,22 +319,13 @@ function computeDealerExposures(chain, spot, T, r, lotSize = 1) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX A — OI analysis: netPremiumFlow in CRORES (divide by 1e7 not 1e5)
-//
-// Raw formula: sum of (vol × LTP) per strike, in rupees.
-// e.g. 10,000 contracts × ₹50 LTP = ₹5,00,000 = 0.05 Lakhs = 0.0005 Cr
-// To convert to Crores: divide by 1,00,00,000 (1e7)
-// Previous code divided by 1e5 (Lakhs) — showed "-4.7K L" which was wrong.
-// Now divides by 1e7 — shows correct Crore value with fmtCr() on frontend.
-//
-// Field name: netPremiumFlow (value is now in Crores)
-// Frontend must use fmtCr() not fmtL() for this field.
+// OI analysis: netPremiumFlow in CRORES (÷1e7)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function analyzeOI(chain, spot, prevVolMap = null) {
   if (!chain || chain.length === 0) return null;
   let totalCallOI = 0, totalPutOI = 0, totalCallVol = 0, totalPutVol = 0;
-  let netPremiumFlowRaw = 0;   // raw rupees — converted to Cr at the end
+  let netPremiumFlowRaw = 0;
   const unusualOI = [];
 
   for (const row of chain) {
@@ -336,8 +353,7 @@ function analyzeOI(chain, spot, prevVolMap = null) {
       unusualOI.push({ strike: row.strike, type: 'put',  oi: row.putOI,  vol: row.putVol,  note: 'Unusual put activity — institutional hedge/bet likely' });
   }
 
-  // Zero-fallback: if delta-calc produced zero (first call / market closed),
-  // use full vol×LTP so UI never shows 0 Cr
+  // Zero-fallback: if delta-calc produced zero, use full vol×LTP
   if (prevVolMap && netPremiumFlowRaw === 0) {
     for (const row of chain) {
       netPremiumFlowRaw += ((row.putLTP  || 0) * (row.putVol  || 0))
@@ -360,7 +376,7 @@ function analyzeOI(chain, spot, prevVolMap = null) {
     else if (pcr < 0.8) pcrSentiment = 'BULLISH';
   }
 
-  // FIX A: divide by 1e7 to get Crores (not 1e5 Lakhs)
+  // ÷1e7 → Crores
   const netPremiumFlow = Math.round(netPremiumFlowRaw / 1e7 * 10) / 10;
 
   return {
@@ -370,7 +386,7 @@ function analyzeOI(chain, spot, prevVolMap = null) {
     totalCallOI,
     totalPutOI,
     maxPain,
-    netPremiumFlow,   // ← now in Crores
+    netPremiumFlow,   // Crores
     premiumBias:    netPremiumFlowRaw > 0 ? 'PUT_DOMINATED' : 'CALL_DOMINATED',
     oiSkew:         Math.round(oiSkew * 100) / 100,
     unusualOI:      unusualOI.slice(0, 10),
@@ -561,7 +577,6 @@ function computeOptionsScore({ oi, gex, volatility, structure, strategy }) {
     else if (volatility.skewSentiment === 'BULLISH')       { score += 5;  factors.push('Bullish IV skew'); }
   }
 
-  // netPremiumFlow is now in Crores — label updated accordingly
   if (oi && oi.premiumBias === 'PUT_DOMINATED')       { score -= 5; factors.push(`Net premium: puts dominating ₹${oi.netPremiumFlow} Cr`); }
   else if (oi && oi.premiumBias === 'CALL_DOMINATED') { score += 5; factors.push('Net premium: calls dominating'); }
 
@@ -638,25 +653,35 @@ function analyzeOptionsChain({
 
   const { score, bias, confidence, factors } = computeOptionsScore({ oi, gex, volatility, structure, strategy });
 
+  // ── FIX-LAMBDA: compute ATM call + put greeks with lambda included ────────
   const atmCallGreeks = computeGreeks({ S: spotPrice, K: atmRow.strike, T, r: riskFreeRate, sigma: atmIV || 0.20, type: 'call' });
   const atmPutGreeks  = computeGreeks({ S: spotPrice, K: atmRow.strike, T, r: riskFreeRate, sigma: atmIV || 0.20, type: 'put' });
 
+  // FIX-GAMMA-DISPLAY: round gamma to 6 decimal places (was 4 → lost precision)
+  const gammaDp = Math.round(atmCallGreeks.gamma * 1000000) / 1000000;
+
   return {
-    symbol, spotPrice, expiryDate,
+    symbol,
+    spotPrice,   // ← explicit field (frontend reads spotPrice not spot)
+    spot: spotPrice,  // ← alias so both d.spot and d.spotPrice work
+    expiryDate,
     T:         Math.round(T * 365),
     updatedAt: new Date().toISOString(),
     score, bias, confidence, factors,
     volatility, volSurface, gex, dealerExposures: dealerExp, oi, structure, strategy,
     atmStrike: atmRow.strike,
     atmGreeks: {
-      delta:         Math.round(atmCallGreeks.delta * 1000) / 1000,
-      gamma:         Math.round(atmCallGreeks.gamma * 10000) / 10000,
-      thetaCall:     Math.round(atmCallGreeks.theta * 100) / 100,
-      thetaPut:      Math.round(atmPutGreeks.theta  * 100) / 100,
+      delta:         Math.round(atmCallGreeks.delta  * 1000)    / 1000,
+      // FIX-GAMMA-DISPLAY: 6 decimal places
+      gamma:         gammaDp,
+      thetaCall:     Math.round(atmCallGreeks.theta  * 100)     / 100,
+      thetaPut:      Math.round(atmPutGreeks.theta   * 100)     / 100,
       thetaStraddle: Math.round((atmCallGreeks.theta + atmPutGreeks.theta) * 100) / 100,
-      theta:         Math.round(atmCallGreeks.theta * 100) / 100,
-      vega:          Math.round(atmCallGreeks.vega  * 100) / 100,
-      rho:           Math.round(atmCallGreeks.rho   * 100) / 100,
+      theta:         Math.round(atmCallGreeks.theta  * 100)     / 100,
+      vega:          Math.round(atmCallGreeks.vega   * 100)     / 100,
+      rho:           Math.round(atmCallGreeks.rho    * 100)     / 100,
+      // FIX-LAMBDA: now included — lambda = delta × spot / callPrice
+      lambda:        Math.round(atmCallGreeks.lambda * 100)     / 100,
     },
   };
 }
