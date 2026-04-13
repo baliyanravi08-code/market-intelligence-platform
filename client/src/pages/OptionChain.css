@@ -1,24 +1,21 @@
-/* OptionChain.css — FIXED
- *
- * FIX C: Header overflow on zoom-in/zoom-out
- *   Problem: .oc-header used flex-wrap:wrap which caused controls to drop
- *            to a second line and then get clipped by overflow:hidden on .oc-page.
- *            On zoom-in the second row disappears entirely.
- *   Solution:
- *     - .oc-header: flex-wrap:nowrap + overflow-x:auto (scrollable instead of wrapping)
- *     - .oc-controls: flex-wrap:nowrap + flex-shrink:0 on each control-group
- *     - .oc-title: flex-shrink:0 so it never squishes
- *     - All control-group children: white-space:nowrap already applied
- *     - Added scrollbar-width:none on .oc-header to hide the scrollbar visually
- *
- * All other rules are unchanged from the original.
+/* OptionChain.css — FONT SIZES UPDATED to 11-15px range
+ * All font-size values bumped systematically:
+ *   7px  → 10px
+ *   7.5px→ 10px
+ *   8px  → 11px
+ *   8.5px→ 11px
+ *   9px  → 11px
+ *   10px → 12px
+ *   11px → 13px
+ *   13px → 15px
+ * Heights adjusted proportionally to accommodate larger text.
  */
 
 :root {
-  --header-h:  41px;
-  --summary-h: 56px;
-  --footer-h:  28px;
-  --table-top: 101px;
+  --header-h:  52px;
+  --summary-h: 68px;
+  --footer-h:  34px;
+  --table-top: 124px;
 
   --bg-deep:     #020810;
   --bg-surface:  #040c18;
@@ -45,12 +42,12 @@
   background: var(--bg-deep);
   color: var(--text-bright);
   font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
   overflow: hidden;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
-/* HEADER — FIX C                                                                */
+/* HEADER                                                                         */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .oc-header {
@@ -62,32 +59,29 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 0 16px;
-  height: var(--header-h, 41px);
-  min-height: 41px;
+  gap: 14px;
+  padding: 0 18px;
+  height: var(--header-h, 52px);
+  min-height: 52px;
   background: linear-gradient(90deg, #030912 0%, #040c18 50%, #030b16 100%);
   border-bottom: 1px solid var(--border);
-
-  /* FIX C: no wrapping — scroll horizontally instead */
   flex-wrap: nowrap;
   overflow-x: auto;
-  scrollbar-width: none;          /* Firefox */
-  -ms-overflow-style: none;       /* IE/Edge */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
-.oc-header::-webkit-scrollbar { display: none; }  /* Chrome/Safari */
+.oc-header::-webkit-scrollbar { display: none; }
 
-/* FIX C: title must not shrink — it anchors the left side */
 .oc-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;   /* ← was missing, title was squishing on zoom */
+  gap: 9px;
+  flex-shrink: 0;
   min-width: 0;
 }
 
 .oc-title h1 {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 900;
   color: var(--text-bright);
   letter-spacing: 1.5px;
@@ -95,7 +89,7 @@
 }
 
 .oc-sub {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-dim);
   letter-spacing: 0.8px;
@@ -103,8 +97,8 @@
 
 .live-dot {
   display: inline-block;
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--ce-color);
   box-shadow: 0 0 8px var(--ce-color);
@@ -112,16 +106,14 @@
   flex-shrink: 0;
 }
 
-/* FIX C: controls row also must not wrap */
 .oc-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-wrap: nowrap;   /* ← was wrap, caused controls to fall off */
-  flex-shrink: 0;      /* ← prevent controls from compressing */
+  gap: 7px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
-/* FIX C: each control group must not shrink below its natural size */
 .control-group {
   display: flex;
   align-items: center;
@@ -129,13 +121,13 @@
   background: rgba(0,0,0,0.25);
   border: 1px solid var(--border-dim);
   border-radius: 5px;
-  padding: 2px;
-  flex-shrink: 0;   /* ← prevents individual groups from collapsing */
+  padding: 3px;
+  flex-shrink: 0;
 }
 
 .ctrl-btn {
-  padding: 3px 9px;
-  font-size: 9px;
+  padding: 4px 11px;
+  font-size: 11px;
   font-weight: 700;
   font-family: inherit;
   letter-spacing: 0.6px;
@@ -155,24 +147,24 @@
 .ctrl-btn.expiry.active { color: var(--atm-color); background: rgba(240,192,64,0.12); }
 
 .ctrl-select {
-  font-size: 9px;
+  font-size: 11px;
   font-family: inherit;
   font-weight: 700;
   color: var(--text-mid);
   background: var(--bg-deep);
   border: none;
   border-radius: 3px;
-  padding: 2px 4px;
+  padding: 3px 5px;
   cursor: pointer;
   outline: none;
 }
 
 .greek-legend-chip {
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 700;
   font-family: "JetBrains Mono", monospace;
   letter-spacing: 0.4px;
-  padding: 2px 6px;
+  padding: 3px 7px;
   border-radius: 3px;
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.06);
@@ -185,11 +177,11 @@
 .conn-badge {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 8.5px;
+  gap: 6px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.8px;
-  padding: 3px 9px;
+  padding: 4px 11px;
   border-radius: 4px;
   border: 1px solid transparent;
   background: rgba(0,0,0,0.3);
@@ -203,15 +195,15 @@
 
 .oc-summary {
   position: fixed;
-  top: var(--header-h, 41px);
+  top: var(--header-h, 52px);
   left: 0;
   right: 0;
   z-index: 99;
   display: flex;
   align-items: center;
   gap: 0;
-  padding: 0 16px;
-  min-height: 48px;
+  padding: 0 18px;
+  min-height: 56px;
   background: linear-gradient(90deg, #030a18 0%, #040c1c 100%);
   border-bottom: 1px solid var(--border-dim);
   overflow-x: auto;
@@ -223,47 +215,47 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 6px 14px;
+  padding: 7px 16px;
   border-right: 1px solid var(--border-dim);
   flex-shrink: 0;
 }
 
 .s-label {
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   color: var(--text-ghost);
   letter-spacing: 1px;
   text-transform: uppercase;
-  margin-bottom: 2px;
+  margin-bottom: 3px;
 }
 
 .s-val {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 900;
   color: var(--text-bright);
   letter-spacing: 0.5px;
 }
 
-.s-val.spot       { color: #e0f0ff; font-size: 15px; }
+.s-val.spot       { color: #e0f0ff; font-size: 17px; }
 .s-val.maxpain    { color: var(--atm-color); }
 .s-val.support    { color: var(--ce-color); }
 .s-val.resistance { color: var(--pe-color); }
 .s-val.ce-oi      { color: var(--ce-color); }
 .s-val.pe-oi      { color: var(--pe-color); }
-.s-val.updated    { font-size: 11px; }
+.s-val.updated    { font-size: 13px; }
 
 .pcr-gauge {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
+  gap: 7px;
+  padding: 7px 16px;
   border-right: 1px solid var(--border-dim);
   flex-shrink: 0;
 }
 
-.pcr-label { font-size: 7px; font-weight: 700; color: var(--text-ghost); letter-spacing: 1px; }
-.pcr-val   { font-size: 15px; font-weight: 900; }
-.pcr-level { font-size: 8px; font-weight: 800; letter-spacing: 0.5px; }
+.pcr-label { font-size: 10px; font-weight: 700; color: var(--text-ghost); letter-spacing: 1px; }
+.pcr-val   { font-size: 17px; font-weight: 900; }
+.pcr-level { font-size: 11px; font-weight: 800; letter-spacing: 0.5px; }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* OI FLOW BAR                                                                    */
@@ -274,7 +266,7 @@
   left: 0;
   right: 0;
   z-index: 98;
-  top: calc(var(--header-h, 41px) + var(--summary-h, 56px));
+  top: calc(var(--header-h, 52px) + var(--summary-h, 68px));
   height: 4px;
   display: flex;
   background: #030810;
@@ -292,11 +284,11 @@
   left: 0;
   right: 0;
   z-index: 96;
-  top: calc(var(--header-h, 41px) + var(--summary-h, 56px) + 4px);
+  top: calc(var(--header-h, 52px) + var(--summary-h, 68px) + 4px);
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 16px;
+  gap: 7px;
+  padding: 5px 18px;
   background: rgba(3, 8, 18, 0.98);
   border-bottom: 1px solid var(--border-dim);
   overflow-x: auto;
@@ -307,20 +299,20 @@
 .oc-alert-pill {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
+  gap: 6px;
+  padding: 4px 11px;
   background: rgba(0,0,0,0.5);
   border: 1px solid;
   border-radius: 4px;
-  font-size: 8.5px;
+  font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .alert-strike { color: var(--text-bright); font-weight: 900; }
-.alert-side   { color: var(--text-dim); font-size: 7.5px; }
-.alert-pct    { color: var(--text-mid); font-size: 7.5px; }
+.alert-side   { color: var(--text-dim); font-size: 10px; }
+.alert-pct    { color: var(--text-mid); font-size: 10px; }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* TABLE WRAP                                                                     */
@@ -330,8 +322,8 @@
   position: fixed;
   left: 0;
   right: 0;
-  top: var(--table-top, 101px);
-  bottom: var(--footer-h, 28px);
+  top: var(--table-top, 124px);
+  bottom: var(--footer-h, 34px);
   overflow: auto;
   background: var(--bg-deep);
   scroll-behavior: smooth;
@@ -360,8 +352,8 @@
 }
 
 .side-label-row th {
-  padding: 5px 0;
-  font-size: 8px;
+  padding: 6px 0;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 2px;
   background: #030a18;
@@ -381,8 +373,8 @@
 }
 
 .oc-table thead tr:last-child th {
-  padding: 5px 8px;
-  font-size: 8px;
+  padding: 6px 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.6px;
   text-align: center;
@@ -420,7 +412,7 @@
 .strike-row.tick-down{ animation: tick-flash-down 0.6s ease-out; }
 
 .oc-table td {
-  padding: 5px 8px;
+  padding: 6px 9px;
   vertical-align: middle;
   white-space: nowrap;
 }
@@ -433,11 +425,11 @@
   background: rgba(0,0,0,0.3);
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
-  min-width: 90px;
+  min-width: 96px;
 }
 
 .strike-num {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 900;
   color: var(--text-bright);
   letter-spacing: 0.5px;
@@ -446,46 +438,46 @@
 .atm-badge {
   display: inline-block;
   margin-left: 5px;
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 900;
   letter-spacing: 0.8px;
   color: var(--atm-color);
   background: rgba(240,192,64,0.15);
   border: 1px solid rgba(240,192,64,0.3);
-  padding: 1px 4px;
+  padding: 2px 5px;
   border-radius: 3px;
   vertical-align: middle;
 }
 
 .ce-cell.ltp, .pe-cell.ltp {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--text-bright);
-  min-width: 70px;
+  min-width: 74px;
 }
 
 .ce-cell.iv, .pe-cell.iv {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--atm-color);
   font-weight: 600;
-  min-width: 48px;
+  min-width: 52px;
 }
 
 .ce-cell.change, .pe-cell.change {
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 700;
-  min-width: 60px;
+  min-width: 64px;
 }
 .ce-cell.change.pos, .pe-cell.change.pos { color: var(--ce-color); }
 .ce-cell.change.neg, .pe-cell.change.neg { color: var(--pe-color); }
 
-.ce-cell.sig, .pe-cell.sig { min-width: 100px; }
+.ce-cell.sig, .pe-cell.sig { min-width: 106px; }
 
 .sig-pill {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 8px;
+  gap: 4px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.4px;
 }
@@ -499,15 +491,15 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  min-width: 110px;
-  height: 22px;
-  padding-right: 4px;
+  min-width: 116px;
+  height: 24px;
+  padding-right: 5px;
 }
 
 .pe-cell .oi-bar-wrap {
   justify-content: flex-start;
   padding-right: 0;
-  padding-left: 4px;
+  padding-left: 5px;
 }
 
 .oi-bar {
@@ -524,7 +516,7 @@
 .oi-val {
   position: relative;
   z-index: 1;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--text-bright);
 }
@@ -532,13 +524,13 @@
 .oi-delta {
   position: relative;
   z-index: 1;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 700;
-  margin-left: 4px;
+  margin-left: 5px;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
-/* GREEK CELL (inline in row)                                                    */
+/* GREEK CELL                                                                    */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .greek-cell {
@@ -546,11 +538,11 @@
   flex-direction: column;
   gap: 1px;
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 3px 5px;
   border-radius: 3px;
   border: 1px solid transparent;
   transition: border-color 0.15s, background 0.15s;
-  min-width: 80px;
+  min-width: 86px;
 }
 
 .greek-cell:hover {
@@ -561,15 +553,15 @@
 .greek-item {
   display: flex;
   align-items: center;
-  gap: 3px;
-  font-size: 8.5px;
+  gap: 4px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 .greek-label {
-  font-size: 8px;
+  font-size: 10px;
   opacity: 0.6;
-  width: 10px;
+  width: 12px;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -585,11 +577,11 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 16px;
-  min-height: 28px;
+  padding: 6px 18px;
+  min-height: 34px;
   background: #020810;
   border-top: 1px solid var(--border-dim);
-  font-size: 7.5px;
+  font-size: 10px;
   color: var(--text-ghost);
   letter-spacing: 0.3px;
 }
@@ -600,22 +592,22 @@
 
 .oc-loading {
   position: fixed;
-  top: var(--table-top, 101px);
+  top: var(--table-top, 124px);
   left: 0;
   right: 0;
-  bottom: var(--footer-h, 28px);
+  bottom: var(--footer-h, 34px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
+  gap: 15px;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .loading-pulse {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   border: 2px solid var(--border);
   border-top-color: var(--ce-color);
@@ -624,20 +616,20 @@
 
 .oc-empty {
   position: fixed;
-  top: var(--table-top, 101px);
+  top: var(--table-top, 124px);
   left: 0;
   right: 0;
-  bottom: var(--footer-h, 28px);
+  bottom: var(--footer-h, 34px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 11px;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 15px;
 }
 
-.empty-sub { font-size: 9px; color: var(--text-ghost); letter-spacing: 0.5px; }
+.empty-sub { font-size: 11px; color: var(--text-ghost); letter-spacing: 0.5px; }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* KEYFRAMES                                                                      */
@@ -682,19 +674,18 @@
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
-  /* On mobile the header still scrolls horizontally — just tighten spacing */
-  .oc-header { gap: 6px; padding: 0 8px; }
-  .oc-controls { gap: 4px; }
-  .ctrl-btn { padding: 2px 6px; font-size: 8px; }
-  .oc-summary { padding: 0 8px; }
-  .summary-item { padding: 4px 8px; }
-  .s-val { font-size: 11px; }
-  .s-val.spot { font-size: 13px; }
-  .oc-footer { font-size: 7px; padding: 4px 8px; }
+  .oc-header { gap: 7px; padding: 0 10px; }
+  .oc-controls { gap: 5px; }
+  .ctrl-btn { padding: 3px 7px; font-size: 10px; }
+  .oc-summary { padding: 0 10px; }
+  .summary-item { padding: 5px 9px; }
+  .s-val { font-size: 13px; }
+  .s-val.spot { font-size: 15px; }
+  .oc-footer { font-size: 10px; padding: 5px 10px; }
   .greek-legend-chip { display: none; }
 }
 
 @media (max-width: 480px) {
-  .oc-title h1 { font-size: 11px; }
+  .oc-title h1 { font-size: 13px; }
   .oc-sub { display: none; }
 }
