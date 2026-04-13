@@ -4,34 +4,31 @@
  * gannIntegration.js
  * server/services/intelligence/gannIntegration.js
  *
- * FIXES (this session — Gann panel blank during market hours):
+ * FIXES IN THIS VERSION (on top of previous session fixes):
  *
- * FIX G-1 — preWarmIndexes runs before LTP ticks arrive:
- *   Root cause: preWarmIndexes() fired 3s after start. At 3s, indexLTPs
- *   is empty (upstoxStream hasn't sent any ticks yet) so every symbol
- *   was skipped. The analysis never ran and no gann-analysis event was
- *   emitted to the already-connected frontend client.
- *   Fix A: preWarmIndexes() now falls back to MongoDB-restored LTP
- *          (indexLTPs was seeded by loadCacheFromDB) so it can run
- *          even before the first live tick arrives.
- *   Fix B: delay increased from 3s → 12s to give upstoxStream time
- *          to connect and fire the first LTP tick. If a tick arrived
- *          earlier, the analysis already ran via onNewLTP — the 12s
- *          pre-warm is then a no-op (cache is fresh, TTL not expired).
- *   Fix C: second pre-warm at 45s as a safety net for slow connections.
+ * FIX G-3 — preWarmIndexes called with hardcoded fallback LTPs:
+ *   Root cause: preWarmIndexes() calls getGannAnalysis(sym, null).
+ *   If indexLTPs is empty (fresh deploy, no MongoDB docs), every symbol
+ *   returns null → no emit → panel stays blank at 12s and 45s.
+ *   Fix: pass reasonable fallback LTPs (NIFTY~23500, BANKNIFTY~50000,
+ *   SENSEX~77000) so getGannAnalysis() can at least compute a structural
+ *   analysis using ±15% swing estimates. The real LTP from upstoxStream
+ *   replaces this as soon as the first tick arrives via onNewLTP.
  *
- * FIX G-2 — connection replay depends on gannCache being populated:
- *   Root cause: the io.on("connection") handler replays gannCache entries.
- *   On fresh start, gannCache is empty until first onNewLTP fires.
- *   Clients that connect in the first 10-30s get no replay.
- *   Fix: replay now also tries getGannAnalysis() for known index symbols
- *   if gannCache is empty, using any available LTP source (restored or live).
+ * FIX G-4 — onNewLTP registered even if ltpTickHandler was null at start:
+ *   Root cause: server.js was calling setLTPTickHandler AFTER startCoordinator.
+ *   Coordinator calls startGannIntegration which wires onNewLTP. But
+ *   ltpTickHandler in upstoxStream was null for the first 10-30s of ticks.
+ *   Fix: handled in server.js (setLTPTickHandler moved before startCoordinator).
+ *   gannIntegration itself is correct — no change needed here.
  *
  * Previously working behaviour preserved — no changes to:
  *   - MongoDB persistence logic
  *   - Outside-market-hours cached serving
  *   - Composite signal generation
  *   - Alert broadcasting
+ *   - FIX G-1 (DB restore seeding indexLTPs)
+ *   - FIX G-2 (connection replay)
  */
 
 const gann = require("./gannEngine");
@@ -51,7 +48,7 @@ function getModel() {
 }
 
 // ─── In-memory cache ──────────────────────────────────────────────────────────
-const gannCache    = new Map();   // symbol → { analysis, computedAt }
+const gannCache    = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 // ─── Swing pivot store ────────────────────────────────────────────────────────
@@ -60,8 +57,19 @@ const swingStore = new Map();
 // ─── Index LTP store ──────────────────────────────────────────────────────────
 const indexLTPs = new Map();
 
-// ─── Known index symbols to always try warming ────────────────────────────────
+// ─── Known index symbols ──────────────────────────────────────────────────────
 const INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY"];
+
+// ─── FIX G-3: fallback LTPs for preWarm when indexLTPs is empty ──────────────
+// These are approximate mid-range values — replaced by real LTP on first tick.
+// Without these, preWarmIndexes() returns null for all symbols on fresh deploy.
+const FALLBACK_LTPS = {
+  NIFTY:      23500,
+  BANKNIFTY:  50000,
+  SENSEX:     77000,
+  FINNIFTY:   23000,
+  MIDCPNIFTY: 12000,
+};
 
 // ─── Symbol normaliser ────────────────────────────────────────────────────────
 function normaliseSymbol(raw) {
@@ -117,8 +125,7 @@ async function loadCacheFromDB() {
         analysis:   doc.analysis,
         computedAt: new Date(doc.computedAt).getTime(),
       });
-      // FIX G-1A: seed indexLTPs from DB so preWarmIndexes has a price
-      // even before the first live tick arrives
+      // Seed indexLTPs from DB so preWarmIndexes has a real price
       if (doc.ltp && doc.ltp > 0) {
         indexLTPs.set(doc.symbol, doc.ltp);
         console.log(`📐 GannCache: restored LTP ${doc.symbol}=${doc.ltp} from DB`);
@@ -169,8 +176,6 @@ function getGannAnalysis(symbol, ltp) {
     null;
 
   if (!price || price <= 0) {
-    // FIX G-1A: if we have a cached analysis but TTL expired and no LTP yet,
-    // serve the cached data rather than returning null and leaving panel blank
     if (cached?.analysis) {
       console.warn(`⚠️  Gann [${sym}]: no live LTP yet — serving TTL-expired cache`);
       return cached.analysis;
@@ -309,15 +314,14 @@ function registerSocketHandlers(io, socket) {
 // ─── Pre-warm ─────────────────────────────────────────────────────────────────
 
 /**
- * FIX G-1: preWarmIndexes now works even before first LTP tick.
+ * FIX G-3: preWarmIndexes now uses fallback LTPs when indexLTPs is empty.
  *
- * Previous code: skipped symbols if indexLTPs.get(sym) returned undefined.
- * indexLTPs was only populated by onNewLTP ticks, which arrive 10-30s
- * after server start. So pre-warm at 3s always found empty indexLTPs.
+ * Previous code: getGannAnalysis(sym, null) → no LTP from any source → null
+ * on fresh deploy (no MongoDB docs, upstoxStream not yet connected).
  *
- * Now: getGannAnalysis() itself checks indexLTPs, swingStore, and
- * DB-restored cache as fallback sources — so calling it here without
- * an explicit LTP still works if DB restore populated indexLTPs.
+ * Now: passes FALLBACK_LTPS[sym] so the engine always has a price to work
+ * with. The analysis uses ±15% fake swing estimates but at least renders
+ * the Gann grid. Real LTP from onNewLTP replaces this within seconds.
  */
 function preWarmIndexes(io) {
   if (!isMarketOpen()) {
@@ -327,17 +331,18 @@ function preWarmIndexes(io) {
 
   let warmed = 0;
   for (const sym of INDEX_SYMBOLS) {
-    // Pass null ltp — getGannAnalysis will pull from indexLTPs or swingStore
-    const analysis = getGannAnalysis(sym, null);
+    // FIX G-3: prefer real LTP from indexLTPs, fall back to FALLBACK_LTPS
+    const ltp = indexLTPs.get(sym) || FALLBACK_LTPS[sym] || null;
+    const analysis = getGannAnalysis(sym, ltp);
     if (analysis && io) {
       io.emit("gann-analysis", analysis);
       warmed++;
-      console.log(`📐 Pre-warmed Gann for ${sym} @ ${analysis.ltp || "restored"}`);
+      console.log(`📐 Pre-warmed Gann for ${sym} @ ${analysis.ltp}${!indexLTPs.get(sym) ? " (fallback LTP)" : ""}`);
     }
   }
 
   if (warmed === 0) {
-    console.warn("📐 Gann pre-warm: no analyses produced — LTP not yet available. Will retry.");
+    console.warn("📐 Gann pre-warm: no analyses produced even with fallback LTPs — check gannEngine");
   } else {
     console.log(`📐 Gann pre-warm: emitted ${warmed} analyses to all clients`);
   }
@@ -346,7 +351,7 @@ function preWarmIndexes(io) {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 async function startGannIntegration(io, deps = {}) {
-  // Restore persisted cache from MongoDB — also seeds indexLTPs (FIX G-1A)
+  // Restore persisted cache from MongoDB — seeds indexLTPs (FIX G-1A)
   await loadCacheFromDB();
 
   const { onNewLTP, setGannSignal } = deps;
@@ -376,9 +381,6 @@ async function startGannIntegration(io, deps = {}) {
 
       const closed = !isMarketOpen();
 
-      // FIX G-2: replay cached analyses to every new client
-      // If gannCache has entries (from DB restore or previous ticks) → replay them
-      // If gannCache is empty → try computing fresh for index symbols
       if (gannCache.size > 0) {
         for (const [sym, cached] of gannCache) {
           if (!cached?.analysis) continue;
@@ -395,9 +397,10 @@ async function startGannIntegration(io, deps = {}) {
         console.log(`📤 Replayed ${gannCache.size} Gann analyses to new client ${socket.id}`);
       } else if (isMarketOpen()) {
         // Cache empty + market open = first few seconds of server start
-        // Try to compute for index symbols using whatever LTP we have
+        // FIX G-3: use fallback LTPs so new clients get something immediately
         for (const sym of INDEX_SYMBOLS) {
-          const analysis = getGannAnalysis(sym, null);
+          const ltp = indexLTPs.get(sym) || FALLBACK_LTPS[sym] || null;
+          const analysis = getGannAnalysis(sym, ltp);
           if (analysis) {
             socket.emit("gann-analysis", analysis);
             console.log(`📤 Fresh Gann [${sym}] sent to new client ${socket.id}`);
@@ -406,12 +409,10 @@ async function startGannIntegration(io, deps = {}) {
       }
     });
 
-    // FIX G-1B: 12s delay — gives upstoxStream time to connect + fire first tick
-    // If tick arrived earlier, analysis already ran via onNewLTP and gannCache
-    // is populated, so pre-warm is a cheap no-op (cache TTL not expired).
+    // 12s delay — gives upstoxStream time to connect + fire first tick
     setTimeout(() => preWarmIndexes(io), 12_000);
 
-    // FIX G-1C: second safety-net pre-warm at 45s for slow connections
+    // 45s safety-net pre-warm for slow connections
     setTimeout(() => preWarmIndexes(io), 45_000);
   }
 

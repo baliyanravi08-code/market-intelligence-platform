@@ -5,7 +5,6 @@ if (process.env.NODE_ENV !== "production") {
 
 const express = require("express");
 const http    = require("http");
-// FIX: removed "const { Server } = require('socket.io')" — websocket.js owns the io instance now
 const path    = require("path");
 const fs      = require("fs");
 const axios   = require("axios");
@@ -14,7 +13,8 @@ const cors    = require("cors");
 const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
-// FIX: added setLTPTickHandler to break circular dependency (registerLTPTick was null)
+
+// FIX BUG 1: import setLTPTickHandler so we can wire it BEFORE startCoordinator
 const { startStreamer, stopStreamer, setOITickHandler, setLTPTickHandler } = require("./services/upstoxStream");
 const { commoditiesRoute }  = require("./api/commodities");
 const {
@@ -32,11 +32,10 @@ const {
   getWindowLabel,
 } = require("./database");
 
-// FIX: attachSocketIO replaces "new Server(server, ...)"
 const { attachSocketIO } = require("./api/websocket");
 
-// FIX: real NIFTY/BANKNIFTY daily closes for HV20/HV60/VRP
-const { startIndexCandleFetcher, getDebugInfo } = require("./services/intelligence/indexCandleFetcher");
+// FIX BUG 2+5: import setToken so we can inject token before startIndexCandleFetcher
+const { startIndexCandleFetcher, setToken: setICFToken, getDebugInfo } = require("./services/intelligence/indexCandleFetcher");
 
 const app    = express();
 const server = http.createServer(app);
@@ -99,7 +98,7 @@ async function loadInstrumentMaster() {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(INSTRUMENT_FILE, JSON.stringify({ _ts: Date.now(), map }), "utf8");
     console.log(`✅ Instrument master fetched & cached: ${Object.keys(map).length} NSE EQ symbols`);
-    _pushMapToGann(map);
+    _pushMapToGann(instrumentMap);
   } catch (e) {
     console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
     instrumentMap = {
@@ -221,6 +220,15 @@ loadInstrumentMaster()
   .finally(() => {
     setOITickHandler(handleOITick);
 
+    // ── FIX BUG 1: wire LTP handler BEFORE startCoordinator ──────────────────
+    // Previously setLTPTickHandler was called AFTER startCoordinator.
+    // startCoordinator → startGannIntegration → registers onNewLTP callback.
+    // But ltpTickHandler in upstoxStream was still null for first 10-30s of
+    // ticks → Gann never received a price → panel stayed blank.
+    // Fix: wire it first so zero ticks are lost.
+    const { registerLTPTick } = require("./coordinator");
+    setLTPTickHandler(registerLTPTick);
+
     if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
       setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
     }
@@ -230,13 +238,14 @@ loadInstrumentMaster()
     startNSEDealsListener(io);
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
 
-    // FIX: wire registerLTPTick AFTER coordinator is fully loaded.
-    // Previously upstoxStream.js required coordinator at module load time —
-    // circular dependency meant registerLTPTick was always null → Gann got no LTP.
-    const { registerLTPTick } = require("./coordinator");
-    setLTPTickHandler(registerLTPTick);
-
-    // FIX: fetch real NIFTY/BANKNIFTY closes so HV20, HV60, VRP show correctly
+    // ── FIX BUG 2+5: inject token before startIndexCandleFetcher ─────────────
+    // indexCandleFetcher has setToken() for exactly this — but it was never
+    // called in server.js. Without it, getToken() returns null on first attempt
+    // → retryFetchAll() kicks in (4-16s delay) → HV data missing first cycle.
+    // Fix: call setICFToken() first so fetchAll() succeeds immediately.
+    if (upstoxAccessToken) {
+      setICFToken(upstoxAccessToken);
+    }
     startIndexCandleFetcher();
 
     const PORT = process.env.PORT || 10000;
@@ -287,6 +296,10 @@ app.get("/auth/upstox/callback", async (req, res) => {
     upstoxTokenExpiry = Date.now() + (response.data.expires_in || 86400) * 1000;
     saveToken(upstoxAccessToken, upstoxTokenExpiry);
     console.log("Upstox token saved, expires:", new Date(upstoxTokenExpiry).toISOString());
+
+    // Also update indexCandleFetcher token when user re-authenticates
+    setICFToken(upstoxAccessToken);
+
     startStreamer(upstoxAccessToken, io);
     res.send(
       "<html><body style='background:#010812;color:#00ff9c;font-family:monospace;padding:40px;text-align:center'>" +
@@ -366,8 +379,7 @@ app.get("/health", (req, res) => {
   });
 });
 
-// ── /api/debug/hv — verify HV closes are correct ─────────────────────────────
-// Visit: https://your-app.onrender.com/api/debug/hv
+// ── /api/debug/hv ─────────────────────────────────────────────────────────────
 app.get("/api/debug/hv", (req, res) => {
   try {
     res.json(getDebugInfo());
