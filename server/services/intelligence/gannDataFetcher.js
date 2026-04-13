@@ -4,14 +4,18 @@
  * gannDataFetcher.js
  * Location: server/services/intelligence/gannDataFetcher.js
  *
- * MARKET HOURS UPDATE:
- *   - fetchAndIngestAll() only runs Mon–Fri 09:00–15:45 IST.
- *   - Outside market hours: skips all HTTP calls, zero data usage.
- *   - Last LTP is preserved in swingStore / gannIntegration cache,
- *     so the frontend still shows last known Gann values.
- *   - Daily scheduler fires at 09:00 IST (not 09:30) so first fetch
- *     lands before significant market movement.
- *   - No polling loop during closed hours — completely silent.
+ * FIX: added real index candle fetching for NIFTY, BANKNIFTY, SENSEX.
+ *
+ * Previously gannDataFetcher only fetched NSE EQ stocks (from marketCapDB).
+ * Index symbols (NIFTY, BANKNIFTY, SENSEX) were never fetched, so
+ * swingStore had no real swing data for them. gannIntegration fell back
+ * to ±15% fake estimates for 52w high/low and swing pivots.
+ *
+ * Fix: fetchAndIngestAll() now calls fetchIndexCandles() first for all
+ * three indices before the stock loop. Real 52w high/low and swing
+ * pivots are computed from 365 days of actual daily candles — same
+ * algorithm as the stock fetcher. swingStore is populated with real data
+ * so gannIntegration uses genuine levels instead of ±15% guesses.
  */
 
 const fs   = require("fs");
@@ -23,8 +27,32 @@ const { isMarketOpen, marketStatus } = require("./marketHours");
 // ─── Config ───────────────────────────────────────────────────────────────────
 const MCAP_DB_PATH  = path.join(__dirname, "../../data/marketCapDB.json");
 const UPSTOX_BASE   = "https://api.upstox.com/v2";
-const RATE_LIMIT_MS = 350;   // ~3 req/sec — safe for Upstox free tier
+const RATE_LIMIT_MS = 350;
 const MAX_STOCKS    = 200;
+
+// ─── Index instrument keys (for Upstox historical-candle API) ─────────────────
+const INDEX_CONFIGS = [
+  {
+    symbol:    "NIFTY",
+    instrKey:  "NSE_INDEX|Nifty 50",
+    priceUnit: 10,   // ~10 Rs per trading day movement for NIFTY
+  },
+  {
+    symbol:    "BANKNIFTY",
+    instrKey:  "NSE_INDEX|Nifty Bank",
+    priceUnit: 30,   // BANKNIFTY moves faster
+  },
+  {
+    symbol:    "SENSEX",
+    instrKey:  "BSE_INDEX|SENSEX",
+    priceUnit: 30,
+  },
+  {
+    symbol:    "FINNIFTY",
+    instrKey:  "NSE_INDEX|Nifty Fin Service",
+    priceUnit: 10,
+  },
+];
 
 // ─── Token getter ─────────────────────────────────────────────────────────────
 let _getToken;
@@ -38,7 +66,7 @@ function getToken() {
   return process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
-// ─── Instrument map ───────────────────────────────────────────────────────────
+// ─── Instrument map (for EQ stocks) ──────────────────────────────────────────
 let _instrumentMap = {};
 
 function setInstrumentMap(map) {
@@ -62,7 +90,8 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function fmtDate(d) { return d.toISOString().slice(0, 10); }
 
 /**
- * Compute 52w high/low + swing pivots from candles.
+ * Compute 52w high/low + swing pivots from daily candles.
+ * Works for both index candles and stock candles.
  */
 function computeLevels(candles) {
   if (!candles || candles.length === 0) return null;
@@ -75,6 +104,7 @@ function computeLevels(candles) {
     if (c.low  < low52w)  { low52w  = c.low;  low52wDate  = c.timestamp; }
   }
 
+  // Use last 60 candles for swing detection
   const recent = candles.slice(-60);
   let swingHigh = { price: -Infinity, date: "" };
   let swingLow  = { price:  Infinity, date: "" };
@@ -95,19 +125,17 @@ function computeLevels(candles) {
     }
   }
 
+  // Fallback to 52w extremes if no swing pivot found
   if (swingHigh.price === -Infinity) swingHigh = { price: high52w, date: high52wDate.slice(0, 10) };
   if (swingLow.price  ===  Infinity) swingLow  = { price: low52w,  date: low52wDate.slice(0, 10) };
 
   return { high52w, low52w, swingHigh, swingLow };
 }
 
-// ─── Upstox candle fetch ──────────────────────────────────────────────────────
-async function fetchCandles(symbol) {
+// ─── Fetch candles from Upstox (generic — works for both index and EQ) ────────
+async function fetchCandles(instrKey) {
   const token = getToken();
   if (!token) throw new Error("No Upstox token available");
-
-  const instrKey = getInstrumentKey(symbol);
-  if (!instrKey) throw new Error(`No instrument key for ${symbol} — skipped`);
 
   const encodedKey = encodeURIComponent(instrKey);
   const toDate     = fmtDate(new Date());
@@ -120,7 +148,7 @@ async function fetchCandles(symbol) {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`HTTP ${res.status} for ${symbol}: ${text.slice(0, 120)}`);
+    throw new Error(`HTTP ${res.status}: ${text.slice(0, 120)}`);
   }
 
   const json = await res.json();
@@ -130,25 +158,78 @@ async function fetchCandles(symbol) {
   }));
 }
 
-// ─── Main fetch loop ──────────────────────────────────────────────────────────
+// ─── NEW: Fetch and ingest real index candles ─────────────────────────────────
+/**
+ * Fetches 365 days of daily candles for NIFTY, BANKNIFTY, SENSEX, FINNIFTY
+ * and ingests real 52w high/low + swing pivots into swingStore via ingestSwingData().
+ *
+ * This replaces the ±15% fake estimates that gannIntegration was using
+ * for index symbols when swingStore had no data for them.
+ */
+async function fetchAndIngestIndexes() {
+  console.log("📐 Gann fetcher: fetching real index candles (NIFTY/BANKNIFTY/SENSEX)…");
+  let ok = 0, fail = 0;
+
+  for (const cfg of INDEX_CONFIGS) {
+    try {
+      const candles = await fetchCandles(cfg.instrKey);
+      if (candles.length < 10) throw new Error("too few candles");
+
+      const levels = computeLevels(candles);
+      if (!levels) throw new Error("could not compute levels");
+
+      // Last close as LTP proxy (real LTP comes from upstoxStream ticks)
+      const lastClose = candles[candles.length - 1]?.close || 0;
+
+      ingestSwingData({
+        symbol:    cfg.symbol,
+        ltp:       lastClose,
+        high52w:   levels.high52w,
+        low52w:    levels.low52w,
+        swingHigh: levels.swingHigh,
+        swingLow:  levels.swingLow,
+        priceUnit: cfg.priceUnit,
+      });
+
+      ok++;
+      console.log(
+        `📐 Gann index [${cfg.symbol}]: ` +
+        `52wH=${levels.high52w} 52wL=${levels.low52w} ` +
+        `SwingH=${levels.swingHigh.price}(${levels.swingHigh.date}) ` +
+        `SwingL=${levels.swingLow.price}(${levels.swingLow.date})`
+      );
+
+      await sleep(RATE_LIMIT_MS);
+    } catch (err) {
+      fail++;
+      console.warn(`📐 Gann fetcher: index ${cfg.symbol} failed — ${err.message}`);
+    }
+  }
+
+  console.log(`📐 Gann fetcher: index fetch complete — ${ok} ok, ${fail} failed`);
+}
+
+// ─── Main fetch loop (EQ stocks) ──────────────────────────────────────────────
 async function fetchAndIngestAll() {
   // ── MARKET HOURS GUARD ────────────────────────────────────────────────────
-  // Only fetch during Mon–Fri 09:00–15:45 IST. Outside these hours we do
-  // nothing — the frontend shows the last cached Gann values with a
-  // "Last known price" indicator. Zero data usage when market is closed.
   if (!isMarketOpen()) {
     const status = marketStatus();
     console.log(`📐 Gann fetcher: market is ${status} — skipping fetch, preserving last values`);
     return;
   }
 
+  // ── Fetch real index candles FIRST ───────────────────────────────────────
+  // This ensures NIFTY/BANKNIFTY/SENSEX have real swing data before
+  // the stock loop starts (stock loop can take several minutes).
+  await fetchAndIngestIndexes();
+
   // ── Instrument map check ──────────────────────────────────────────────────
   const mapSize = Object.keys(_instrumentMap).length;
   if (mapSize === 0) {
-    console.warn("📐 Gann fetcher: instrument map is EMPTY — all fetches will fail.");
-  } else {
-    console.log(`📐 Gann fetcher: instrument map has ${mapSize} symbols — starting data pull`);
+    console.warn("📐 Gann fetcher: instrument map is EMPTY — skipping stock fetch");
+    return;
   }
+  console.log(`📐 Gann fetcher: instrument map has ${mapSize} symbols — starting stock pull`);
 
   let db;
   try {
@@ -167,7 +248,6 @@ async function fetchAndIngestAll() {
   let ok = 0, fail = 0;
 
   for (const entry of entries) {
-    // Re-check market hours on each iteration — stop mid-loop if market closes
     if (!isMarketOpen()) {
       console.log(`📐 Gann fetcher: market closed mid-run — stopping at ${ok} stocks`);
       break;
@@ -175,7 +255,10 @@ async function fetchAndIngestAll() {
 
     const { symbol, lastPrice, name } = entry;
     try {
-      const candles = await fetchCandles(symbol);
+      const instrKey = getInstrumentKey(symbol);
+      if (!instrKey) { fail++; continue; }
+
+      const candles = await fetchCandles(instrKey);
       if (candles.length < 10) throw new Error("too few candles");
 
       const levels = computeLevels(candles);
@@ -191,7 +274,7 @@ async function fetchAndIngestAll() {
       });
 
       ok++;
-      if (ok % 20 === 0) console.log(`📐 Gann fetcher: ${ok}/${entries.length} done…`);
+      if (ok % 20 === 0) console.log(`📐 Gann fetcher: ${ok}/${entries.length} stocks done…`);
     } catch (err) {
       fail++;
       if (fail <= 10) {
@@ -206,17 +289,14 @@ async function fetchAndIngestAll() {
 
 // ─── Scheduler ────────────────────────────────────────────────────────────────
 /**
- * Starts the Gann data fetcher.
+ * startGannDataFetcher()
  *
- * Behaviour:
- *   - If market is open NOW → run immediately (server restarted during hours).
- *   - If market is closed → skip initial run, schedule only the 09:00 IST daily refresh.
- *   - Daily refresh fires every Mon–Fri at 09:00 IST (03:30 UTC).
- *   - After 15:45 IST the fetcher goes completely silent until next morning.
- *   - Zero HTTP calls outside market hours.
+ * - If market is open NOW → fetch indexes immediately, then stocks.
+ * - If market is closed → skip, schedule 09:00 IST daily refresh.
+ * - Index candles are fetched every day at open (real swing levels).
+ * - Stock candles fetched in the same loop after indexes.
  */
 function startGannDataFetcher() {
-  // Only run immediately if market is actually open right now
   if (isMarketOpen()) {
     console.log(`📐 Gann fetcher: market is open — starting initial data pull`);
     fetchAndIngestAll().catch(e =>
@@ -224,9 +304,15 @@ function startGannDataFetcher() {
     );
   } else {
     console.log(`📐 Gann fetcher: market is ${marketStatus()} — skipping initial fetch`);
+
+    // Even outside market hours, fetch index candles once for yesterday's
+    // swing data so gannIntegration has real levels (not ±15% estimates).
+    // This runs without the market hours guard.
+    fetchAndIngestIndexes().catch(e =>
+      console.warn("📐 Gann fetcher: off-hours index fetch failed —", e.message)
+    );
   }
 
-  // Schedule daily refresh at 09:00 IST (03:30 UTC) every weekday
   scheduleDailyRefresh();
 }
 
@@ -236,23 +322,18 @@ function scheduleDailyRefresh() {
 
   // Target 03:30 UTC = 09:00 IST
   nextRun.setUTCHours(3, 30, 0, 0);
+  if (nextRun <= now) nextRun.setUTCDate(nextRun.getUTCDate() + 1);
 
-  // If 09:00 IST already passed today, schedule for tomorrow
-  if (nextRun <= now) {
-    nextRun.setUTCDate(nextRun.getUTCDate() + 1);
-  }
-
-  // Skip to Monday if next run lands on weekend
+  // Skip weekends
   const nextDay = nextRun.getUTCDay();
-  if (nextDay === 0) nextRun.setUTCDate(nextRun.getUTCDate() + 1); // Sun → Mon
-  if (nextDay === 6) nextRun.setUTCDate(nextRun.getUTCDate() + 2); // Sat → Mon
+  if (nextDay === 0) nextRun.setUTCDate(nextRun.getUTCDate() + 1);
+  if (nextDay === 6) nextRun.setUTCDate(nextRun.getUTCDate() + 2);
 
-  const msUntil = nextRun - now;
+  const msUntil   = nextRun - now;
   const minsUntil = Math.round(msUntil / 60000);
   console.log(`📐 Gann fetcher: next daily refresh in ${minsUntil} min (${nextRun.toISOString()})`);
 
   setTimeout(() => {
-    // Double-check it's actually a market day before fetching
     if (isMarketOpen()) {
       fetchAndIngestAll()
         .catch(e => console.error("📐 Gann fetcher daily error:", e.message))
