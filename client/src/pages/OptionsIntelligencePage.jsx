@@ -347,7 +347,7 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
   const canUp=scrollIdx>0, canDn=scrollIdx+ROWS<rows.length;
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0 }}>
+    <div style={{ display:"flex", flexDirection:"column" }}>
       <div style={{ display:"flex", gap:5, marginBottom:6 }}>
         {[{ key:"near", label:`NEAR ATM ${nearLabel}`, color:"#4fc3f7" },{ key:"tail", label:"FII HEDGE / TAIL", color:"#d890f8" }].map(t=>(
           <button key={t.key} onClick={()=>{ setView(t.key); setScrollIdx(0); }}
@@ -360,7 +360,7 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
       <div style={{ display:"grid", gridTemplateColumns:"32px 56px 1fr 1fr 46px", gap:3, fontSize:10, fontFamily:"IBM Plex Mono,monospace", color:"#5a90a8", letterSpacing:0.7, textTransform:"uppercase", paddingBottom:4, borderBottom:"1px solid #1a3040", marginBottom:3, flexShrink:0 }}>
         <span/><span>STRIKE</span><span style={{ textAlign:"right" }}>OI</span><span style={{ textAlign:"right" }}>VOL</span><span style={{ textAlign:"right" }}>DIST%</span>
       </div>
-      <div style={{ flex:1, overflow:"hidden" }}>
+      <div>
         {rows.length===0
           ? <div style={{ fontSize:11, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", textAlign:"center", padding:"12px 0" }}>◌ No data</div>
           : visible.map((u,i)=>{
@@ -457,8 +457,8 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
     <PanelWrap>
       <SL>OI Intelligence</SL>
 
-      {/* ── Single column: PCR → Max Pain → Total OI → Net Flow ── */}
-      <div style={{ display:"flex", flexDirection:"column", gap:5, marginBottom:6 }}>
+      {/* ── Single row: PCR | MAX PAIN | TOTAL OI | NET FLOW ── */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:5, marginBottom:6 }}>
         <MiniCard
           label="PCR"
           value={fmt2(oi.pcr)}
