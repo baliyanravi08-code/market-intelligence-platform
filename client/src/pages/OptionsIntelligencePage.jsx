@@ -1,5 +1,7 @@
-// OptionsIntelligencePage.jsx — FONT SIZES UPDATED to 11-15px range
-// All fontSize values bumped: 7px→10px, 8px→11px, 9px→11px, 10px→12px, 11px→13px, 12px→14px, 13px→15px
+// OptionsIntelligencePage.jsx — FIXED:
+// 1. Alerts → horizontal scrolling pill strip (thin, saves vertical space)
+// 2. OI Intelligence → single column layout (PCR → Max Pain → Total OI → Net Flow)
+// 3. OI Intelligence → scrollable like other 3 panels
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import GannBadge from "../components/GannBadge";
@@ -245,9 +247,21 @@ function StrategyTag({ signal }) {
   );
 }
 
+// PanelWrap — all 4 panels use this, overflowY:"auto" makes them all scrollable
 function PanelWrap({ children, borderColor }) {
   return (
-    <div style={{ background:"#060f1c", border:`1px solid ${borderColor||"#1c3a58"}`, borderRadius:6, padding:"11px 13px", flex:"1 1 0", minWidth:0, minHeight:0, overflowY:"auto", display:"flex", flexDirection:"column" }}>
+    <div style={{
+      background:"#060f1c",
+      border:`1px solid ${borderColor||"#1c3a58"}`,
+      borderRadius:6,
+      padding:"11px 13px",
+      flex:"1 1 0",
+      minWidth:0,
+      minHeight:0,
+      overflowY:"auto",
+      display:"flex",
+      flexDirection:"column",
+    }}>
       {children}
     </div>
   );
@@ -264,32 +278,54 @@ function EmptyState({ symbol }) {
   );
 }
 
-function AlertCard({ alerts }) {
-  const ref = useRef(null);
-  useEffect(()=>{ if(ref.current) ref.current.scrollTop=0; },[alerts?.length]);
+// ── FIXED: Alerts as horizontal scrolling pill strip ──────────────────────────
+function AlertStrip({ alerts }) {
   return (
-    <div style={{ background:"#071828", border:"1px solid #1c3a58", borderRadius:5, padding:"6px 11px", minWidth:210, maxWidth:290, flexShrink:0 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4 }}>
-        <div style={{ fontSize:11, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, color:"#c8d8e8", letterSpacing:1.2, textTransform:"uppercase" }}>⚡ Alerts</div>
-        {alerts?.length>0 && <span style={{ fontSize:10, fontFamily:"IBM Plex Mono,monospace", padding:"2px 5px", borderRadius:2, background:"#1a0000", color:"#ef5350", fontWeight:700 }}>{alerts.length}</span>}
-      </div>
-      <div ref={ref} style={{ maxHeight:68, overflowY:"auto" }}>
-        {!alerts?.length
-          ? <div style={{ fontSize:10, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace" }}>◌ No alerts</div>
-          : alerts.slice(0,5).map((a,i)=>{
-              const isHigh=a.priority==="HIGH";
-              const color=isHigh?"#ef5350":a.priority==="MEDIUM"?"#ffd54f":"#a8c8e0";
-              const age=a.ts?Math.round((Date.now()-a.ts)/1000):null;
-              return (
-                <div key={i} style={{ display:"flex", gap:5, padding:"3px 0", borderBottom:i<Math.min(alerts.length,5)-1?"1px solid #1a3040":"none" }}>
-                  <span style={{ fontSize:11, flexShrink:0 }}>{ALERT_ICONS[a.type]||"◈"}</span>
-                  <div style={{ flex:1, fontSize:10, color, fontFamily:"IBM Plex Mono,monospace", fontWeight:isHigh?700:400, lineHeight:1.4 }}>{a.message||a.detail||String(a)}</div>
-                  {age!=null && <span style={{ fontSize:10, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace", flexShrink:0 }}>{age<60?`${age}s`:`${Math.round(age/60)}m`}</span>}
-                </div>
-              );
-            })
-        }
-      </div>
+    <div style={{
+      display:"flex",
+      alignItems:"center",
+      gap:6,
+      flex:1,
+      overflowX:"auto",
+      overflowY:"hidden",
+      scrollbarWidth:"none",
+      msOverflowStyle:"none",
+      minWidth:0,
+    }}>
+      <style>{`.alert-strip::-webkit-scrollbar{display:none}`}</style>
+      <span style={{ fontSize:11, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, color:"#c8d8e8", letterSpacing:1.2, textTransform:"uppercase", flexShrink:0 }}>⚡</span>
+      {alerts?.length > 0 && (
+        <span style={{ fontSize:10, fontFamily:"IBM Plex Mono,monospace", padding:"1px 5px", borderRadius:2, background:"#1a0000", color:"#ef5350", fontWeight:700, flexShrink:0 }}>{alerts.length}</span>
+      )}
+      {!alerts?.length
+        ? <span style={{ fontSize:10, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", flexShrink:0 }}>◌ No alerts</span>
+        : alerts.slice(0, 20).map((a, i) => {
+            const isHigh = a.priority === "HIGH";
+            const color  = isHigh ? "#ef5350" : a.priority === "MEDIUM" ? "#ffd54f" : "#a8c8e0";
+            const age    = a.ts ? Math.round((Date.now() - a.ts) / 1000) : null;
+            return (
+              <div key={i} style={{
+                display:"flex", alignItems:"center", gap:5,
+                padding:"2px 9px",
+                background:`${color}11`,
+                border:`1px solid ${color}33`,
+                borderRadius:3,
+                flexShrink:0,
+                whiteSpace:"nowrap",
+              }}>
+                <span style={{ fontSize:11, flexShrink:0 }}>{ALERT_ICONS[a.type]||"◈"}</span>
+                <span style={{ fontSize:10, color, fontFamily:"IBM Plex Mono,monospace", fontWeight:isHigh?700:400 }}>
+                  {a.message||a.detail||String(a)}
+                </span>
+                {age != null && (
+                  <span style={{ fontSize:10, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace" }}>
+                    {age < 60 ? `${age}s` : `${Math.round(age/60)}m`}
+                  </span>
+                )}
+              </div>
+            );
+          })
+      }
     </div>
   );
 }
@@ -410,6 +446,7 @@ function GEXPanel({ gex, dealerExposures }) {
   );
 }
 
+// ── FIXED: OI panel — single column + scrollable via PanelWrap ────────────────
 function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
   const oiSummary = oi.pcr > 1.2 ? "Put dominance → bullish (mm hedge)"
                   : oi.pcr < 0.8 ? "Call dominance → market complacent"
@@ -419,10 +456,25 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
   return (
     <PanelWrap>
       <SL>OI Intelligence</SL>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:6 }}>
-        <MiniCard label="PCR"      value={fmt2(oi.pcr)} sub="put/call" color={oi.pcr>1.2?"#00ff9c":oi.pcr<0.8?"#ef5350":"#ffd54f"} />
-        <MiniCard label="MAX PAIN" value={oi.maxPain ? oi.maxPain.toLocaleString("en-IN") : "—"} sub="expiry" color="#4fc3f7" />
-        <MiniCard label="TOTAL OI" value={fmtOILakhs(oi.totalCallOI, oi.totalPutOI)} />
+
+      {/* ── Single column: PCR → Max Pain → Total OI → Net Flow ── */}
+      <div style={{ display:"flex", flexDirection:"column", gap:5, marginBottom:6 }}>
+        <MiniCard
+          label="PCR"
+          value={fmt2(oi.pcr)}
+          sub="put/call"
+          color={oi.pcr > 1.2 ? "#00ff9c" : oi.pcr < 0.8 ? "#ef5350" : "#ffd54f"}
+        />
+        <MiniCard
+          label="MAX PAIN"
+          value={oi.maxPain ? oi.maxPain.toLocaleString("en-IN") : "—"}
+          sub="expiry"
+          color="#4fc3f7"
+        />
+        <MiniCard
+          label="TOTAL OI"
+          value={fmtOILakhs(oi.totalCallOI, oi.totalPutOI)}
+        />
         <MiniCard
           label="NET FLOW"
           value={oi.netPremiumFlow != null ? fmtCr(oi.netPremiumFlow) : "—"}
@@ -430,6 +482,7 @@ function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
           color={oi.netPremiumFlow > 0 ? "#00ff9c" : "#ef5350"}
         />
       </div>
+
       {oiSummary && (
         <div style={{ fontSize:10, fontFamily:"IBM Plex Mono,monospace", color:oiColor, marginBottom:7, padding:"4px 7px", background:`${oiColor}10`, borderRadius:3, border:`1px solid ${oiColor}22` }}>◈ {oiSummary}</div>
       )}
@@ -873,10 +926,12 @@ export default function OptionsIntelligencePage({ socket }) {
       <style>{`@keyframes alertPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`}</style>
       <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"#020d1c", overflow:"hidden" }}>
 
-        {/* Toolbar */}
+        {/* ── Toolbar — alerts now inline as horizontal strip ── */}
         <div style={{ display:"flex", alignItems:"center", gap:9, padding:"6px 14px", borderBottom:"1px solid #1c3a58", flexShrink:0, background:"#060f1c", minHeight:42 }}>
           <span style={{ fontFamily:"IBM Plex Mono,monospace", fontSize:12, fontWeight:700, color:"#00cfff", letterSpacing:1, flexShrink:0 }}>⚡ OPTIONS INTEL</span>
-          <div style={{ display:"flex", gap:4, overflowX:"auto", flex:1 }}>
+
+          {/* Symbol tabs */}
+          <div style={{ display:"flex", gap:4, overflowX:"auto", flexShrink:0 }}>
             {symbolList.length === 0 && <span style={{ fontSize:11, fontFamily:"IBM Plex Mono,monospace", color:"#c8d8e8" }}>◌ Waiting…</span>}
             {symbolList.slice(0,20).map(sym => (
               <button key={sym} onClick={() => handleSymbolChange(sym)}
@@ -885,7 +940,14 @@ export default function OptionsIntelligencePage({ socket }) {
               </button>
             ))}
           </div>
-          {d && <AlertCard alerts={liveAlerts} />}
+
+          {/* Divider */}
+          <div style={{ width:1, height:20, background:"#1c3a58", flexShrink:0 }} />
+
+          {/* Horizontal alert strip — takes remaining space */}
+          {d && <AlertStrip alerts={liveAlerts} />}
+
+          {/* Age indicator */}
           {ageSec != null && (
             <span style={{ fontSize:10, fontFamily:"IBM Plex Mono,monospace", color: ageSec > 120 ? "#ffd54f" : "#a0b8cc", flexShrink:0 }}>
               ↻ {ageSec < 60 ? `${ageSec}s` : `${Math.round(ageSec/60)}m`}
@@ -940,7 +1002,7 @@ export default function OptionsIntelligencePage({ socket }) {
               <TradeDecision spot={spot} callWall={gex.callWall} putWall={gex.putWall} gammaFlip={gex.gammaFlip} regime={gex.regime} pcr={oi.pcr} skew25={skew25} />
             </div>
 
-            {/* 4 Panels */}
+            {/* 4 Panels — all scrollable via PanelWrap */}
             <div style={{ flex:1, display:"flex", gap:9, minHeight:0 }}>
               <GEXPanel gex={gex} dealerExposures={dealerExp} />
               <OIPanel oi={oi} nearATMSignals={nearATMSignals} tailRiskSignals={tailRiskSignals} spot={spot} activeSymbol={activeSymbol} />
