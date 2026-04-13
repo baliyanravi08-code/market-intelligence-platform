@@ -5,6 +5,7 @@ if (process.env.NODE_ENV !== "production") {
 
 const express = require("express");
 const http    = require("http");
+// FIX: removed "const { Server } = require('socket.io')" — websocket.js owns the io instance now
 const path    = require("path");
 const fs      = require("fs");
 const axios   = require("axios");
@@ -13,7 +14,8 @@ const cors    = require("cors");
 const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
-const { startStreamer, stopStreamer, setOITickHandler } = require("./services/upstoxStream");
+// FIX: added setLTPTickHandler to break circular dependency (registerLTPTick was null)
+const { startStreamer, stopStreamer, setOITickHandler, setLTPTickHandler } = require("./services/upstoxStream");
 const { commoditiesRoute }  = require("./api/commodities");
 const {
   startNSEOIListener,
@@ -30,14 +32,16 @@ const {
   getWindowLabel,
 } = require("./database");
 
+// FIX: attachSocketIO replaces "new Server(server, ...)"
 const { attachSocketIO } = require("./api/websocket");
 
-// ── FIX: real NIFTY/BANKNIFTY daily closes for HV20/HV60/VRP ─────────────────
-const { startIndexCandleFetcher } = require("./services/intelligence/indexCandleFetcher");
+// FIX: real NIFTY/BANKNIFTY daily closes for HV20/HV60/VRP
+const { startIndexCandleFetcher, getDebugInfo } = require("./services/intelligence/indexCandleFetcher");
 
 const app    = express();
 const server = http.createServer(app);
-const io     = attachSocketIO(server);
+
+const io = attachSocketIO(server);
 
 app.use(cors());
 app.use(express.json());
@@ -226,8 +230,13 @@ loadInstrumentMaster()
     startNSEDealsListener(io);
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
 
-    // ── FIX: fetch real NIFTY/BANKNIFTY closes so HV20, HV60, VRP show correctly
-    // Must run after token is loaded. Uses same Upstox token as gannDataFetcher.
+    // FIX: wire registerLTPTick AFTER coordinator is fully loaded.
+    // Previously upstoxStream.js required coordinator at module load time —
+    // circular dependency meant registerLTPTick was always null → Gann got no LTP.
+    const { registerLTPTick } = require("./coordinator");
+    setLTPTickHandler(registerLTPTick);
+
+    // FIX: fetch real NIFTY/BANKNIFTY closes so HV20, HV60, VRP show correctly
     startIndexCandleFetcher();
 
     const PORT = process.env.PORT || 10000;
@@ -355,6 +364,16 @@ app.get("/health", (req, res) => {
     upstox:         (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) ? "connected" : "disconnected",
     instrumentMap:  Object.keys(instrumentMap).length,
   });
+});
+
+// ── /api/debug/hv — verify HV closes are correct ─────────────────────────────
+// Visit: https://your-app.onrender.com/api/debug/hv
+app.get("/api/debug/hv", (req, res) => {
+  try {
+    res.json(getDebugInfo());
+  } catch (e) {
+    res.json({ error: e.message });
+  }
 });
 
 // ── /api/test-circuit ─────────────────────────────────────────────────────────
