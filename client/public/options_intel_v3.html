@@ -3,1050 +3,1235 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Options Intel v3</title>
+<title>Options Intel v4</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600;700&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600;700&display=swap" rel="stylesheet">
 <style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg0:#010b15;--bg1:#040f1a;--bg2:#060f1e;--bg3:#0a1828;--bg4:#0d2035;
+  --border:#1a3548;--border2:#243f58;
+  --t1:#e8f2ff;--t2:#c8d8e8;--t3:#8aacc2;--t4:#4a7090;
+  --cyan:#00cfff;--green:#00ff9c;--red:#ef5350;--amber:#ffd54f;
+  --blue:#4fc3f7;--purple:#d090ff;--orange:#ff8a65;--pink:#ff5cff;
+  --scanline:rgba(0,207,255,0.018);
+}
+html,body{height:100%;background:var(--bg0);overflow:hidden}
+body::before{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
+  background:repeating-linear-gradient(0deg,transparent,transparent 1px,var(--scanline) 1px,var(--scanline) 2px);
+}
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:var(--bg1)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes barIn{from{width:0}to{width:var(--w)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
+@keyframes tickScroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@keyframes alertScroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 
-:root {
-  --bg0: #010b15;
-  --bg1: #040f1a;
-  --bg2: #060f1e;
-  --bg3: #0a1828;
-  --bg4: #0d2035;
-  --border: #1a3548;
-  --border2: #243f58;
-  --text1: #e8f2ff;
-  --text2: #c8d8e8;
-  --text3: #8aacc2;
-  --text4: #4a7090;
-  --cyan: #00cfff;
-  --green: #00ff9c;
-  --red: #ef5350;
-  --amber: #ffd54f;
-  --blue: #4fc3f7;
-  --purple: #d090ff;
-  --orange: #ff8a65;
-  --pink: #ff5cff;
-  --scanline-color: rgba(0,207,255,0.025);
+/* ─── APP SHELL ─────────────────────────────────────── */
+#app{
+  display:flex;flex-direction:column;height:100vh;overflow:hidden;
+  font-family:'IBM Plex Mono',monospace;color:var(--t1);background:var(--bg0);
+  animation:fadeIn .3s ease;
 }
 
-html, body { height: 100%; background: var(--bg0); overflow: hidden; }
+/* ─── TOPBAR ─────────────────────────────────────────── */
+#topbar{
+  height:28px;background:#000;border-bottom:1px solid var(--border);
+  display:flex;align-items:stretch;flex-shrink:0;
+}
+.tb-logo{
+  padding:0 12px;font-size:9px;font-weight:700;letter-spacing:2px;
+  color:var(--cyan);border-right:1px solid var(--border);
+  display:flex;align-items:center;flex-shrink:0;
+  text-shadow:0 0 8px var(--cyan);
+}
+.sym-btn{
+  padding:0 10px;font-size:8px;font-weight:700;letter-spacing:.5px;
+  background:transparent;border:none;border-right:1px solid var(--border);
+  color:var(--t4);cursor:pointer;font-family:'IBM Plex Mono',monospace;
+  transition:all .15s;flex-shrink:0;
+}
+.sym-btn:hover{background:rgba(0,207,255,.05);color:var(--t2)}
+.sym-btn.active{background:rgba(0,207,255,.1);color:var(--cyan);border-bottom:2px solid var(--cyan)}
+.tb-spacer{flex:1}
 
-body::before {
-  content: '';
-  position: fixed; inset: 0;
-  background: repeating-linear-gradient(0deg, transparent, transparent 1px, var(--scanline-color) 1px, var(--scanline-color) 2px);
-  pointer-events: none; z-index: 9999;
+/* Alert ticker — FIXED: horizontal scroll, zero vertical growth */
+.alert-strip{
+  display:flex;align-items:center;border-left:1px solid var(--border);
+  max-width:520px;overflow:hidden;flex-shrink:0;
+}
+.alert-strip-label{
+  padding:0 8px;font-size:8px;font-weight:700;letter-spacing:1px;
+  color:var(--amber);white-space:nowrap;border-right:1px solid var(--border);flex-shrink:0;
+}
+.alert-count{
+  font-size:7px;padding:1px 4px;border-radius:2px;
+  background:rgba(239,83,80,.18);color:var(--red);font-weight:700;
+  margin:0 6px;flex-shrink:0;
+}
+.alert-scroll-track{flex:1;overflow:hidden;position:relative}
+.alert-scroll-inner{
+  display:inline-flex;gap:30px;white-space:nowrap;
+  animation:alertScroll 22s linear infinite;align-items:center;
+  padding:0 4px;
+}
+.alert-scroll-inner:hover{animation-play-state:paused}
+.alert-item{
+  display:inline-flex;align-items:center;gap:4px;
+  font-size:8px;color:var(--amber);
+}
+.alert-item .dot{
+  width:4px;height:4px;border-radius:50%;background:var(--red);flex-shrink:0;
+}
+.alert-item.high{animation:pulse 1.4s infinite;color:var(--red)}
+.alert-pause-btn{
+  padding:0 7px;font-size:9px;background:transparent;border:none;border-left:1px solid var(--border);
+  color:var(--t4);cursor:pointer;font-family:monospace;flex-shrink:0;height:100%;
+}
+.alert-pause-btn:hover{color:var(--t2)}
+.tb-live{
+  padding:0 10px;font-size:8px;display:flex;align-items:center;gap:5px;
+  color:var(--t4);border-left:1px solid var(--border);flex-shrink:0;
+}
+.live-dot{
+  width:5px;height:5px;border-radius:50%;background:var(--green);
+  animation:pulse 1.5s infinite;box-shadow:0 0 5px var(--green);flex-shrink:0;
 }
 
-::-webkit-scrollbar { width: 3px; height: 3px; }
-::-webkit-scrollbar-track { background: var(--bg1); }
-::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+/* ─── TICKER BAR ─────────────────────────────────────── */
+#ticker{
+  height:22px;background:#010d18;border-bottom:1px solid var(--border);
+  overflow:hidden;display:flex;align-items:center;flex-shrink:0;
+}
+.ticker-inner{
+  display:inline-flex;align-items:center;gap:22px;
+  animation:tickScroll 36s linear infinite;padding:0 10px;
+}
+.ticker-inner:hover{animation-play-state:paused}
+.ti{display:inline-flex;align-items:center;gap:5px;font-size:9px}
+.ti-name{color:var(--cyan);font-weight:700}
+.ti-price{color:var(--t1);font-weight:700}
+.ti-chg{font-size:8px}
+.ti-chg.up{color:var(--green)}
+.ti-chg.dn{color:var(--red)}
+.ti-sep{color:var(--border2);font-size:11px}
 
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-@keyframes glow { 0%,100%{box-shadow:0 0 4px currentColor} 50%{box-shadow:0 0 14px currentColor,0 0 28px currentColor} }
-@keyframes ticker { from{transform:translateX(0)} to{transform:translateX(-50%)} }
-@keyframes fadeIn { from{opacity:0;transform:translateY(3px)} to{opacity:1;transform:translateY(0)} }
-@keyframes barIn { from{width:0} to{width:var(--w)} }
-@keyframes gannPulse { 0%,100%{r:5} 50%{r:7} }
-@keyframes gannFrozenBlink { 0%,100%{opacity:.5} 50%{opacity:1} }
+/* ─── ISK ROW (Score + Greeks) ───────────────────────── */
+#iskrow{
+  height:58px;background:var(--bg2);border-bottom:1px solid var(--border);
+  display:flex;align-items:stretch;flex-shrink:0;overflow:hidden;
+}
+.isk-score{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:0 14px;border-right:1px solid var(--border);min-width:70px;flex-shrink:0;
+}
+.isk-num{font-size:28px;font-weight:700;line-height:1}
+.isk-lbl{font-size:7px;font-weight:700;letter-spacing:1px;margin-top:2px}
+.isk-sym{
+  display:flex;flex-direction:column;justify-content:center;
+  padding:0 12px;border-right:1px solid var(--border);min-width:175px;flex-shrink:0;
+}
+.isk-sym-row{display:flex;align-items:center;gap:5px;margin-bottom:4px}
+.isk-sym-name{font-size:13px;font-weight:700;color:var(--t1)}
+.isk-bias{font-size:8px;font-weight:700}
+.badge{
+  font-size:7px;font-weight:700;padding:1px 5px;border-radius:2px;
+  border:1px solid;white-space:nowrap;letter-spacing:.3px;
+}
+.isk-strats{display:flex;gap:3px;flex-wrap:nowrap;overflow:hidden}
+.isk-stats{
+  display:flex;align-items:stretch;flex:1;overflow:hidden;
+}
+.istat{
+  display:flex;flex-direction:column;justify-content:center;
+  padding:0 9px;border-right:1px solid var(--border);min-width:55px;flex-shrink:0;
+}
+.istat-l{font-size:7px;color:var(--t3);letter-spacing:.7px;text-transform:uppercase;margin-bottom:2px;white-space:nowrap}
+.istat-v{font-size:11px;font-weight:700;line-height:1.1}
+.istat-s{font-size:6px;color:var(--t3);margin-top:1px}
+.ivrank-wrap{
+  display:flex;flex-direction:column;justify-content:center;
+  padding:0 9px;min-width:82px;flex-shrink:0;border-right:1px solid var(--border);
+}
+.ivr-row{display:flex;justify-content:space-between;font-size:7px;margin-bottom:2px}
+.ivr-track{height:3px;background:var(--bg4);border-radius:2px;overflow:hidden}
+.ivr-fill{height:3px;border-radius:2px}
+.ivr-pct{font-size:6px;color:var(--t3);margin-top:2px}
+.trend-block{
+  display:flex;align-items:center;padding:0 10px;flex-shrink:0;
+  border-left:none;
+}
+.trend-text{font-size:8px;font-weight:700;line-height:1.4}
 
-#app {
-  display: flex; flex-direction: column;
-  height: 100vh; overflow: hidden;
-  font-family: 'IBM Plex Mono', monospace;
-  color: var(--text1);
-  background:
-    radial-gradient(ellipse 80% 40% at 50% -10%, rgba(0,207,255,0.07) 0%, transparent 70%),
-    var(--bg0);
-  animation: fadeIn .3s ease;
+/* ─── 4-PANEL GRID ───────────────────────────────────── */
+#panels{
+  flex:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:0;min-height:0;overflow:hidden;
+}
+.panel{
+  background:var(--bg1);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;min-height:0;overflow:hidden;
+  animation:fadeIn .25s ease;
+}
+.panel:last-child{border-right:none}
+
+/* Panel header */
+.ph{
+  height:22px;background:#000;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 8px;gap:6px;flex-shrink:0;
+}
+.ph-title{
+  font-size:8px;font-weight:700;letter-spacing:1.2px;
+  text-transform:uppercase;color:var(--t3);
+}
+.ph-badge{
+  font-size:7px;font-weight:700;padding:1px 5px;border-radius:2px;border:1px solid;
+}
+.ph-spacer{flex:1}
+
+/* Panel body */
+.pbody{
+  flex:1;overflow-y:auto;padding:7px 9px;
+  display:flex;flex-direction:column;gap:0;
+}
+.pbody::-webkit-scrollbar{width:2px}
+
+/* Section heading inside panel */
+.sec-hdr{
+  font-size:7px;font-weight:700;color:var(--t3);letter-spacing:1px;
+  text-transform:uppercase;border-top:1px solid var(--border);
+  border-bottom:1px solid var(--border);padding:2px 0;margin:6px 0 4px;
+  flex-shrink:0;
 }
 
-/* ─── TOOLBAR ─────────────────────────────────────────────────────────── */
-#toolbar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 0 12px;
-  height: 40px; flex-shrink: 0;
-  background: var(--bg2);
-  border-bottom: 1px solid var(--border);
-  position: relative;
+/* Mini card grid */
+.mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px;margin-bottom:5px}
+.mc{background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:4px 7px}
+.mc-l{font-size:7px;color:var(--t2);letter-spacing:.8px;display:block;margin-bottom:1px}
+.mc-v{font-size:12px;font-weight:700;display:block;line-height:1.1;word-break:break-word}
+.mc-s{font-size:6px;color:var(--t3);display:block;margin-top:1px}
+
+/* ─── GEX PANEL ──────────────────────────────────────── */
+.gex-bar{margin-bottom:5px}
+.gex-bar-hd{display:flex;justify-content:space-between;font-size:9px;margin-bottom:2px}
+.gex-track{height:4px;background:var(--bg4);border-radius:2px;overflow:hidden}
+.gex-fill{
+  height:4px;border-radius:2px;
+  --w:0%;width:var(--w);
+  animation:barIn .6s cubic-bezier(.4,0,.2,1) forwards;
 }
-#toolbar::after {
-  content: '';
-  position: absolute; bottom: -1px; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
-  opacity: .4;
+.regime-tag{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 7px;border-radius:2px;font-size:7px;font-weight:700;
+  border:1px solid;margin:4px 0 6px;
 }
-
-.logo { font-size: 9px; font-weight: 700; letter-spacing: 2px; color: var(--cyan); flex-shrink: 0; text-shadow: 0 0 8px var(--cyan); }
-
-.sym-btn {
-  padding: 2px 9px; border-radius: 2px; cursor: pointer;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 8px; font-weight: 700; letter-spacing: .5px;
-  background: transparent; border: 1px solid var(--border);
-  color: var(--text4); transition: all .15s; flex-shrink: 0;
+.gex-strike{
+  display:flex;align-items:center;gap:4px;
+  font-size:8px;padding:2px 0;border-bottom:1px solid rgba(26,53,72,.5);
 }
-.sym-btn:hover { border-color: var(--border2); color: var(--text2); }
-.sym-btn.active { background: rgba(0,207,255,.1); border-color: rgba(0,207,255,.5); color: var(--cyan); box-shadow: 0 0 8px rgba(0,207,255,.2); }
-.spacer { flex: 1; }
+.gex-s-lbl{width:48px;color:var(--t2);flex-shrink:0}
+.gex-s-track{flex:1;height:3px;background:var(--bg4);border-radius:2px;overflow:hidden}
+.gex-s-fill{height:3px;border-radius:2px;--w:0%;width:var(--w);animation:barIn .5s ease forwards}
+.gex-s-val{width:52px;text-align:right;font-size:7px;font-weight:700}
 
-.alert-strip { display: flex; flex-direction: column; gap: 0; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; min-width: 170px; max-width: 250px; flex-shrink: 0; max-height: 68px; overflow: hidden; }
-.alert-strip-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
-.alert-strip-head span { font-size: 7px; font-weight: 700; letter-spacing: 1px; color: var(--text2); }
-.alert-count { font-size: 7px; padding: 1px 4px; border-radius: 2px; background: rgba(239,83,80,.15); color: var(--red); font-weight: 700; }
-.alert-row { display: flex; align-items: flex-start; gap: 4px; font-size: 7px; line-height: 1.35; color: var(--red); padding: 1px 0; border-bottom: 1px solid var(--border); }
-.alert-row:last-child { border-bottom: none; }
-.alert-row.medium { color: var(--amber); }
-.alert-row.high { animation: pulse 1.4s infinite; }
-.alert-icon { flex-shrink: 0; margin-top: 1px; }
-.alert-msg { flex: 1; }
-.alert-age { color: var(--text4); flex-shrink: 0; font-size: 6px; margin-top: 1px; }
-.live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); flex-shrink: 0; animation: pulse 1.5s infinite; box-shadow: 0 0 6px var(--green); }
-.live-label { font-size: 7px; color: var(--text4); flex-shrink: 0; }
-
-/* ─── BODY ────────────────────────────────────────────────────────────── */
-#body { flex: 1; display: flex; flex-direction: column; padding: 7px 8px; gap: 7px; overflow: hidden; min-height: 0; }
-
-/* ─── SCORE CARD ─────────────────────────────────────────────────────── */
-#scorecard {
-  flex-shrink: 0; border-radius: 6px;
-  padding: 9px 14px; display: flex; align-items: center; gap: 14px;
-  border: 1px solid var(--border); background: var(--bg2);
-  position: relative; overflow: hidden;
+/* ─── OI PANEL ───────────────────────────────────────── */
+.oi-tabs{display:flex;gap:0;margin-bottom:5px;border:1px solid var(--border);border-radius:3px;overflow:hidden}
+.oi-tab{
+  flex:1;font-size:7px;font-weight:700;letter-spacing:.4px;
+  padding:3px 2px;border-radius:0;cursor:pointer;border:none;
+  background:transparent;color:var(--t4);transition:all .15s;
+  font-family:'IBM Plex Mono',monospace;
 }
-#scorecard::before { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, var(--score-color, #00ff9c) 0%, transparent 25%); opacity: .04; pointer-events: none; }
-
-.score-block { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; min-width: 50px; }
-.score-num { font-size: 36px; font-weight: 700; line-height: 1; }
-.score-label { font-size: 7px; font-weight: 700; letter-spacing: 1px; margin-top: 1px; }
-.score-sym { flex-shrink: 0; min-width: 120px; }
-.score-sym-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-.score-sym-name { font-size: 14px; font-weight: 700; color: var(--text1); }
-.score-bias { font-size: 9px; font-weight: 700; }
-.gann-badge-compact { display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px; border-radius: 3px; font-size: 8px; font-weight: 700; cursor: default; border: 1px solid; letter-spacing: .3px; }
-.strats { display: flex; gap: 3px; flex-wrap: wrap; }
-.strat-tag { font-size: 7px; font-weight: 700; padding: 1px 5px; border-radius: 2px; border: 1px solid; white-space: nowrap; letter-spacing: .3px; }
-.vdiv { width: 1px; background: var(--border); align-self: stretch; margin: 0 6px; flex-shrink: 0; }
-.stats-row { display: flex; gap: 10px; align-items: flex-start; flex: 1; overflow-x: auto; flex-wrap: nowrap; }
-.stat { display: flex; flex-direction: column; gap: 1px; min-width: 50px; flex-shrink: 0; }
-.stat-label { font-size: 7px; color: var(--text2); letter-spacing: .8px; text-transform: uppercase; white-space: nowrap; }
-.stat-val { font-size: 11px; font-weight: 700; line-height: 1.1; }
-.stat-sub { font-size: 6.5px; color: var(--text3); }
-.iv-rank-wrap { min-width: 76px; flex-shrink: 0; }
-.iv-rank-row { display: flex; justify-content: space-between; font-size: 7px; margin-bottom: 2px; }
-.rank-bar-bg { height: 4px; background: var(--bg4); border-radius: 2px; overflow: hidden; }
-.rank-bar-fg { height: 4px; border-radius: 2px; transition: width .6s ease; }
-.rank-pct { font-size: 6px; color: var(--text3); margin-top: 1px; }
-.spark-wrap { flex-shrink: 0; width: 70px; display: flex; flex-direction: column; gap: 2px; align-items: center; }
-.spark-label { font-size: 6.5px; color: var(--text3); letter-spacing: .5px; }
-
-/* ─── PANEL GRID ─────────────────────────────────────────────────────── */
-#panels { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; min-height: 0; overflow: hidden; }
-
-.panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; overflow-y: auto; min-height: 0; animation: fadeIn .25s ease; }
-.panel-title { font-size: 8px; font-weight: 700; color: var(--text3); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin-bottom: 8px; flex-shrink: 0; }
-
-/* GEX */
-.gex-bar-wrap { margin-bottom: 7px; }
-.gex-bar-head { display: flex; justify-content: space-between; font-size: 9px; margin-bottom: 3px; }
-.gex-bar-bg { height: 6px; background: var(--bg4); border-radius: 3px; overflow: hidden; position: relative; }
-.gex-bar-fill { height: 6px; border-radius: 3px; --w: 0%; width: var(--w); animation: barIn .7s cubic-bezier(.4,0,.2,1) forwards; position: relative; }
-.gex-bar-fill::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 70%, rgba(255,255,255,.25)); border-radius: 3px; }
-.gex-regime-tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 3px; font-size: 7px; font-weight: 700; border: 1px solid; margin-bottom: 8px; }
-.mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
-.mini-card { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; }
-.mini-card-label { font-size: 7px; color: var(--text2); letter-spacing: .8px; margin-bottom: 2px; display: block; }
-.mini-card-val { font-size: 12px; font-weight: 700; line-height: 1.1; display: block; word-break: break-word; }
-.mini-card-sub { font-size: 6.5px; color: var(--text3); margin-top: 1px; display: block; }
-.sub-title { font-size: 7px; font-weight: 700; color: var(--text3); letter-spacing: 1px; text-transform: uppercase; border-bottom: 1px solid var(--border); padding-bottom: 3px; margin: 8px 0 5px; flex-shrink: 0; }
-
-/* OI */
-.oi-tabs { display: flex; gap: 4px; margin-bottom: 6px; }
-.oi-tab { flex: 1; font-size: 7px; font-weight: 700; letter-spacing: .5px; padding: 3px 2px; border-radius: 3px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text4); transition: all .15s; font-family: 'IBM Plex Mono', monospace; }
-.oi-tab.active-near { background: rgba(79,195,247,.1); border-color: rgba(79,195,247,.4); color: var(--blue); }
-.oi-tab.active-tail { background: rgba(208,144,255,.1); border-color: rgba(208,144,255,.4); color: var(--purple); }
-.oi-hdr { display: grid; grid-template-columns: 26px 52px 1fr 1fr 44px; gap: 3px; font-size: 7px; color: var(--text4); letter-spacing: .5px; padding-bottom: 3px; border-bottom: 1px solid var(--border); margin-bottom: 2px; }
-.oi-row { display: grid; grid-template-columns: 26px 52px 1fr 1fr 44px; gap: 3px; padding: 3px 2px; border-radius: 2px; align-items: center; transition: background .1s; }
-.oi-row:nth-child(even) { background: rgba(6,15,28,.6); }
-.oi-row:hover { background: var(--bg4); }
-.oi-type { font-size: 7px; font-weight: 700; padding: 1px 2px; border-radius: 2px; border: 1px solid; text-align: center; display: block; }
-.oi-strike { font-size: 8px; font-weight: 700; color: var(--text1); }
-.oi-oi { font-size: 7px; color: var(--text2); text-align: right; display: block; }
-.oi-vol { font-size: 7px; color: var(--pink); text-align: right; display: block; }
-.oi-dist { font-size: 7px; font-weight: 700; text-align: right; display: block; }
-.oi-pgn { display: flex; align-items: center; justify-content: space-between; padding-top: 4px; border-top: 1px solid var(--border); margin-top: 4px; }
-.oi-pgn-info { font-size: 7px; color: var(--text4); }
-.oi-pgn-btns { display: flex; gap: 3px; }
-.oi-pgn-btn { font-size: 8px; padding: 1px 6px; border-radius: 2px; border: 1px solid var(--border); background: transparent; color: var(--text4); cursor: pointer; font-family: 'IBM Plex Mono', monospace; transition: all .1s; }
-.oi-pgn-btn:not(:disabled):hover { background: var(--bg4); color: var(--text2); border-color: var(--border2); }
-.oi-pgn-btn:disabled { opacity: .35; cursor: default; }
-
-/* ─── GANN PANEL (v2 — Fan + Sq9 + Signals) ──────────────────────── */
-.gann-status-bar {
-  display: flex; align-items: center; gap: 5px;
-  padding: 3px 7px; border-radius: 3px; border: 1px solid;
-  margin-bottom: 7px; font-size: 7px;
+.oi-tab.active-near{background:rgba(79,195,247,.1);color:var(--blue)}
+.oi-tab.active-tail{background:rgba(208,144,255,.1);color:var(--purple)}
+.oi-hdr{
+  display:grid;grid-template-columns:26px 52px 1fr 1fr 42px;
+  gap:2px;font-size:7px;color:var(--t4);letter-spacing:.5px;
+  padding:2px 2px 3px;border-bottom:1px solid var(--border);margin-bottom:2px;
 }
-.gann-status-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-.gann-signal-card {
-  border-radius: 5px; padding: 7px 9px; border: 1px solid;
-  margin-bottom: 7px; transition: border-color .4s, background .4s;
+.oi-row{
+  display:grid;grid-template-columns:26px 52px 1fr 1fr 42px;
+  gap:2px;padding:2px 2px;border-radius:2px;align-items:center;
+  transition:background .1s;
 }
-.gann-sig-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-.gann-sig-icon { font-size: 15px; line-height: 1; }
-.gann-sig-label { font-size: 12px; font-weight: 700; letter-spacing: .3px; }
-.gann-sig-str { font-size: 10px; font-weight: 700; margin-left: auto; }
-.gann-str-bar-bg { height: 3px; background: #ffffff10; border-radius: 2px; margin-bottom: 4px; }
-.gann-str-bar-fill { height: 3px; border-radius: 2px; --w: 50%; width: var(--w); animation: barIn .6s ease forwards; }
-.gann-rationale { font-size: 7.5px; color: var(--text3); line-height: 1.45; }
-.gann-fan-badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border-radius: 2px; font-size: 7px; font-weight: 700; border: 1px solid; margin-top: 3px; }
-
-/* Gann fan SVG container */
-.gann-fan-wrap {
-  background: #060a14; border-radius: 5px; border: 1px solid #0e1828;
-  overflow: hidden; margin-bottom: 7px; position: relative;
+.oi-row:nth-child(even){background:rgba(6,15,28,.6)}
+.oi-row:hover{background:var(--bg4)}
+.oi-type{
+  font-size:7px;font-weight:700;padding:1px 2px;border-radius:2px;
+  border:1px solid;text-align:center;
 }
-.gann-fan-frozen-msg {
-  text-align: center; padding: 3px 0; font-size: 7px;
-  color: #3a5070; border-top: 1px solid #0e1828;
+.oi-strike{font-size:8px;font-weight:700;color:var(--t1)}
+.oi-oi{font-size:7px;color:var(--t2);text-align:right}
+.oi-vol{font-size:7px;color:var(--pink);text-align:right}
+.oi-dist{font-size:7px;font-weight:700;text-align:right}
+.oi-pgn{
+  display:flex;align-items:center;justify-content:space-between;
+  padding-top:4px;border-top:1px solid var(--border);margin-top:4px;flex-shrink:0;
 }
+.pgn-info{font-size:7px;color:var(--t4)}
+.pgn-btns{display:flex;gap:3px}
+.pgn-btn{
+  font-size:8px;padding:1px 6px;border-radius:2px;
+  border:1px solid var(--border);background:transparent;
+  color:var(--t4);cursor:pointer;font-family:'IBM Plex Mono',monospace;
+  transition:all .1s;
+}
+.pgn-btn:not(:disabled):hover{background:var(--bg4);color:var(--t2);border-color:var(--border2)}
+.pgn-btn:disabled{opacity:.3;cursor:default}
 
-/* Sq9 table */
-.sq9-title { font-size: 7px; font-weight: 700; letter-spacing: 1px; color: var(--text3); margin-bottom: 5px; }
-.sq9-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
-.sq9-row { display: flex; justify-content: space-between; align-items: center; padding: 2px 5px; border-radius: 2px; }
-.sq9-lbl { font-size: 7px; color: var(--text4); }
-.sq9-val { font-size: 9px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; }
-.sq9-dist { font-size: 7px; color: var(--text4); }
+/* ─── GANN PANEL ─────────────────────────────────────── */
+.gann-status{
+  display:flex;align-items:center;gap:5px;
+  padding:3px 7px;border-radius:3px;border:1px solid;
+  margin-bottom:6px;font-size:7px;
+}
+.gann-status-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.gann-tabs{display:flex;gap:0;margin-bottom:6px;border:1px solid var(--border);border-radius:3px;overflow:hidden}
+.gann-tab{
+  flex:1;font-size:7px;font-weight:700;letter-spacing:.4px;
+  padding:3px 2px;cursor:pointer;border:none;
+  background:transparent;color:var(--t4);transition:all .15s;
+  font-family:'IBM Plex Mono',monospace;
+}
+.gann-tab.active{background:#1a2a4a;color:var(--blue)}
+.gann-sig-card{
+  border-radius:3px;padding:6px 8px;border:1px solid;margin-bottom:6px;
+}
+.gann-sig-row{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.gann-sig-icon{font-size:13px;line-height:1}
+.gann-sig-label{font-size:11px;font-weight:700;letter-spacing:.3px}
+.gann-sig-str{font-size:9px;font-weight:700;margin-left:auto}
+.str-bar-bg{height:3px;background:#ffffff10;border-radius:2px;margin-bottom:4px}
+.str-bar-fill{height:3px;border-radius:2px;--w:50%;width:var(--w);animation:barIn .6s ease forwards}
+.gann-rationale{font-size:7px;color:var(--t3);line-height:1.5}
+.gann-day-stats{display:flex;gap:3px;margin-bottom:6px}
+.gds{
+  flex:1;background:var(--bg3);border:1px solid var(--border);
+  border-radius:3px;padding:3px 5px;
+  display:flex;flex-direction:column;gap:1px;
+}
+.gds-l{font-size:6px;color:var(--t4);letter-spacing:.8px;text-transform:uppercase}
+.gds-v{font-size:9px;font-weight:700}
+.gann-fan-wrap{
+  background:#050a12;border-radius:3px;border:1px solid #0e1828;
+  overflow:hidden;margin-bottom:6px;
+}
+.gann-fan-frozen{
+  text-align:center;padding:3px 0;font-size:7px;
+  color:var(--t4);border-top:1px solid #0e1828;
+}
+.fan-legend{display:flex;flex-wrap:wrap;gap:5px;padding:2px 0 3px}
+.fan-leg-item{display:flex;align-items:center;gap:2px;font-size:6px;color:var(--t4)}
+.fan-leg-line{width:10px;height:2px;border-radius:1px}
+.sq9-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px}
+.sq9-row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:2px 5px;border-radius:2px;
+}
+.sq9-lbl{font-size:7px;color:var(--t4)}
+.sq9-val{font-size:8px;font-weight:700;font-family:'IBM Plex Mono',monospace}
+.sq9-dist{font-size:7px;color:var(--t4)}
+.gann-sr-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:5px}
+.gann-sr-col{background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:4px 6px}
+.gann-sr-hdr{font-size:7px;color:var(--t3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:3px}
+.gann-sr-row{display:flex;justify-content:space-between;font-size:8px;padding:1px 0}
+.gann-log-row{
+  display:flex;align-items:center;gap:5px;
+  padding:2px 0;border-bottom:1px solid #0e1828;font-size:7px;
+}
+.gann-log-row:last-child{border:none}
 
-/* Gann tab buttons */
-.gann-tabs { display: flex; gap: 3px; margin-bottom: 7px; }
-.gann-tab { flex: 1; font-size: 7px; font-weight: 700; letter-spacing: .4px; padding: 3px 2px; border-radius: 3px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text4); transition: all .15s; font-family: 'IBM Plex Mono', monospace; }
-.gann-tab.active { background: #1a2a4a; border-color: #3060a0; color: var(--blue); }
-
-/* Day stats mini */
-.gann-day-stats { display: flex; gap: 4px; margin-bottom: 7px; }
-.gann-ds { display: flex; flex-direction: column; gap: 1px; flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 3px 5px; }
-.gann-ds-l { font-size: 6px; color: var(--text4); letter-spacing: 1px; }
-.gann-ds-v { font-size: 9px; font-weight: 700; }
-
-/* Signal log */
-.gann-log-title { font-size: 7px; font-weight: 700; letter-spacing: 1px; color: var(--text3); margin-bottom: 4px; }
-.gann-log-row { display: flex; align-items: center; gap: 5px; padding: 2px 0; border-bottom: 1px solid #0e1828; font-size: 7px; }
-.gann-log-row:last-child { border: none; }
-
-/* Legend */
-.gann-fan-legend { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 0 2px; }
-.gann-legend-item { display: flex; align-items: center; gap: 2px; font-size: 6px; color: var(--text4); }
-.gann-legend-line { width: 10px; height: 2px; border-radius: 1px; }
-
-/* Structure panel */
-.zone-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 3px; margin-bottom: 6px; border: 1px solid; font-size: 8px; font-weight: 700; }
-.zone-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-.range-bar-wrap { margin-bottom: 8px; }
-.range-bar-labels { display: flex; justify-content: space-between; font-size: 7px; color: var(--text4); margin-bottom: 2px; }
-.range-bar-bg { height: 6px; background: var(--bg4); border-radius: 3px; position: relative; overflow: visible; }
-.range-bar-fill { height: 6px; border-radius: 3px; background: linear-gradient(90deg, rgba(255,138,101,.4), rgba(255,213,79,.4)); transition: width .6s ease; }
-.range-bar-needle { position: absolute; top: -2px; width: 2px; height: 10px; background: var(--text1); border-radius: 1px; transform: translateX(-50%); transition: left .4s ease; box-shadow: 0 0 4px rgba(255,255,255,.5); }
-.lvl-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 8px; }
-.lvl-label { color: var(--text2); }
-.lvl-val { font-weight: 700; }
-.gex-strike-bar { display: flex; align-items: center; gap: 5px; font-size: 8px; padding: 2px 0; border-bottom: 1px solid rgba(26,53,72,.5); }
-.gex-strike-label { width: 50px; color: var(--text2); flex-shrink: 0; }
-.gex-strike-track { flex: 1; height: 4px; background: var(--bg4); border-radius: 2px; overflow: hidden; }
-.gex-strike-fill { height: 4px; border-radius: 2px; --w: 0%; width: var(--w); animation: barIn .6s ease forwards; }
-.gex-strike-val { width: 40px; text-align: right; font-size: 7px; font-weight: 700; }
-.greek-item { display: flex; flex-direction: column; }
-.greek-label { font-size: 7px; color: var(--text3); letter-spacing: .5px; }
-.greek-val { font-size: 10px; font-weight: 700; }
-.greek-sub { font-size: 6px; color: var(--text3); }
-.spark-svg { overflow: visible; }
+/* ─── STRUCTURE PANEL ────────────────────────────────── */
+.zone-badge{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:3px 8px;border-radius:3px;margin-bottom:5px;
+  border:1px solid;font-size:8px;font-weight:700;
+}
+.zone-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.range-wrap{margin-bottom:6px}
+.range-lbls{
+  display:flex;justify-content:space-between;
+  font-size:7px;color:var(--t4);margin-bottom:2px;
+}
+.range-track{
+  height:5px;background:var(--bg4);border-radius:3px;
+  position:relative;overflow:visible;
+}
+.range-fill{
+  height:5px;border-radius:3px;
+  background:linear-gradient(90deg,rgba(255,138,101,.4),rgba(255,213,79,.4));
+  transition:width .5s ease;
+}
+.range-needle{
+  position:absolute;top:-2px;width:2px;height:9px;
+  background:var(--t1);border-radius:1px;transform:translateX(-50%);
+  transition:left .4s ease;
+}
+.lvl-row{
+  display:flex;justify-content:space-between;
+  padding:3px 0;border-bottom:1px solid var(--border);font-size:8px;
+}
+.lvl-lbl{color:var(--t2)}
+.lvl-val{font-weight:700}
+.straddle-row{
+  display:flex;justify-content:space-between;
+  font-size:9px;padding:4px 0;
+  border-top:1px solid var(--border);margin-top:4px;
+}
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="toolbar"></div>
-  <div id="body">
-    <div id="scorecard"></div>
-    <div id="panels"></div>
-  </div>
+  <div id="topbar"></div>
+  <div id="ticker"></div>
+  <div id="iskrow"></div>
+  <div id="panels"></div>
 </div>
 
 <script>
-(function() {
-  const s = document.createElement('script');
-  s.src = '/socket.io/socket.io.js';
-  s.onload  = () => window._socketIOReady && window._socketIOReady();
-  s.onerror = () => { window._socketOffline = true; window._socketIOReady && window._socketIOReady(); };
+// ─── SOCKET.IO loader ─────────────────────────────────────────────────────
+(function(){
+  const s=document.createElement('script');
+  s.src='/socket.io/socket.io.js';
+  s.onload=()=>window._socketIOReady&&window._socketIOReady();
+  s.onerror=()=>{window._socketOffline=true;window._socketIOReady&&window._socketIOReady()};
   document.head.appendChild(s);
 })();
-</script>
-<script>
-// ═══════════════════════════════════════════════════════════════
-//  OPTIONS INTEL v3 — with Gann Fan + Square of 9 + Market Hours
-// ═══════════════════════════════════════════════════════════════
 
-const SYMBOLS = ["NIFTY 50", "BANK NIFTY", "SENSEX"];
-
-// ── Live state ────────────────────────────────────────────────
-const STATE = {
-  "NIFTY 50": { symbol:"NIFTY 50", score:50, bias:"NEUTRAL", spot:0, ltp:0, strategy:[], volatility:{ atmIV:0, hv20:0, hv60:0, vrp:0, ivRank:50, ivPercentile:50, skew25:0, skewSentiment:"NEUTRAL" }, atmGreeks:{ delta:0.50, gamma:0, theta:0, vega:0, rho:0 }, gex:{ netGEX:0, callGEX:0, putGEX:0, callWall:null, putWall:null, gammaFlip:null, regime:"MEAN_REVERTING", topStrikes:[] }, dealerExposures:{ dex:0, vex:0, chex:0 }, oi:{ pcr:1.0, maxPain:null, totalCallOI:0, totalPutOI:0, netPremiumFlow:0, premiumBias:"NEUTRAL", unusualOI:[], unusualOITailRisk:[] }, structure:{ straddlePrice:0, expectedMoveAbs:0, expectedMovePct:0, vrp:0, ivEnvironment:"NORMAL", eventRiskScore:0, supportFromOI:null, resistanceFromOI:null } },
-  "BANK NIFTY": { symbol:"BANK NIFTY", score:50, bias:"NEUTRAL", spot:0, ltp:0, strategy:[], volatility:{ atmIV:0, hv20:0, hv60:0, vrp:0, ivRank:50, ivPercentile:50, skew25:0, skewSentiment:"NEUTRAL" }, atmGreeks:{ delta:0.50, gamma:0, theta:0, vega:0, rho:0 }, gex:{ netGEX:0, callGEX:0, putGEX:0, callWall:null, putWall:null, gammaFlip:null, regime:"MEAN_REVERTING", topStrikes:[] }, dealerExposures:{ dex:0, vex:0, chex:0 }, oi:{ pcr:1.0, maxPain:null, totalCallOI:0, totalPutOI:0, netPremiumFlow:0, premiumBias:"NEUTRAL", unusualOI:[], unusualOITailRisk:[] }, structure:{ straddlePrice:0, expectedMoveAbs:0, expectedMovePct:0, vrp:0, ivEnvironment:"NORMAL", eventRiskScore:0, supportFromOI:null, resistanceFromOI:null } },
-  "SENSEX":    { symbol:"SENSEX",    score:50, bias:"NEUTRAL", spot:0, ltp:0, strategy:[], volatility:{ atmIV:0, hv20:0, hv60:0, vrp:0, ivRank:50, ivPercentile:50, skew25:0, skewSentiment:"NEUTRAL" }, atmGreeks:{ delta:0.50, gamma:0, theta:0, vega:0, rho:0 }, gex:{ netGEX:0, callGEX:0, putGEX:0, callWall:null, putWall:null, gammaFlip:null, regime:"MEAN_REVERTING", topStrikes:[] }, dealerExposures:{ dex:0, vex:0, chex:0 }, oi:{ pcr:1.0, maxPain:null, totalCallOI:0, totalPutOI:0, netPremiumFlow:0, premiumBias:"NEUTRAL", unusualOI:[], unusualOITailRisk:[] }, structure:{ straddlePrice:0, expectedMoveAbs:0, expectedMovePct:0, vrp:0, ivEnvironment:"NORMAL", eventRiskScore:0, supportFromOI:null, resistanceFromOI:null } },
-};
-
-// ── Gann state (keyed by display symbol) ──────────────────────
-// Populated by: socket gann:update / gann:frozen / gann:weekend
-const GANN = {
-  "NIFTY 50":   { ltp:0, dayLow:0, dayHigh:0, dayOpen:0, barsFromLow:0, barsFromHigh:0, signal:null, strength:0, rationale:'', sq9Levels:[], fanFromLow:[], fanFromHigh:[], aboveFan:null, frozen:false, frozenAt:null, marketOpen:false, status:'no_data', signalLog:[], tab:'fan' },
-  "BANK NIFTY": { ltp:0, dayLow:0, dayHigh:0, dayOpen:0, barsFromLow:0, barsFromHigh:0, signal:null, strength:0, rationale:'', sq9Levels:[], fanFromLow:[], fanFromHigh:[], aboveFan:null, frozen:false, frozenAt:null, marketOpen:false, status:'no_data', signalLog:[], tab:'fan' },
-  "SENSEX":     { ltp:0, dayLow:0, dayHigh:0, dayOpen:0, barsFromLow:0, barsFromHigh:0, signal:null, strength:0, rationale:'', sq9Levels:[], fanFromLow:[], fanFromHigh:[], aboveFan:null, frozen:false, frozenAt:null, marketOpen:false, status:'no_data', signalLog:[], tab:'fan' },
-};
-
-const spotHistory = {};
-SYMBOLS.forEach(s => { spotHistory[s] = []; });
-
-let active   = "NIFTY 50";
-let oiView   = "near";
-let oiScroll = 0;
-const OI_ROWS = 7;
-let alerts = [];
-const MAX_ALERTS = 6;
-let isConnected = false;
-
-// ── Market hours (IST) ─────────────────────────────────────────
-function getIST() { return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })); }
-function mktStatus() {
-  const d = getIST(), day = d.getDay(), m = d.getHours() * 60 + d.getMinutes();
-  if (day === 0 || day === 6) return 'weekend';
-  if (m < 555) return 'pre';
-  if (m <= 930) return 'open';
-  return 'closed';
-}
-
-// ── Gann math ──────────────────────────────────────────────────
-const GANN_FANS = [
-  { label:'8x1', ratio:8,    color:'#ff4757' },
-  { label:'4x1', ratio:4,    color:'#ff6b35' },
-  { label:'2x1', ratio:2,    color:'#ffa502' },
-  { label:'1x1', ratio:1,    color:'#ffffff' },
-  { label:'1x2', ratio:.5,   color:'#70a1ff' },
-  { label:'1x4', ratio:.25,  color:'#5352ed' },
-  { label:'1x8', ratio:.125, color:'#2ed573' },
+// ═══════════════════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════════════════
+const SYMBOLS=["NIFTY 50","BANK NIFTY","SENSEX"];
+const GANN_FANS=[
+  {label:'8x1',ratio:8,color:'#ff4757'},
+  {label:'4x1',ratio:4,color:'#ff6b35'},
+  {label:'2x1',ratio:2,color:'#ffa502'},
+  {label:'1x1',ratio:1,color:'#ffffff'},
+  {label:'1x2',ratio:.5,color:'#70a1ff'},
+  {label:'1x4',ratio:.25,color:'#5352ed'},
+  {label:'1x8',ratio:.125,color:'#2ed573'},
 ];
 
-function computeSq9(price, steps = 6) {
-  const root = Math.sqrt(price), out = [];
-  for (let i = -steps; i <= steps; i++) {
-    if (i === 0) continue;
-    const lvl = Math.pow(root + i * 0.125, 2);
-    if (lvl > 0) out.push({ level: Math.round(lvl * 10) / 10, rotation: i, label: i > 0 ? `+${i}/8` : `${i}/8`, dir: i > 0 ? 'R' : 'S' });
+function _mkState(sym){
+  return{
+    symbol:sym,score:50,bias:'NEUTRAL',spot:0,ltp:0,strategy:[],
+    volatility:{atmIV:0,hv20:0,hv60:0,vrp:0,ivRank:50,ivPercentile:50,skew25:0,skewSentiment:'NEUTRAL'},
+    atmGreeks:{delta:0.5,gamma:0,theta:0,vega:0,rho:0,lambda:0},
+    gex:{netGEX:0,callGEX:0,putGEX:0,callWall:null,putWall:null,gammaFlip:null,regime:'MEAN_REVERTING',topStrikes:[]},
+    dealerExposures:{dex:0,vex:0,chex:0},
+    oi:{pcr:1,maxPain:null,totalCallOI:0,totalPutOI:0,netPremiumFlow:0,premiumBias:'NEUTRAL',unusualOI:[],unusualOITailRisk:[]},
+    structure:{straddlePrice:0,expectedMoveAbs:0,expectedMovePct:0,vrp:0,ivEnvironment:'NORMAL',eventRiskScore:0,supportFromOI:null,resistanceFromOI:null},
+  };
+}
+function _mkGann(sym){
+  return{
+    symbol:sym,ltp:0,dayLow:0,dayHigh:0,dayOpen:0,
+    barsFromLow:0,barsFromHigh:0,
+    signal:null,strength:0,rationale:'',
+    sq9Levels:[],fanFromLow:[],fanFromHigh:[],aboveFan:null,
+    frozen:false,frozenAt:null,marketOpen:false,
+    status:'no_data',signalLog:[],tab:'fan',
+  };
+}
+
+const STATE={};
+const GANN={};
+const spotHistory={};
+SYMBOLS.forEach(s=>{STATE[s]=_mkState(s);GANN[s]=_mkGann(s);spotHistory[s]=[]});
+
+let active='NIFTY 50';
+let oiView='near';
+let oiScroll=0;
+const OI_ROWS=7;
+let alerts=[];
+const MAX_ALERTS=20;
+let isConnected=false;
+
+// ─── IST / Market hours ───────────────────────────────────────────────────
+function getIST(){return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}))}
+function mktStatus(){
+  const d=getIST(),day=d.getDay(),m=d.getHours()*60+d.getMinutes();
+  if(day===0||day===6)return'weekend';
+  if(m<555)return'pre';
+  if(m<=930)return'open';
+  return'closed';
+}
+
+// ─── Gann math ────────────────────────────────────────────────────────────
+function computeSq9(price,steps=5){
+  const root=Math.sqrt(price),out=[];
+  for(let i=-steps;i<=steps;i++){
+    if(i===0)continue;
+    const lvl=Math.pow(root+i*0.125,2);
+    if(lvl>0)out.push({level:Math.round(lvl*10)/10,rotation:i,label:i>0?`+${i}/8`:`${i}/8`,dir:i>0?'R':'S'});
   }
   return out;
 }
-
-function computeGannSignal(ltp, dayLow, dayHigh, barsFromLow, barsFromHigh) {
-  if (!ltp || !dayLow || !dayHigh) return { signal: 'NEUTRAL', strength: 40, rationale: 'Awaiting data', aboveFan: null };
-  const fanValsL = GANN_FANS.map(f => ({ ...f, proj: dayLow  + f.ratio * barsFromLow  }));
-  const fanValsH = GANN_FANS.map(f => ({ ...f, proj: dayHigh - f.ratio * barsFromHigh }));
-  const above1x1 = ltp > fanValsL.find(f => f.label === '1x1').proj;
-  const below1x1H = ltp < fanValsH.find(f => f.label === '1x1').proj;
-  let signal = 'NEUTRAL', strength = 40, rationale = '', aboveFan = null;
-
-  if (above1x1) {
-    const candidates = fanValsL.filter(f => f.proj <= ltp).sort((a,b) => b.ratio - a.ratio);
-    const top = candidates[0];
-    aboveFan = top?.label;
-    if (top?.ratio >= 4) { signal = 'STRONG LONG'; strength = 88; }
-    else if (top?.ratio >= 2) { signal = 'LONG'; strength = 72; }
-    else { signal = 'WEAK LONG'; strength = 55; }
-    rationale = `Above ${top?.label || '1x1'} fan from day low (${dayLow?.toFixed(0)})`;
-  } else if (below1x1H) {
-    const candidates = fanValsH.filter(f => f.proj >= ltp).sort((a,b) => a.ratio - b.ratio);
-    const top = candidates[0];
-    if (top?.ratio >= 4) { signal = 'STRONG SHORT'; strength = 88; }
-    else if (top?.ratio >= 2) { signal = 'SHORT'; strength = 72; }
-    else { signal = 'WEAK SHORT'; strength = 55; }
-    rationale = `Below ${top?.label || '1x1'} fan from day high (${dayHigh?.toFixed(0)})`;
-  } else {
-    rationale = 'Price between 1×1 lines — no directional bias';
+function computeGannSignal(ltp,dayLow,dayHigh,barsFromLow,barsFromHigh){
+  if(!ltp||!dayLow||!dayHigh)return{signal:'NEUTRAL',strength:40,rationale:'Awaiting data',aboveFan:null};
+  const fanValsL=GANN_FANS.map(f=>({...f,proj:dayLow+f.ratio*barsFromLow}));
+  const fanValsH=GANN_FANS.map(f=>({...f,proj:dayHigh-f.ratio*barsFromHigh}));
+  const above1x1=ltp>fanValsL.find(f=>f.label==='1x1').proj;
+  const below1x1H=ltp<fanValsH.find(f=>f.label==='1x1').proj;
+  let signal='NEUTRAL',strength=40,rationale='',aboveFan=null;
+  if(above1x1){
+    const candidates=fanValsL.filter(f=>f.proj<=ltp).sort((a,b)=>b.ratio-a.ratio);
+    const top=candidates[0];aboveFan=top?.label;
+    if(top?.ratio>=4){signal='STRONG LONG';strength=88}
+    else if(top?.ratio>=2){signal='LONG';strength=72}
+    else{signal='WEAK LONG';strength=55}
+    rationale=`Above ${top?.label||'1x1'} fan from low (${dayLow?.toFixed(0)})`;
+  }else if(below1x1H){
+    const candidates=fanValsH.filter(f=>f.proj>=ltp).sort((a,b)=>a.ratio-b.ratio);
+    const top=candidates[0];
+    if(top?.ratio>=4){signal='STRONG SHORT';strength=88}
+    else if(top?.ratio>=2){signal='SHORT';strength=72}
+    else{signal='WEAK SHORT';strength=55}
+    rationale=`Below ${top?.label||'1x1'} fan from high (${dayHigh?.toFixed(0)})`;
+  }else{
+    rationale='Price between 1×1 lines — neutral';
   }
-
-  // Sq9 confluence check
-  const sq9 = computeSq9(ltp, 3);
-  const nearR = sq9.find(l => l.dir === 'R' && Math.abs(l.level - ltp) / ltp < 0.003);
-  const nearS = sq9.find(l => l.dir === 'S' && Math.abs(l.level - ltp) / ltp < 0.003);
-  if (nearR) { rationale += ` | Near Sq9 R: ${nearR.level}`; strength = Math.max(30, strength - 18); }
-  if (nearS) { rationale += ` | Near Sq9 S: ${nearS.level}`; strength = Math.max(30, strength - 18); }
-
-  return { signal, strength, rationale, aboveFan };
+  const sq9=computeSq9(ltp,3);
+  const nearR=sq9.find(l=>l.dir==='R'&&Math.abs(l.level-ltp)/ltp<0.003);
+  const nearS=sq9.find(l=>l.dir==='S'&&Math.abs(l.level-ltp)/ltp<0.003);
+  if(nearR){rationale+=` | Near Sq9 R: ${nearR.level}`;strength=Math.max(30,strength-18)}
+  if(nearS){rationale+=` | Near Sq9 S: ${nearS.level}`;strength=Math.max(30,strength-18)}
+  return{signal,strength,rationale,aboveFan};
 }
 
-// ── Socket ─────────────────────────────────────────────────────
-window._socketIOReady = function () {
-  if (window._socketOffline || typeof io === 'undefined') return;
-  const socket = io({ transports: ['websocket', 'polling'] });
+// ─── Socket ───────────────────────────────────────────────────────────────
+window._socketIOReady=function(){
+  if(window._socketOffline||typeof io==='undefined')return;
+  const socket=io({transports:['websocket','polling']});
 
-  socket.on('connect', () => { isConnected = true; renderToolbar(); });
-  socket.on('disconnect', () => { isConnected = false; renderToolbar(); });
+  socket.on('connect',()=>{isConnected=true;renderTopbar()});
+  socket.on('disconnect',()=>{isConnected=false;renderTopbar()});
 
-  socket.on('options-intel', (data) => {
-    if (!data?.symbol || !STATE[data.symbol]) return;
-    Object.assign(STATE[data.symbol], data);
-    if (data.spot > 0) { spotHistory[data.symbol].push(data.spot); if (spotHistory[data.symbol].length > 24) spotHistory[data.symbol].shift(); }
-    if (active === data.symbol) render();
+  socket.on('options-intel',data=>{
+    if(!data?.symbol||!STATE[data.symbol])return;
+    Object.assign(STATE[data.symbol],data);
+    if(data.spot>0){spotHistory[data.symbol].push(data.spot);if(spotHistory[data.symbol].length>24)spotHistory[data.symbol].shift()}
+    if(active===data.symbol)render();
   });
 
-  // ── Gann socket events ──────────────────────────────────────
-  socket.on('gann:update', (data) => {
-    // data: { symbol:"NIFTY", ltp, dayLow, dayHigh, dayOpen, signal, strength, rationale, sq9Levels, fanFromLow, fanFromHigh, aboveFan, marketOpen, updatedAt }
-    const sym = _gannSymMap(data.symbol);
-    if (!sym || !GANN[sym]) return;
-    const prev = GANN[sym];
-    // Detect signal change → push to log
-    if (data.signal && data.signal !== prev.signal && data.strength >= 60) {
-      prev.signalLog = [{ signal: data.signal, ltp: data.ltp, str: data.strength, time: data.updatedAt || getIST().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) }, ...prev.signalLog].slice(0, 5);
+  socket.on('gann:update',data=>{
+    const sym=_gannMap(data.symbol);if(!sym||!GANN[sym])return;
+    const prev=GANN[sym];
+    if(data.signal&&data.signal!==prev.signal&&data.strength>=60){
+      prev.signalLog=[{signal:data.signal,ltp:data.ltp,str:data.strength,time:data.updatedAt||getIST().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})},...prev.signalLog].slice(0,5);
     }
-    Object.assign(GANN[sym], data, { frozen: false, marketOpen: true, status: 'live' });
-    if (active === sym) renderPanels();
+    Object.assign(GANN[sym],data,{frozen:false,marketOpen:true,status:'live'});
+    if(active===sym)renderPanels();
   });
 
-  socket.on('gann:frozen', (data) => {
-    const sym = _gannSymMap(data.symbol);
-    if (!sym || !GANN[sym]) return;
-    Object.assign(GANN[sym], data, { frozen: true, marketOpen: false, status: 'frozen' });
-    if (active === sym) renderPanels();
+  socket.on('gann:frozen',data=>{
+    const sym=_gannMap(data.symbol);if(!sym||!GANN[sym])return;
+    Object.assign(GANN[sym],data,{frozen:true,marketOpen:false,status:'frozen'});
+    if(active===sym)renderPanels();
   });
 
-  socket.on('gann:weekend', (data) => {
-    const sym = _gannSymMap(data.symbol);
-    if (!sym || !GANN[sym]) return;
-    Object.assign(GANN[sym], data, { frozen: true, marketOpen: false, status: 'frozen' });
-    if (active === sym) renderPanels();
+  socket.on('gann:weekend',data=>{
+    const sym=_gannMap(data.symbol);if(!sym||!GANN[sym])return;
+    Object.assign(GANN[sym],data,{frozen:true,marketOpen:false,status:'frozen'});
+    if(active===sym)renderPanels();
   });
 
-  socket.on('gann:signal', (data) => {
-    const sym = _gannSymMap(data.symbol);
-    if (!sym || !GANN[sym]) return;
-    GANN[sym].signalLog = [data, ...GANN[sym].signalLog].slice(0, 5);
-    if (active === sym) renderPanels();
+  socket.on('gann:signal',data=>{
+    const sym=_gannMap(data.symbol);if(!sym||!GANN[sym])return;
+    GANN[sym].signalLog=[data,...GANN[sym].signalLog].slice(0,5);
+    if(active===sym)renderPanels();
   });
 
-  socket.on('options-alert', (alert) => {
-    if (!alert?.message) return;
-    const already = alerts.some(a => a.message === alert.message && Date.now() - a.ts < 60_000);
-    if (!already) { alerts.unshift({ ...alert, ts: alert.ts || Date.now() }); if (alerts.length > MAX_ALERTS) alerts = alerts.slice(0, MAX_ALERTS); renderToolbar(); }
+  socket.on('options-alert',alert=>{
+    if(!alert?.message)return;
+    const dup=alerts.some(a=>a.message===alert.message&&Date.now()-a.ts<60000);
+    if(!dup){alerts.unshift({...alert,ts:alert.ts||Date.now()});if(alerts.length>MAX_ALERTS)alerts=alerts.slice(0,MAX_ALERTS);renderTopbar()}
   });
 
-  socket.on('market-tick', (updates) => {
-    if (!Array.isArray(updates)) return;
-    let changed = false;
-    for (const tick of updates) {
-      const sym = tick.name;
-      if (!STATE[sym]) continue;
-      if (tick.raw > 0) { STATE[sym].spot = tick.raw; STATE[sym].ltp = tick.raw; spotHistory[sym].push(tick.raw); if (spotHistory[sym].length > 24) spotHistory[sym].shift(); if (sym === active) changed = true; }
+  socket.on('market-tick',updates=>{
+    if(!Array.isArray(updates))return;
+    let changed=false;
+    for(const tick of updates){
+      const sym=tick.name;if(!STATE[sym])continue;
+      if(tick.raw>0){STATE[sym].spot=tick.raw;STATE[sym].ltp=tick.raw;spotHistory[sym].push(tick.raw);if(spotHistory[sym].length>24)spotHistory[sym].shift();if(sym===active)changed=true;}
     }
-    if (changed) renderScoreCard();
+    if(changed){renderISKRow();renderTicker()}
   });
 
-  // Also load Gann REST state on connect
-  SYMBOLS.forEach(sym => {
-    const gannSym = _displayToGannSym(sym);
-    fetch(`/api/gann/${gannSym}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d && GANN[sym]) { const prev = GANN[sym]; Object.assign(GANN[sym], d); GANN[sym].signalLog = prev.signalLog; if (active === sym) renderPanels(); } })
-      .catch(() => {});
+  SYMBOLS.forEach(sym=>{
+    const gs=_displayToGannSym(sym);
+    fetch(`/api/gann/${gs}`).then(r=>r.ok?r.json():null).then(d=>{
+      if(d&&GANN[sym]){const prev=GANN[sym];Object.assign(GANN[sym],d);GANN[sym].signalLog=prev.signalLog;if(active===sym)renderPanels()}
+    }).catch(()=>{});
   });
 };
 
-function _gannSymMap(s) {
-  // Maps server symbol ("NIFTY","BANKNIFTY","SENSEX") → display key
-  if (!s) return null;
-  const u = s.toUpperCase().replace(/\s/g, '');
-  if (u === 'NIFTY' || u === 'NIFTY50') return 'NIFTY 50';
-  if (u === 'BANKNIFTY' || u === 'BANKNIFTY50') return 'BANK NIFTY';
-  if (u === 'SENSEX') return 'SENSEX';
+function _gannMap(s){
+  if(!s)return null;
+  const u=s.toUpperCase().replace(/\s/g,'');
+  if(u==='NIFTY'||u==='NIFTY50')return'NIFTY 50';
+  if(u==='BANKNIFTY'||u==='BANKNIFTY50')return'BANK NIFTY';
+  if(u==='SENSEX')return'SENSEX';
   return null;
 }
-function _displayToGannSym(sym) {
-  if (sym === 'NIFTY 50')   return 'NIFTY';
-  if (sym === 'BANK NIFTY') return 'BANKNIFTY';
-  return 'SENSEX';
+function _displayToGannSym(sym){
+  if(sym==='NIFTY 50')return'NIFTY';
+  if(sym==='BANK NIFTY')return'BANKNIFTY';
+  return'SENSEX';
 }
 
-setInterval(() => { if (document.querySelector('.alert-row')) renderToolbar(); }, 10_000);
+setInterval(()=>renderTopbar(),15000);
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 //  HELPERS
-// ═══════════════════════════════════════════════════════════════
-const fmt2  = n => n == null ? '—' : Number(n).toFixed(2);
-const fmtI  = n => n == null ? '—' : Math.round(Number(n)).toLocaleString('en-IN');
-const fmtCr = n => { if (n == null) return '—'; const a = Math.abs(n); return a >= 1000 ? (n / 1000).toFixed(1) + 'K Cr' : Number(n).toFixed(1) + ' Cr'; };
-const calcP = (a, b) => (!a || !b) ? null : +((a - b) / b * 100).toFixed(1);
+// ═══════════════════════════════════════════════════════════════════════════
+const fmt2=n=>n==null?'—':Number(n).toFixed(2);
+const fmtI=n=>n==null?'—':Math.round(Number(n)).toLocaleString('en-IN');
+const fmtCr=n=>{if(n==null)return'—';const a=Math.abs(n);return a>=1000?(n/1000).toFixed(1)+'K Cr':Number(n).toFixed(1)+' Cr'};
+const calcP=(a,b)=>(!a||!b)?null:+((a-b)/b*100).toFixed(1);
 
-function scoreBand(s) {
-  if (s >= 80) return { color:'#00ff9c', bg:'rgba(0,255,156,.06)', border:'rgba(0,255,156,.3)', label:'STRONG BUY' };
-  if (s >= 65) return { color:'#4fc3f7', bg:'rgba(79,195,247,.06)', border:'rgba(79,195,247,.3)', label:'BUY' };
-  if (s >= 45) return { color:'#ffd54f', bg:'rgba(255,213,79,.06)', border:'rgba(255,213,79,.3)', label:'NEUTRAL' };
-  if (s >= 30) return { color:'#ff8a65', bg:'rgba(255,138,101,.06)', border:'rgba(255,138,101,.3)', label:'SELL' };
-  return { color:'#ef5350', bg:'rgba(239,83,80,.06)', border:'rgba(239,83,80,.3)', label:'STRONG SELL' };
+function scoreBand(s){
+  if(s>=80)return{color:'#00ff9c',bg:'rgba(0,255,156,.06)',border:'rgba(0,255,156,.3)',label:'STRONG BUY'};
+  if(s>=65)return{color:'#4fc3f7',bg:'rgba(79,195,247,.06)',border:'rgba(79,195,247,.3)',label:'BUY'};
+  if(s>=45)return{color:'#ffd54f',bg:'rgba(255,213,79,.06)',border:'rgba(255,213,79,.3)',label:'NEUTRAL'};
+  if(s>=30)return{color:'#ff8a65',bg:'rgba(255,138,101,.06)',border:'rgba(255,138,101,.3)',label:'SELL'};
+  return{color:'#ef5350',bg:'rgba(239,83,80,.06)',border:'rgba(239,83,80,.3)',label:'STRONG SELL'};
 }
-
-function sigStyle(sig) {
-  if (!sig || sig === 'NEUTRAL') return { bg:'rgba(255,255,255,.04)', border:'#2a3848', text:'#8aacc2', icon:'◆' };
-  if (sig.includes('STRONG LONG'))  return { bg:'rgba(0,255,100,.1)',  border:'#00ff64', text:'#00ff64', icon:'▲▲' };
-  if (sig.includes('LONG'))         return { bg:'rgba(0,200,80,.08)',  border:'#00c850', text:'#00c850', icon:'▲'  };
-  if (sig.includes('STRONG SHORT')) return { bg:'rgba(255,50,50,.1)', border:'#ff3232', text:'#ff3232', icon:'▼▼' };
-  if (sig.includes('SHORT'))        return { bg:'rgba(220,50,50,.08)',border:'#dc3232', text:'#dc3232', icon:'▼'  };
-  return { bg:'rgba(255,213,79,.06)', border:'#ffd54f40', text:'#ffd54f', icon:'◆' };
+function sigStyle(sig){
+  if(!sig||sig==='NEUTRAL')return{bg:'rgba(255,255,255,.04)',border:'#2a3848',text:'#8aacc2',icon:'◆'};
+  if(sig.includes('STRONG LONG'))return{bg:'rgba(0,255,100,.1)',border:'#00ff64',text:'#00ff64',icon:'▲▲'};
+  if(sig.includes('LONG'))return{bg:'rgba(0,200,80,.08)',border:'#00c850',text:'#00c850',icon:'▲'};
+  if(sig.includes('STRONG SHORT'))return{bg:'rgba(255,50,50,.1)',border:'#ff3232',text:'#ff3232',icon:'▼▼'};
+  if(sig.includes('SHORT'))return{bg:'rgba(220,50,50,.08)',border:'#dc3232',text:'#dc3232',icon:'▼'};
+  return{bg:'rgba(255,213,79,.06)',border:'#ffd54f40',text:'#ffd54f',icon:'◆'};
 }
-
-function gannMktStatusCfg() {
-  const ms = mktStatus();
-  const cfgs = {
-    open:    { cls:'border:1px solid rgba(0,255,156,.25);background:rgba(0,255,156,.07)', dotColor:'#00ff9c', label:'● LIVE', sub:'NSE 9:15–15:30 IST' },
-    closed:  { cls:'border:1px solid rgba(255,107,53,.25);background:rgba(255,107,53,.07)', dotColor:'#ff6b35', label:'🔒 CLOSED', sub:'Gann frozen at last LTP' },
-    weekend: { cls:'border:1px solid rgba(83,82,237,.25);background:rgba(83,82,237,.07)', dotColor:'#5352ed', label:'⏸ WEEKEND', sub:'Last session price' },
-    pre:     { cls:'border:1px solid rgba(255,213,79,.25);background:rgba(255,213,79,.07)', dotColor:'#ffd54f', label:'◐ PRE-MARKET', sub:'Opens 9:15 AM IST' },
+function gannMktCfg(){
+  const ms=mktStatus();
+  const m={
+    open:{cls:'border-color:rgba(0,255,156,.25);background:rgba(0,255,156,.07)',dotColor:'#00ff9c',label:'● LIVE',sub:'NSE 9:15–15:30 IST'},
+    closed:{cls:'border-color:rgba(255,107,53,.25);background:rgba(255,107,53,.07)',dotColor:'#ff6b35',label:'🔒 CLOSED',sub:'Frozen at last LTP'},
+    weekend:{cls:'border-color:rgba(83,82,237,.25);background:rgba(83,82,237,.07)',dotColor:'#5352ed',label:'⏸ WEEKEND',sub:'Last session price'},
+    pre:{cls:'border-color:rgba(255,213,79,.25);background:rgba(255,213,79,.07)',dotColor:'#ffd54f',label:'◐ PRE-MKT',sub:'Opens 9:15 AM IST'},
   };
-  return cfgs[ms] || cfgs.closed;
+  return m[ms]||m.closed;
 }
-
-const stratColors = {
-  SELL_PREMIUM:{ bg:'rgba(0,255,156,.07)', color:'#00ff9c', border:'rgba(0,255,156,.25)' },
-  BUY_OPTIONS:{ bg:'rgba(79,195,247,.07)', color:'#4fc3f7', border:'rgba(79,195,247,.25)' },
-  DEFENSIVE:{ bg:'rgba(239,83,80,.07)', color:'#ef5350', border:'rgba(239,83,80,.25)' },
-  GAMMA_WALL:{ bg:'rgba(255,213,79,.07)', color:'#ffd54f', border:'rgba(255,213,79,.25)' },
-  UNUSUAL_ACTIVITY:{ bg:'rgba(255,92,255,.07)', color:'#ff5cff', border:'rgba(255,92,255,.25)' },
-  SKEW_TRADE:{ bg:'rgba(255,138,101,.07)', color:'#ff8a65', border:'rgba(255,138,101,.25)' },
+const stratColors={
+  SELL_PREMIUM:{bg:'rgba(0,255,156,.07)',color:'#00ff9c',border:'rgba(0,255,156,.25)'},
+  BUY_OPTIONS:{bg:'rgba(79,195,247,.07)',color:'#4fc3f7',border:'rgba(79,195,247,.25)'},
+  DEFENSIVE:{bg:'rgba(239,83,80,.07)',color:'#ef5350',border:'rgba(239,83,80,.25)'},
+  GAMMA_WALL:{bg:'rgba(255,213,79,.07)',color:'#ffd54f',border:'rgba(255,213,79,.25)'},
+  UNUSUAL_ACTIVITY:{bg:'rgba(255,92,255,.07)',color:'#ff5cff',border:'rgba(255,92,255,.25)'},
+  SKEW_TRADE:{bg:'rgba(255,138,101,.07)',color:'#ff8a65',border:'rgba(255,138,101,.25)'},
 };
 
-// ── DOM helpers ───────────────────────────────────────────────
-function h(tag, props = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (k === 'class') el.className = v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
-    else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
-    else el.setAttribute(k, v);
+// ─── DOM builder ──────────────────────────────────────────────────────────
+function h(tag,props={},...children){
+  const el=document.createElement(tag);
+  for(const[k,v]of Object.entries(props)){
+    if(k==='class')el.className=v;
+    else if(k==='style'&&typeof v==='object')Object.assign(el.style,v);
+    else if(k.startsWith('on'))el.addEventListener(k.slice(2).toLowerCase(),v);
+    else el.setAttribute(k,v);
   }
-  for (const child of children.flat()) {
-    if (child == null || child === false) continue;
-    el.appendChild(typeof child === 'string' || typeof child === 'number'
-      ? document.createTextNode(String(child)) : child);
+  for(const child of children.flat()){
+    if(child==null||child===false)continue;
+    el.appendChild(typeof child==='string'||typeof child==='number'
+      ?document.createTextNode(String(child)):child);
   }
   return el;
 }
-function svgEl(tag, attrs = {}) {
-  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+function svgEl(tag,attrs={}){
+  const el=document.createElementNS('http://www.w3.org/2000/svg',tag);
+  for(const[k,v]of Object.entries(attrs))el.setAttribute(k,v);
   return el;
 }
 
-function buildSparkline(history, color, w = 70, ht = 24) {
-  if (!history || history.length < 2) return null;
-  const mn = Math.min(...history), mx = Math.max(...history), range = mx - mn || 1;
-  const pts = history.map((v, i) => { const x = (i / (history.length - 1)) * w; const y = ht - ((v - mn) / range) * (ht - 4) - 2; return `${x.toFixed(1)},${y.toFixed(1)}`; });
-  const polyline = pts.join(' ');
-  const fillPts = `0,${ht} ` + polyline + ` ${w},${ht}`;
-  const svg = svgEl('svg', { viewBox:`0 0 ${w} ${ht}`, width:w, height:ht, class:'spark-svg' });
-  const defs = svgEl('defs');
-  const gradId = 'sg-' + Math.random().toString(36).slice(2, 6);
-  const grad = svgEl('linearGradient', { id:gradId, x1:'0', y1:'0', x2:'0', y2:'1' });
-  const s1 = svgEl('stop', { offset:'0%' }); s1.setAttribute('stop-color', color); s1.setAttribute('stop-opacity', '0.25');
-  const s2 = svgEl('stop', { offset:'100%' }); s2.setAttribute('stop-color', color); s2.setAttribute('stop-opacity', '0.01');
-  grad.appendChild(s1); grad.appendChild(s2); defs.appendChild(grad); svg.appendChild(defs);
-  svg.appendChild(svgEl('polygon', { points:fillPts, fill:`url(#${gradId})` }));
-  svg.appendChild(svgEl('polyline', { points:polyline, fill:'none', stroke:color, 'stroke-width':'1.2', 'stroke-linejoin':'round', 'stroke-linecap':'round' }));
-  const last = pts[pts.length - 1].split(',');
-  svg.appendChild(svgEl('circle', { cx:last[0], cy:last[1], r:'2', fill:color, filter:`drop-shadow(0 0 3px ${color})` }));
-  return svg;
-}
-
-function scoreDonut(score, color, size = 52) {
-  const R = size / 2 - 5, cx = size / 2, cy = size / 2, circ = 2 * Math.PI * R, dash = (score / 100) * circ;
-  const svg = svgEl('svg', { viewBox:`0 0 ${size} ${size}`, width:size, height:size });
-  svg.appendChild(svgEl('circle', { cx, cy, r:R, fill:'none', stroke:'#1a3548', 'stroke-width':'4' }));
-  svg.appendChild(svgEl('circle', { cx, cy, r:R, fill:'none', stroke:color, 'stroke-width':'4', 'stroke-dasharray':`${dash.toFixed(1)} ${circ.toFixed(1)}`, 'stroke-dashoffset':circ * 0.25, 'stroke-linecap':'round', style:`filter:drop-shadow(0 0 4px ${color})` }));
-  return svg;
-}
-
-// ─── Gann Fan SVG builder ──────────────────────────────────────
-function buildGannFanSVG(g) {
-  const W = 260, H = 160;
-  const { ltp, dayLow, dayHigh, barsFromLow = 28, barsFromHigh = 15, frozen } = g;
-  if (!ltp || !dayLow || !dayHigh) {
-    return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">
+// ─── Gann Fan SVG ─────────────────────────────────────────────────────────
+function buildGannFanSVG(g){
+  const W=260,H=145;
+  const{ltp,dayLow,dayHigh,barsFromLow=28,barsFromHigh=15,frozen}=g;
+  if(!ltp||!dayLow||!dayHigh){
+    return`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">
       <text x="${W/2}" y="${H/2}" fill="#2a4060" font-size="9" text-anchor="middle" font-family="IBM Plex Mono,monospace">Awaiting price data…</text>
     </svg>`;
   }
-  const pad = (dayHigh - dayLow) * 0.45 || ltp * 0.02;
-  const pMin = dayLow - pad, pMax = dayHigh + pad, pRange = pMax - pMin;
-  const totalBars = 80, pivotBar = 5, currBar = totalBars - 6;
-  const xS = b => (b / totalBars) * W;
-  const yS = p => H - ((p - pMin) / pRange) * (H - 10) - 5;
-
-  let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">`;
-  // Grid lines
-  [0.25, 0.5, 0.75].forEach(f => { svg += `<line x1="0" y1="${(H*f).toFixed(1)}" x2="${W}" y2="${(H*f).toFixed(1)}" stroke="#ffffff06" stroke-width="1"/>`; });
-
-  // Fan from day LOW (bullish, solid)
-  GANN_FANS.forEach(fan => {
-    const x1 = xS(pivotBar), y1 = yS(dayLow);
-    const x2 = xS(totalBars), y2 = yS(dayLow + fan.ratio * (totalBars - pivotBar));
-    const sw = fan.label === '1x1' ? 1.6 : 0.8;
-    const da = fan.label === '1x1' ? '' : ' stroke-dasharray="4,3"';
-    svg += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${fan.color}" stroke-width="${sw}" opacity="0.75"${da}/>`;
-    const ly = Math.max(8, Math.min(H - 5, y2));
-    svg += `<text x="${(x2 - 2).toFixed(1)}" y="${ly.toFixed(1)}" fill="${fan.color}" font-size="7" text-anchor="end" font-family="IBM Plex Mono,monospace" opacity=".8">${fan.label}</text>`;
+  const pad=(dayHigh-dayLow)*0.45||ltp*0.02;
+  const pMin=dayLow-pad,pMax=dayHigh+pad,pRange=pMax-pMin;
+  const totalBars=80,pivotBar=5,currBar=totalBars-6;
+  const xS=b=>(b/totalBars)*W;
+  const yS=p=>H-((p-pMin)/pRange)*(H-10)-5;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">`;
+  [0.25,0.5,0.75].forEach(f=>{svg+=`<line x1="0" y1="${(H*f).toFixed(1)}" x2="${W}" y2="${(H*f).toFixed(1)}" stroke="#ffffff05" stroke-width="1"/>`});
+  GANN_FANS.forEach(fan=>{
+    const x1=xS(pivotBar),y1=yS(dayLow),x2=xS(totalBars),y2=yS(dayLow+fan.ratio*(totalBars-pivotBar));
+    const sw=fan.label==='1x1'?1.6:0.8;
+    const da=fan.label==='1x1'?'':' stroke-dasharray="4,3"';
+    svg+=`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${fan.color}" stroke-width="${sw}" opacity="0.75"${da}/>`;
+    const ly=Math.max(8,Math.min(H-4,y2));
+    svg+=`<text x="${(x2-2).toFixed(1)}" y="${ly.toFixed(1)}" fill="${fan.color}" font-size="7" text-anchor="end" font-family="IBM Plex Mono,monospace" opacity=".8">${fan.label}</text>`;
   });
-
-  // Fan from day HIGH (bearish, faded dashed)
-  GANN_FANS.forEach(fan => {
-    const x1 = xS(pivotBar), y1 = yS(dayHigh);
-    const x2 = xS(totalBars), y2 = yS(dayHigh - fan.ratio * (totalBars - pivotBar));
-    svg += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${fan.color}" stroke-width="0.6" opacity="0.28" stroke-dasharray="3,4"/>`;
+  GANN_FANS.forEach(fan=>{
+    const x1=xS(pivotBar),y1=yS(dayHigh),x2=xS(totalBars),y2=yS(dayHigh-fan.ratio*(totalBars-pivotBar));
+    svg+=`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${fan.color}" stroke-width="0.6" opacity="0.25" stroke-dasharray="3,4"/>`;
   });
-
-  // Pivot dots
-  const pyL = yS(dayLow), pyH = yS(dayHigh), px = xS(pivotBar);
-  svg += `<circle cx="${px.toFixed(1)}" cy="${pyL.toFixed(1)}" r="3.5" fill="#00ff64" opacity=".9"/>`;
-  svg += `<text x="${(px+5).toFixed(1)}" y="${(pyL-3).toFixed(1)}" fill="#00ff64" font-size="7" font-family="IBM Plex Mono,monospace">L${dayLow.toFixed(0)}</text>`;
-  svg += `<circle cx="${px.toFixed(1)}" cy="${pyH.toFixed(1)}" r="3.5" fill="#ff4757" opacity=".9"/>`;
-  svg += `<text x="${(px+5).toFixed(1)}" y="${(pyH+11).toFixed(1)}" fill="#ff4757" font-size="7" font-family="IBM Plex Mono,monospace">H${dayHigh.toFixed(0)}</text>`;
-
-  // LTP horizontal line
-  const yLTP = yS(ltp), xLTP = xS(currBar);
-  svg += `<line x1="0" y1="${yLTP.toFixed(1)}" x2="${W}" y2="${yLTP.toFixed(1)}" stroke="#f0c040" stroke-width="1.4" stroke-dasharray="6,3" opacity=".9"/>`;
-
-  // LTP dot (pulsing if live)
-  if (!frozen) {
-    svg += `<circle cx="${xLTP.toFixed(1)}" cy="${yLTP.toFixed(1)}" r="4.5" fill="#f0c040">
-      <animate attributeName="r" values="4.5;6.5;4.5" dur="1.5s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="1;.5;1" dur="1.5s" repeatCount="indefinite"/>
-    </circle>`;
-  } else {
-    svg += `<circle cx="${xLTP.toFixed(1)}" cy="${yLTP.toFixed(1)}" r="4.5" fill="#555"/>`;
+  const px=xS(pivotBar);
+  svg+=`<circle cx="${px.toFixed(1)}" cy="${yS(dayLow).toFixed(1)}" r="3.5" fill="#00ff64" opacity=".9"/>`;
+  svg+=`<text x="${(px+5).toFixed(1)}" y="${(yS(dayLow)-3).toFixed(1)}" fill="#00ff64" font-size="7" font-family="IBM Plex Mono,monospace">L${dayLow.toFixed(0)}</text>`;
+  svg+=`<circle cx="${px.toFixed(1)}" cy="${yS(dayHigh).toFixed(1)}" r="3.5" fill="#ff4757" opacity=".9"/>`;
+  svg+=`<text x="${(px+5).toFixed(1)}" y="${(yS(dayHigh)+11).toFixed(1)}" fill="#ff4757" font-size="7" font-family="IBM Plex Mono,monospace">H${dayHigh.toFixed(0)}</text>`;
+  const yLTP=yS(ltp),xLTP=xS(currBar);
+  svg+=`<line x1="0" y1="${yLTP.toFixed(1)}" x2="${W}" y2="${yLTP.toFixed(1)}" stroke="#f0c040" stroke-width="1.4" stroke-dasharray="6,3" opacity=".9"/>`;
+  if(!frozen){
+    svg+=`<circle cx="${xLTP.toFixed(1)}" cy="${yLTP.toFixed(1)}" r="4.5" fill="#f0c040"><animate attributeName="r" values="4.5;6.5;4.5" dur="1.5s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;.5;1" dur="1.5s" repeatCount="indefinite"/></circle>`;
+  }else{
+    svg+=`<circle cx="${xLTP.toFixed(1)}" cy="${yLTP.toFixed(1)}" r="4.5" fill="#555"/>`;
   }
-
-  // LTP label
-  svg += `<rect x="${(xLTP+6).toFixed(1)}" y="${(yLTP-8).toFixed(1)}" width="48" height="14" fill="#060a14" rx="2"/>`;
-  svg += `<text x="${(xLTP+9).toFixed(1)}" y="${(yLTP+2).toFixed(1)}" fill="${frozen?'#555':'#f0c040'}" font-size="9" font-weight="700" font-family="IBM Plex Mono,monospace">${ltp.toFixed(0)}</text>`;
-
-  // Signal overlay on chart
-  if (g.signal && g.signal !== 'NEUTRAL' && !frozen) {
-    const ss = sigStyle(g.signal);
-    svg += `<text x="${(W/2).toFixed(1)}" y="13" fill="${ss.text}" font-size="9" text-anchor="middle" font-weight="700" font-family="IBM Plex Mono,monospace" opacity=".9">${ss.icon} ${g.signal}</text>`;
+  svg+=`<rect x="${(xLTP+6).toFixed(1)}" y="${(yLTP-8).toFixed(1)}" width="48" height="14" fill="#050a12" rx="2"/>`;
+  svg+=`<text x="${(xLTP+9).toFixed(1)}" y="${(yLTP+2).toFixed(1)}" fill="${frozen?'#555':'#f0c040'}" font-size="9" font-weight="700" font-family="IBM Plex Mono,monospace">${ltp.toFixed(0)}</text>`;
+  if(g.signal&&g.signal!=='NEUTRAL'&&!frozen){
+    const ss=sigStyle(g.signal);
+    svg+=`<text x="${(W/2).toFixed(1)}" y="13" fill="${ss.text}" font-size="9" text-anchor="middle" font-weight="700" font-family="IBM Plex Mono,monospace" opacity=".9">${ss.icon} ${g.signal}</text>`;
   }
-
-  svg += `</svg>`;
+  svg+=`</svg>`;
   return svg;
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  TOOLBAR
-// ═══════════════════════════════════════════════════════════════
-function renderToolbar() {
-  const tb = document.getElementById('toolbar');
-  tb.innerHTML = '';
-  tb.appendChild(h('span', { class:'logo' }, '⚡ OPTIONS INTEL'));
-  SYMBOLS.forEach(sym => {
-    const d = STATE[sym];
-    tb.appendChild(h('button', { class:'sym-btn' + (active === sym ? ' active' : ''), onClick: () => { active = sym; oiView = 'near'; oiScroll = 0; render(); } }, sym + (d.spot > 0 ? '' : ' …')));
+// ═══════════════════════════════════════════════════════════════════════════
+//  TOPBAR (logo + sym buttons + horizontal alert ticker + live dot)
+// ═══════════════════════════════════════════════════════════════════════════
+function renderTopbar(){
+  const tb=document.getElementById('topbar');
+  tb.innerHTML='';
+  tb.appendChild(h('span',{class:'tb-logo'},'⚡ OPTIONS INTEL'));
+  SYMBOLS.forEach(sym=>{
+    tb.appendChild(h('button',{class:'sym-btn'+(active===sym?' active':''),onClick:()=>{active=sym;oiView='near';oiScroll=0;render()}},sym));
   });
-  tb.appendChild(h('div', { class:'spacer' }));
-  const ac = h('div', { class:'alert-strip' });
-  ac.appendChild(h('div', { class:'alert-strip-head' }, h('span', {}, '⚡ ALERTS'), h('span', { class:'alert-count' }, String(alerts.length))));
-  if (alerts.length === 0) {
-    ac.appendChild(h('div', { style:{ fontSize:'7px', color:'#4a7090', padding:'2px 0' } }, isConnected ? '◌ Monitoring…' : '◌ Connecting…'));
-  } else {
-    alerts.slice(0, 3).forEach(a => {
-      const age = Math.round((Date.now() - a.ts) / 1000);
-      const ageStr = age < 60 ? `${age}s` : `${Math.round(age/60)}m`;
-      const icon = a.type === 'GAMMA_FLIP' ? '⚡' : a.type === 'TIME_CYCLE' ? '◷' : '●';
-      ac.appendChild(h('div', { class:`alert-row ${a.priority === 'HIGH' ? 'high' : 'medium'}` }, h('span', { class:'alert-icon' }, icon), h('span', { class:'alert-msg' }, a.message), h('span', { class:'alert-age' }, ageStr)));
+  tb.appendChild(h('div',{class:'tb-spacer'}));
+
+  // Horizontal alert ticker strip
+  const strip=h('div',{class:'alert-strip'});
+  strip.appendChild(h('span',{class:'alert-strip-label'},'⚡ ALERTS'));
+  strip.appendChild(h('span',{class:'alert-count'},String(alerts.length)));
+  const track=h('div',{class:'alert-scroll-track'});
+  const inner=h('div',{class:'alert-scroll-inner',id:'alertScrollInner'});
+
+  // Build alert items (duplicate for seamless loop)
+  const makeItems=()=>alerts.length===0
+    ?[h('span',{class:'alert-item'},isConnected?'◌ Monitoring…':'◌ Connecting…')]
+    :alerts.map(a=>{
+      const age=Math.round((Date.now()-a.ts)/1000);
+      const ageStr=age<60?`${age}s`:`${Math.round(age/60)}m`;
+      const icon=a.type==='GAMMA_FLIP'?'⚡':a.type==='TIME_CYCLE'?'◷':'●';
+      const cls='alert-item'+(a.priority==='HIGH'?' high':'');
+      return h('span',{class:cls},
+        h('span',{class:'dot'}),
+        icon+' '+a.message+' ('+ageStr+')');
     });
-  }
-  tb.appendChild(ac);
-  const dotColor = isConnected ? '#00ff9c' : '#ef5350';
-  tb.appendChild(h('div', { class:'live-dot', style:{ background:dotColor, boxShadow:`0 0 6px ${dotColor}` } }));
-  tb.appendChild(h('span', { class:'live-label' }, isConnected ? '↻ live' : '⊗ offline'));
+
+  const items1=makeItems(),items2=makeItems();
+  items1.forEach(i=>inner.appendChild(i));
+  items2.forEach(i=>inner.appendChild(i.cloneNode(true)));
+  track.appendChild(inner);
+  strip.appendChild(track);
+
+  const pauseBtn=h('button',{class:'alert-pause-btn',onClick:function(){
+    const el=document.getElementById('alertScrollInner');
+    if(!el)return;
+    const paused=el.style.animationPlayState==='paused';
+    el.style.animationPlayState=paused?'running':'paused';
+    this.textContent=paused?'⏸':'▶';
+  }},'⏸');
+  strip.appendChild(pauseBtn);
+  tb.appendChild(strip);
+
+  const dotColor=isConnected?'#00ff9c':'#ef5350';
+  tb.appendChild(h('div',{class:'tb-live'},
+    h('span',{class:'live-dot',style:{background:dotColor,boxShadow:`0 0 5px ${dotColor}`}}),
+    isConnected?'LIVE':'OFFLINE'
+  ));
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  SCORE CARD
-// ═══════════════════════════════════════════════════════════════
-function renderScoreCard() {
-  const d = STATE[active];
-  const g = GANN[active];
-  const band = scoreBand(d.score);
-  const gBias = g?.signal || 'NEUTRAL';
-  const gc = sigStyle(gBias);
-  const spot = d.spot;
-  const vol = d.volatility, gr = d.atmGreeks, st = d.structure, gex = d.gex;
-  const history = spotHistory[active];
-  const isUp = history.length >= 2 && history[history.length - 1] >= history[history.length - 2];
-  const spotColor = isUp ? '#00ff9c' : '#ef5350';
+// ═══════════════════════════════════════════════════════════════════════════
+//  TICKER BAR (market indices + assets, horizontal scroll)
+// ═══════════════════════════════════════════════════════════════════════════
+const TICKER_DATA=[
+  {name:'NIFTY 50',price:'23,754.5',chg:'-296.10',pct:'-1.23%',up:false},
+  {name:'SENSEX',price:'76,517.56',chg:'-1032.69',pct:'-1.33%',up:false},
+  {name:'BANK NIFTY',price:'54,970.05',chg:'-942.70',pct:'-1.69%',up:false},
+  {name:'BTC',price:'$70,845',chg:'-1.00%',pct:'',up:false},
+  {name:'PI',price:'$0.1667',chg:'-2.02%',pct:'',up:false},
+  {name:'GOLD',price:'$4,745',chg:'-0.88%',pct:'',up:false},
+  {name:'SILVER',price:'$74.61',chg:'+2.45%',pct:'',up:true},
+];
+function renderTicker(){
+  const tb=document.getElementById('ticker');
+  tb.innerHTML='';
+  const inner=h('div',{class:'ticker-inner'});
 
-  const card = document.getElementById('scorecard');
-  card.innerHTML = '';
-  card.style.setProperty('--score-color', band.color);
-  card.style.background = `linear-gradient(90deg, ${band.bg} 0%, #060f1e 30%)`;
-  card.style.borderColor = band.border;
+  const mkItems=()=>TICKER_DATA.map((m,i)=>{
+    const d=STATE[m.name];
+    const spot=d?.spot;
+    const livePrice=spot>0?'₹'+Math.round(spot).toLocaleString('en-IN'):null;
+    const cls='ti-chg '+(m.up?'up':'dn');
+    const items=[
+      h('span',{class:'ti'},
+        h('span',{class:'ti-name'},m.name),
+        h('span',{class:'ti-price'},livePrice||m.price),
+        h('span',{class:cls},(m.up?'▲':'▼')+' '+m.chg+(m.pct?' ('+m.pct+')':'')))
+    ];
+    if(i<TICKER_DATA.length-1)items.push(h('span',{class:'ti-sep'},'|'));
+    return items;
+  }).flat();
 
-  // Score donut
-  const sb = h('div', { class:'score-block' });
-  const rw = h('div', { style:{ position:'relative', width:'52px', height:'52px', flexShrink:'0' } });
-  rw.appendChild(scoreDonut(d.score, band.color));
-  rw.appendChild(h('span', { style:{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)', fontSize:'16px', fontWeight:'700', color:band.color, lineHeight:'1' } }, String(d.score)));
-  sb.appendChild(rw);
-  sb.appendChild(h('span', { class:'score-label', style:{ color:band.color } }, band.label));
-  card.appendChild(sb);
+  mkItems().forEach(i=>inner.appendChild(i));
+  mkItems().forEach(i=>inner.appendChild(i.cloneNode(true)));
+  tb.appendChild(inner);
+}
 
-  // Symbol + bias + Gann badge
-  const symBlock = h('div', { class:'score-sym' });
-  const symRow = h('div', { class:'score-sym-row' });
-  symRow.appendChild(h('span', { class:'score-sym-name' }, active));
-  symRow.appendChild(h('span', { class:'score-bias', style:{ color:band.color } }, d.bias));
-  const shortBias = gBias.replace('STRONG_', 'S·').replace(/_/g, '');
-  symRow.appendChild(h('span', { class:'gann-badge-compact', style:{ background:gc.bg, borderColor:gc.border, color:gc.text } }, '📐 ' + shortBias));
+// ═══════════════════════════════════════════════════════════════════════════
+//  ISK ROW (Score + all stats + greeks in one compact horizontal strip)
+// ═══════════════════════════════════════════════════════════════════════════
+function renderISKRow(){
+  const d=STATE[active];
+  const g=GANN[active];
+  const band=scoreBand(d.score);
+  const gBias=g?.signal||'NEUTRAL';
+  const gc=sigStyle(gBias);
+  const spot=d.spot;
+  const vol=d.volatility,gr=d.atmGreeks,st=d.structure,gex=d.gex;
+
+  const row=document.getElementById('iskrow');
+  row.innerHTML='';
+  row.style.setProperty('--score-color',band.color);
+
+  // Score
+  const scoreBlock=h('div',{class:'isk-score'});
+  scoreBlock.appendChild(h('div',{class:'isk-num',style:{color:band.color}},String(d.score)));
+  scoreBlock.appendChild(h('div',{class:'isk-lbl',style:{color:band.color}},band.label));
+  row.appendChild(scoreBlock);
+
+  // Symbol + strategies
+  const symBlock=h('div',{class:'isk-sym'});
+  const symRow=h('div',{class:'isk-sym-row'});
+  symRow.appendChild(h('span',{class:'isk-sym-name'},active));
+  symRow.appendChild(h('span',{class:'isk-bias',style:{color:band.color}},d.bias));
+  const shortBias=gBias.replace('STRONG_','S·').replace(/_/g,'');
+  symRow.appendChild(h('span',{class:'badge',style:{background:gc.bg,borderColor:gc.border,color:gc.text}},'◤ '+shortBias));
   symBlock.appendChild(symRow);
-  const stags = h('div', { class:'strats' });
-  (d.strategy || []).slice(0, 4).forEach(s => { const sc = stratColors[s] || { bg:'#1a3040', color:'#a8c8e0', border:'rgba(74,155,187,.2)' }; stags.appendChild(h('span', { class:'strat-tag', style:{ background:sc.bg, color:sc.color, borderColor:sc.border } }, s.replace(/_/g, ' '))); });
-  symBlock.appendChild(stags);
-  card.appendChild(symBlock);
-  card.appendChild(h('div', { class:'vdiv' }));
+  const strats=h('div',{class:'isk-strats'});
+  (d.strategy||[]).slice(0,4).forEach(s=>{
+    const sc=stratColors[s]||{bg:'#1a3040',color:'#a8c8e0',border:'rgba(74,155,187,.2)'};
+    strats.appendChild(h('span',{class:'badge',style:{background:sc.bg,color:sc.color,borderColor:sc.border}},s.replace(/_/g,' ')));
+  });
+  symBlock.appendChild(strats);
+  row.appendChild(symBlock);
 
   // Stats
-  const stats = h('div', { class:'stats-row' });
-  function stat(label, value, sub, color) { return h('div', { class:'stat' }, h('span', { class:'stat-label' }, label), h('span', { class:'stat-val', style:{ color:color || '#e8f2ff' } }, String(value)), sub ? h('span', { class:'stat-sub' }, sub) : null); }
-  function vdiv() { return h('div', { class:'vdiv' }); }
-  stats.appendChild(stat('Spot', spot > 0 ? '₹' + fmtI(spot) : '—', null, spotColor));
-  stats.appendChild(stat('Exp Move', st.expectedMoveAbs > 0 ? '±' + fmt2(st.expectedMoveAbs) : '—', '1σ', '#4fc3f7'));
-  stats.appendChild(stat('Evt Risk', String(st.eventRiskScore || 0), '0–100', st.eventRiskScore > 60 ? '#ef5350' : st.eventRiskScore > 30 ? '#ffd54f' : '#5a90a8'));
+  const stats=h('div',{class:'isk-stats'});
+  function istat(label,value,sub,color){
+    const el=h('div',{class:'istat'});
+    el.appendChild(h('span',{class:'istat-l'},label));
+    el.appendChild(h('span',{class:'istat-v',style:{color:color||'var(--t1)'}},String(value)));
+    if(sub)el.appendChild(h('span',{class:'istat-s'},sub));
+    return el;
+  }
+  function vdiv(){return h('div',{style:{width:'1px',background:'var(--border)',alignSelf:'stretch',margin:'0 2px',flexShrink:'0'}})}
+
+  if(spot>0)stats.appendChild(istat('SPOT','₹'+fmtI(spot),null,'#e8f2ff'));
+  stats.appendChild(istat('EXP MOVE',st.expectedMoveAbs>0?'±'+fmt2(st.expectedMoveAbs):'—','1σ','#4fc3f7'));
+  stats.appendChild(istat('EVT RISK',String(st.eventRiskScore||0),'0-100',st.eventRiskScore>60?'#ef5350':st.eventRiskScore>30?'#ffd54f':'#5a90a8'));
   stats.appendChild(vdiv());
-  stats.appendChild(stat('ATM IV', vol.atmIV > 0 ? vol.atmIV.toFixed(1) + '%' : '—', null, '#00cfff'));
-  stats.appendChild(stat('VRP', vol.vrp != null ? (vol.vrp > 0 ? '+' : '') + fmt2(vol.vrp) + '%' : '—', 'IV−HV20', (vol.vrp || 0) > 0 ? '#ff8a65' : '#00ff9c'));
-  stats.appendChild(stat('HV 20', vol.hv20 > 0 ? vol.hv20.toFixed(1) + '%' : '—'));
-  stats.appendChild(stat('HV 60', vol.hv60 > 0 ? vol.hv60.toFixed(1) + '%' : '—'));
-  const ivRankWrap = h('div', { class:'iv-rank-wrap' });
-  const ivR = vol.ivRank || 0;
-  const ivc = ivR > 70 ? '#ef5350' : ivR > 40 ? '#ffd54f' : '#00ff9c';
-  ivRankWrap.appendChild(h('div', { class:'iv-rank-row' }, h('span', { style:{ color:'#c8d8e8', letterSpacing:'.5px', fontSize:'7px' } }, 'IV RANK'), h('span', { style:{ color:ivc, fontWeight:'700', fontSize:'7px' } }, fmt2(ivR))));
-  const bg = h('div', { class:'rank-bar-bg' }); bg.appendChild(h('div', { class:'rank-bar-fg', style:{ width:ivR + '%', '--w':ivR + '%', background:ivc } })); ivRankWrap.appendChild(bg);
-  if (vol.ivPercentile != null) ivRankWrap.appendChild(h('span', { class:'rank-pct' }, `%ile: ${fmt2(vol.ivPercentile)}`));
-  stats.appendChild(ivRankWrap);
+  stats.appendChild(istat('ATM IV',vol.atmIV>0?vol.atmIV.toFixed(1)+'%':'—',null,'#00cfff'));
+  stats.appendChild(istat('VRP',vol.vrp!=null?(vol.vrp>0?'+':'')+fmt2(vol.vrp)+'%':'—','IV-HV20',(vol.vrp||0)>0?'#ff8a65':'#00ff9c'));
+  stats.appendChild(istat('HV 20',vol.hv20>0?vol.hv20.toFixed(1)+'%':'—'));
+  stats.appendChild(istat('HV 60',vol.hv60>0?vol.hv60.toFixed(1)+'%':'—'));
+
+  // IV rank bar
+  const ivr=h('div',{class:'ivrank-wrap'});
+  const ivRank=vol.ivRank||0;
+  const ivc=ivRank>70?'#ef5350':ivRank>40?'#ffd54f':'#00ff9c';
+  ivr.appendChild(h('div',{class:'ivr-row'},
+    h('span',{style:{color:'var(--t2)',fontSize:'7px',letterSpacing:'.5px'}},  'IV RANK'),
+    h('span',{style:{color:ivc,fontWeight:'700',fontSize:'7px'}},fmt2(ivRank))));
+  const ivrTrack=h('div',{class:'ivr-track'});
+  ivrTrack.appendChild(h('div',{class:'ivr-fill',style:{width:ivRank+'%','--w':ivRank+'%',background:ivc}}));
+  ivr.appendChild(ivrTrack);
+  if(vol.ivPercentile!=null)ivr.appendChild(h('span',{class:'ivr-pct'},'%ile: '+fmt2(vol.ivPercentile)));
+  stats.appendChild(ivr);
+
   stats.appendChild(vdiv());
-  const dc = Math.abs(gr.delta) > 0.85 ? '#ffd54f' : gr.delta > 0 ? '#00ff9c' : '#ef5350';
-  stats.appendChild(stat('Delta', fmt2(gr.delta), null, dc));
-  stats.appendChild(stat('Gamma', gr.gamma ? gr.gamma.toFixed(4) : '—'));
-  stats.appendChild(stat('Theta', fmt2(gr.theta), '₹/day', '#ff8a65'));
-  stats.appendChild(stat('Vega', fmt2(gr.vega), '1%IV', '#4fc3f7'));
-  card.appendChild(stats);
-  if (history.length >= 2) {
-    const sw = h('div', { class:'spark-wrap', style:{ marginLeft:'8px' } });
-    sw.appendChild(h('span', { class:'spark-label' }, 'SPOT TRAIL'));
-    const svg = buildSparkline(history, spotColor); if (svg) sw.appendChild(svg);
-    card.appendChild(sw);
+  const dc=Math.abs(gr.delta||0)>0.85?'#ffd54f':(gr.delta||0)>0?'#00ff9c':'#ef5350';
+  stats.appendChild(istat('DELTA',fmt2(gr.delta),null,dc));
+  stats.appendChild(istat('GAMMA',gr.gamma?gr.gamma.toFixed(6):'—',null,'var(--t1)'));
+  stats.appendChild(istat('THETA',fmt2(gr.theta),'₹/day','#ff8a65'));
+  stats.appendChild(istat('VEGA',fmt2(gr.vega),'1%IV','#4fc3f7'));
+  stats.appendChild(istat('LAMBDA',(gr.lambda||gr.leverage)!=null&&(gr.lambda||gr.leverage)!==0?fmt2(gr.lambda||gr.leverage):'—','lev'));
+  if(gr.rho!=null)stats.appendChild(istat('RHO',fmt2(gr.rho)));
+  row.appendChild(stats);
+
+  // Trade decision badge
+  const td=tradeDecision(d);
+  if(td){
+    const tb2=h('div',{class:'trend-block'});
+    tb2.appendChild(h('span',{class:'trend-text',style:{color:td.color,background:`${td.color}10`,border:`1px solid ${td.color}30`,padding:'3px 8px',borderRadius:'3px'}},td.icon+' '+td.text));
+    row.appendChild(tb2);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  GEX PANEL
-// ═══════════════════════════════════════════════════════════════
-function renderGEX(d) {
-  const g = d.gex, de = d.dealerExposures || {};
-  const gexMax = Math.max(Math.abs(g.netGEX || 0), Math.abs(g.callGEX || 0), Math.abs(g.putGEX || 0), 1);
-  const regimeColor = g.regime === 'MEAN_REVERTING' ? '#00ff9c' : '#ef5350';
-  const biasText = g.netGEX > 0 ? 'Dealers long gamma — stabilized' : g.netGEX < 0 ? 'Dealers short gamma — volatile' : 'Neutral positioning';
+function tradeDecision(d){
+  const spot=d.spot,gex=d.gex,oi=d.oi,st=d.structure;
+  if(!spot)return null;
+  if(gex.gammaFlip&&spot>gex.gammaFlip&&gex.regime==='TREND_AMPLIFYING')return{text:'Trend mode → Buy dips / momentum longs',color:'#00ff9c',icon:'▲'};
+  if(gex.gammaFlip&&spot<gex.gammaFlip&&gex.regime==='MEAN_REVERTING')return{text:'Mean reversion → Sell rallies / range plays',color:'#ffd54f',icon:'◆'};
+  if(gex.callWall&&spot>=gex.callWall*.995)return{text:'At call wall → Expect pin / sell calls',color:'#4fc3f7',icon:'●'};
+  if(gex.putWall&&spot<=gex.putWall*1.005)return{text:'At put wall → Expect bounce / buy dips',color:'#ff8a65',icon:'●'};
+  if(oi.pcr&&oi.pcr>1.4)return{text:'PCR extreme → Contrarian buy signals',color:'#00ff9c',icon:'▲'};
+  if(oi.pcr&&oi.pcr<0.7)return{text:'PCR low → Market complacent, stay hedged',color:'#ef5350',icon:'▼'};
+  return null;
+}
 
-  const p = h('div', { class:'panel' });
-  p.appendChild(h('div', { class:'panel-title' }, '⬡ Dealer GEX'));
+// ═══════════════════════════════════════════════════════════════════════════
+//  PANEL 1 — GEX
+// ═══════════════════════════════════════════════════════════════════════════
+function renderGEX(d){
+  const g=d.gex,de=d.dealerExposures||{};
+  const gexMax=Math.max(Math.abs(g.netGEX||0),Math.abs(g.callGEX||0),Math.abs(g.putGEX||0),1);
+  const regimeC=g.regime==='MEAN_REVERTING'?'#00ff9c':'#ef5350';
+  const biasText=g.netGEX>0?'Dealers long gamma — stabilized':g.netGEX<0?'Dealers short gamma — volatile, trend-amplifying':'Neutral positioning';
+  const p=h('div',{class:'panel'});
+  p.appendChild(h('div',{class:'ph'},
+    h('span',{class:'ph-title'},'Dealer GEX'),
+    h('span',{class:'ph-badge',style:{color:g.netGEX>=0?'#00ff9c':'#ef5350',background:g.netGEX>=0?'rgba(0,255,156,.1)':'rgba(239,83,80,.1)',borderColor:g.netGEX>=0?'rgba(0,255,156,.3)':'rgba(239,83,80,.3)'}},g.regime.replace(/_/g,' '))
+  ));
+  const body=h('div',{class:'pbody'});
 
-  function gexBar(label, value, color) {
-    const pct = Math.min(Math.abs((value || 0) / (gexMax || 1)) * 100, 100).toFixed(1);
-    const wr = h('div', { class:'gex-bar-wrap' });
-    wr.appendChild(h('div', { class:'gex-bar-head' }, h('span', { style:{ color:'#c8d8e8' } }, label), h('span', { style:{ color, fontWeight:'700' } }, fmtCr(value))));
-    const bg = h('div', { class:'gex-bar-bg' }); bg.appendChild(h('div', { class:'gex-bar-fill', style:{ '--w':pct+'%', background:`linear-gradient(90deg, ${color}99, ${color})`, width:pct+'%' } }));
-    wr.appendChild(bg); return wr;
+  function gexBar(label,value,color){
+    const pct=Math.min(Math.abs((value||0)/(gexMax||1))*100,100).toFixed(1);
+    const wr=h('div',{class:'gex-bar'});
+    wr.appendChild(h('div',{class:'gex-bar-hd'},h('span',{style:{color:'#c8d8e8'}},label),h('span',{style:{color,fontWeight:'700'}},fmtCr(value))));
+    const track=h('div',{class:'gex-track'});
+    track.appendChild(h('div',{class:'gex-fill',style:{'--w':pct+'%',width:pct+'%',background:color}}));
+    wr.appendChild(track);return wr;
   }
-  p.appendChild(gexBar('Net GEX', g.netGEX, g.netGEX >= 0 ? '#00ff9c' : '#ef5350'));
-  p.appendChild(gexBar('Call GEX', g.callGEX, '#4fc3f7'));
-  p.appendChild(gexBar('Put GEX', g.putGEX, '#ff8a65'));
-  p.appendChild(h('div', { class:'gex-regime-tag', style:{ color:regimeColor, background:`${regimeColor}0f`, borderColor:`${regimeColor}33` } }, h('span', {}, '●'), h('span', { style:{ fontSize:'7px', fontWeight:'700', letterSpacing:'.5px' } }, (g.regime || '—').replace(/_/g, ' ')), h('span', { style:{ fontSize:'7px', color:'#8aacc2' } }, '— ' + biasText)));
+  body.appendChild(gexBar('Net GEX',g.netGEX,g.netGEX>=0?'#00ff9c':'#ef5350'));
+  body.appendChild(gexBar('Call GEX',g.callGEX,'#4fc3f7'));
+  body.appendChild(gexBar('Put GEX',g.putGEX,'#ff8a65'));
+  body.appendChild(h('div',{class:'regime-tag',style:{color:regimeC,background:`${regimeC}10`,borderColor:`${regimeC}33`}},
+    h('span',{style:{width:'5px',height:'5px',borderRadius:'50%',background:regimeC,display:'inline-block',flexShrink:'0'}}),
+    g.regime.replace(/_/g,' '),' — ',biasText
+  ));
 
-  function mc(label, val, sub, color) { return h('div', { class:'mini-card' }, h('span', { class:'mini-card-label' }, label), h('span', { class:'mini-card-val', style:{ color:color||'#e8f2ff' } }, String(val)), sub ? h('span', { class:'mini-card-sub' }, sub) : null); }
-  const grid = h('div', { class:'mini-grid' });
-  grid.appendChild(mc('GAMMA FLIP', g.gammaFlip ? fmtI(g.gammaFlip) : '—', 'spot level', '#ffd54f'));
-  grid.appendChild(mc('REGIME', (g.regime || '—').replace(/_/g, ' '), null, regimeColor));
-  grid.appendChild(mc('CALL WALL', g.callWall ? fmtI(g.callWall) : '—', 'resistance', '#4fc3f7'));
-  grid.appendChild(mc('PUT WALL', g.putWall ? fmtI(g.putWall) : '—', 'support', '#ff8a65'));
-  p.appendChild(grid);
-  const vanna = de.vex ?? null, charm = de.chex ?? null;
-  if (vanna != null || charm != null) {
-    p.appendChild(h('div', { class:'sub-title' }, '2nd Order Greeks'));
-    const g2 = h('div', { class:'mini-grid' });
-    if (vanna != null) g2.appendChild(mc('VANNA', fmtCr(vanna), 'Δ vs vol', '#ff5cff'));
-    if (charm != null) g2.appendChild(mc('CHARM', fmtCr(charm), 'time decay', '#ffd54f'));
-    p.appendChild(g2);
+  function mc(label,val,sub,color){return h('div',{class:'mc'},h('span',{class:'mc-l'},label),h('span',{class:'mc-v',style:{color:color||'var(--t1)'}},String(val)),sub?h('span',{class:'mc-s'},sub):null)}
+  const grid=h('div',{class:'mini-grid'});
+  grid.appendChild(mc('GAMMA FLIP',g.gammaFlip?fmtI(g.gammaFlip):'—','spot level','#ffd54f'));
+  grid.appendChild(mc('REGIME',(g.regime||'—').replace(/_/g,' '),null,regimeC));
+  grid.appendChild(mc('CALL WALL',g.callWall?fmtI(g.callWall):'—','resistance','#4fc3f7'));
+  grid.appendChild(mc('PUT WALL',g.putWall?fmtI(g.putWall):'—','support','#ff8a65'));
+  body.appendChild(grid);
+
+  const vanna=de.vex??null,charm=de.chex??null;
+  if(vanna!=null||charm!=null){
+    body.appendChild(h('div',{class:'sec-hdr'},'2nd Order Greeks'));
+    const g2=h('div',{class:'mini-grid'});
+    if(vanna!=null)g2.appendChild(mc('VANNA',fmtCr(vanna),'Δ vs vol','#ff5cff'));
+    if(charm!=null)g2.appendChild(mc('CHARM',fmtCr(charm),'time decay','#ffd54f'));
+    body.appendChild(g2);
   }
-  if (g.topStrikes?.length > 0) {
-    p.appendChild(h('div', { class:'sub-title' }, 'Top GEX Strikes'));
-    const maxStrike = Math.max(...g.topStrikes.map(s => Math.abs(s.netGEX || 0)), 1);
-    g.topStrikes.slice(0, 4).forEach(s => {
-      const pct = Math.min(Math.abs((s.netGEX || 0) / maxStrike) * 100, 100).toFixed(1);
-      const sc = (s.netGEX || 0) >= 0 ? '#00ff9c' : '#ef5350';
-      p.appendChild(h('div', { class:'gex-strike-bar' }, h('span', { class:'gex-strike-label' }, fmtI(s.strike)), h('div', { class:'gex-strike-track' }, h('div', { class:'gex-strike-fill', style:{ '--w':pct+'%', width:pct+'%', background:sc } })), h('span', { class:'gex-strike-val', style:{ color:sc } }, fmtCr(s.netGEX))));
+
+  if(g.topStrikes?.length>0){
+    body.appendChild(h('div',{class:'sec-hdr'},'Top GEX Strikes'));
+    const maxStrike=Math.max(...g.topStrikes.map(s=>Math.abs(s.netGEX||0)),1);
+    g.topStrikes.slice(0,5).forEach(s=>{
+      const pct=Math.min(Math.abs((s.netGEX||0)/maxStrike)*100,100).toFixed(1);
+      const sc=(s.netGEX||0)>=0?'#00ff9c':'#ef5350';
+      body.appendChild(h('div',{class:'gex-strike'},
+        h('span',{class:'gex-s-lbl'},fmtI(s.strike)),
+        h('div',{class:'gex-s-track'},h('div',{class:'gex-s-fill',style:{'--w':pct+'%',width:pct+'%',background:sc}})),
+        h('span',{class:'gex-s-val',style:{color:sc}},fmtCr(s.netGEX))
+      ));
     });
   }
-  if (g.netGEX === 0 && g.callGEX === 0) p.appendChild(h('div', { style:{ fontSize:'7px', color:'#4a7090', textAlign:'center', padding:'8px 0' } }, '◌ Awaiting live GEX data…'));
-  return p;
+  if(g.netGEX===0&&g.callGEX===0)body.appendChild(h('div',{style:{fontSize:'7px',color:'#4a7090',textAlign:'center',padding:'10px 0'}},'◌ Awaiting live GEX data…'));
+  p.appendChild(body);return p;
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  OI PANEL
-// ═══════════════════════════════════════════════════════════════
-function renderOI(d) {
-  const oi = d.oi, spot = d.spot;
-  const oiC = oi.pcr > 1.2 ? '#00ff9c' : oi.pcr < 0.8 ? '#ef5350' : '#ffd54f';
-  const p = h('div', { class:'panel' });
-  p.appendChild(h('div', { class:'panel-title' }, '◎ OI Intelligence'));
+// ═══════════════════════════════════════════════════════════════════════════
+//  PANEL 2 — OI
+// ═══════════════════════════════════════════════════════════════════════════
+function renderOI(d){
+  const oi=d.oi,spot=d.spot;
+  const oiC=oi.pcr>1.2?'#00ff9c':oi.pcr<0.8?'#ef5350':'#ffd54f';
+  const p=h('div',{class:'panel'});
+  const pcrLabel=oi.pcr>1.2?'BULLISH':oi.pcr<0.8?'BEARISH':'NEUTRAL';
+  p.appendChild(h('div',{class:'ph'},
+    h('span',{class:'ph-title'},'OI Intelligence'),
+    h('span',{class:'ph-badge',style:{color:oiC,background:`${oiC}12`,borderColor:`${oiC}33`}},
+      oi.pcr>0?`PCR ${fmt2(oi.pcr)} — ${pcrLabel}`:'PCR —'
+    )
+  ));
+  const body=h('div',{class:'pbody'});
 
-  function mc(label, val, sub, color) { return h('div', { class:'mini-card' }, h('span', { class:'mini-card-label' }, label), h('span', { class:'mini-card-val', style:{ color:color||'#e8f2ff' } }, String(val)), sub ? h('span', { class:'mini-card-sub' }, sub) : null); }
-  const grid = h('div', { class:'mini-grid', style:{ marginBottom:'6px' } });
-  grid.appendChild(mc('PCR', oi.pcr > 0 ? fmt2(oi.pcr) : '—', 'put/call', oiC));
-  grid.appendChild(mc('MAX PAIN', oi.maxPain ? fmtI(oi.maxPain) : '—', 'expiry', '#4fc3f7'));
-  const tot = (oi.totalCallOI || 0) + (oi.totalPutOI || 0);
-  grid.appendChild(mc('TOTAL OI', tot > 0 ? (tot / 1e5).toFixed(1) + 'L' : '—'));
-  grid.appendChild(mc('NET FLOW', oi.netPremiumFlow != null ? fmtCr(oi.netPremiumFlow) : '—', null, (oi.netPremiumFlow || 0) > 0 ? '#00ff9c' : '#ef5350'));
-  p.appendChild(grid);
+  function mc(label,val,sub,color){return h('div',{class:'mc'},h('span',{class:'mc-l'},label),h('span',{class:'mc-v',style:{color:color||'var(--t1)'}},String(val)),sub?h('span',{class:'mc-s'},sub):null)}
+  const grid=h('div',{class:'mini-grid',style:{marginBottom:'5px'}});
+  grid.appendChild(mc('PCR',oi.pcr>0?fmt2(oi.pcr):'—','put/call',oiC));
+  grid.appendChild(mc('MAX PAIN',oi.maxPain?fmtI(oi.maxPain):'—','expiry','#4fc3f7'));
+  const tot=(oi.totalCallOI||0)+(oi.totalPutOI||0);
+  grid.appendChild(mc('TOTAL OI',tot>0?(tot/1e5).toFixed(1)+'L':'—'));
+  grid.appendChild(mc('NET FLOW',oi.netPremiumFlow!=null?fmtCr(oi.netPremiumFlow):'—',null,(oi.netPremiumFlow||0)>0?'#00ff9c':'#ef5350'));
+  body.appendChild(grid);
 
-  const oiSumText = oi.pcr > 1.2 ? 'Put dominance → bullish (mm hedge)' : oi.pcr < 0.8 ? 'Call dominance → market complacent' : oi.pcr > 0 ? 'Balanced PCR → neutral' : null;
-  if (oiSumText) p.appendChild(h('div', { style:{ fontSize:'7px', color:oiC, marginBottom:'6px', padding:'3px 6px', background:oiC+'10', borderRadius:'3px', border:`1px solid ${oiC}22` } }, '◈ ' + oiSumText));
+  const oiSumText=oi.pcr>1.2?'Put dominance → bullish (mm hedge)':oi.pcr<0.8?'Call dominance → market complacent':oi.pcr>0?'Balanced PCR → neutral':null;
+  if(oiSumText)body.appendChild(h('div',{style:{fontSize:'7px',color:oiC,marginBottom:'5px',padding:'3px 6px',background:`${oiC}10`,borderRadius:'3px',border:`1px solid ${oiC}22`}},'◈ '+oiSumText));
 
-  const tabs = h('div', { class:'oi-tabs' });
-  [{ key:'near', label:'NEAR ATM ±8%', cc:'near' }, { key:'tail', label:'FII HEDGE / TAIL', cc:'tail' }].forEach(t => {
-    tabs.appendChild(h('button', { class:`oi-tab ${oiView === t.key ? `active-${t.cc}` : ''}`, onClick: () => { oiView = t.key; oiScroll = 0; render(); } }, t.label));
+  const tabs=h('div',{class:'oi-tabs'});
+  [['near','NEAR ATM ±8%'],['tail','FII HEDGE / TAIL']].forEach(([key,label])=>{
+    tabs.appendChild(h('button',{class:'oi-tab'+(oiView===key?(' active-'+key):''),onClick:()=>{oiView=key;oiScroll=0;render()}},label));
   });
-  p.appendChild(tabs);
+  body.appendChild(tabs);
 
-  const rows = oiView === 'near' ? oi.unusualOI : (oi.unusualOITailRisk || []);
-  const sorted = [...(rows || [])].sort((a, b) => { const da = spot ? Math.abs(a.strike - spot) : 0, db = spot ? Math.abs(b.strike - spot) : 0; return da !== db ? da - db : (a.type || '').toUpperCase() === 'CALL' ? -1 : 1; });
-  const visible = sorted.slice(oiScroll, oiScroll + OI_ROWS);
-  const canUp = oiScroll > 0, canDn = oiScroll + OI_ROWS < sorted.length;
+  const rows=oiView==='near'?oi.unusualOI:(oi.unusualOITailRisk||[]);
+  const sorted=[...(rows||[])].sort((a,b)=>{const da=spot?Math.abs(a.strike-spot):0,db=spot?Math.abs(b.strike-spot):0;return da!==db?da-db:(a.type||'').toUpperCase()==='CALL'?-1:1});
+  const visible=sorted.slice(oiScroll,oiScroll+OI_ROWS);
+  const canUp=oiScroll>0,canDn=oiScroll+OI_ROWS<sorted.length;
 
-  p.appendChild(h('div', { class:'oi-hdr' }, h('span', {}, ''), h('span', {}, 'STRIKE'), h('span', { style:{ textAlign:'right' } }, 'OI'), h('span', { style:{ textAlign:'right' } }, 'VOL'), h('span', { style:{ textAlign:'right' } }, 'DIST%')));
-  if (visible.length === 0) {
-    p.appendChild(h('div', { style:{ fontSize:'7px', color:'#5a90a8', textAlign:'center', padding:'10px 0' } }, oi.totalCallOI === 0 ? '◌ Awaiting OI data…' : '◌ No data'));
-  } else {
-    visible.forEach(u => {
-      const isCE = (u.type || '').toUpperCase() === 'CALL';
-      const dist = spot ? calcP(u.strike, spot) : null;
-      const tc = isCE ? '#4fc3f7' : '#ff8a65';
-      p.appendChild(h('div', { class:'oi-row' }, h('span', { class:'oi-type', style:{ background:tc+'18', color:tc, borderColor:tc+'33' } }, isCE ? 'CE' : 'PE'), h('span', { class:'oi-strike' }, fmtI(u.strike)), h('span', { class:'oi-oi' }, (u.oi || 0).toLocaleString('en-IN')), h('span', { class:'oi-vol' }, (u.vol || 0).toLocaleString('en-IN')), h('span', { class:'oi-dist', style:{ color:dist != null ? (dist > 0 ? '#4fc3f7' : '#ff8a65') : '#5a90a8' } }, dist != null ? (dist > 0 ? '+' : '') + dist + '%' : '—')));
+  body.appendChild(h('div',{class:'oi-hdr'},h('span',{},''),h('span',{},'STRIKE'),h('span',{style:{textAlign:'right'}},'OI'),h('span',{style:{textAlign:'right'}},'VOL'),h('span',{style:{textAlign:'right'}},'DIST%')));
+  if(visible.length===0){
+    body.appendChild(h('div',{style:{fontSize:'7px',color:'#5a90a8',textAlign:'center',padding:'10px 0'}},oi.totalCallOI===0?'◌ Awaiting OI data…':'◌ No data'));
+  }else{
+    visible.forEach(u=>{
+      const isCE=(u.type||'').toUpperCase()==='CALL';
+      const dist=spot?calcP(u.strike,spot):null;
+      const tc=isCE?'#4fc3f7':'#ff8a65';
+      body.appendChild(h('div',{class:'oi-row'},
+        h('span',{class:'oi-type',style:{background:`${tc}18`,color:tc,borderColor:`${tc}33`}},isCE?'CE':'PE'),
+        h('span',{class:'oi-strike'},fmtI(u.strike)),
+        h('span',{class:'oi-oi'},(u.oi||0).toLocaleString('en-IN')),
+        h('span',{class:'oi-vol'},(u.vol||0).toLocaleString('en-IN')),
+        h('span',{class:'oi-dist',style:{color:dist!=null?(dist>0?'#4fc3f7':'#ff8a65'):'#5a90a8'}},dist!=null?(dist>0?'+':'')+dist+'%':'—')
+      ));
     });
   }
-  const pgn = h('div', { class:'oi-pgn' });
-  pgn.appendChild(h('span', { class:'oi-pgn-info' }, sorted.length > 0 ? `${oiScroll+1}–${Math.min(oiScroll+OI_ROWS, sorted.length)} / ${sorted.length}` : '0'));
-  const bw = h('div', { class:'oi-pgn-btns' });
-  const bUp = h('button', { class:'oi-pgn-btn', ...(canUp ? {} : { disabled:'' }), ...(canUp ? { onClick:() => { oiScroll = Math.max(0, oiScroll - OI_ROWS); render(); } } : {}) }, '▲');
-  const bDn = h('button', { class:'oi-pgn-btn', ...(canDn ? {} : { disabled:'' }), ...(canDn ? { onClick:() => { oiScroll = Math.min(sorted.length - OI_ROWS, oiScroll + OI_ROWS); render(); } } : {}) }, '▼');
-  bw.appendChild(bUp); bw.appendChild(bDn); pgn.appendChild(bw); p.appendChild(pgn);
-  return p;
+  const pgn=h('div',{class:'oi-pgn'});
+  pgn.appendChild(h('span',{class:'pgn-info'},sorted.length>0?`${oiScroll+1}–${Math.min(oiScroll+OI_ROWS,sorted.length)} / ${sorted.length}`:'0'));
+  const btns=h('div',{class:'pgn-btns'});
+  btns.appendChild(h('button',{class:'pgn-btn',...(canUp?{onClick:()=>{oiScroll=Math.max(0,oiScroll-OI_ROWS);render()}}:{disabled:''})}, '▲'));
+  btns.appendChild(h('button',{class:'pgn-btn',...(canDn?{onClick:()=>{oiScroll=Math.min(sorted.length-OI_ROWS,oiScroll+OI_ROWS);render()}}:{disabled:''})}, '▼'));
+  pgn.appendChild(btns);
+  body.appendChild(pgn);
+  p.appendChild(body);return p;
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  GANN PANEL v2 — Fan + Sq9 + Signals + Market Hours
-// ═══════════════════════════════════════════════════════════════
-function renderGann(g) {
-  const p = h('div', { class:'panel' });
-  p.appendChild(h('div', { class:'panel-title' }, '⚡ Gann Analysis'));
+// ═══════════════════════════════════════════════════════════════════════════
+//  PANEL 3 — GANN
+// ═══════════════════════════════════════════════════════════════════════════
+function renderGann(g){
+  const p=h('div',{class:'panel'});
+  const frozen=g.frozen||!g.marketOpen;
+  const ss=sigStyle(frozen?null:g.signal);
+  const scoreColor=(g.strength||0)>=80?'#00ff64':(g.strength||0)>=60?'#ffa502':'#607a90';
 
-  if (!g || (g.status === 'no_data' && !g.ltp)) {
-    p.appendChild(h('div', { style:{ fontSize:'8px', color:'#c8d8e8', textAlign:'center', padding:'20px 0' } }, '◌ Awaiting Gann data…'));
-    p.appendChild(h('div', { style:{ fontSize:'7px', color:'#4a7090', textAlign:'center' } }, 'Connect Upstox stream to activate'));
-    return p;
+  p.appendChild(h('div',{class:'ph'},
+    h('span',{class:'ph-title'},'Gann Analysis'),
+    g.ltp?h('span',{class:'ph-badge',style:{color:ss.text,background:`${ss.text}12`,borderColor:`${ss.text}33`}},frozen?'FROZEN':((g.signal||'NEUTRAL')+' '+Math.round(g.strength||0)+'%')):null
+  ));
+
+  if(!g||(!g.ltp&&g.status==='no_data')){
+    const body=h('div',{class:'pbody'});
+    body.appendChild(h('div',{style:{fontSize:'8px',color:'#c8d8e8',textAlign:'center',padding:'20px 0'}},'◌ Awaiting Gann data…'));
+    body.appendChild(h('div',{style:{fontSize:'7px',color:'#4a7090',textAlign:'center'}},'Connect Upstox stream to activate'));
+    p.appendChild(body);return p;
   }
 
-  // ── Market status bar ────────────────────────────────────────
-  const msCfg = gannMktStatusCfg();
-  const msBar = h('div', { class:'gann-status-bar', style:msCfg.cls });
-  msBar.appendChild(h('div', { class:'gann-status-dot', style:{ background:msCfg.dotColor } }));
-  msBar.appendChild(h('span', { style:{ fontWeight:'700', color:msCfg.dotColor, fontSize:'7px' } }, msCfg.label));
-  msBar.appendChild(h('span', { style:{ color:'var(--text4)', fontSize:'7px', marginLeft:'4px' } }, msCfg.sub));
-  p.appendChild(msBar);
+  const body=h('div',{class:'pbody'});
+  const msCfg=gannMktCfg();
+  const msBar=h('div',{class:'gann-status',style:{[msCfg.cls.split(';')[0].split(':')[0].trim()]:msCfg.cls.split(';')[0].split(':').slice(1).join(':').trim(),[msCfg.cls.split(';')[1].split(':')[0].trim()]:msCfg.cls.split(';')[1].split(':').slice(1).join(':').trim()}});
+  // Simpler approach for status bar inline style:
+  msBar.style.cssText=msCfg.cls;
+  msBar.appendChild(h('div',{class:'gann-status-dot',style:{background:msCfg.dotColor}}));
+  msBar.appendChild(h('span',{style:{fontWeight:'700',color:msCfg.dotColor,fontSize:'7px'}},msCfg.label));
+  msBar.appendChild(h('span',{style:{color:'var(--t4)',fontSize:'7px',marginLeft:'4px'}},msCfg.sub));
+  body.appendChild(msBar);
 
-  // ── Tabs ─────────────────────────────────────────────────────
-  const tabs = h('div', { class:'gann-tabs' });
-  [['fan', 'FAN CHART'], ['sq9', 'SQUARE OF 9']].forEach(([key, label]) => {
-    tabs.appendChild(h('button', { class:`gann-tab${g.tab === key ? ' active' : ''}`, onClick: () => { g.tab = key; renderPanels(); } }, label));
+  const tabs=h('div',{class:'gann-tabs'});
+  [['fan','FAN CHART'],['sq9','SQUARE OF 9']].forEach(([key,label])=>{
+    tabs.appendChild(h('button',{class:'gann-tab'+(g.tab===key?' active':''),onClick:()=>{g.tab=key;renderPanels()}},label));
   });
-  p.appendChild(tabs);
+  body.appendChild(tabs);
 
-  // ── Signal card ───────────────────────────────────────────────
-  const frozen = g.frozen || !g.marketOpen;
-  const hasSig = !frozen && g.signal && g.signal !== 'NEUTRAL';
-  const ss = sigStyle(frozen ? null : g.signal);
-  const strColor = (g.strength || 0) >= 80 ? '#00ff64' : (g.strength || 0) >= 60 ? '#ffa502' : '#555';
-  const sigCard = h('div', { class:'gann-signal-card', style:{ background:frozen?'rgba(255,255,255,.02)':ss.bg, borderColor:frozen?'#2a3848':ss.border } });
-  const sigRow = h('div', { class:'gann-sig-row' });
-  sigRow.appendChild(h('span', { class:'gann-sig-icon' }, frozen ? '🔒' : (ss.icon || '◆')));
-  sigRow.appendChild(h('span', { class:'gann-sig-label', style:{ color:frozen?'#5a7090':ss.text } }, frozen ? 'MARKET CLOSED' : (g.signal || 'NEUTRAL')));
-  if (!frozen) sigRow.appendChild(h('span', { class:'gann-sig-str', style:{ color:strColor } }, (g.strength || 0) + '%'));
-  else sigRow.appendChild(h('span', { style:{ fontSize:'8px', color:'#4a7090', marginLeft:'auto' } }, g.frozenAt ? `frozen ${g.frozenAt}` : ''));
+  const sigCard=h('div',{class:'gann-sig-card',style:{background:frozen?'rgba(255,255,255,.02)':ss.bg,borderColor:frozen?'#2a3848':ss.border}});
+  const sigRow=h('div',{class:'gann-sig-row'});
+  sigRow.appendChild(h('span',{class:'gann-sig-icon'},frozen?'🔒':(ss.icon||'◆')));
+  sigRow.appendChild(h('span',{class:'gann-sig-label',style:{color:frozen?'#5a7090':ss.text}},frozen?'MARKET CLOSED':(g.signal||'NEUTRAL')));
+  if(!frozen)sigRow.appendChild(h('span',{class:'gann-sig-str',style:{color:scoreColor}},(g.strength||0)+'%'));
+  else sigRow.appendChild(h('span',{style:{fontSize:'8px',color:'#4a7090',marginLeft:'auto'}},g.frozenAt?`frozen ${g.frozenAt}`:''));
   sigCard.appendChild(sigRow);
-  if (!frozen) { const sb = h('div', { class:'gann-str-bar-bg' }); sb.appendChild(h('div', { class:'gann-str-bar-fill', style:{ '--w':(g.strength||0)+'%', width:(g.strength||0)+'%', background:strColor } })); sigCard.appendChild(sb); }
-  sigCard.appendChild(h('div', { class:'gann-rationale' }, frozen ? `Gann frozen at last traded price ${g.ltp?.toFixed(0)||'—'} — levels remain valid for reference` : (g.rationale || 'Computing…')));
-  if (hasSig && g.aboveFan) sigCard.appendChild(h('div', { class:'gann-fan-badge', style:{ background:'rgba(0,207,255,.06)', borderColor:'rgba(0,207,255,.25)', color:'var(--cyan)' } }, `Above fan: ${g.aboveFan}`));
-  p.appendChild(sigCard);
+  if(!frozen){const sb=h('div',{class:'str-bar-bg'});sb.appendChild(h('div',{class:'str-bar-fill',style:{'--w':(g.strength||0)+'%',width:(g.strength||0)+'%',background:scoreColor}}));sigCard.appendChild(sb)}
+  sigCard.appendChild(h('div',{class:'gann-rationale'},frozen?`Frozen at last LTP ${g.ltp?.toFixed(0)||'—'}`:(g.rationale||'Computing…')));
+  body.appendChild(sigCard);
 
-  // ── Day stats ─────────────────────────────────────────────────
-  if (g.ltp) {
-    const ds = h('div', { class:'gann-day-stats' });
-    [['O', g.dayOpen, 'var(--text2)'], ['L', g.dayLow, 'var(--green)'], ['H', g.dayHigh, 'var(--red)'], ['LTP', g.ltp, frozen?'#5a7090':'var(--amber)']].forEach(([l, v, c]) => {
-      if (!v) return;
-      const d = h('div', { class:'gann-ds' });
-      d.appendChild(h('span', { class:'gann-ds-l' }, l));
-      d.appendChild(h('span', { class:'gann-ds-v', style:{ color:c } }, Number(v).toFixed(0)));
-      ds.appendChild(d);
+  if(g.ltp){
+    const ds=h('div',{class:'gann-day-stats'});
+    [['O',g.dayOpen,'var(--t2)'],['L',g.dayLow,'var(--green)'],['H',g.dayHigh,'var(--red)'],['LTP',g.ltp,frozen?'#5a7090':'#ffd54f']].forEach(([l,v,c])=>{
+      if(!v)return;
+      const d2=h('div',{class:'gds'});
+      d2.appendChild(h('span',{class:'gds-l'},l));
+      d2.appendChild(h('span',{class:'gds-v',style:{color:c}},Number(v).toFixed(0)));
+      ds.appendChild(d2);
     });
-    p.appendChild(ds);
+    body.appendChild(ds);
   }
 
-  // ── Tab content ───────────────────────────────────────────────
-  if (g.tab === 'fan') {
-    // Fan SVG
-    const fanWrap = h('div', { class:'gann-fan-wrap' });
-    fanWrap.innerHTML = buildGannFanSVG(g);
-    if (frozen) fanWrap.innerHTML += `<div class="gann-fan-frozen-msg">🔒 Frozen at last price — resumes 9:15 AM IST</div>`;
-    p.appendChild(fanWrap);
-
-    // Fan legend
-    const legend = h('div', { class:'gann-fan-legend' });
-    GANN_FANS.forEach(f => {
-      const item = h('div', { class:'gann-legend-item' });
-      item.appendChild(h('div', { class:'gann-legend-line', style:{ background:f.color } }));
-      item.appendChild(document.createTextNode(f.label));
-      legend.appendChild(item);
-    });
-    p.appendChild(legend);
-
-  } else {
-    // Square of 9 table
-    const ltp = g.ltp || 0;
-    const sq9 = g.sq9Levels?.length ? g.sq9Levels : computeSq9(ltp, 4);
-    p.appendChild(h('div', { class:'sq9-title' }, 'KEY LEVELS'));
-    const grid = h('div', { class:'sq9-grid' });
-    sq9.slice(0, 8).forEach(l => {
-      const isR = l.dir === 'R';
-      const col = isR ? '#ff8090' : '#00d460';
-      const bg = isR ? 'rgba(255,71,87,.06)' : 'rgba(0,255,100,.06)';
-      const bdr = isR ? 'rgba(255,71,87,.15)' : 'rgba(0,255,100,.15)';
-      const dist = ltp ? ((l.level - ltp) / ltp * 100).toFixed(2) : null;
-      const row = h('div', { class:'sq9-row', style:{ background:bg, border:`1px solid ${bdr}` } });
-      row.appendChild(h('span', { class:'sq9-lbl' }, l.label));
-      row.appendChild(h('span', { class:'sq9-val', style:{ color:col } }, l.level.toFixed(0)));
-      if (dist) row.appendChild(h('span', { class:'sq9-dist' }, (dist > 0 ? '+' : '') + dist + '%'));
+  if(g.tab==='fan'){
+    const wrap=h('div',{class:'gann-fan-wrap'});
+    wrap.innerHTML=buildGannFanSVG(g);
+    if(frozen)wrap.innerHTML+=`<div class="gann-fan-frozen">🔒 Frozen — resumes 9:15 AM IST</div>`;
+    body.appendChild(wrap);
+    const legend=h('div',{class:'fan-legend'});
+    GANN_FANS.forEach(f=>{const item=h('div',{class:'fan-leg-item'});item.appendChild(h('div',{class:'fan-leg-line',style:{background:f.color}}));item.appendChild(document.createTextNode(f.label));legend.appendChild(item)});
+    body.appendChild(legend);
+  }else{
+    const ltp=g.ltp||0;
+    const sq9=g.sq9Levels?.length?g.sq9Levels:computeSq9(ltp,4);
+    body.appendChild(h('div',{class:'sec-hdr',style:{marginTop:'0'}},'KEY LEVELS — SQUARE OF 9'));
+    const grid=h('div',{class:'sq9-grid'});
+    sq9.slice(0,8).forEach(l=>{
+      const isR=l.dir==='R';
+      const col=isR?'#ff8090':'#00d460';
+      const bg=isR?'rgba(255,71,87,.06)':'rgba(0,255,100,.06)';
+      const bdr=isR?'rgba(255,71,87,.15)':'rgba(0,255,100,.15)';
+      const dist=ltp?((l.level-ltp)/ltp*100).toFixed(2):null;
+      const row=h('div',{class:'sq9-row',style:{background:bg,border:`1px solid ${bdr}`}});
+      row.appendChild(h('span',{class:'sq9-lbl'},l.label));
+      row.appendChild(h('span',{class:'sq9-val',style:{color:col}},l.level.toFixed(0)));
+      if(dist)row.appendChild(h('span',{class:'sq9-dist'},(dist>0?'+':'')+dist+'%'));
       grid.appendChild(row);
     });
-    p.appendChild(grid);
+    body.appendChild(grid);
   }
 
-  // ── Signal log ────────────────────────────────────────────────
-  if (g.signalLog?.length > 0) {
-    p.appendChild(h('div', { class:'gann-log-title' }, 'SIGNAL LOG'));
-    g.signalLog.forEach((l, i) => {
-      const ls = sigStyle(l.signal);
-      const row = h('div', { class:'gann-log-row', style:{ opacity: String(1 - i * 0.15) } });
-      row.appendChild(h('span', { style:{ color:ls.text, fontWeight:'700' } }, ls.icon + ' ' + l.signal));
-      row.appendChild(h('span', { style:{ color:'var(--amber)', marginLeft:'4px' } }, l.ltp?.toFixed(0) || ''));
-      row.appendChild(h('span', { style:{ color:'#444', marginLeft:'auto' } }, l.time || ''));
-      p.appendChild(row);
+  // S/R grid
+  const srGrid=h('div',{class:'gann-sr-grid'});
+  const supportsData=(g.sq9Levels||computeSq9(g.ltp||23000,3)).filter(l=>l.dir==='S').slice(0,3);
+  const resistsData=(g.sq9Levels||computeSq9(g.ltp||23000,3)).filter(l=>l.dir==='R').slice(0,3);
+  function srCol(title,items,color){
+    const col=h('div',{class:'gann-sr-col'});
+    col.appendChild(h('div',{class:'gann-sr-hdr'},title));
+    items.forEach((item,i)=>{
+      const row=h('div',{class:'gann-sr-row'});
+      row.appendChild(h('span',{style:{color}},(title==='Supports'?'S':'R')+(i+1)+' '+fmtI(item.level||item.price||item)));
+      row.appendChild(h('span',{style:{color:'var(--t3)',fontSize:'7px'}},item.source?.includes('Nine')?'SoN':item.source?.includes('Cardinal')?'Card':'SoN'));
+      col.appendChild(row);
+    });
+    return col;
+  }
+  srGrid.appendChild(srCol('Supports',supportsData,'#00ff9c'));
+  srGrid.appendChild(srCol('Resistances',resistsData,'#ef5350'));
+  body.appendChild(srGrid);
+
+  if(g.signalLog?.length>0){
+    body.appendChild(h('div',{class:'sec-hdr'},'Signal Log'));
+    g.signalLog.forEach((l,i)=>{
+      const ls=sigStyle(l.signal);
+      const row=h('div',{class:'gann-log-row',style:{opacity:String(1-i*0.15)}});
+      row.appendChild(h('span',{style:{color:ls.text,fontWeight:'700'}},ls.icon+' '+l.signal));
+      row.appendChild(h('span',{style:{color:'#ffd54f',marginLeft:'4px'}},l.ltp?.toFixed(0)||''));
+      row.appendChild(h('span',{style:{color:'#2a4060',marginLeft:'auto'}},l.time||''));
+      body.appendChild(row);
     });
   }
 
-  return p;
+  p.appendChild(body);return p;
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  STRUCTURE PANEL
-// ═══════════════════════════════════════════════════════════════
-function renderStructure(d) {
-  const st = d.structure, g = d.gex, oi = d.oi, spot = d.spot;
-  const cw = g.callWall, pw = g.putWall, gf = g.gammaFlip;
-  let rangePct = null;
-  if (cw && pw && spot) rangePct = Math.max(0, Math.min(100, Math.round(((spot - pw) / (cw - pw)) * 100)));
-  let zoneLabel, zoneColor;
-  if (cw && spot >= cw * .99) { zoneLabel = 'At Call Wall — resistance'; zoneColor = '#4fc3f7'; }
-  else if (pw && spot <= pw * 1.01) { zoneLabel = 'At Put Wall — support'; zoneColor = '#ff8a65'; }
-  else if (gf && spot >= gf) { zoneLabel = 'Above Gamma Flip — trend'; zoneColor = '#00ff9c'; }
-  else if (gf && spot < gf) { zoneLabel = 'Below Gamma Flip — MR'; zoneColor = '#ffd54f'; }
-  else if (spot > 0) { zoneLabel = 'Between walls'; zoneColor = '#4a9abb'; }
-  else { zoneLabel = 'Awaiting data'; zoneColor = '#4a7090'; }
+// ═══════════════════════════════════════════════════════════════════════════
+//  PANEL 4 — MARKET STRUCTURE
+// ═══════════════════════════════════════════════════════════════════════════
+function renderStructure(d){
+  const st=d.structure,g=d.gex,oi=d.oi,spot=d.spot;
+  const cw=g.callWall,pw=g.putWall,gf=g.gammaFlip;
+  let rangePct=null;
+  if(cw&&pw&&spot)rangePct=Math.max(0,Math.min(100,Math.round(((spot-pw)/(cw-pw))*100)));
+  let zoneLabel,zoneColor;
+  if(cw&&spot>=cw*.99){zoneLabel='At Call Wall — resistance';zoneColor='#4fc3f7'}
+  else if(pw&&spot<=pw*1.01){zoneLabel='At Put Wall — support';zoneColor='#ff8a65'}
+  else if(gf&&spot>=gf){zoneLabel='Above Gamma Flip — trend';zoneColor='#00ff9c'}
+  else if(gf&&spot<gf){zoneLabel='Below Gamma Flip — MR';zoneColor='#ffd54f'}
+  else if(spot>0){zoneLabel='Between walls';zoneColor='#4a9abb'}
+  else{zoneLabel='Awaiting data';zoneColor='#4a7090'}
 
-  const p = h('div', { class:'panel' });
-  p.appendChild(h('div', { class:'panel-title' }, '≡ Market Structure'));
-  p.appendChild(h('div', { class:'zone-badge', style:{ color:zoneColor, background:zoneColor+'11', borderColor:zoneColor+'33' } }, h('div', { class:'zone-dot', style:{ background:zoneColor } }), zoneLabel));
-  if (spot > 0) p.appendChild(h('span', { style:{ fontSize:'12px', fontWeight:'700', color:'#e8f2ff', marginBottom:'4px', display:'block' } }, '₹' + fmtI(spot)));
+  const p=h('div',{class:'panel'});
+  p.appendChild(h('div',{class:'ph'},
+    h('span',{class:'ph-title'},'Market Structure'),
+    h('span',{class:'ph-badge',style:{color:zoneColor,background:`${zoneColor}12`,borderColor:`${zoneColor}33`}},zoneLabel)
+  ));
+  const body=h('div',{class:'pbody'});
 
-  if (rangePct !== null) {
-    const wrap = h('div', { class:'range-bar-wrap' });
-    wrap.appendChild(h('div', { class:'range-bar-labels' }, h('span', {}, 'PUT ' + fmtI(pw)), h('span', { style:{ color:'#e8f2ff' } }, rangePct + '% in range'), h('span', {}, 'CALL ' + fmtI(cw))));
-    const rbg = h('div', { class:'range-bar-bg' });
-    rbg.appendChild(h('div', { class:'range-bar-fill', style:{ width:rangePct+'%' } }));
-    rbg.appendChild(h('div', { class:'range-bar-needle', style:{ left:rangePct+'%' } }));
-    wrap.appendChild(rbg); p.appendChild(wrap);
+  if(spot>0){body.appendChild(h('span',{style:{fontSize:'14px',fontWeight:'700',color:'var(--t1)',marginBottom:'5px',display:'block'}},`₹${fmtI(spot)}`))}
+
+  if(rangePct!==null){
+    const wrap=h('div',{class:'range-wrap'});
+    wrap.appendChild(h('div',{class:'range-lbls'},h('span',{},'PUT '+fmtI(pw)),h('span',{style:{color:'var(--t1)'}},rangePct+'% in range'),h('span',{},'CALL '+fmtI(cw))));
+    const track=h('div',{class:'range-track'});
+    track.appendChild(h('div',{class:'range-fill',style:{width:rangePct+'%'}}));
+    track.appendChild(h('div',{class:'range-needle',style:{left:rangePct+'%'}}));
+    wrap.appendChild(track);body.appendChild(wrap);
   }
 
-  function mc(label, val, sub, color) { return h('div', { class:'mini-card' }, h('span', { class:'mini-card-label' }, label), h('span', { class:'mini-card-val', style:{ color:color||'#e8f2ff' } }, String(val)), sub ? h('span', { class:'mini-card-sub' }, sub) : null); }
-  const mg = h('div', { class:'mini-grid', style:{ marginBottom:'8px' } });
-  mg.appendChild(mc('SUPPORT (OI)', st.supportFromOI ? fmtI(st.supportFromOI) : '—', 'put OI wall', '#00ff9c'));
-  mg.appendChild(mc('RESIST (OI)', st.resistanceFromOI ? fmtI(st.resistanceFromOI) : '—', 'call OI wall', '#ef5350'));
-  p.appendChild(mg);
+  function mc(label,val,sub,color){return h('div',{class:'mc'},h('span',{class:'mc-l'},label),h('span',{class:'mc-v',style:{color:color||'var(--t1)'}},String(val)),sub?h('span',{class:'mc-s'},sub):null)}
+  const mg=h('div',{class:'mini-grid',style:{marginBottom:'6px'}});
+  mg.appendChild(mc('SUPPORT (OI)',st.supportFromOI?fmtI(st.supportFromOI):'—','put OI wall','#00ff9c'));
+  mg.appendChild(mc('RESIST (OI)',st.resistanceFromOI?fmtI(st.resistanceFromOI):'—','call OI wall','#ef5350'));
+  body.appendChild(mg);
 
-  function lvRow(label, val, color) { p.appendChild(h('div', { class:'lvl-row' }, h('span', { class:'lvl-label' }, label), h('span', { class:'lvl-val', style:{ color } }, val))); }
-  if (cw && spot) { const d2 = calcP(cw, spot); lvRow('↑ Call Wall', `+${Math.abs(d2).toFixed(1)}% ₹${fmtI(cw - spot)}`, '#4fc3f7'); }
-  if (pw && spot) { const d2 = calcP(spot, pw); lvRow('↓ Put Wall', `-${Math.abs(d2).toFixed(1)}% ₹${fmtI(spot - pw)}`, '#ff8a65'); }
-  if (gf && spot) { const abv = spot > gf, d2 = calcP(gf, spot); lvRow('γ Flip', (abv?'+':'-') + Math.abs(d2).toFixed(1) + '% ₹' + fmtI(gf), abv ? '#00ff9c' : '#ffd54f'); }
-  if (oi.maxPain) lvRow('⊗ Max Pain', '₹' + fmtI(oi.maxPain), '#a8c8e0');
-  if (oi.pcr > 0) lvRow('⊕ PCR', oi.pcr.toFixed(2) + ' — ' + (oi.pcr > 1.2 ? 'bullish' : oi.pcr < 0.8 ? 'bearish' : 'neutral'), oi.pcr > 1.2 ? '#00ff9c' : oi.pcr < 0.8 ? '#ef5350' : '#ffd54f');
+  function lvRow(label,val,color){body.appendChild(h('div',{class:'lvl-row'},h('span',{class:'lvl-lbl'},label),h('span',{class:'lvl-val',style:{color}},val)))}
+  if(cw&&spot){const d2=calcP(cw,spot);lvRow('↑ Call Wall',`+${Math.abs(d2).toFixed(1)}% ₹${fmtI(cw-spot)}`,'#4fc3f7')}
+  if(pw&&spot){const d2=calcP(spot,pw);lvRow('↓ Put Wall',`-${Math.abs(d2).toFixed(1)}% ₹${fmtI(spot-pw)}`,'#ff8a65')}
+  if(gf&&spot){const abv=spot>gf,d2=calcP(gf,spot);lvRow('γ Flip',(abv?'+':'-')+Math.abs(d2).toFixed(1)+'% ₹'+fmtI(gf),abv?'#00ff9c':'#ffd54f')}
+  if(oi.maxPain)lvRow('⊗ Max Pain','₹'+fmtI(oi.maxPain),'#a8c8e0');
+  if(oi.pcr>0)lvRow('⊕ PCR',oi.pcr.toFixed(2)+' — '+(oi.pcr>1.2?'bullish':oi.pcr<0.8?'bearish':'neutral'),oi.pcr>1.2?'#00ff9c':oi.pcr<0.8?'#ef5350':'#ffd54f');
 
-  if (st.ivEnvironment) p.appendChild(h('div', { style:{ fontSize:'7.5px', color:'#a0b8cc', marginTop:'6px' } }, 'IV env: ', h('span', { style:{ color:'#ffd54f' } }, st.ivEnvironment.replace(/_/g, ' '))));
-  if (st.straddlePrice > 0) {
-    const sr = h('div', { style:{ display:'flex', justifyContent:'space-between', fontSize:'9px', padding:'5px 0', borderTop:'1px solid #1a3040', marginTop:'6px' } });
-    sr.appendChild(h('span', { style:{ color:'#c8d8e8' } }, 'ATM Straddle'));
-    sr.appendChild(h('span', { style:{ color:'#e8f2ff', fontWeight:'700' } }, '₹' + fmt2(st.straddlePrice)));
-    p.appendChild(sr);
+  if(st.ivEnvironment){
+    const ivMap={RICH_SELL_PREMIUM:{label:'RICH — SELL PREMIUM',color:'#ef5350'},ELEVATED:{label:'ELEVATED',color:'#ff8a65'},NORMAL:{label:'NORMAL',color:'#a0b8cc'},CHEAP_BUY_OPTIONS:{label:'CHEAP — BUY OPTIONS',color:'#00ff9c'},VERY_CHEAP:{label:'VERY CHEAP',color:'#00ff9c'},MIXED_IV:{label:'MIXED IV',color:'#ffd54f'}};
+    const iv=ivMap[st.ivEnvironment]||{label:st.ivEnvironment.replace(/_/g,' '),color:'#a0b8cc'};
+    body.appendChild(h('div',{style:{fontSize:'8px',color:'#a0b8cc',marginTop:'6px',display:'flex',alignItems:'center',gap:'4px'}},
+      h('span',{},'IV env:'),h('span',{style:{color:iv.color,fontWeight:'700'}},iv.label)
+    ));
+    if(st.ivEnvironment==='MIXED_IV'){
+      body.appendChild(h('div',{style:{fontSize:'7px',color:'#ffd54f88',marginTop:'3px',lineHeight:'1.5',padding:'3px 5px',background:'#1a100033',borderRadius:'2px',border:'1px solid #ffd54f22'}},'IV Rank high vs history but cheap vs realized. Avoid premium selling.'));
+    }
   }
-  return p;
+  if(st.straddlePrice>0){
+    body.appendChild(h('div',{class:'straddle-row'},h('span',{style:{color:'var(--t2)'}},'ATM Straddle'),h('span',{style:{color:'var(--t1)',fontWeight:'700'}},'₹'+fmt2(st.straddlePrice))));
+  }
+  p.appendChild(body);return p;
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 //  MAIN RENDER
-// ═══════════════════════════════════════════════════════════════
-function renderPanels() {
-  const d = STATE[active];
-  const g = GANN[active];
-  const panels = document.getElementById('panels');
-  panels.innerHTML = '';
+// ═══════════════════════════════════════════════════════════════════════════
+function renderPanels(){
+  const d=STATE[active];
+  const g=GANN[active];
+  const panels=document.getElementById('panels');
+  panels.innerHTML='';
   panels.appendChild(renderGEX(d));
   panels.appendChild(renderOI(d));
   panels.appendChild(renderGann(g));
   panels.appendChild(renderStructure(d));
 }
 
-function render() {
-  renderToolbar();
-  renderScoreCard();
+function render(){
+  renderTopbar();
+  renderTicker();
+  renderISKRow();
   renderPanels();
 }
 
 render();
-// Refresh market status every 30s (handles 9:15 open / 3:30 close transitions)
-setInterval(() => render(), 30_000);
+setInterval(()=>render(),30000);
 </script>
 </body>
 </html>
