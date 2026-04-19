@@ -14,7 +14,6 @@ const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
 
-// FIX BUG 1: import setLTPTickHandler so we can wire it BEFORE startCoordinator
 const { startStreamer, stopStreamer, setOITickHandler, setLTPTickHandler } = require("./services/upstoxStream");
 const { commoditiesRoute }  = require("./api/commodities");
 const {
@@ -34,8 +33,10 @@ const {
 
 const { attachSocketIO } = require("./api/websocket");
 
-// FIX BUG 2+5: import setToken so we can inject token before startIndexCandleFetcher
 const { startIndexCandleFetcher, setToken: setICFToken, getDebugInfo } = require("./services/intelligence/indexCandleFetcher");
+
+// ── Market Scanner ────────────────────────────────────────────────────────────
+const { startMarketScanner, getScannerData, getTechnicalsREST } = require("./services/intelligence/marketScanner");
 
 const app    = express();
 const server = http.createServer(app);
@@ -64,7 +65,6 @@ let upstoxTokenExpiry = null;
 let instrumentMap = {};
 
 async function loadInstrumentMaster() {
-  // ── 1. Try disk cache (valid for 24 h) ──────────────────────────────────────
   try {
     if (fs.existsSync(INSTRUMENT_FILE)) {
       const cached = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
@@ -77,14 +77,13 @@ async function loadInstrumentMaster() {
     }
   } catch (e) { /* rebuild below */ }
 
-  // ── 2. Fetch from Upstox CDN ────────────────────────────────────────────────
   try {
     console.log("📥 Fetching Upstox instrument master...");
     const res = await axios.get(
       "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
       { timeout: 30_000, responseType: "arraybuffer" }
     );
-    const zlib        = require("zlib");
+    const zlib         = require("zlib");
     const decompressed = zlib.gunzipSync(Buffer.from(res.data));
     const instruments  = JSON.parse(decompressed.toString("utf8"));
     const map = {};
@@ -220,12 +219,7 @@ loadInstrumentMaster()
   .finally(() => {
     setOITickHandler(handleOITick);
 
-    // ── FIX BUG 1: wire LTP handler BEFORE startCoordinator ──────────────────
-    // Previously setLTPTickHandler was called AFTER startCoordinator.
-    // startCoordinator → startGannIntegration → registers onNewLTP callback.
-    // But ltpTickHandler in upstoxStream was still null for first 10-30s of
-    // ticks → Gann never received a price → panel stayed blank.
-    // Fix: wire it first so zero ticks are lost.
+    // FIX BUG 1: wire LTP handler BEFORE startCoordinator so no ticks are lost
     const { registerLTPTick } = require("./coordinator");
     setLTPTickHandler(registerLTPTick);
 
@@ -238,15 +232,14 @@ loadInstrumentMaster()
     startNSEDealsListener(io);
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
 
-    // ── FIX BUG 2+5: inject token before startIndexCandleFetcher ─────────────
-    // indexCandleFetcher has setToken() for exactly this — but it was never
-    // called in server.js. Without it, getToken() returns null on first attempt
-    // → retryFetchAll() kicks in (4-16s delay) → HV data missing first cycle.
-    // Fix: call setICFToken() first so fetchAll() succeeds immediately.
+    // FIX BUG 2+5: inject token before startIndexCandleFetcher
     if (upstoxAccessToken) {
       setICFToken(upstoxAccessToken);
     }
     startIndexCandleFetcher();
+
+    // Market Scanner
+    startMarketScanner(io);
 
     const PORT = process.env.PORT || 10000;
     server.listen(PORT, () => {
@@ -296,10 +289,7 @@ app.get("/auth/upstox/callback", async (req, res) => {
     upstoxTokenExpiry = Date.now() + (response.data.expires_in || 86400) * 1000;
     saveToken(upstoxAccessToken, upstoxTokenExpiry);
     console.log("Upstox token saved, expires:", new Date(upstoxTokenExpiry).toISOString());
-
-    // Also update indexCandleFetcher token when user re-authenticates
     setICFToken(upstoxAccessToken);
-
     startStreamer(upstoxAccessToken, io);
     res.send(
       "<html><body style='background:#010812;color:#00ff9c;font-family:monospace;padding:40px;text-align:center'>" +
@@ -373,19 +363,16 @@ app.get("/api/commodities", commoditiesRoute);
 // ── /health ───────────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
   res.json({
-    status:         "ok",
-    upstox:         (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) ? "connected" : "disconnected",
-    instrumentMap:  Object.keys(instrumentMap).length,
+    status:        "ok",
+    upstox:        (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) ? "connected" : "disconnected",
+    instrumentMap: Object.keys(instrumentMap).length,
   });
 });
 
 // ── /api/debug/hv ─────────────────────────────────────────────────────────────
 app.get("/api/debug/hv", (req, res) => {
-  try {
-    res.json(getDebugInfo());
-  } catch (e) {
-    res.json({ error: e.message });
-  }
+  try { res.json(getDebugInfo()); }
+  catch (e) { res.json({ error: e.message }); }
 });
 
 // ── /api/test-circuit ─────────────────────────────────────────────────────────
@@ -605,6 +592,36 @@ async function searchBSE(q) {
   } catch { /* ok */ }
   return [];
 }
+
+// ── /api/scanner ──────────────────────────────────────────────────────────────
+app.get("/api/scanner", (req, res) => {
+  const d = getScannerData();
+  if (!d.updatedAt) return res.json({ error: "Scanner not yet ready — first scan in progress" });
+  res.json({
+    gainers:  d.gainers  || [],
+    losers:   d.losers   || [],
+    byMcap:   d.byMcap   || {},
+    bySector: d.bySector || [],
+    market: {
+      advancing: d.advancing  || 0,
+      declining: d.declining  || 0,
+      unchanged: d.unchanged  || 0,
+      total:     d.totalCount || 0,
+    },
+    updatedAt: d.updatedAt,
+  });
+});
+
+// ── /api/scanner/technicals/:symbol ──────────────────────────────────────────
+app.get("/api/scanner/technicals/:symbol", async (req, res) => {
+  try {
+    const result = await getTechnicalsREST(req.params.symbol.toUpperCase());
+    if (!result) return res.json({ error: "No data for this symbol — try again after first scan" });
+    res.json(result);
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
 
 // ── /api/admin/backfill ───────────────────────────────────────────────────────
 app.get("/api/admin/backfill", async (req, res) => {
