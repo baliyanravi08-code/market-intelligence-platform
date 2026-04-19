@@ -5,6 +5,7 @@ import CircuitAlerts from "./components/CircuitAlerts";
 import OptionChain from "./pages/OptionChain";
 import ScoresPage from "./pages/ScoresPage";
 import OptionsIntelligencePage from "./pages/OptionsIntelligencePage";
+import MarketScannerPage from "./pages/MarketScannerPage";
 import GannBadge from "./components/GannBadge";
 
 const SIGNAL_COLOR = {
@@ -308,25 +309,19 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
-// ─── TICKER MODAL — FIXED ─────────────────────────────────────────────────────
-// ONLY CHANGE: replaced broken Upstox redirect (type:"upstox") with embedded
-// TradingView iframe for all Indian indices. Everything else is identical.
-
 function TickerModal({ item, onClose }) {
   if (!item) return null;
 
-  // ── FIX: unified TV symbol map (replaces the old getChartConfig) ──────────
   const TV_SYMBOLS = {
-  "NIFTY 50":   "NSE:NIFTY",
-  "SENSEX":     "BSE:SENSEX",
-  "BANK NIFTY": "NSE:BANKNIFTY",
-  "BTC":        "BINANCE:BTCUSDT",
-  "GOLD":       "TVC:GOLD",
-  "SILVER":     "TVC:SILVER",
-};
-const tvSymbol = TV_SYMBOLS[item.name] || null;
+    "NIFTY 50":   "NSE:NIFTY",
+    "SENSEX":     "BSE:SENSEX",
+    "BANK NIFTY": "NSE:BANKNIFTY",
+    "BTC":        "BINANCE:BTCUSDT",
+    "GOLD":       "TVC:GOLD",
+    "SILVER":     "TVC:SILVER",
+  };
+  const tvSymbol = TV_SYMBOLS[item.name] || null;
   const isPI     = item.name === "PI";
-  // ─────────────────────────────────────────────────────────────────────────
 
   const isUp   = item.up === true  || (item.change24h ?? 0) > 0;
   const isDown = item.up === false || (item.change24h ?? 0) < 0;
@@ -345,7 +340,6 @@ const tvSymbol = TV_SYMBOLS[item.name] || null;
         onClick={e => e.stopPropagation()}
         style={{ background: "#030e1e", border: "1px solid #0d3560", borderRadius: 10, width: "94vw", maxWidth: 760, maxHeight: "88vh", display: "flex", flexDirection: "column", boxShadow: "0 0 60px rgba(0,150,255,0.18)", overflow: "hidden" }}
       >
-        {/* Header — unchanged */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "14px 16px 12px", borderBottom: "1px solid #0a2540", background: "linear-gradient(90deg, #020d1f, #041828)", flexShrink: 0 }}>
           <div>
             <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, fontWeight: 700, color: "#00cfff" }}>{item.name}</div>
@@ -357,30 +351,27 @@ const tvSymbol = TV_SYMBOLS[item.name] || null;
           <button onClick={onClose} style={{ background: "none", border: "none", color: "#2a5070", fontSize: 18, cursor: "pointer", padding: "0 0 0 12px", flexShrink: 0 }}>✕</button>
         </div>
 
-        {/* Chart body — FIXED: all known symbols now render a TV iframe */}
         <div style={{ flex: 1, minHeight: 420, flexShrink: 0 }}>
           {tvSymbol && (
-  <iframe
-    key={tvSymbol}
-    src={
-      "https://s.tradingview.com/widgetembed/?frameElementId=tv_chart" +
-      "&symbol=" + encodeURIComponent(tvSymbol) +
-      "&interval=5" +
-      "&hidesidetoolbar=0&hidetoptoolbar=0" +
-      "&symboledit=1&saveimage=0" +
-      "&toolbarbg=020c1a&theme=dark&style=1" +
-      "&timezone=Asia%2FKolkata" +
-      "&withdateranges=1&locale=en" +
-      "&utm_source=" + encodeURIComponent(window.location.hostname) +
-      "&utm_medium=widget&utm_campaign=chart"
-    }
-    style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }}
-    allowFullScreen
-    title={item.name + " Chart"}
-  />
-)}
-
-          {/* PI network — no TV widget */}
+            <iframe
+              key={tvSymbol}
+              src={
+                "https://s.tradingview.com/widgetembed/?frameElementId=tv_chart" +
+                "&symbol=" + encodeURIComponent(tvSymbol) +
+                "&interval=5" +
+                "&hidesidetoolbar=0&hidetoptoolbar=0" +
+                "&symboledit=1&saveimage=0" +
+                "&toolbarbg=020c1a&theme=dark&style=1" +
+                "&timezone=Asia%2FKolkata" +
+                "&withdateranges=1&locale=en" +
+                "&utm_source=" + encodeURIComponent(window.location.hostname) +
+                "&utm_medium=widget&utm_campaign=chart"
+              }
+              style={{ width: "100%", height: "100%", border: "none", display: "block", minHeight: 420 }}
+              allowFullScreen
+              title={item.name + " Chart"}
+            />
+          )}
           {isPI && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 420, color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8 }}>
               <span style={{ fontSize: 32 }}>π</span>
@@ -388,8 +379,6 @@ const tvSymbol = TV_SYMBOLS[item.name] || null;
               <a href="https://coinmarketcap.com/currencies/pi-network/" target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: "#00cfff", fontSize: 10 }}>View on CoinMarketCap ↗</a>
             </div>
           )}
-
-          {/* Unknown ticker */}
           {!tvSymbol && !isPI && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 420, color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8 }}>
               <span style={{ fontSize: 32 }}>📊</span>
@@ -398,14 +387,9 @@ const tvSymbol = TV_SYMBOLS[item.name] || null;
           )}
         </div>
 
-        {/* Footer — unchanged */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid #0a2540", background: "#020b18", flexShrink: 0 }}>
           <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#1a4060" }}>
-            {tvSymbol
-              ? "TradingView · 5-min chart · NIFTY Index data"
-              : isPI
-              ? "π PI Network · CoinMarketCap"
-              : ""}
+            {tvSymbol ? "TradingView · 5-min chart · NIFTY Index data" : isPI ? "π PI Network · CoinMarketCap" : ""}
           </span>
           {tvSymbol && (
             <a
@@ -718,8 +702,6 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
   );
 }
 
-// ─── RADAR PANEL — now accepts gannMap ───────────────────────────────────────
-
 function RadarPanel({ filteredRadar, radarQuery, setRadarQuery, compositeMap, gannMap }) {
   return (
     <div className="panel radar-panel">
@@ -911,7 +893,8 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
   const isOptions      = currentPage === "options";
   const isScores       = currentPage === "scores";
   const isOptionsIntel = currentPage === "options-intel";
-  const isAltPage      = isOptions || isScores || isOptionsIntel;
+  const isScanner      = currentPage === "scanner";
+  const isAltPage      = isOptions || isScores || isOptionsIntel || isScanner;
 
   return (
     <div className="header">
@@ -920,7 +903,6 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
         <span className="title">Market Intelligence</span>
         <MarketStatus />
 
-        {/* Options page button */}
         <button
           className={`options-nav-btn${isOptions ? " active" : ""}`}
           onClick={() => setCurrentPage(isOptions ? "dashboard" : "options")}
@@ -931,7 +913,6 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           {isOptions && <span className="options-nav-back">←</span>}
         </button>
 
-        {/* Scores page button */}
         <button
           className={`options-nav-btn${isScores ? " active" : ""}`}
           onClick={() => setCurrentPage(isScores ? "dashboard" : "scores")}
@@ -943,7 +924,6 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           {isScores && <span className="options-nav-back">←</span>}
         </button>
 
-        {/* Options Intelligence page button — NEW */}
         <button
           className={`options-nav-btn${isOptionsIntel ? " active" : ""}`}
           onClick={() => setCurrentPage(isOptionsIntel ? "dashboard" : "options-intel")}
@@ -953,6 +933,18 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           <span className="options-nav-icon">📐</span>
           <span className="options-nav-label">{isOptionsIntel ? "Dashboard" : "OI Intel"}</span>
           {isOptionsIntel && <span className="options-nav-back">←</span>}
+        </button>
+
+        {/* ── SCANNER BUTTON — NEW ── */}
+        <button
+          className={`options-nav-btn${isScanner ? " active" : ""}`}
+          onClick={() => setCurrentPage(isScanner ? "dashboard" : "scanner")}
+          title="Market Scanner — Gainers, Losers, Technicals"
+          style={{ marginLeft: 4 }}
+        >
+          <span className="options-nav-icon">📊</span>
+          <span className="options-nav-label">{isScanner ? "Dashboard" : "Scanner"}</span>
+          {isScanner && <span className="options-nav-back">←</span>}
         </button>
 
         {needsConnect && !isAltPage && (
@@ -1017,12 +1009,10 @@ export default function App() {
   const [selectedTicker,   setSelectedTicker]   = useState(null);
   const [socket,           setSocket]           = useState(null);
 
-  // Composite scores: map of symbol → score object for badge lookups
   const [compositeScores, setCompositeScores] = useState([]);
   const compositeMap = {};
   compositeScores.forEach(s => { compositeMap[s.symbol] = s; });
 
-  // Gann signals: map of symbol → gann signal object — NEW
   const [gannSignals, setGannSignals] = useState([]);
   const gannMap = {};
   gannSignals.forEach(g => { gannMap[g.symbol] = g; });
@@ -1074,7 +1064,6 @@ export default function App() {
       });
     });
 
-    // Gann signals — NEW
     sock.on("gann-signal", (signal) => {
       if (!signal?.symbol) return;
       setGannSignals(prev => {
@@ -1084,33 +1073,35 @@ export default function App() {
     });
 
     sock.on("upstox-status", ({ connected }) => { if (!connected) setTickerSource("connecting"); });
-    sock.on("nse_events", (events) => {
-  if (!Array.isArray(events)) return;
-  setNseEvents(prev => {
-    const combined = [...events, ...prev];
-    const seen = new Set();
-    return combined.filter(e => {
-      const key = `${e.company}||${(e.title||"").substring(0,60)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, 200);
-  });
-});
 
-sock.on("bse_events", (events) => {
-  if (!Array.isArray(events)) return;
-  setBseEvents(prev => {
-    const combined = [...events, ...prev];
-    const seen = new Set();
-    return combined.filter(e => {
-      const key = `${e.company}||${(e.title||"").substring(0,60)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, 200);
-  });
-});
+    sock.on("nse_events", (events) => {
+      if (!Array.isArray(events)) return;
+      setNseEvents(prev => {
+        const combined = [...events, ...prev];
+        const seen = new Set();
+        return combined.filter(e => {
+          const key = `${e.company}||${(e.title||"").substring(0,60)}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 200);
+      });
+    });
+
+    sock.on("bse_events", (events) => {
+      if (!Array.isArray(events)) return;
+      setBseEvents(prev => {
+        const combined = [...events, ...prev];
+        const seen = new Set();
+        return combined.filter(e => {
+          const key = `${e.company}||${(e.title||"").substring(0,60)}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 200);
+      });
+    });
+
     sock.on("disconnect", () => { setTickerSource("error"); });
 
     return () => sock.disconnect();
@@ -1377,7 +1368,7 @@ sock.on("bse_events", (events) => {
     );
   }
 
-  // ── Options Intelligence page — NEW ────────────────────────────────────────
+  // ── Options Intelligence page ──────────────────────────────────────────────
   if (currentPage === "options-intel") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
@@ -1385,6 +1376,20 @@ sock.on("bse_events", (events) => {
         {sharedTicker}
         <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
           <OptionsIntelligencePage socket={socket} />
+        </div>
+        <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
+      </div>
+    );
+  }
+
+  // ── Market Scanner page — NEW ──────────────────────────────────────────────
+  if (currentPage === "scanner") {
+    return (
+      <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
+        {sharedHeader}
+        {sharedTicker}
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          <MarketScannerPage socket={socket} />
         </div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
@@ -1412,6 +1417,7 @@ sock.on("bse_events", (events) => {
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("options")}>⚡ OI</button>
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("scores")}>🏆 SCR</button>
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("options-intel")}>📐 OI Intel</button>
+          <button className="mobile-tab-btn" onClick={() => setCurrentPage("scanner")}>📊 Scan</button>
         </div>
         <div className="mobile-panel-wrap">
           {mobilePanelTab === "intel"        && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />}
