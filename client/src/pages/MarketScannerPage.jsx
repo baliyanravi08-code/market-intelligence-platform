@@ -130,7 +130,6 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
                       stock.mcapBucket === "smallcap" ? "#ce93d8" : "#888",
         }}>{stock.mcapLabel || "—"}</span>
       </td>
-      {/* Technicals (shown when available) */}
       <td style={{ padding: "7px 8px" }}>
         {tech ? <RSIBar value={tech.rsi} /> : <span style={{ color: "#333", fontSize: 11 }}>—</span>}
       </td>
@@ -176,7 +175,6 @@ function TechPanel({ symbol, tech, onClose }) {
         </div>
       ) : (
         <>
-          {/* Score */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "14px 16px", marginBottom: 16, textAlign: "center",
@@ -192,7 +190,6 @@ function TechPanel({ symbol, tech, onClose }) {
             }}>{tech.bias}</div>
           </div>
 
-          {/* EMAs */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 11, color: "#555", fontWeight: 700, letterSpacing: "1px", marginBottom: 8 }}>MOVING AVERAGES</div>
             {[
@@ -216,7 +213,6 @@ function TechPanel({ symbol, tech, onClose }) {
             })}
           </div>
 
-          {/* RSI */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "12px 14px", marginBottom: 12,
@@ -247,7 +243,6 @@ function TechPanel({ symbol, tech, onClose }) {
             </div>
           </div>
 
-          {/* MACD */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "12px 14px", marginBottom: 12,
@@ -282,7 +277,6 @@ function TechPanel({ symbol, tech, onClose }) {
             ) : <span style={{ color: "#444" }}>Insufficient data</span>}
           </div>
 
-          {/* Bollinger Bands */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "12px 14px", marginBottom: 12,
@@ -322,7 +316,6 @@ function TechPanel({ symbol, tech, onClose }) {
             ) : <span style={{ color: "#444" }}>Insufficient data</span>}
           </div>
 
-          {/* MA Summary (TradingView style) */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "12px 14px", marginBottom: 12,
@@ -365,7 +358,7 @@ function TechPanel({ symbol, tech, onClose }) {
 }
 
 // ── Gainers/Losers Card ───────────────────────────────────────────────────────
-function GainLossCard({ title, stocks, onSelect, color: cardColor }) {
+function GainLossCard({ title, stocks, onSelect, color: cardColor, onViewAll, tabId }) {
   return (
     <div style={{
       background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 10,
@@ -377,10 +370,22 @@ function GainLossCard({ title, stocks, onSelect, color: cardColor }) {
         display: "flex", justifyContent: "space-between", alignItems: "center",
       }}>
         <span style={{ fontWeight: 800, fontSize: 12, color: cardColor, letterSpacing: "0.8px" }}>{title}</span>
-        <span style={{ fontSize: 10, color: "#444" }}>{stocks.length} stocks</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 10, color: "#444" }}>{stocks.length} stocks</span>
+          {/* FIX 1: "View All" scrolls down to the tab table */}
+          <button
+            onClick={onViewAll}
+            style={{
+              fontSize: 9, color: cardColor, background: `${cardColor}18`,
+              border: `1px solid ${cardColor}44`, borderRadius: 3,
+              padding: "2px 7px", cursor: "pointer", fontWeight: 700,
+              letterSpacing: "0.5px",
+            }}
+          >VIEW ALL ↓</button>
+        </div>
       </div>
       <div style={{ maxHeight: 320, overflowY: "auto" }}>
-        {stocks.slice(0, 15).map((s, i) => (
+        {stocks.slice(0, 15).map((s) => (
           <div key={s.symbol} onClick={() => onSelect(s.symbol)}
             style={{
               display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -441,32 +446,46 @@ function SectorBar({ sector }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function MarketScannerPage() {
+  // FIX 2: store data in a ref AND state so socket handlers always see latest value
   const [data,          setData]          = useState(null);
-  const [stocks,        setStocks]        = useState([]);
+  const dataRef = useRef(null);
+
   const [selectedSym,   setSelectedSym]   = useState(null);
   const [tech,          setTech]          = useState(null);
   const [techLoading,   setTechLoading]   = useState(false);
-  const [tab,           setTab]           = useState("gainers");    // gainers|losers|largecap|midcap|smallcap|microcap|sector
+  const [tab,           setTab]           = useState("gainers");
   const [sortBy,        setSortBy]        = useState("gainers");
   const [searchQ,       setSearchQ]       = useState("");
   const [updatedAt,     setUpdatedAt]     = useState(null);
-  const socketRef = useRef(null);
+
+  const socketRef    = useRef(null);
   const techCacheRef = useRef({});
+  const tabRef       = useRef(tab);           // FIX 2: always-current tab ref
+  const tableRef     = useRef(null);          // FIX 1: scroll target
+
+  // Keep tabRef in sync
+  useEffect(() => { tabRef.current = tab; }, [tab]);
+
+  // FIX 2: derive stocks from data + tab (no stale closure)
+  const getStocksForTab = useCallback((d, t) => {
+    if (!d) return [];
+    if (t === "gainers")  return d.gainers          || [];
+    if (t === "losers")   return d.losers           || [];
+    if (t === "largecap") return d.byMcap?.largecap || [];
+    if (t === "midcap")   return d.byMcap?.midcap   || [];
+    if (t === "smallcap") return d.byMcap?.smallcap || [];
+    if (t === "microcap") return d.byMcap?.microcap || [];
+    return [];
+  }, []);
 
   useEffect(() => {
     const socket = getSocket();
     socketRef.current = socket;
 
     socket.on("scanner-update", (d) => {
+      dataRef.current = d;           // FIX 2: update ref immediately
       setData(d);
       setUpdatedAt(new Date(d.updatedAt));
-      // Default stock list
-      if (tab === "gainers")  setStocks(d.gainers  || []);
-      if (tab === "losers")   setStocks(d.losers   || []);
-      if (tab === "largecap") setStocks(d.byMcap?.largecap || []);
-      if (tab === "midcap")   setStocks(d.byMcap?.midcap   || []);
-      if (tab === "smallcap") setStocks(d.byMcap?.smallcap || []);
-      if (tab === "microcap") setStocks(d.byMcap?.microcap || []);
     });
 
     socket.on("scanner-technicals", (t) => {
@@ -481,18 +500,7 @@ export default function MarketScannerPage() {
       socket.off("scanner-update");
       socket.off("scanner-technicals");
     };
-  }, [tab, selectedSym]);
-
-  // Switch tab
-  useEffect(() => {
-    if (!data) return;
-    if (tab === "gainers")  setStocks(data.gainers  || []);
-    else if (tab === "losers")   setStocks(data.losers   || []);
-    else if (tab === "largecap") setStocks(data.byMcap?.largecap || []);
-    else if (tab === "midcap")   setStocks(data.byMcap?.midcap   || []);
-    else if (tab === "smallcap") setStocks(data.byMcap?.smallcap || []);
-    else if (tab === "microcap") setStocks(data.byMcap?.microcap || []);
-  }, [tab, data]);
+  }, [selectedSym]);
 
   // Select symbol → load technicals
   const handleSelect = useCallback((symbol) => {
@@ -507,7 +515,18 @@ export default function MarketScannerPage() {
     }
   }, []);
 
-  // Filtered stocks
+  // FIX 1: clicking "View All" on a card switches tab + scrolls to table
+  const handleViewAll = useCallback((tabId) => {
+    setTab(tabId);
+    setSortBy(tabId === "losers" ? "losers" : "gainers");
+    setTimeout(() => {
+      tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }, []);
+
+  // Current stock list derived fresh every render (no stale state)
+  const stocks = getStocksForTab(data, tab);
+
   const filtered = searchQ
     ? stocks.filter(s =>
         s.symbol.includes(searchQ.toUpperCase()) ||
@@ -551,7 +570,6 @@ export default function MarketScannerPage() {
           <div style={{ fontSize: 10, color: "#555" }}>NSE · BSE · Live + Historical</div>
         </div>
 
-        {/* Market breadth pills */}
         {data?.market && (
           <div style={{ display: "flex", gap: 8, marginLeft: 8 }}>
             <div style={{ background: "#00e67611", border: "1px solid #00e67633", borderRadius: 20, padding: "3px 12px", fontSize: 11, color: "#00e676", fontWeight: 700 }}>
@@ -571,131 +589,151 @@ export default function MarketScannerPage() {
         </div>
       </div>
 
-      <div style={{ display: "flex", height: "calc(100vh - 57px)" }}>
-        {/* ── Main content ── */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px 20px" }}>
+      {/* FIX 3: whole page scrolls, not a nested div — remove fixed height */}
+      <div style={{ padding: "16px 20px 40px" }}>
 
-          {/* Top strip: gainers + losers */}
-          {data && (
-            <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
-              <GainLossCard title="TOP GAINERS" stocks={data.gainers || []} onSelect={handleSelect} color="#00e676" />
-              <GainLossCard title="TOP LOSERS"  stocks={data.losers  || []} onSelect={handleSelect} color="#ff4444" />
-            </div>
-          )}
-
-          {/* Tabs */}
-          <div style={{ display: "flex", gap: 4, marginBottom: 14, flexWrap: "wrap" }}>
-            {TABS.map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)} style={{
-                padding: "5px 14px", borderRadius: 4, fontSize: 11, fontWeight: 700,
-                cursor: "pointer", border: "1px solid",
-                borderColor: tab === t.id ? t.color : "#1e2a3a",
-                background:  tab === t.id ? `${t.color}18` : "#0a0f16",
-                color:       tab === t.id ? t.color : "#555",
-                transition: "all 0.15s", letterSpacing: "0.5px",
-              }}>{t.label}</button>
-            ))}
+        {/* Top strip: gainers + losers */}
+        {data && (
+          <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+            <GainLossCard
+              title="TOP GAINERS"
+              stocks={data.gainers || []}
+              onSelect={handleSelect}
+              color="#00e676"
+              onViewAll={() => handleViewAll("gainers")}
+            />
+            <GainLossCard
+              title="TOP LOSERS"
+              stocks={data.losers || []}
+              onSelect={handleSelect}
+              color="#ff4444"
+              onViewAll={() => handleViewAll("losers")}
+            />
           </div>
+        )}
 
-          {/* Sector view */}
-          {tab === "sector" ? (
-            <div style={{ background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 10, padding: "14px 16px" }}>
-              <div style={{ fontSize: 11, color: "#555", fontWeight: 700, letterSpacing: "1px", marginBottom: 10 }}>
-                SECTOR PERFORMANCE — NSE 500
-              </div>
-              {(data?.bySector || []).map(s => (
-                <SectorBar key={s.sector} sector={s} />
-              ))}
-            </div>
-          ) : (
-            <>
-              {/* Search + sort bar */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}>
-                <input
-                  placeholder="Search symbol or name…"
-                  value={searchQ}
-                  onChange={e => setSearchQ(e.target.value)}
-                  style={{
-                    background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 6,
-                    color: "#ccc", padding: "6px 12px", fontSize: 12, width: 220,
-                    outline: "none", fontFamily: "inherit",
-                  }}
-                />
-                <div style={{ display: "flex", gap: 4 }}>
-                  {[
-                    { id: "gainers", label: "% Chg ↑" },
-                    { id: "losers",  label: "% Chg ↓" },
-                    { id: "volume",  label: "Volume" },
-                    { id: "value",   label: "Value" },
-                  ].map(s => (
-                    <button key={s.id} onClick={() => setSortBy(s.id)} style={{
-                      padding: "5px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer",
-                      border: "1px solid", fontWeight: 700,
-                      borderColor: sortBy === s.id ? "#7986cb" : "#1e2a3a",
-                      background:  sortBy === s.id ? "#7986cb22" : "#0a0f16",
-                      color:       sortBy === s.id ? "#7986cb" : "#555",
-                    }}>{s.label}</button>
-                  ))}
-                </div>
-                <span style={{ marginLeft: "auto", fontSize: 11, color: "#444" }}>
-                  {sorted.length} stocks
-                </span>
-              </div>
-
-              {/* Stock table */}
-              {!data ? (
-                <div style={{ textAlign: "center", padding: "60px 0", color: "#444" }}>
-                  <div style={{ fontSize: 32, marginBottom: 8 }}>📡</div>
-                  <div>Fetching market data…</div>
-                  <div style={{ fontSize: 11, color: "#333", marginTop: 4 }}>NSE 500 live feed loading</div>
-                </div>
-              ) : (
-                <div style={{ background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 10, overflow: "hidden" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr style={{ background: "#080d14", borderBottom: "1px solid #1e2a3a" }}>
-                        {["#", "Symbol", "LTP", "Change", "Volume", "Cap", "RSI", "MACD", "Bollinger", "MA Signal"].map(h => (
-                          <th key={h} style={{
-                            padding: "8px 8px", fontSize: 10, color: "#444", fontWeight: 700,
-                            textAlign: h === "#" || h === "Symbol" ? "left" : h === "LTP" || h === "Change" || h === "Volume" ? "right" : "left",
-                            letterSpacing: "0.5px",
-                          }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sorted.slice(0, 100).map((s, i) => (
-                        <StockRow
-                          key={s.symbol}
-                          stock={s}
-                          rank={i + 1}
-                          onSelect={handleSelect}
-                          selected={selectedSym === s.symbol}
-                          tech={techCacheRef.current[s.symbol] || null}
-                        />
-                      ))}
-                    </tbody>
-                  </table>
-                  {sorted.length > 100 && (
-                    <div style={{ textAlign: "center", padding: "10px", fontSize: 11, color: "#444", borderTop: "1px solid #111" }}>
-                      Showing 100 of {sorted.length} — use search to filter
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
+        {/* Tabs — anchor point for scroll */}
+        <div ref={tableRef} style={{ display: "flex", gap: 4, marginBottom: 14, flexWrap: "wrap" }}>
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              padding: "5px 14px", borderRadius: 4, fontSize: 11, fontWeight: 700,
+              cursor: "pointer", border: "1px solid",
+              borderColor: tab === t.id ? t.color : "#1e2a3a",
+              background:  tab === t.id ? `${t.color}18` : "#0a0f16",
+              color:       tab === t.id ? t.color : "#555",
+              transition: "all 0.15s", letterSpacing: "0.5px",
+            }}>{t.label}</button>
+          ))}
         </div>
 
-        {/* ── Tech Panel ── */}
-        {selectedSym && (
-          <TechPanel
-            symbol={selectedSym}
-            tech={techLoading ? null : tech}
-            onClose={() => { setSelectedSym(null); setTech(null); }}
-          />
+        {/* Sector view */}
+        {tab === "sector" ? (
+          <div style={{ background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 10, padding: "14px 16px" }}>
+            <div style={{ fontSize: 11, color: "#555", fontWeight: 700, letterSpacing: "1px", marginBottom: 10 }}>
+              SECTOR PERFORMANCE — NSE 500
+            </div>
+            {(data?.bySector || []).map(s => (
+              <SectorBar key={s.sector} sector={s} />
+            ))}
+          </div>
+        ) : (
+          <>
+            {/* Search + sort bar */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}>
+              <input
+                placeholder="Search symbol or name…"
+                value={searchQ}
+                onChange={e => setSearchQ(e.target.value)}
+                style={{
+                  background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 6,
+                  color: "#ccc", padding: "6px 12px", fontSize: 12, width: 220,
+                  outline: "none", fontFamily: "inherit",
+                }}
+              />
+              <div style={{ display: "flex", gap: 4 }}>
+                {[
+                  { id: "gainers", label: "% Chg ↑" },
+                  { id: "losers",  label: "% Chg ↓" },
+                  { id: "volume",  label: "Volume" },
+                  { id: "value",   label: "Value" },
+                ].map(s => (
+                  <button key={s.id} onClick={() => setSortBy(s.id)} style={{
+                    padding: "5px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer",
+                    border: "1px solid", fontWeight: 700,
+                    borderColor: sortBy === s.id ? "#7986cb" : "#1e2a3a",
+                    background:  sortBy === s.id ? "#7986cb22" : "#0a0f16",
+                    color:       sortBy === s.id ? "#7986cb" : "#555",
+                  }}>{s.label}</button>
+                ))}
+              </div>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: "#444" }}>
+                {sorted.length} stocks
+              </span>
+            </div>
+
+            {/* Stock table */}
+            {!data ? (
+              <div style={{ textAlign: "center", padding: "60px 0", color: "#444" }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📡</div>
+                <div>Fetching market data…</div>
+                <div style={{ fontSize: 11, color: "#333", marginTop: 4 }}>NSE 500 live feed loading</div>
+              </div>
+            ) : sorted.length === 0 ? (
+              // FIX 2: empty state so user knows tab data is missing vs loading
+              <div style={{ textAlign: "center", padding: "60px 0", color: "#444" }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
+                <div>No stocks in this category yet</div>
+                <div style={{ fontSize: 11, color: "#333", marginTop: 4 }}>
+                  Scanner may still be loading this segment
+                </div>
+              </div>
+            ) : (
+              <div style={{ background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 10, overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "#080d14", borderBottom: "1px solid #1e2a3a" }}>
+                      {["#", "Symbol", "LTP", "Change", "Volume", "Cap", "RSI", "MACD", "Bollinger", "MA Signal"].map(h => (
+                        <th key={h} style={{
+                          padding: "8px 8px", fontSize: 10, color: "#444", fontWeight: 700,
+                          textAlign: h === "#" || h === "Symbol" ? "left" : h === "LTP" || h === "Change" || h === "Volume" ? "right" : "left",
+                          letterSpacing: "0.5px",
+                          position: "sticky", top: 0, background: "#080d14", zIndex: 1,
+                        }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.slice(0, 100).map((s, i) => (
+                      <StockRow
+                        key={s.symbol}
+                        stock={s}
+                        rank={i + 1}
+                        onSelect={handleSelect}
+                        selected={selectedSym === s.symbol}
+                        tech={techCacheRef.current[s.symbol] || null}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+                {sorted.length > 100 && (
+                  <div style={{ textAlign: "center", padding: "10px", fontSize: 11, color: "#444", borderTop: "1px solid #111" }}>
+                    Showing 100 of {sorted.length} — use search to filter
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
+
+      {/* ── Tech Panel ── */}
+      {selectedSym && (
+        <TechPanel
+          symbol={selectedSym}
+          tech={techLoading ? null : tech}
+          onClose={() => { setSelectedSym(null); setTech(null); }}
+        />
+      )}
     </div>
   );
 }
