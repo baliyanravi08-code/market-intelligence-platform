@@ -489,32 +489,42 @@ export default function MarketScannerPage() {
       setUpdatedAt(new Date(d.updatedAt));
     });
 
-    socket.on("scanner-technicals", (t) => {
-      techCacheRef.current[t.symbol] = t;
-      // Use ref — never stale, no matter when the event fires
-      if (selectedSymRef.current === t.symbol) {
-        setTech(t);
-        setTechLoading(false);
-      }
-    });
-
     return () => {
       socket.off("scanner-update");
-      socket.off("scanner-technicals");
     };
-  }, []);   // run once — refs handle currency
+  }, []);
 
   // Select symbol → load technicals
-  const handleSelect = useCallback((symbol) => {
-    selectedSymRef.current = symbol;          // update ref first
+  const handleSelect = useCallback(async (symbol) => {
+    selectedSymRef.current = symbol;
     setSelectedSym(symbol);
+
+    // Serve from cache instantly if available
     if (techCacheRef.current[symbol]) {
       setTech(techCacheRef.current[symbol]);
       setTechLoading(false);
-    } else {
-      setTech(null);
-      setTechLoading(true);
-      socketRef.current?.emit("get-technicals", { symbol });
+      return;
+    }
+
+    // Use REST — reliable, no socket stale-closure issues
+    setTech(null);
+    setTechLoading(true);
+    try {
+      const res  = await fetch(`/api/scanner/technicals/${symbol}`);
+      const data = await res.json();
+      if (data && !data.error) {
+        techCacheRef.current[symbol] = data;
+        // Only update state if user hasn't switched to a different symbol
+        if (selectedSymRef.current === symbol) {
+          setTech(data);
+          setTechLoading(false);
+        }
+      } else {
+        if (selectedSymRef.current === symbol) setTechLoading(false);
+      }
+    } catch (e) {
+      console.error("Technicals fetch failed:", e);
+      if (selectedSymRef.current === symbol) setTechLoading(false);
     }
   }, []);
 
