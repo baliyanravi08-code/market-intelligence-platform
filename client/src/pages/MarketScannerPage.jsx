@@ -458,12 +458,13 @@ export default function MarketScannerPage() {
   const [searchQ,       setSearchQ]       = useState("");
   const [updatedAt,     setUpdatedAt]     = useState(null);
 
-  const socketRef    = useRef(null);
-  const techCacheRef = useRef({});
-  const tabRef       = useRef(tab);           // FIX 2: always-current tab ref
-  const tableRef     = useRef(null);          // FIX 1: scroll target
+  const socketRef      = useRef(null);
+  const techCacheRef   = useRef({});
+  const tabRef         = useRef(tab);
+  const tableRef       = useRef(null);
+  const selectedSymRef = useRef(null);        // FIX: always-current selectedSym
 
-  // Keep tabRef in sync
+  // Keep refs in sync
   useEffect(() => { tabRef.current = tab; }, [tab]);
 
   // FIX 2: derive stocks from data + tab (no stale closure)
@@ -490,7 +491,8 @@ export default function MarketScannerPage() {
 
     socket.on("scanner-technicals", (t) => {
       techCacheRef.current[t.symbol] = t;
-      if (selectedSym === t.symbol) {
+      // Use ref — never stale, no matter when the event fires
+      if (selectedSymRef.current === t.symbol) {
         setTech(t);
         setTechLoading(false);
       }
@@ -500,10 +502,11 @@ export default function MarketScannerPage() {
       socket.off("scanner-update");
       socket.off("scanner-technicals");
     };
-  }, [selectedSym]);
+  }, []);   // run once — refs handle currency
 
   // Select symbol → load technicals
   const handleSelect = useCallback((symbol) => {
+    selectedSymRef.current = symbol;          // update ref first
     setSelectedSym(symbol);
     if (techCacheRef.current[symbol]) {
       setTech(techCacheRef.current[symbol]);
@@ -731,7 +734,7 @@ export default function MarketScannerPage() {
         <TechPanel
           symbol={selectedSym}
           tech={techLoading ? null : tech}
-          onClose={() => { setSelectedSym(null); setTech(null); }}
+          onClose={() => { selectedSymRef.current = null; setSelectedSym(null); setTech(null); }}
         />
       )}
     </div>
