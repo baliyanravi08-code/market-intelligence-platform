@@ -14,6 +14,7 @@
  *   - Moving average summary (all timeframes): 1D/1W/1M signal
  *   - Sector-wise performance
  *   - Socket events: scanner-update, scanner-technicals
+ *   - Background tech cache pre-warming after every scan
  */
 
 const axios = require("axios");
@@ -21,9 +22,11 @@ const path  = require("path");
 const fs    = require("fs");
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const MCAP_DB_PATH  = path.join(__dirname, "../../data/marketCapDB.json");
-const SCAN_INTERVAL = 5 * 60 * 1000;   // refresh every 5 min during market hours
-const MAX_SYMBOLS   = 500;             // NSE top 500
+const MCAP_DB_PATH    = path.join(__dirname, "../../data/marketCapDB.json");
+const SCAN_INTERVAL   = 5 * 60 * 1000;   // refresh every 5 min during market hours
+const TECH_CACHE_TTL  = 15 * 60 * 1000;  // 15 min tech cache
+const PREWARM_DELAY   = 5000;            // start pre-warm 5s after scan
+const PREWARM_BETWEEN = 300;             // 300ms between each NSE request
 
 // ── NSE public endpoints (no auth needed) ────────────────────────────────────
 const NSE_BASE    = "https://www.nseindia.com";
@@ -37,10 +40,10 @@ const NSE_HEADERS = {
 
 // ── Market cap buckets (in Crores) ────────────────────────────────────────────
 const MCAP_BUCKETS = {
-  largecap:  { min: 20000,  label: "Large Cap" },
-  midcap:    { min: 5000,   max: 20000, label: "Mid Cap" },
-  smallcap:  { min: 500,    max: 5000,  label: "Small Cap" },
-  microcap:  { min: 0,      max: 500,   label: "Micro Cap" },
+  largecap:  { min: 20000,              label: "Large Cap"  },
+  midcap:    { min: 5000,  max: 20000,  label: "Mid Cap"   },
+  smallcap:  { min: 500,   max: 5000,   label: "Small Cap" },
+  microcap:  { min: 0,     max: 500,    label: "Micro Cap" },
 };
 
 // ── In-memory store ───────────────────────────────────────────────────────────
@@ -49,14 +52,19 @@ let scanCache = {
   losers:     [],
   allStocks:  [],
   byMcap:     { largecap: [], midcap: [], smallcap: [], microcap: [] },
-  bySector:   {},
+  bySector:   [],
   updatedAt:  0,
+  advancing:  0,
+  declining:  0,
+  unchanged:  0,
+  totalCount: 0,
 };
 
-let techCache = new Map();   // symbol → technical analysis result
-let nseCookie = "";
+let techCache    = new Map();  // symbol → technical analysis result
+let nseCookie    = "";
 let lastCookieAt = 0;
-let ioRef = null;
+let ioRef        = null;
+let preWarmTimer = null;       // track pre-warm so we don't stack runs
 
 // ── Token getter ──────────────────────────────────────────────────────────────
 let _getToken;
@@ -79,7 +87,7 @@ async function refreshNSECookie() {
       timeout: 15000,
     });
     const cookies = res.headers["set-cookie"] || [];
-    nseCookie = cookies.map(c => c.split(";")[0]).join("; ");
+    nseCookie    = cookies.map(c => c.split(";")[0]).join("; ");
     lastCookieAt = Date.now();
   } catch (e) {
     console.warn("📊 Scanner: NSE cookie refresh failed —", e.message);
@@ -90,9 +98,9 @@ async function refreshNSECookie() {
 async function fetchNSEMarketData(index = "NIFTY 500") {
   await refreshNSECookie();
   const indexMap = {
-    "NIFTY 50":    "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050",
-    "NIFTY 500":   "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500",
-    "NIFTY MIDCAP 100": "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20MIDCAP%20100",
+    "NIFTY 50":           "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050",
+    "NIFTY 500":          "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500",
+    "NIFTY MIDCAP 100":   "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20MIDCAP%20100",
     "NIFTY SMALLCAP 100": "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20SMALLCAP%20100",
   };
   const url = indexMap[index] || indexMap["NIFTY 500"];
@@ -125,8 +133,8 @@ function getMcapBucket(mcapCr) {
 
 function calcEMA(closes, period) {
   if (closes.length < period) return null;
-  const k = 2 / (period + 1);
-  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const k   = 2 / (period + 1);
+  let ema   = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
   for (let i = period; i < closes.length; i++) {
     ema = closes[i] * k + ema * (1 - k);
   }
@@ -145,13 +153,13 @@ function calcRSI(closes, period = 14) {
   let gains = 0, losses = 0;
   for (let i = 1; i < recent.length; i++) {
     const diff = recent[i] - recent[i - 1];
-    if (diff > 0) gains += diff;
-    else losses += Math.abs(diff);
+    if (diff > 0) gains  += diff;
+    else          losses += Math.abs(diff);
   }
-  const avgGain = gains / period;
+  const avgGain = gains  / period;
   const avgLoss = losses / period;
   if (avgLoss === 0) return 100;
-  const rs  = avgGain / avgLoss;
+  const rs = avgGain / avgLoss;
   return Math.round((100 - 100 / (1 + rs)) * 100) / 100;
 }
 
@@ -161,14 +169,14 @@ function calcMACD(closes) {
   if (!ema12 || !ema26) return null;
   const macdLine = Math.round((ema12 - ema26) * 100) / 100;
 
-  // Signal line: 9-day EMA of MACD — approximate using last 9 MACD values
+  // Signal: 9-day EMA of MACD series
   const macdSeries = [];
   for (let i = 26; i <= closes.length; i++) {
     const e12 = calcEMA(closes.slice(0, i), 12);
     const e26 = calcEMA(closes.slice(0, i), 26);
     if (e12 && e26) macdSeries.push(e12 - e26);
   }
-  const signal   = calcEMA(macdSeries, 9);
+  const signal    = calcEMA(macdSeries, 9);
   const histogram = signal ? Math.round((macdLine - signal) * 100) / 100 : null;
 
   return {
@@ -192,11 +200,11 @@ function calcBollingerBands(closes, period = 20, stdDevMult = 2) {
   const bPct   = Math.round(((ltp - lower) / (upper - lower)) * 100);
 
   let position;
-  if (ltp > upper)          position = "ABOVE_UPPER";
-  else if (ltp < lower)     position = "BELOW_LOWER";
-  else if (bPct > 70)       position = "NEAR_UPPER";
-  else if (bPct < 30)       position = "NEAR_LOWER";
-  else                      position = "MIDDLE";
+  if      (ltp > upper)  position = "ABOVE_UPPER";
+  else if (ltp < lower)  position = "BELOW_LOWER";
+  else if (bPct > 70)    position = "NEAR_UPPER";
+  else if (bPct < 30)    position = "NEAR_LOWER";
+  else                   position = "MIDDLE";
 
   return { upper, middle, lower, bandwidth: bWidth, percentB: bPct, position };
 }
@@ -218,25 +226,27 @@ function calcMASummary(closes, ltp) {
     sma200: calcSMA(closes, 200),
   };
 
-  // Count buy/sell/neutral signals
   let buy = 0, sell = 0, neutral = 0;
   const signals = {};
 
   for (const [key, val] of Object.entries({ ...emas, ...smas })) {
-    if (!val) { neutral++; signals[key] = { value: null, signal: "N/A" }; continue; }
-    if (ltp > val * 1.001)      { buy++;     signals[key] = { value: val, signal: "BUY"     }; }
+    if (!val) {
+      neutral++;
+      signals[key] = { value: null, signal: "N/A" };
+      continue;
+    }
+    if      (ltp > val * 1.001) { buy++;     signals[key] = { value: val, signal: "BUY"     }; }
     else if (ltp < val * 0.999) { sell++;    signals[key] = { value: val, signal: "SELL"    }; }
     else                        { neutral++; signals[key] = { value: val, signal: "NEUTRAL" }; }
   }
 
-  const total   = buy + sell + neutral;
-  const summary = buy > sell + 2   ? "STRONG BUY"
-                : buy > sell       ? "BUY"
-                : sell > buy + 2   ? "STRONG SELL"
-                : sell > buy       ? "SELL"
-                : "NEUTRAL";
+  const summary =
+    buy  > sell + 2 ? "STRONG BUY"  :
+    buy  > sell     ? "BUY"         :
+    sell > buy  + 2 ? "STRONG SELL" :
+    sell > buy      ? "SELL"        : "NEUTRAL";
 
-  return { buy, sell, neutral, total, summary, signals };
+  return { buy, sell, neutral, total: buy + sell + neutral, summary, signals };
 }
 
 // ── Full technical analysis for one symbol ────────────────────────────────────
@@ -247,17 +257,15 @@ function computeTechnicals(symbol, closes, ltp) {
   const macd   = calcMACD(closes);
   const bb     = calcBollingerBands(closes);
   const maSumm = calcMASummary(closes, ltp);
-
   const ema5   = calcEMA(closes, 5);
   const ema9   = calcEMA(closes, 9);
   const ema21  = calcEMA(closes, 21);
   const ema50  = calcEMA(closes, 50);
   const ema200 = calcEMA(closes, 200);
 
-  // Overall signal
   let techScore = 50;
-  if (rsi)  {
-    if (rsi > 70) techScore -= 10;
+  if (rsi) {
+    if      (rsi > 70) techScore -= 10;
     else if (rsi < 30) techScore += 10;
     else if (rsi > 55) techScore += 5;
     else if (rsi < 45) techScore -= 5;
@@ -275,14 +283,14 @@ function computeTechnicals(symbol, closes, ltp) {
   return {
     symbol,
     ltp,
-    emas:          { ema5, ema9, ema21, ema50, ema200 },
+    emas:           { ema5, ema9, ema21, ema50, ema200 },
     rsi,
     macd,
     bollingerBands: bb,
-    maSummary:     maSumm,
+    maSummary:      maSumm,
     techScore,
     bias,
-    computedAt:    Date.now(),
+    computedAt:     Date.now(),
   };
 }
 
@@ -292,9 +300,10 @@ async function fetchNSEHistorical(symbol, days = 365) {
   try {
     const toDate   = new Date();
     const fromDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-    const fmt      = d => `${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
-    const url      = `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmt(fromDate)}&to=${fmt(toDate)}&csv=false`;
-    const res      = await axios.get(url, {
+    const fmt      = d =>
+      `${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
+    const url = `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmt(fromDate)}&to=${fmt(toDate)}&csv=false`;
+    const res = await axios.get(url, {
       headers: { ...NSE_HEADERS, Cookie: nseCookie },
       timeout: 15000,
     });
@@ -309,6 +318,44 @@ async function fetchNSEHistorical(symbol, days = 365) {
   }
 }
 
+// ── Get technicals (cache-first) ──────────────────────────────────────────────
+async function getTechnicals(symbol) {
+  const cached = techCache.get(symbol);
+  if (cached && Date.now() - cached.computedAt < TECH_CACHE_TTL) return cached;
+
+  const stockData = scanCache.allStocks.find(s => s.symbol === symbol);
+  const ltp       = stockData?.ltp || 0;
+
+  const closes = await fetchNSEHistorical(symbol, 365);
+  if (closes.length < 20) return null;
+
+  const result = computeTechnicals(symbol, closes, ltp || closes[closes.length - 1]);
+  if (result) techCache.set(symbol, result);
+  return result;
+}
+
+// ── Background pre-warm: fetch technicals for top stocks silently ─────────────
+async function preWarmTechCache(symbols) {
+  if (!symbols.length) return;
+  console.log(`📊 Scanner: pre-warming tech cache for ${symbols.length} symbols…`);
+  let warmed = 0;
+  for (const sym of symbols) {
+    try {
+      // Skip if already fresh in cache
+      const cached = techCache.get(sym);
+      if (cached && Date.now() - cached.computedAt < TECH_CACHE_TTL) {
+        warmed++;
+        continue;
+      }
+      await getTechnicals(sym);
+      warmed++;
+      // Throttle — don't hammer NSE
+      await new Promise(r => setTimeout(r, PREWARM_BETWEEN));
+    } catch (_) {}
+  }
+  console.log(`📊 Scanner: pre-warm done — ${warmed}/${symbols.length} cached`);
+}
+
 // ── Main scanner ──────────────────────────────────────────────────────────────
 async function runScanner() {
   try {
@@ -320,20 +367,20 @@ async function runScanner() {
     try {
       const nifty500 = await fetchNSEMarketData("NIFTY 500");
       stocks = nifty500.map(s => ({
-        symbol:      s.symbol,
-        name:        s.meta?.companyName || s.symbol,
-        ltp:         parseFloat(s.lastPrice || 0),
-        change:      parseFloat(s.change || 0),
-        changePct:   parseFloat(s.pChange || 0),
-        open:        parseFloat(s.open || 0),
-        high:        parseFloat(s.dayHigh || 0),
-        low:         parseFloat(s.dayLow || 0),
-        prevClose:   parseFloat(s.previousClose || 0),
-        volume:      parseInt(s.totalTradedVolume || 0),
-        totalValue:  parseFloat(s.totalTradedValue || 0),
-        yearHigh:    parseFloat(s.yearHigh || 0),
-        yearLow:     parseFloat(s.yearLow || 0),
-        sector:      s.meta?.industry || "",
+        symbol:     s.symbol,
+        name:       s.meta?.companyName || s.symbol,
+        ltp:        parseFloat(s.lastPrice          || 0),
+        change:     parseFloat(s.change             || 0),
+        changePct:  parseFloat(s.pChange            || 0),
+        open:       parseFloat(s.open               || 0),
+        high:       parseFloat(s.dayHigh            || 0),
+        low:        parseFloat(s.dayLow             || 0),
+        prevClose:  parseFloat(s.previousClose      || 0),
+        volume:     parseInt (s.totalTradedVolume   || 0),
+        totalValue: parseFloat(s.totalTradedValue   || 0),
+        yearHigh:   parseFloat(s.yearHigh           || 0),
+        yearLow:    parseFloat(s.yearLow            || 0),
+        sector:     s.meta?.industry                || "",
       })).filter(s => s.ltp > 0);
     } catch (e) {
       console.warn("📊 Scanner: NSE 500 fetch failed —", e.message);
@@ -359,38 +406,29 @@ async function runScanner() {
     });
 
     // Sort gainers / losers
-    const sorted    = [...stocks].sort((a, b) => b.changePct - a.changePct);
-    const gainers   = sorted.filter(s => s.changePct > 0).slice(0, 20);
-    const losers    = [...sorted].reverse().filter(s => s.changePct < 0).slice(0, 20);
+    const sorted  = [...stocks].sort((a, b) => b.changePct - a.changePct);
+    const gainers = sorted.filter(s => s.changePct > 0).slice(0, 20);
+    const losers  = [...sorted].reverse().filter(s => s.changePct < 0).slice(0, 20);
 
     // Group by mcap
     const byMcap = { largecap: [], midcap: [], smallcap: [], microcap: [] };
-    for (const s of stocks) {
-      byMcap[s.mcapBucket]?.push(s);
-    }
+    for (const s of stocks) byMcap[s.mcapBucket]?.push(s);
 
-    // Group by sector
+    // Group by sector → performance summary
     const bySector = {};
     for (const s of stocks) {
       if (!s.sector) continue;
       if (!bySector[s.sector]) bySector[s.sector] = [];
       bySector[s.sector].push(s);
     }
-
-    // Sector performance summary
-    const sectorSummary = Object.entries(bySector).map(([sector, stocks]) => {
-      const avgChange = stocks.reduce((sum, s) => sum + s.changePct, 0) / stocks.length;
-      const advancing = stocks.filter(s => s.changePct > 0).length;
-      const declining = stocks.filter(s => s.changePct < 0).length;
-      return {
-        sector,
-        avgChange:  Math.round(avgChange * 100) / 100,
-        advancing,
-        declining,
-        total:      stocks.length,
-        topGainer:  stocks.sort((a, b) => b.changePct - a.changePct)[0],
-      };
-    }).sort((a, b) => b.avgChange - a.avgChange);
+    const sectorSummary = Object.entries(bySector).map(([sector, ss]) => ({
+      sector,
+      avgChange:  Math.round((ss.reduce((sum, s) => sum + s.changePct, 0) / ss.length) * 100) / 100,
+      advancing:  ss.filter(s => s.changePct > 0).length,
+      declining:  ss.filter(s => s.changePct < 0).length,
+      total:      ss.length,
+      topGainer:  [...ss].sort((a, b) => b.changePct - a.changePct)[0],
+    })).sort((a, b) => b.avgChange - a.avgChange);
 
     scanCache = {
       gainers,
@@ -407,45 +445,43 @@ async function runScanner() {
 
     console.log(`📊 Scanner: ${stocks.length} stocks — ${scanCache.advancing} up, ${scanCache.declining} down`);
 
+    // Broadcast to all connected clients
     if (ioRef) {
       ioRef.emit("scanner-update", {
-        gainers:   scanCache.gainers,
-        losers:    scanCache.losers,
-        byMcap:    {
+        gainers,
+        losers,
+        byMcap: {
           largecap:  byMcap.largecap.slice(0, 50),
           midcap:    byMcap.midcap.slice(0, 50),
           smallcap:  byMcap.smallcap.slice(0, 50),
           microcap:  byMcap.microcap.slice(0, 50),
         },
         bySector:  sectorSummary,
-        market:    {
-          advancing:  scanCache.advancing,
-          declining:  scanCache.declining,
-          unchanged:  scanCache.unchanged,
-          total:      scanCache.totalCount,
+        market: {
+          advancing: scanCache.advancing,
+          declining: scanCache.declining,
+          unchanged: scanCache.unchanged,
+          total:     scanCache.totalCount,
         },
         updatedAt: scanCache.updatedAt,
       });
     }
+
+    // ── Pre-warm tech cache for most-viewed stocks ────────────────────────────
+    // Deduplicated list: top gainers + losers + large caps
+    const toPreWarm = [
+      ...gainers.map(s => s.symbol),
+      ...losers.map(s => s.symbol),
+      ...byMcap.largecap.slice(0, 10).map(s => s.symbol),
+    ].filter((sym, i, arr) => arr.indexOf(sym) === i);
+
+    // Cancel any in-progress pre-warm from previous scan
+    if (preWarmTimer) clearTimeout(preWarmTimer);
+    preWarmTimer = setTimeout(() => preWarmTechCache(toPreWarm), PREWARM_DELAY);
+
   } catch (e) {
     console.error("📊 Scanner error:", e.message);
   }
-}
-
-// ── Technical scan for a single symbol (on demand) ───────────────────────────
-async function getTechnicals(symbol) {
-  const cached = techCache.get(symbol);
-  if (cached && Date.now() - cached.computedAt < 15 * 60 * 1000) return cached;
-
-  const stockData = scanCache.allStocks.find(s => s.symbol === symbol);
-  const ltp       = stockData?.ltp || 0;
-
-  const closes = await fetchNSEHistorical(symbol, 365);
-  if (closes.length < 20) return null;
-
-  const result = computeTechnicals(symbol, closes, ltp || closes[closes.length - 1]);
-  if (result) techCache.set(symbol, result);
-  return result;
 }
 
 // ── Socket handlers ───────────────────────────────────────────────────────────
@@ -454,8 +490,8 @@ function registerScannerHandlers(io) {
     // Send cached data to new client immediately
     if (scanCache.updatedAt > 0) {
       socket.emit("scanner-update", {
-        gainers:   scanCache.gainers,
-        losers:    scanCache.losers,
+        gainers:  scanCache.gainers,
+        losers:   scanCache.losers,
         byMcap: {
           largecap:  scanCache.byMcap.largecap.slice(0, 50),
           midcap:    scanCache.byMcap.midcap.slice(0, 50),
@@ -473,32 +509,28 @@ function registerScannerHandlers(io) {
       });
     }
 
-    // On-demand technicals for a symbol
+    // on-demand technicals via socket (kept for compatibility)
+    // Note: frontend now uses REST /api/scanner/technicals/:symbol instead
     socket.on("get-technicals", async ({ symbol } = {}) => {
       if (!symbol) return;
       try {
         const result = await getTechnicals(symbol.toUpperCase());
         if (result) socket.emit("scanner-technicals", result);
       } catch (e) {
-        console.warn("📊 Technicals error:", e.message);
+        console.warn("📊 Technicals socket error:", e.message);
       }
     });
 
     // Full stock list with filters
     socket.on("get-scanner-stocks", ({ bucket, sector, sortBy, limit } = {}) => {
       let stocks = [...(scanCache.allStocks || [])];
-      if (bucket && bucket !== "all") {
-        stocks = scanCache.byMcap[bucket] || [];
-      }
-      if (sector) {
-        stocks = stocks.filter(s => s.sector === sector);
-      }
-      if (sortBy === "gainers")   stocks.sort((a, b) => b.changePct - a.changePct);
-      if (sortBy === "losers")    stocks.sort((a, b) => a.changePct - b.changePct);
-      if (sortBy === "volume")    stocks.sort((a, b) => b.volume - a.volume);
-      if (sortBy === "value")     stocks.sort((a, b) => b.totalValue - a.totalValue);
-      if (sortBy === "52whigh")   stocks.sort((a, b) => (b.ltp / b.yearHigh) - (a.ltp / a.yearHigh));
-
+      if (bucket && bucket !== "all") stocks = scanCache.byMcap[bucket] || [];
+      if (sector) stocks = stocks.filter(s => s.sector === sector);
+      if (sortBy === "gainers")  stocks.sort((a, b) => b.changePct  - a.changePct);
+      if (sortBy === "losers")   stocks.sort((a, b) => a.changePct  - b.changePct);
+      if (sortBy === "volume")   stocks.sort((a, b) => b.volume     - a.volume);
+      if (sortBy === "value")    stocks.sort((a, b) => b.totalValue - a.totalValue);
+      if (sortBy === "52whigh")  stocks.sort((a, b) => (b.ltp / b.yearHigh) - (a.ltp / a.yearHigh));
       socket.emit("scanner-stocks", {
         stocks: stocks.slice(0, limit || 100),
         total:  stocks.length,
@@ -514,17 +546,12 @@ function registerScannerHandlers(io) {
 function startMarketScanner(io) {
   ioRef = io;
   registerScannerHandlers(io);
-
-  // First run immediately
-  runScanner();
-
-  // Then every 5 minutes
-  setInterval(runScanner, SCAN_INTERVAL);
-
+  runScanner();                              // first run immediately
+  setInterval(runScanner, SCAN_INTERVAL);   // then every 5 min
   console.log("📊 Market Scanner started");
 }
 
-// ── REST API handler ──────────────────────────────────────────────────────────
+// ── REST API handlers ─────────────────────────────────────────────────────────
 function getScannerData() { return scanCache; }
 async function getTechnicalsREST(symbol) { return getTechnicals(symbol); }
 
