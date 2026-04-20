@@ -380,6 +380,44 @@ app.get("/api/debug/hv", (req, res) => {
   catch (e) { res.json({ error: e.message }); }
 });
 
+// ── /api/debug/candles ────────────────────────────────────────────────────────
+// Test whether Upstox candle fetch works for a given symbol + timeframe.
+// Usage:
+//   /api/debug/candles?symbol=RELIANCE&tf=5min
+//   /api/debug/candles?symbol=TCS&tf=1hour
+//   /api/debug/candles?symbol=INFY&tf=4hour
+app.get("/api/debug/candles", async (req, res) => {
+  const symbol = (req.query.symbol || "RELIANCE").toUpperCase();
+  const tf     = req.query.tf || "1day";
+  try {
+    const result = await getTechnicalsForTimeframe(symbol, tf);
+    if (!result) {
+      return res.json({
+        ok: false,
+        symbol, tf,
+        message: "No data returned — check server logs for the exact failure",
+        debug: {
+          tokenPresent:          !!(process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN),
+          instrumentMapSize:     Object.keys(getInstrumentMap()).length,
+          instrumentKeyForSymbol: getInstrumentMap()[symbol] || null,
+        },
+      });
+    }
+    res.json({
+      ok: true,
+      symbol, tf,
+      ltp:        result.ltp,
+      techScore:  result.techScore,
+      signal:     result.signal,
+      rsi:        result.rsi,
+      macd:       result.macd?.crossover,
+      computedAt: new Date(result.computedAt).toISOString(),
+    });
+  } catch (e) {
+    res.json({ ok: false, symbol, tf, error: e.message });
+  }
+});
+
 // ── /api/test-circuit ─────────────────────────────────────────────────────────
 app.get("/api/test-circuit", async (req, res) => {
   const symbol = req.query.symbol || "RELIANCE";
@@ -623,12 +661,18 @@ app.get("/api/scanner/technicals/:symbol", async (req, res) => {
   try {
     const symbol    = req.params.symbol.toUpperCase();
     const timeframe = req.query.timeframe || "1day";
-
-    const validTimeframes = ["5min", "15min", "1hour", "4hour", "1day", "1week", "1month"];
-    const tf = validTimeframes.includes(timeframe) ? timeframe : "1day";
-
+    const validTFs  = ["5min", "15min", "1hour", "4hour", "1day", "1week", "1month"];
+    const tf        = validTFs.includes(timeframe) ? timeframe : "1day";
     const result = await getTechnicalsForTimeframe(symbol, tf);
-    if (!result) return res.json({ error: "No data for this symbol — try again after first scan" });
+    if (!result) {
+      return res.json({
+        error: `No data for ${symbol} [${tf}] — check Upstox token and instrument key`,
+        debug: {
+          tokenPresent:       !!(process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN),
+          instrumentKeyFound: !!(getInstrumentMap()[symbol]),
+        },
+      });
+    }
     res.json(result);
   } catch (e) {
     res.json({ error: e.message });
