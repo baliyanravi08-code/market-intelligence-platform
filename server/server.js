@@ -36,7 +36,12 @@ const { attachSocketIO } = require("./api/websocket");
 const { startIndexCandleFetcher, setToken: setICFToken, getDebugInfo } = require("./services/intelligence/indexCandleFetcher");
 
 // ── Market Scanner ────────────────────────────────────────────────────────────
-const { startMarketScanner, getScannerData, getTechnicalsREST } = require("./services/intelligence/marketScanner");
+const {
+  startMarketScanner,
+  getScannerData,
+  getTechnicalsREST,
+  getTechnicalsForTimeframe,
+} = require("./services/intelligence/marketScanner");
 
 const app    = express();
 const server = http.createServer(app);
@@ -613,9 +618,16 @@ app.get("/api/scanner", (req, res) => {
 });
 
 // ── /api/scanner/technicals/:symbol ──────────────────────────────────────────
+// Supports ?timeframe=5min|15min|1hour|4hour|1day|1week|1month (default: 1day)
 app.get("/api/scanner/technicals/:symbol", async (req, res) => {
   try {
-    const result = await getTechnicalsREST(req.params.symbol.toUpperCase());
+    const symbol    = req.params.symbol.toUpperCase();
+    const timeframe = req.query.timeframe || "1day";
+
+    const validTimeframes = ["5min", "15min", "1hour", "4hour", "1day", "1week", "1month"];
+    const tf = validTimeframes.includes(timeframe) ? timeframe : "1day";
+
+    const result = await getTechnicalsForTimeframe(symbol, tf);
     if (!result) return res.json({ error: "No data for this symbol — try again after first scan" });
     res.json(result);
   } catch (e) {

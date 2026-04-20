@@ -19,6 +19,17 @@ const fmtK = (n) => {
 const color = (v) => v > 0 ? "#00e676" : v < 0 ? "#ff4444" : "#888";
 const arrow = (v) => v > 0 ? "▲" : v < 0 ? "▼" : "—";
 
+// ── Timeframe config ──────────────────────────────────────────────────────────
+const TIMEFRAMES = [
+  { id: "5min",   label: "5m"  },
+  { id: "15min",  label: "15m" },
+  { id: "1hour",  label: "1H"  },
+  { id: "4hour",  label: "4H"  },
+  { id: "1day",   label: "1D"  },
+  { id: "1week",  label: "1W"  },
+  { id: "1month", label: "1M"  },
+];
+
 // ── MA Signal badge ───────────────────────────────────────────────────────────
 function MASigBadge({ signal }) {
   const map = {
@@ -147,7 +158,7 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
 }
 
 // ── Technical Detail Panel ────────────────────────────────────────────────────
-function TechPanel({ symbol, tech, onClose }) {
+function TechPanel({ symbol, tech, timeframe, onTimeframeChange, onClose }) {
   if (!symbol) return null;
 
   return (
@@ -157,7 +168,8 @@ function TechPanel({ symbol, tech, onClose }) {
       overflowY: "auto", zIndex: 100, padding: "20px 16px",
       boxShadow: "-8px 0 40px rgba(0,0,0,0.6)",
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 800, color: "#e8f4fd", letterSpacing: "1px" }}>{symbol}</div>
           <div style={{ fontSize: 11, color: "#555" }}>Technical Analysis</div>
@@ -168,18 +180,43 @@ function TechPanel({ symbol, tech, onClose }) {
         }}>✕</button>
       </div>
 
+      {/* ── Timeframe selector ── */}
+      <div style={{
+        display: "flex", gap: 3, marginBottom: 16,
+        background: "#080d14", padding: "4px", borderRadius: 6,
+        border: "1px solid #1e2a3a",
+      }}>
+        {TIMEFRAMES.map(tf => (
+          <button
+            key={tf.id}
+            onClick={() => onTimeframeChange(tf.id)}
+            style={{
+              flex: 1, padding: "5px 0", fontSize: 10, fontWeight: 700,
+              borderRadius: 4, cursor: "pointer", border: "none",
+              background: timeframe === tf.id ? "#7986cb" : "transparent",
+              color:      timeframe === tf.id ? "#fff"    : "#555",
+              transition: "all 0.15s", letterSpacing: "0.3px",
+            }}
+          >{tf.label}</button>
+        ))}
+      </div>
+
+      {/* Loading state */}
       {!tech ? (
         <div style={{ color: "#555", textAlign: "center", marginTop: 60 }}>
           <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
-          <div>Loading technicals…</div>
+          <div>Loading {timeframe} data…</div>
         </div>
       ) : (
         <>
+          {/* Tech Score */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "14px 16px", marginBottom: 16, textAlign: "center",
           }}>
-            <div style={{ fontSize: 11, color: "#555", marginBottom: 4 }}>TECH SCORE</div>
+            <div style={{ fontSize: 11, color: "#555", marginBottom: 4 }}>
+              TECH SCORE · {timeframe.toUpperCase()}
+            </div>
             <div style={{
               fontSize: 36, fontWeight: 900,
               color: tech.techScore >= 60 ? "#00e676" : tech.techScore <= 40 ? "#ff4444" : "#f9a825",
@@ -190,6 +227,7 @@ function TechPanel({ symbol, tech, onClose }) {
             }}>{tech.bias}</div>
           </div>
 
+          {/* Moving Averages */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 11, color: "#555", fontWeight: 700, letterSpacing: "1px", marginBottom: 8 }}>MOVING AVERAGES</div>
             {[
@@ -213,6 +251,7 @@ function TechPanel({ symbol, tech, onClose }) {
             })}
           </div>
 
+          {/* RSI */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "12px 14px", marginBottom: 12,
@@ -243,6 +282,7 @@ function TechPanel({ symbol, tech, onClose }) {
             </div>
           </div>
 
+          {/* MACD */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "12px 14px", marginBottom: 12,
@@ -277,6 +317,7 @@ function TechPanel({ symbol, tech, onClose }) {
             ) : <span style={{ color: "#444" }}>Insufficient data</span>}
           </div>
 
+          {/* Bollinger Bands */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "12px 14px", marginBottom: 12,
@@ -316,6 +357,7 @@ function TechPanel({ symbol, tech, onClose }) {
             ) : <span style={{ color: "#444" }}>Insufficient data</span>}
           </div>
 
+          {/* MA Summary */}
           <div style={{
             background: "#111", border: "1px solid #1e2a3a", borderRadius: 8,
             padding: "12px 14px", marginBottom: 12,
@@ -358,7 +400,7 @@ function TechPanel({ symbol, tech, onClose }) {
 }
 
 // ── Gainers/Losers Card ───────────────────────────────────────────────────────
-function GainLossCard({ title, stocks, onSelect, color: cardColor, onViewAll, tabId }) {
+function GainLossCard({ title, stocks, onSelect, color: cardColor, onViewAll }) {
   return (
     <div style={{
       background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 10,
@@ -372,7 +414,6 @@ function GainLossCard({ title, stocks, onSelect, color: cardColor, onViewAll, ta
         <span style={{ fontWeight: 800, fontSize: 12, color: cardColor, letterSpacing: "0.8px" }}>{title}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 10, color: "#444" }}>{stocks.length} stocks</span>
-          {/* FIX 1: "View All" scrolls down to the tab table */}
           <button
             onClick={onViewAll}
             style={{
@@ -446,28 +487,30 @@ function SectorBar({ sector }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function MarketScannerPage() {
-  // FIX 2: store data in a ref AND state so socket handlers always see latest value
-  const [data,          setData]          = useState(null);
+  const [data,        setData]        = useState(null);
   const dataRef = useRef(null);
 
-  const [selectedSym,   setSelectedSym]   = useState(null);
-  const [tech,          setTech]          = useState(null);
-  const [techLoading,   setTechLoading]   = useState(false);
-  const [tab,           setTab]           = useState("gainers");
-  const [sortBy,        setSortBy]        = useState("gainers");
-  const [searchQ,       setSearchQ]       = useState("");
-  const [updatedAt,     setUpdatedAt]     = useState(null);
+  const [selectedSym, setSelectedSym] = useState(null);
+  const [tech,        setTech]        = useState(null);
+  const [techLoading, setTechLoading] = useState(false);
+  const [activeTF,    setActiveTF]    = useState("1day");   // ← active timeframe
+  const [tab,         setTab]         = useState("gainers");
+  const [sortBy,      setSortBy]      = useState("gainers");
+  const [searchQ,     setSearchQ]     = useState("");
+  const [updatedAt,   setUpdatedAt]   = useState(null);
 
   const socketRef      = useRef(null);
-  const techCacheRef   = useRef({});
+  const techCacheRef   = useRef({});      // keyed "SYMBOL:timeframe"
   const tabRef         = useRef(tab);
   const tableRef       = useRef(null);
-  const selectedSymRef = useRef(null);        // FIX: always-current selectedSym
+  const selectedSymRef = useRef(null);
+  const activeTFRef    = useRef(activeTF);
 
   // Keep refs in sync
-  useEffect(() => { tabRef.current = tab; }, [tab]);
+  useEffect(() => { tabRef.current   = tab;      }, [tab]);
+  useEffect(() => { activeTFRef.current = activeTF; }, [activeTF]);
 
-  // FIX 2: derive stocks from data + tab (no stale closure)
+  // Derive stocks from data + tab
   const getStocksForTab = useCallback((d, t) => {
     if (!d) return [];
     if (t === "gainers")  return d.gainers          || [];
@@ -484,37 +527,37 @@ export default function MarketScannerPage() {
     socketRef.current = socket;
 
     socket.on("scanner-update", (d) => {
-      dataRef.current = d;           // FIX 2: update ref immediately
+      dataRef.current = d;
       setData(d);
       setUpdatedAt(new Date(d.updatedAt));
     });
 
-    return () => {
-      socket.off("scanner-update");
-    };
+    return () => { socket.off("scanner-update"); };
   }, []);
 
-  // Select symbol → load technicals
-  const handleSelect = useCallback(async (symbol) => {
+  // ── Select symbol + load technicals ──────────────────────────────────────────
+  // Accepts optional timeframe — defaults to activeTFRef so it's always current
+  const handleSelect = useCallback(async (symbol, timeframe) => {
+    const tf = timeframe || activeTFRef.current || "1day";
+    const cacheKey = `${symbol}:${tf}`;
+
     selectedSymRef.current = symbol;
     setSelectedSym(symbol);
 
     // Serve from cache instantly if available
-    if (techCacheRef.current[symbol]) {
-      setTech(techCacheRef.current[symbol]);
+    if (techCacheRef.current[cacheKey]) {
+      setTech(techCacheRef.current[cacheKey]);
       setTechLoading(false);
       return;
     }
 
-    // Use REST — reliable, no socket stale-closure issues
     setTech(null);
     setTechLoading(true);
     try {
-      const res  = await fetch(`/api/scanner/technicals/${symbol}`);
+      const res  = await fetch(`/api/scanner/technicals/${symbol}?timeframe=${tf}`);
       const data = await res.json();
       if (data && !data.error) {
-        techCacheRef.current[symbol] = data;
-        // Only update state if user hasn't switched to a different symbol
+        techCacheRef.current[cacheKey] = data;
         if (selectedSymRef.current === symbol) {
           setTech(data);
           setTechLoading(false);
@@ -528,7 +571,16 @@ export default function MarketScannerPage() {
     }
   }, []);
 
-  // FIX 1: clicking "View All" on a card switches tab + scrolls to table
+  // ── Timeframe change handler ──────────────────────────────────────────────────
+  const handleTimeframeChange = useCallback((tf) => {
+    setActiveTF(tf);
+    activeTFRef.current = tf;
+    if (selectedSymRef.current) {
+      handleSelect(selectedSymRef.current, tf);
+    }
+  }, [handleSelect]);
+
+  // ── View All: switch tab + scroll to table ────────────────────────────────────
   const handleViewAll = useCallback((tabId) => {
     setTab(tabId);
     setSortBy(tabId === "losers" ? "losers" : "gainers");
@@ -537,7 +589,7 @@ export default function MarketScannerPage() {
     }, 80);
   }, []);
 
-  // Current stock list derived fresh every render (no stale state)
+  // Current stock list
   const stocks = getStocksForTab(data, tab);
 
   const filtered = searchQ
@@ -602,7 +654,7 @@ export default function MarketScannerPage() {
         </div>
       </div>
 
-      {/* FIX 3: whole page scrolls, not a nested div — remove fixed height */}
+      {/* ── Body ── */}
       <div style={{ padding: "16px 20px 40px" }}>
 
         {/* Top strip: gainers + losers */}
@@ -611,21 +663,21 @@ export default function MarketScannerPage() {
             <GainLossCard
               title="TOP GAINERS"
               stocks={data.gainers || []}
-              onSelect={handleSelect}
+              onSelect={(sym) => handleSelect(sym, activeTFRef.current)}
               color="#00e676"
               onViewAll={() => handleViewAll("gainers")}
             />
             <GainLossCard
               title="TOP LOSERS"
               stocks={data.losers || []}
-              onSelect={handleSelect}
+              onSelect={(sym) => handleSelect(sym, activeTFRef.current)}
               color="#ff4444"
               onViewAll={() => handleViewAll("losers")}
             />
           </div>
         )}
 
-        {/* Tabs — anchor point for scroll */}
+        {/* Tabs */}
         <div ref={tableRef} style={{ display: "flex", gap: 4, marginBottom: 14, flexWrap: "wrap" }}>
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -692,7 +744,6 @@ export default function MarketScannerPage() {
                 <div style={{ fontSize: 11, color: "#333", marginTop: 4 }}>NSE 500 live feed loading</div>
               </div>
             ) : sorted.length === 0 ? (
-              // FIX 2: empty state so user knows tab data is missing vs loading
               <div style={{ textAlign: "center", padding: "60px 0", color: "#444" }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
                 <div>No stocks in this category yet</div>
@@ -721,9 +772,9 @@ export default function MarketScannerPage() {
                         key={s.symbol}
                         stock={s}
                         rank={i + 1}
-                        onSelect={handleSelect}
+                        onSelect={(sym) => handleSelect(sym, activeTFRef.current)}
                         selected={selectedSym === s.symbol}
-                        tech={techCacheRef.current[s.symbol] || null}
+                        tech={techCacheRef.current[`${s.symbol}:${activeTF}`] || null}
                       />
                     ))}
                   </tbody>
@@ -744,7 +795,15 @@ export default function MarketScannerPage() {
         <TechPanel
           symbol={selectedSym}
           tech={techLoading ? null : tech}
-          onClose={() => { selectedSymRef.current = null; setSelectedSym(null); setTech(null); }}
+          timeframe={activeTF}
+          onTimeframeChange={handleTimeframeChange}
+          onClose={() => {
+            selectedSymRef.current = null;
+            setSelectedSym(null);
+            setTech(null);
+            setActiveTF("1day");
+            activeTFRef.current = "1day";
+          }}
         />
       )}
     </div>

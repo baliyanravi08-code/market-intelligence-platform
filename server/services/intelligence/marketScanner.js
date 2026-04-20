@@ -7,6 +7,9 @@
  * KEY FIX: Historical OHLC now fetched via Upstox historical-candle API
  * (token-based, works from any server IP including Render/AWS).
  * NSE historical API 403s on cloud servers — kept only as fallback.
+ *
+ * MULTI-TIMEFRAME: Added TIMEFRAME_CONFIG, getTechnicalsForTimeframe,
+ * and updated fetchHistoricalCloses to accept interval param.
  */
 
 const axios = require("axios");
@@ -19,6 +22,20 @@ const SCAN_INTERVAL   = 5 * 60 * 1000;
 const TECH_CACHE_TTL  = 15 * 60 * 1000;
 const PREWARM_DELAY   = 5000;
 const PREWARM_BETWEEN = 400;   // ms between Upstox requests
+
+// ── Timeframe config ──────────────────────────────────────────────────────────
+// interval = Upstox candle interval string
+// NOTE: "240minute" is not a native Upstox interval — we fetch "60minute"
+//       and aggregate every 4 candles. Handled in fetchHistoricalCloses.
+const TIMEFRAME_CONFIG = {
+  "5min":   { interval: "5minute",   days: 30,   candles: 200, ttl: 2  * 60 * 1000 },
+  "15min":  { interval: "15minute",  days: 60,   candles: 200, ttl: 5  * 60 * 1000 },
+  "1hour":  { interval: "60minute",  days: 120,  candles: 200, ttl: 10 * 60 * 1000 },
+  "4hour":  { interval: "240minute", days: 180,  candles: 200, ttl: 15 * 60 * 1000 },
+  "1day":   { interval: "day",       days: 365,  candles: 250, ttl: 15 * 60 * 1000 },
+  "1week":  { interval: "week",      days: 730,  candles: 104, ttl: 30 * 60 * 1000 },
+  "1month": { interval: "month",     days: 1825, candles: 60,  ttl: 60 * 60 * 1000 },
+};
 
 // ── NSE public endpoints ──────────────────────────────────────────────────────
 const NSE_BASE    = "https://www.nseindia.com";
@@ -46,6 +63,7 @@ let scanCache = {
   advancing: 0, declining: 0, unchanged: 0, totalCount: 0,
 };
 
+// techCache keyed by "SYMBOL:timeframe" e.g. "RELIANCE:1day", "TCS:15min"
 let techCache    = new Map();
 let nseCookie    = "";
 let lastCookieAt = 0;
@@ -182,10 +200,10 @@ function calcMASummary(closes, ltp) {
   let buy = 0, sell = 0, neutral = 0;
   const signals = {};
   for (const [k, v] of Object.entries(mas)) {
-    if (!v)             { neutral++; signals[k] = { value: null, signal: "N/A"     }; }
+    if (!v)                   { neutral++; signals[k] = { value: null, signal: "N/A"     }; }
     else if (ltp > v * 1.001) { buy++;     signals[k] = { value: v,    signal: "BUY"     }; }
     else if (ltp < v * 0.999) { sell++;    signals[k] = { value: v,    signal: "SELL"    }; }
-    else                { neutral++; signals[k] = { value: v,    signal: "NEUTRAL" }; }
+    else                      { neutral++; signals[k] = { value: v,    signal: "NEUTRAL" }; }
   }
   const summary =
     buy  > sell + 2 ? "STRONG BUY"  : buy  > sell ? "BUY"  :
@@ -225,9 +243,15 @@ function computeTechnicals(symbol, closes, ltp) {
 }
 
 // ── Historical closes — Upstox PRIMARY, NSE fallback ─────────────────────────
-async function fetchHistoricalCloses(symbol, days = 365) {
+// interval: Upstox candle interval string e.g. "day", "60minute", "15minute"
+// "240minute" (4H) is handled by fetching "60minute" and aggregating 4→1
+async function fetchHistoricalCloses(symbol, days = 365, interval = "day") {
   const token    = getUpstoxToken();
   const instrKey = getInstrumentKey(symbol);
+
+  // 4H is not a native Upstox interval — fetch 1H and aggregate every 4 candles
+  const actualInterval = interval === "240minute" ? "60minute" : interval;
+  const aggregate4H    = interval === "240minute";
 
   // PRIMARY: Upstox historical-candle API — works from any IP with token
   if (token && instrKey) {
@@ -235,53 +259,88 @@ async function fetchHistoricalCloses(symbol, days = 365) {
       const to   = new Date();
       const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
       const fmt  = d => d.toISOString().slice(0, 10);
-      const url  = `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/day/${fmt(to)}/${fmt(from)}`;
-      const res  = await axios.get(url, {
+
+      // Intraday intervals use a different Upstox endpoint
+      const isIntraday = ["1minute","5minute","15minute","30minute","60minute"].includes(actualInterval);
+      const url = isIntraday
+        ? `https://api.upstox.com/v2/historical-candle/intraday/${encodeURIComponent(instrKey)}/${actualInterval}`
+        : `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/${actualInterval}/${fmt(to)}/${fmt(from)}`;
+
+      const res = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         timeout: 10000,
       });
+
       // Format: [timestamp, open, high, low, close, volume, oi] — newest first
-      const closes = (res.data?.data?.candles || [])
+      let rawCandles = (res.data?.data?.candles || []).reverse(); // oldest first
+
+      // Aggregate 1H → 4H: take close of every 4th candle (last in group)
+      if (aggregate4H && rawCandles.length >= 4) {
+        const agg = [];
+        for (let i = 3; i < rawCandles.length; i += 4) {
+          agg.push(rawCandles[i]);
+        }
+        rawCandles = agg;
+      }
+
+      const closes = rawCandles
         .map(c => parseFloat(c[4]))
-        .filter(v => v > 0)
-        .reverse();
+        .filter(v => v > 0);
+
       if (closes.length >= 20) return closes;
-      console.warn(`📊 Upstox: only ${closes.length} candles for ${symbol}`);
+      console.warn(`📊 Upstox: only ${closes.length} candles for ${symbol} [${interval}]`);
     } catch (e) {
-      console.warn(`📊 Upstox historical failed [${symbol}]:`, e.response?.status || e.message);
+      console.warn(`📊 Upstox historical failed [${symbol}][${interval}]:`, e.response?.status || e.message);
     }
   } else {
     if (!token)    console.warn(`📊 No Upstox token for ${symbol} technicals`);
     if (!instrKey) console.warn(`📊 No instrument key for ${symbol}`);
   }
 
-  // FALLBACK: NSE (403s on cloud — only works from Indian IP)
-  await refreshNSECookie();
-  try {
-    const to   = new Date();
-    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-    const fmt  = d => `${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
-    const res  = await axios.get(
-      `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmt(from)}&to=${fmt(to)}&csv=false`,
-      { headers: { ...NSE_HEADERS, Cookie: nseCookie }, timeout: 15000 }
-    );
-    return (res.data?.data || [])
-      .map(r => parseFloat(r.CH_CLOSING_PRICE || r.close || 0))
-      .filter(v => v > 0)
-      .reverse();
-  } catch (_) { return []; }
+  // FALLBACK: NSE daily — only for "day" interval (403s on cloud)
+  if (interval === "day") {
+    await refreshNSECookie();
+    try {
+      const to   = new Date();
+      const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const fmt  = d => `${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
+      const res  = await axios.get(
+        `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmt(from)}&to=${fmt(to)}&csv=false`,
+        { headers: { ...NSE_HEADERS, Cookie: nseCookie }, timeout: 15000 }
+      );
+      return (res.data?.data || [])
+        .map(r => parseFloat(r.CH_CLOSING_PRICE || r.close || 0))
+        .filter(v => v > 0)
+        .reverse();
+    } catch (_) { return []; }
+  }
+
+  return [];
 }
 
-// ── Get technicals (cache-first) ──────────────────────────────────────────────
-async function getTechnicals(symbol) {
-  const cached = techCache.get(symbol);
-  if (cached && Date.now() - cached.computedAt < TECH_CACHE_TTL) return cached;
+// ── Get technicals for a specific timeframe (cache-first) ─────────────────────
+// Cache key: "SYMBOL:timeframe" e.g. "RELIANCE:1day", "TCS:15min"
+async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
+  const cfg      = TIMEFRAME_CONFIG[timeframe] || TIMEFRAME_CONFIG["1day"];
+  const cacheKey = `${symbol}:${timeframe}`;
+  const cached   = techCache.get(cacheKey);
+  if (cached && Date.now() - cached.computedAt < cfg.ttl) return cached;
+
   const ltp    = scanCache.allStocks.find(s => s.symbol === symbol)?.ltp || 0;
-  const closes = await fetchHistoricalCloses(symbol, 365);
+  const closes = await fetchHistoricalCloses(symbol, cfg.days, cfg.interval);
   if (closes.length < 20) return null;
+
   const result = computeTechnicals(symbol, closes, ltp || closes[closes.length - 1]);
-  if (result) techCache.set(symbol, result);
+  if (result) {
+    result.timeframe = timeframe;
+    techCache.set(cacheKey, result);
+  }
   return result;
+}
+
+// ── Get technicals (cache-first) — defaults to 1day for backward compat ───────
+async function getTechnicals(symbol) {
+  return getTechnicalsForTimeframe(symbol, "1day");
 }
 
 // ── Background pre-warm ───────────────────────────────────────────────────────
@@ -291,7 +350,7 @@ async function preWarmTechCache(symbols) {
   let warmed = 0;
   for (const sym of symbols) {
     try {
-      const cached = techCache.get(sym);
+      const cached = techCache.get(`${sym}:1day`);
       if (cached && Date.now() - cached.computedAt < TECH_CACHE_TTL) { warmed++; continue; }
       await getTechnicals(sym);
       warmed++;
@@ -389,7 +448,7 @@ async function runScanner() {
       });
     }
 
-    // Pre-warm top gainers + losers + large caps
+    // Pre-warm top gainers + losers + large caps (1day only)
     const toWarm = [
       ...gainers.map(s => s.symbol),
       ...losers.map(s => s.symbol),
@@ -460,4 +519,9 @@ function startMarketScanner(io) {
 function getScannerData()                { return scanCache; }
 async function getTechnicalsREST(symbol) { return getTechnicals(symbol); }
 
-module.exports = { startMarketScanner, getScannerData, getTechnicalsREST };
+module.exports = {
+  startMarketScanner,
+  getScannerData,
+  getTechnicalsREST,
+  getTechnicalsForTimeframe,
+};
