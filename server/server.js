@@ -14,7 +14,12 @@ const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
 
-const { startStreamer, stopStreamer, setOITickHandler, setLTPTickHandler } = require("./services/upstoxStream");
+const {
+  startStreamer, stopStreamer,
+  setOITickHandler, setLTPTickHandler,
+  setBacktestEngine,               // ← NEW
+} = require("./services/upstoxStream");
+
 const { commoditiesRoute }  = require("./api/commodities");
 const {
   startNSEOIListener,
@@ -32,7 +37,6 @@ const {
 } = require("./database");
 
 const { attachSocketIO } = require("./api/websocket");
-
 const { startIndexCandleFetcher, setToken: setICFToken, getDebugInfo } = require("./services/intelligence/indexCandleFetcher");
 
 // ── Market Scanner ────────────────────────────────────────────────────────────
@@ -43,10 +47,12 @@ const {
   getTechnicalsForTimeframe,
 } = require("./services/intelligence/marketScanner");
 
+// ── Backtest routes ───────────────────────────────────────────────────────────
+const backtestRoutes = require("./routes/backtestRoutes");   // ← NEW
+
 const app    = express();
 const server = http.createServer(app);
-
-const io = attachSocketIO(server);
+const io     = attachSocketIO(server);
 
 app.use(cors());
 app.use(express.json());
@@ -106,57 +112,35 @@ async function loadInstrumentMaster() {
   } catch (e) {
     console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
     instrumentMap = {
-      "RELIANCE":   "NSE_EQ|INE002A01018",
-      "TCS":        "NSE_EQ|INE467B01029",
-      "HDFCBANK":   "NSE_EQ|INE040A01034",
-      "INFY":       "NSE_EQ|INE009A01021",
-      "ICICIBANK":  "NSE_EQ|INE090A01021",
-      "SBIN":       "NSE_EQ|INE062A01020",
-      "AXISBANK":   "NSE_EQ|INE238A01034",
-      "KOTAKBANK":  "NSE_EQ|INE237A01028",
-      "LT":         "NSE_EQ|INE018A01030",
-      "WIPRO":      "NSE_EQ|INE075A01022",
-      "BAJFINANCE": "NSE_EQ|INE296A01024",
-      "BHARTIARTL": "NSE_EQ|INE397D01024",
-      "HINDUNILVR": "NSE_EQ|INE030A01027",
-      "NTPC":       "NSE_EQ|INE733E01010",
-      "SUNPHARMA":  "NSE_EQ|INE044A01036",
-      "TATAMOTORS": "NSE_EQ|INE155A01022",
-      "TATASTEEL":  "NSE_EQ|INE081A01020",
-      "MARUTI":     "NSE_EQ|INE585B01010",
-      "TITAN":      "NSE_EQ|INE280A01028",
-      "ULTRACEMCO": "NSE_EQ|INE481G01011",
-      "ITC":        "NSE_EQ|INE154A01025",
-      "ADANIENT":   "NSE_EQ|INE423A01024",
-      "ADANIPORTS": "NSE_EQ|INE742F01042",
-      "POWERGRID":  "NSE_EQ|INE752E01010",
-      "ONGC":       "NSE_EQ|INE213A01029",
-      "JSWSTEEL":   "NSE_EQ|INE019A01038",
-      "HINDALCO":   "NSE_EQ|INE038A01020",
-      "COALINDIA":  "NSE_EQ|INE522F01014",
-      "BPCL":       "NSE_EQ|INE029A01011",
-      "GRASIM":     "NSE_EQ|INE047A01021",
-      "DIVISLAB":   "NSE_EQ|INE361B01024",
-      "DRREDDY":    "NSE_EQ|INE089A01023",
-      "CIPLA":      "NSE_EQ|INE059A01026",
-      "EICHERMOT":  "NSE_EQ|INE066A01021",
-      "HEROMOTOCO": "NSE_EQ|INE158A01026",
-      "INDUSINDBK": "NSE_EQ|INE095A01012",
-      "BAJAJ-AUTO": "NSE_EQ|INE917I01010",
-      "BAJAJFINSV": "NSE_EQ|INE918I01026",
-      "HCLTECH":    "NSE_EQ|INE860A01027",
-      "TECHM":      "NSE_EQ|INE669C01036",
-      "NESTLEIND":  "NSE_EQ|INE239A01016",
-      "ASIANPAINT": "NSE_EQ|INE021A01026",
-      "BRITANNIA":  "NSE_EQ|INE216A01030",
-      "TATACONSUM": "NSE_EQ|INE192A01025",
-      "SBILIFE":    "NSE_EQ|INE123W01016",
-      "HDFCLIFE":   "NSE_EQ|INE795G01014",
-      "HAL":        "NSE_EQ|INE066F01020",
-      "BEL":        "NSE_EQ|INE263A01024",
-      "ZOMATO":     "NSE_EQ|INE758T01015",
-      "RECLTD":     "NSE_EQ|INE020B01018",
-      "PFC":        "NSE_EQ|INE134E01011",
+      "RELIANCE":   "NSE_EQ|INE002A01018", "TCS":        "NSE_EQ|INE467B01029",
+      "HDFCBANK":   "NSE_EQ|INE040A01034", "INFY":       "NSE_EQ|INE009A01021",
+      "ICICIBANK":  "NSE_EQ|INE090A01021", "SBIN":       "NSE_EQ|INE062A01020",
+      "AXISBANK":   "NSE_EQ|INE238A01034", "KOTAKBANK":  "NSE_EQ|INE237A01028",
+      "LT":         "NSE_EQ|INE018A01030", "WIPRO":      "NSE_EQ|INE075A01022",
+      "BAJFINANCE": "NSE_EQ|INE296A01024", "BHARTIARTL": "NSE_EQ|INE397D01024",
+      "HINDUNILVR": "NSE_EQ|INE030A01027", "NTPC":       "NSE_EQ|INE733E01010",
+      "SUNPHARMA":  "NSE_EQ|INE044A01036", "TATAMOTORS": "NSE_EQ|INE155A01022",
+      "TATASTEEL":  "NSE_EQ|INE081A01020", "MARUTI":     "NSE_EQ|INE585B01010",
+      "TITAN":      "NSE_EQ|INE280A01028", "ITC":        "NSE_EQ|INE154A01025",
+      "ADANIENT":   "NSE_EQ|INE423A01024", "ADANIPORTS": "NSE_EQ|INE742F01042",
+      "HCLTECH":    "NSE_EQ|INE860A01027", "TECHM":      "NSE_EQ|INE669C01036",
+      "ZOMATO":     "NSE_EQ|INE758T01015", "JSWSTEEL":   "NSE_EQ|INE019A01038",
+      "HINDALCO":   "NSE_EQ|INE038A01020", "COALINDIA":  "NSE_EQ|INE522F01014",
+      "DRREDDY":    "NSE_EQ|INE089A01023", "CIPLA":      "NSE_EQ|INE059A01026",
+      "EICHERMOT":  "NSE_EQ|INE066A01021", "HEROMOTOCO": "NSE_EQ|INE158A01026",
+      "BAJAJ-AUTO": "NSE_EQ|INE917I01010", "BAJAJFINSV": "NSE_EQ|INE918I01026",
+      "NESTLEIND":  "NSE_EQ|INE239A01016", "ASIANPAINT": "NSE_EQ|INE021A01026",
+      "ULTRACEMCO": "NSE_EQ|INE481G01011", "POWERGRID":  "NSE_EQ|INE752E01010",
+      "ONGC":       "NSE_EQ|INE213A01029", "BPCL":       "NSE_EQ|INE029A01011",
+      "GRASIM":     "NSE_EQ|INE047A01021", "DIVISLAB":   "NSE_EQ|INE361B01024",
+      "INDUSINDBK": "NSE_EQ|INE095A01012", "HAL":        "NSE_EQ|INE066F01020",
+      "BEL":        "NSE_EQ|INE263A01024", "RECLTD":     "NSE_EQ|INE020B01018",
+      "PFC":        "NSE_EQ|INE134E01011", "TATACONSUM": "NSE_EQ|INE192A01025",
+      "SBILIFE":    "NSE_EQ|INE123W01016", "HDFCLIFE":   "NSE_EQ|INE795G01014",
+      "BRITANNIA":  "NSE_EQ|INE216A01030", "HAL":        "NSE_EQ|INE066F01020",
+      "ADANIPOWER": "NSE_EQ|INE814H01011", "IRCTC":      "NSE_EQ|INE335Y01012",
+      "IRFC":       "NSE_EQ|INE053F01010", "TRENT":      "NSE_EQ|INE849A01020",
+      "NHPC":       "NSE_EQ|INE848E01016", "POLYCAB":    "NSE_EQ|INE455K01017",
     };
     console.log(`⚠️ Using fallback instrument map: ${Object.keys(instrumentMap).length} symbols`);
     _pushMapToGann(instrumentMap);
@@ -211,7 +195,7 @@ function saveToken(token, expiry) {
 function clearToken() {
   upstoxAccessToken = null;
   upstoxTokenExpiry = null;
-  try { if (fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE); } catch (e) {}
+  try { if (fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE); } catch {}
 }
 
 // ── Startup sequence ──────────────────────────────────────────────────────────
@@ -224,9 +208,15 @@ loadInstrumentMaster()
   .finally(() => {
     setOITickHandler(handleOITick);
 
-    // FIX BUG 1: wire LTP handler BEFORE startCoordinator so no ticks are lost
+    // Wire LTP handler (Gann + composite)
     const { registerLTPTick } = require("./coordinator");
     setLTPTickHandler(registerLTPTick);
+
+    // ── NEW: Init backtest engine and wire into upstox stream ─────────────
+    const backtestEngine = require("./services/backtestEngine");
+    backtestEngine.init(io);
+    setBacktestEngine(backtestEngine);
+    // ─────────────────────────────────────────────────────────────────────
 
     if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
       setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
@@ -237,13 +227,9 @@ loadInstrumentMaster()
     startNSEDealsListener(io);
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
 
-    // FIX BUG 2+5: inject token before startIndexCandleFetcher
-    if (upstoxAccessToken) {
-      setICFToken(upstoxAccessToken);
-    }
+    if (upstoxAccessToken) setICFToken(upstoxAccessToken);
     startIndexCandleFetcher();
 
-    // Market Scanner
     startMarketScanner(io);
 
     const PORT = process.env.PORT || 10000;
@@ -255,6 +241,9 @@ loadInstrumentMaster()
     });
   });
 
+// ── Backtest API ──────────────────────────────────────────────────────────────
+app.use("/api/backtest", backtestRoutes);   // ← NEW
+
 // ── Auth routes ───────────────────────────────────────────────────────────────
 const UPSTOX_INSTRUMENTS = {
   "NIFTY 50":   "NSE_INDEX|Nifty 50",
@@ -264,13 +253,11 @@ const UPSTOX_INSTRUMENTS = {
 const INDEX_NAMES = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
 
 app.get("/auth/upstox", (req, res) => {
-  if (!UPSTOX_API_KEY || !UPSTOX_REDIRECT_URI) {
+  if (!UPSTOX_API_KEY || !UPSTOX_REDIRECT_URI)
     return res.send("ERR: UPSTOX_API_KEY or UPSTOX_REDIRECT_URI not set.");
-  }
   const authUrl =
     "https://api.upstox.com/v2/login/authorization/dialog" +
-    "?response_type=code" +
-    "&client_id=" + UPSTOX_API_KEY +
+    "?response_type=code&client_id=" + UPSTOX_API_KEY +
     "&redirect_uri=" + encodeURIComponent(UPSTOX_REDIRECT_URI);
   res.redirect(authUrl);
 });
@@ -282,24 +269,20 @@ app.get("/auth/upstox/callback", async (req, res) => {
     const response = await axios.post(
       "https://api.upstox.com/v2/login/authorization/token",
       new URLSearchParams({
-        code,
-        client_id:     UPSTOX_API_KEY,
-        client_secret: UPSTOX_API_SECRET,
-        redirect_uri:  UPSTOX_REDIRECT_URI,
-        grant_type:    "authorization_code",
+        code, client_id: UPSTOX_API_KEY, client_secret: UPSTOX_API_SECRET,
+        redirect_uri: UPSTOX_REDIRECT_URI, grant_type: "authorization_code",
       }),
       { headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" } }
     );
     upstoxAccessToken = response.data.access_token;
     upstoxTokenExpiry = Date.now() + (response.data.expires_in || 86400) * 1000;
     saveToken(upstoxAccessToken, upstoxTokenExpiry);
-    console.log("Upstox token saved, expires:", new Date(upstoxTokenExpiry).toISOString());
     setICFToken(upstoxAccessToken);
     startStreamer(upstoxAccessToken, io);
     res.send(
       "<html><body style='background:#010812;color:#00ff9c;font-family:monospace;padding:40px;text-align:center'>" +
       "<h2>Upstox Connected!</h2>" +
-      "<p style='color:#b8cfe8'>Live NIFTY / SENSEX / BANK NIFTY WebSocket stream is now active.</p>" +
+      "<p style='color:#b8cfe8'>Live stream active.</p>" +
       "<p style='color:#4a8adf'>Token expires: " + new Date(upstoxTokenExpiry).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + " IST</p><br>" +
       "<a href='/' style='color:#00cfff;text-decoration:none;border:1px solid #00cfff33;padding:8px 16px;border-radius:4px'>Back to Dashboard</a>" +
       "</body></html>"
@@ -324,10 +307,7 @@ async function fetchUpstoxMarket() {
   const keys = Object.values(UPSTOX_INSTRUMENTS).join(",");
   const res  = await axios.get(
     "https://api.upstox.com/v2/market-quote/quotes?instrument_key=" + encodeURIComponent(keys),
-    {
-      headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
-      timeout: 8000,
-    }
+    { headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" }, timeout: 8000 }
   );
   const data = res.data?.data || {};
   return INDEX_NAMES.map(name => {
@@ -381,11 +361,6 @@ app.get("/api/debug/hv", (req, res) => {
 });
 
 // ── /api/debug/candles ────────────────────────────────────────────────────────
-// Test whether Upstox candle fetch works for a given symbol + timeframe.
-// Usage:
-//   /api/debug/candles?symbol=RELIANCE&tf=5min
-//   /api/debug/candles?symbol=TCS&tf=1hour
-//   /api/debug/candles?symbol=INFY&tf=4hour
 app.get("/api/debug/candles", async (req, res) => {
   const symbol = (req.query.symbol || "RELIANCE").toUpperCase();
   const tf     = req.query.tf || "1day";
@@ -393,26 +368,16 @@ app.get("/api/debug/candles", async (req, res) => {
     const result = await getTechnicalsForTimeframe(symbol, tf);
     if (!result) {
       return res.json({
-        ok: false,
-        symbol, tf,
-        message: "No data returned — check server logs for the exact failure",
+        ok: false, symbol, tf,
+        message: "No data returned — check server logs",
         debug: {
-          tokenPresent:          !!(process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN),
-          instrumentMapSize:     Object.keys(getInstrumentMap()).length,
+          tokenPresent:           !!(process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN),
+          instrumentMapSize:      Object.keys(getInstrumentMap()).length,
           instrumentKeyForSymbol: getInstrumentMap()[symbol] || null,
         },
       });
     }
-    res.json({
-      ok: true,
-      symbol, tf,
-      ltp:        result.ltp,
-      techScore:  result.techScore,
-      signal:     result.signal,
-      rsi:        result.rsi,
-      macd:       result.macd?.crossover,
-      computedAt: new Date(result.computedAt).toISOString(),
-    });
+    res.json({ ok: true, symbol, tf, ltp: result.ltp, techScore: result.techScore, signal: result.signal, rsi: result.rsi, macd: result.macd?.crossover, computedAt: new Date(result.computedAt).toISOString() });
   } catch (e) {
     res.json({ ok: false, symbol, tf, error: e.message });
   }
@@ -422,10 +387,10 @@ app.get("/api/debug/candles", async (req, res) => {
 app.get("/api/test-circuit", async (req, res) => {
   const symbol = req.query.symbol || "RELIANCE";
   const ikey   = instrumentMap[symbol];
-  if (!ikey) return res.json({ error: `Symbol ${symbol} not in instrument map`, mapSize: Object.keys(instrumentMap).length, sample: Object.entries(instrumentMap).slice(0, 5) });
+  if (!ikey) return res.json({ error: `Symbol ${symbol} not in instrument map`, mapSize: Object.keys(instrumentMap).length });
   try {
     const r = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
-      params:  { instrument_key: ikey },
+      params: { instrument_key: ikey },
       headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
       timeout: 10_000,
     });
@@ -440,27 +405,25 @@ app.get("/api/test-instrument-map", (req, res) => {
   res.json({ total: Object.keys(instrumentMap).length, sample: Object.entries(instrumentMap).slice(0, 10) });
 });
 
-// ── /api/option-chain/expiries ────────────────────────────────────────────────
+// ── /api/option-chain ─────────────────────────────────────────────────────────
 app.get("/api/option-chain/expiries", (req, res) => {
   const underlying = req.query.underlying || "NIFTY";
   res.json({ underlying, expiries: getExpiries(underlying) });
 });
 
-// ── /api/option-chain ─────────────────────────────────────────────────────────
 app.get("/api/option-chain", (req, res) => {
   const underlying = req.query.underlying || "NIFTY";
   const expiry     = req.query.expiry;
   if (!expiry) {
     const expiries = getExpiries(underlying);
-    if (!expiries.length) return res.json({ error: "No expiry data yet — polling in progress" });
+    if (!expiries.length) return res.json({ error: "No expiry data yet" });
     return res.json({ underlying, expiries });
   }
   const chain = getChain(underlying, expiry);
-  if (!chain) return res.json({ error: "No data for this expiry yet — try again in 60s" });
+  if (!chain) return res.json({ error: "No data for this expiry yet" });
   res.json(chain);
 });
 
-// ── /api/option-chain/all ─────────────────────────────────────────────────────
 app.get("/api/option-chain/all", (req, res) => {
   const all     = getAllCached();
   const summary = {};
@@ -478,7 +441,6 @@ app.get("/api/option-chain/all", (req, res) => {
   res.json(summary);
 });
 
-// ── /api/option-chain/subscribe ───────────────────────────────────────────────
 app.post("/api/option-chain/subscribe", (req, res) => {
   const { name, instrumentKey } = req.body;
   if (!name || !instrumentKey) return res.status(400).json({ error: "name and instrumentKey required" });
@@ -513,7 +475,7 @@ app.get("/api/mcap", (req, res) => {
     const data = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
     const arr  = Array.isArray(data) ? data : Object.entries(data).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
     res.json(arr);
-  } catch (e) { res.json([]); }
+  } catch { res.json([]); }
 });
 
 // ── /api/orderbook ────────────────────────────────────────────────────────────
@@ -554,7 +516,6 @@ app.get("/api/orderbook", async (req, res) => {
   }
 });
 
-// ── /api/orderbook/:code ──────────────────────────────────────────────────────
 app.get("/api/orderbook/:code", (req, res) => {
   try {
     const { getEstimatedOrderBook, getCompanyData } = require("./data/marketCap");
@@ -618,7 +579,7 @@ app.get("/api/search/:query", async (req, res) => {
     }
     if (localResults.length > 0) return res.json({ results: localResults });
     res.json({ results: await searchBSE(q) });
-  } catch (e) { res.json({ results: [] }); }
+  } catch { res.json({ results: [] }); }
 });
 
 async function searchBSE(q) {
@@ -639,24 +600,17 @@ async function searchBSE(q) {
 // ── /api/scanner ──────────────────────────────────────────────────────────────
 app.get("/api/scanner", (req, res) => {
   const d = getScannerData();
-  if (!d.updatedAt) return res.json({ error: "Scanner not yet ready — first scan in progress" });
+  if (!d.updatedAt) return res.json({ error: "Scanner not yet ready" });
   res.json({
     gainers:  d.gainers  || [],
     losers:   d.losers   || [],
     byMcap:   d.byMcap   || {},
     bySector: d.bySector || [],
-    market: {
-      advancing: d.advancing  || 0,
-      declining: d.declining  || 0,
-      unchanged: d.unchanged  || 0,
-      total:     d.totalCount || 0,
-    },
+    market: { advancing: d.advancing || 0, declining: d.declining || 0, unchanged: d.unchanged || 0, total: d.totalCount || 0 },
     updatedAt: d.updatedAt,
   });
 });
 
-// ── /api/scanner/technicals/:symbol ──────────────────────────────────────────
-// Supports ?timeframe=5min|15min|1hour|4hour|1day|1week|1month (default: 1day)
 app.get("/api/scanner/technicals/:symbol", async (req, res) => {
   try {
     const symbol    = req.params.symbol.toUpperCase();
@@ -664,25 +618,15 @@ app.get("/api/scanner/technicals/:symbol", async (req, res) => {
     const validTFs  = ["5min", "15min", "1hour", "4hour", "1day", "1week", "1month"];
     const tf        = validTFs.includes(timeframe) ? timeframe : "1day";
     const result = await getTechnicalsForTimeframe(symbol, tf);
-    if (!result) {
-      return res.json({
-        error: `No data for ${symbol} [${tf}] — check Upstox token and instrument key`,
-        debug: {
-          tokenPresent:       !!(process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN),
-          instrumentKeyFound: !!(getInstrumentMap()[symbol]),
-        },
-      });
-    }
+    if (!result) return res.json({ error: `No data for ${symbol} [${tf}]`, debug: { tokenPresent: !!(process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN), instrumentKeyFound: !!(getInstrumentMap()[symbol]) } });
     res.json(result);
-  } catch (e) {
-    res.json({ error: e.message });
-  }
+  } catch (e) { res.json({ error: e.message }); }
 });
 
 // ── /api/admin/backfill ───────────────────────────────────────────────────────
 app.get("/api/admin/backfill", async (req, res) => {
   const secret = process.env.ADMIN_SECRET || "backfill2026";
-  if (req.query.token !== secret) return res.status(401).json({ error: "Unauthorized — pass ?token=YOUR_ADMIN_SECRET" });
+  if (req.query.token !== secret) return res.status(401).json({ error: "Unauthorized" });
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.setHeader("Transfer-Encoding", "chunked");
   const log = (msg) => { console.log(msg); res.write(msg + "\n"); };
@@ -697,12 +641,12 @@ app.get("/api/admin/backfill", async (req, res) => {
     log("\n[1] Getting BSE cookie...");
     let bseCookie = "";
     try {
-      const w = await axios.get("https://www.bseindia.com/corporates/ann.html", { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9", "Connection": "keep-alive" }, timeout: 20000, maxRedirects: 5 });
+      const w = await axios.get("https://www.bseindia.com/corporates/ann.html", { headers: { "User-Agent": "Mozilla/5.0", "Accept": "text/html" }, timeout: 20000, maxRedirects: 5 });
       const ck = w.headers["set-cookie"];
-      if (ck?.length) { bseCookie = ck.map(c => c.split(";")[0]).join("; "); log("Cookie: " + bseCookie.substring(0, 60) + "..."); } else { log("No Set-Cookie header — continuing without"); }
+      if (ck?.length) { bseCookie = ck.map(c => c.split(";")[0]).join("; "); log("Cookie obtained"); }
     } catch (e) { log("Warmup failed: " + e.message); }
-    const apiH = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36", "Accept": "application/json, text/plain, */*", "Referer": "https://www.bseindia.com/corporates/ann.html", "Origin": "https://www.bseindia.com", "X-Requested-With": "XMLHttpRequest", ...(bseCookie ? { Cookie: bseCookie } : {}) };
-    const OB_KW = ["infra","epc","engineer","construct","railway","defense","defence","solar","renewable","power","water","wabag","rites","rvnl","irfc","hal ","bel ","ntpc","l&t","larsen","kec ","kalpataru","thermax","bhel","suzlon","tata power","inox wind","jsw energy","nhpc","abb india","siemens","garden reach","cochin ship","mazagon","data pattern","mtar","ncc ","hg infra","pnc infra","dilip","j kumar","titagarh","jupiter wagon","cg power","va tech"];
+    const apiH = { "User-Agent": "Mozilla/5.0", "Accept": "application/json", "Referer": "https://www.bseindia.com", "Origin": "https://www.bseindia.com", ...(bseCookie ? { Cookie: bseCookie } : {}) };
+    const OB_KW = ["infra","epc","engineer","construct","railway","defense","solar","renewable","power","water","rites","rvnl","irfc","hal ","bel ","ntpc","l&t","larsen","kec ","kalpataru","thermax","bhel","suzlon","tata power","inox wind","jsw energy","nhpc","abb","siemens","mazagon","titagarh","jupiter wagon"];
     const isOB = n => OB_KW.some(k => (n || "").toLowerCase().includes(k.trim()));
     const quarters = [
       { name: "Q3FY26", from: new Date("2026-01-01"), to: new Date("2026-03-28") },
@@ -722,7 +666,7 @@ app.get("/api/admin/backfill", async (req, res) => {
           const d = r.data;
           if (typeof d === "string" && d.includes("<")) continue;
           const rows = d?.Table || d?.Table1 || d?.data || (Array.isArray(d) ? d : []);
-          const rf   = rows.filter(f => { const h = (f.HEADLINE || "").toLowerCase(), c2 = (f.CATEGORYNAME || "").toLowerCase(); return (c2.includes("result") || h.includes("financial result") || h.includes("quarterly result") || h.includes("unaudited") || /q[1-4]fy/i.test(h)) && f.ATTACHMENTNAME; });
+          const rf   = rows.filter(f => { const h = (f.HEADLINE || "").toLowerCase(), c2 = (f.CATEGORYNAME || "").toLowerCase(); return (c2.includes("result") || h.includes("financial result") || h.includes("quarterly result") || /q[1-4]fy/i.test(h)) && f.ATTACHMENTNAME; });
           if (!rf.length) continue;
           const pdfUrl  = "https://www.bseindia.com/xml-data/corpfiling/AttachLive/" + rf[0].ATTACHMENTNAME;
           totalPDFs++;
@@ -742,7 +686,6 @@ app.get("/api/admin/backfill", async (req, res) => {
       await sleep(2000);
     }
     log("\n=== DONE: scanned=" + totalPDFs + " found=" + totalFound + " ===");
-    if (totalFound === 0) log("BSE may be rate-limiting. Try again in 30 mins.");
     res.end();
   } catch (e) { log("FATAL: " + e.message); res.end(); }
 });

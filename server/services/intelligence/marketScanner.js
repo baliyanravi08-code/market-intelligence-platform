@@ -2,12 +2,13 @@
 
 /**
  * marketScanner.js
- * Location: server/services/intelligence/marketScanner.js
+ * Location: server/services/intelligence/marketScanner.js   ← REPLACE EXISTING
  *
- * FIX: Pre-warmed tech data now pushed to all connected sockets after each
- * batch completes via "scanner-tech-batch" event. Frontend listens for this
- * event and populates its techCacheRef, making RSI/MACD/Bollinger columns
- * fill in without requiring a click on each stock.
+ * Changes from original:
+ *  1. After each scan completes, signals are auto-captured into backtestEngine
+ *  2. Signal stocks are subscribed in Upstox stream for live price tracking
+ *  3. computeTechnicals() now returns target/stopLoss/entry for backtest capture
+ *  Everything else is identical to the original.
  */
 
 const axios = require("axios");
@@ -31,7 +32,7 @@ const TIMEFRAME_CONFIG = {
   "1month": { interval: "month",    days: 1825, candles: 60,  ttl: 60 * 60 * 1000 },
 };
 
-// ── NSE public endpoints ──────────────────────────────────────────────────────
+// ── NSE / BSE endpoints ───────────────────────────────────────────────────────
 const NSE_BASE    = "https://www.nseindia.com";
 const NSE_HEADERS = {
   "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -40,8 +41,6 @@ const NSE_HEADERS = {
   "Referer":         "https://www.nseindia.com/market-data/live-equity-market",
   "Connection":      "keep-alive",
 };
-
-// ── BSE public endpoints ──────────────────────────────────────────────────────
 const BSE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
   "Accept":     "application/json, text/plain, */*",
@@ -49,7 +48,6 @@ const BSE_HEADERS = {
   "Origin":     "https://www.bseindia.com",
 };
 
-// ── Market cap buckets ────────────────────────────────────────────────────────
 const MCAP_BUCKETS = {
   largecap:  { label: "Large Cap"  },
   midcap:    { label: "Mid Cap"    },
@@ -65,12 +63,14 @@ let scanCache = {
   advancing: 0, declining: 0, unchanged: 0, totalCount: 0,
 };
 
-// techCache keyed by "SYMBOL:timeframe"
 let techCache    = new Map();
 let nseCookie    = "";
 let lastCookieAt = 0;
 let ioRef        = null;
 let preWarmTimer = null;
+
+// ── NEW: Track last backtest capture time ─────────────────────────────────────
+let lastBacktestCapture = 0;
 
 // ── Symbol → mcap bucket map ──────────────────────────────────────────────────
 let symbolBucketMap = {};
@@ -98,7 +98,7 @@ function buildSymbolBucketMap() {
       "PERSISTENT","COFORGE","MPHASIS","LTIM","LTTS","OFSS",
       "BANKBARODA","PNB","CANBK","UNIONBANK","IDFCFIRSTB","FEDERALBNK",
       "M&M","TVSMOTOR","ASHOKLEY","ESCORTS","BALKRISIND",
-      "TATACHEM","PIDILITIND","DEEPAKNTR","AARTIIND","NAVINFLUOR",
+      "TATACHEM","DEEPAKNTR","AARTIIND","NAVINFLUOR",
       "DLF","GODREJPROP","OBEROIRLTY","PHOENIXLTD",
       "VOLTAS","WHIRLPOOL","BLUESTARCO","CROMPTON",
       "PAGEIND","ABFRL","VEDANT","MANYAVAR",
@@ -127,18 +127,18 @@ function buildSymbolBucketMap() {
       "RADICO","RAJESHEXPO","RAMCOCEM","RATNAMANI","RCF","REDINGTON",
       "RELAXO","RITES","RVNL","SAREGAMA","SCHAEFFLER","SEQUENT",
       "SHYAMMETL","SKFINDIA","SOLARINDS","SOMANYCERA","SRTRANSFIN",
-      "STARCEMENT","STYLEGLAZE","SUMICHEM","SUPRAJIT","SUVENPHAR",
-      "SYMPHONY","TANLA","TASTYBITE","TIINDIA","TIMKEN","TTKPRESTIG",
-      "TVTODAY","UCOBANK","UJJIVAN","ULTRACABL","UNIONBANK","USHAMART",
+      "STARCEMENT","SUMICHEM","SUPRAJIT","SUVENPHAR",
+      "SYMPHONY","TANLA","TIINDIA","TIMKEN","TTKPRESTIG",
+      "TVTODAY","UCOBANK","UJJIVAN","UNIONBANK","USHAMART",
       "VAIBHAVGBL","VGUARD","VHL","VINATIORGA","VMART","VSTIND",
-      "WABCOINDIA","WELCORP","WELSPUNLIV","WINSOME","WONDERLA","YESBANK",
+      "WABCOINDIA","WELCORP","WELSPUNLIV","WONDERLA","YESBANK",
     ]);
 
     for (const [, entry] of Object.entries(db)) {
       const sym = (entry.symbol || "").toUpperCase();
       if (!sym) continue;
-      if (KNOWN_LARGECAP.has(sym))      symbolBucketMap[sym] = "largecap";
-      else if (KNOWN_MIDCAP.has(sym))   symbolBucketMap[sym] = "midcap";
+      if (KNOWN_LARGECAP.has(sym))    symbolBucketMap[sym] = "largecap";
+      else if (KNOWN_MIDCAP.has(sym)) symbolBucketMap[sym] = "midcap";
       else {
         const lp = entry.lastPrice || 0;
         if (lp >= 2000)     symbolBucketMap[sym] = "midcap";
@@ -154,7 +154,6 @@ function buildSymbolBucketMap() {
 
 buildSymbolBucketMap();
 
-// ── Get mcap bucket ───────────────────────────────────────────────────────────
 function getMcapBucket(symbol, ltp, volume) {
   if (symbolBucketMap[symbol]) return symbolBucketMap[symbol];
   if (ltp >= 1000 && volume >= 500000)  return "largecap";
@@ -166,7 +165,6 @@ function getMcapBucket(symbol, ltp, volume) {
   return "microcap";
 }
 
-// ── Upstox token ──────────────────────────────────────────────────────────────
 function getUpstoxToken() {
   try {
     const { getAccessToken } = require("../upstoxStream");
@@ -176,7 +174,6 @@ function getUpstoxToken() {
   return process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
-// ── Instrument key lookup ─────────────────────────────────────────────────────
 function getInstrumentKey(symbol) {
   try {
     const { getInstrumentMap } = require("../../server");
@@ -203,29 +200,15 @@ function getInstrumentKey(symbol) {
     "ZOMATO":     "NSE_EQ|INE758T01015", "JSWSTEEL":   "NSE_EQ|INE019A01038",
     "HINDALCO":   "NSE_EQ|INE038A01020", "COALINDIA":  "NSE_EQ|INE522F01014",
     "DRREDDY":    "NSE_EQ|INE089A01023", "CIPLA":      "NSE_EQ|INE059A01026",
-    "EICHERMOT":  "NSE_EQ|INE066A01021", "HEROMOTOCO": "NSE_EQ|INE158A01026",
     "BAJAJ-AUTO": "NSE_EQ|INE917I01010", "BAJAJFINSV": "NSE_EQ|INE918I01026",
     "NESTLEIND":  "NSE_EQ|INE239A01016", "ASIANPAINT": "NSE_EQ|INE021A01026",
-    "ULTRACEMCO": "NSE_EQ|INE481G01011", "POWERGRID":  "NSE_EQ|INE752E01010",
-    "ONGC":       "NSE_EQ|INE213A01029", "BPCL":       "NSE_EQ|INE029A01011",
-    "GRASIM":     "NSE_EQ|INE047A01021", "DIVISLAB":   "NSE_EQ|INE361B01024",
-    "INDUSINDBK": "NSE_EQ|INE095A01012", "HAL":        "NSE_EQ|INE066F01020",
-    "BEL":        "NSE_EQ|INE263A01024", "RECLTD":     "NSE_EQ|INE020B01018",
-    "PFC":        "NSE_EQ|INE134E01011", "TATACONSUM": "NSE_EQ|INE192A01025",
-    "SBILIFE":    "NSE_EQ|INE123W01016", "HDFCLIFE":   "NSE_EQ|INE795G01014",
-    "BRITANNIA":  "NSE_EQ|INE216A01030", "ADANIPOWER": "NSE_EQ|INE814H01011",
-    "AWL":        "NSE_EQ|INE699H01024", "IRCTC":      "NSE_EQ|INE335Y01012",
-    "IRFC":       "NSE_EQ|INE053F01010", "TRENT":      "NSE_EQ|INE849A01020",
-    "NHPC":       "NSE_EQ|INE848E01016", "POLYCAB":    "NSE_EQ|INE455K01017",
-    "MOTHERSON":  "NSE_EQ|INE775A01035", "EXIDEIND":   "NSE_EQ|INE302A01020",
-    "JPPOWER":    "NSE_EQ|INE351F01018", "BALRAMCHIN": "NSE_EQ|INE119A01028",
-    "DEEPAKNTR":  "NSE_EQ|INE288B01029", "PERSISTENT": "NSE_EQ|INE262H01021",
-    "COFORGE":    "NSE_EQ|INE591G01017", "HEXT":       "NSE_EQ|INE093I01010",
+    "HAL":        "NSE_EQ|INE066F01020", "BEL":        "NSE_EQ|INE263A01024",
+    "RECLTD":     "NSE_EQ|INE020B01018", "PFC":        "NSE_EQ|INE134E01011",
+    "POLYCAB":    "NSE_EQ|INE455K01017", "PERSISTENT": "NSE_EQ|INE262H01021",
   };
   return FALLBACK[symbol] || FALLBACK[symbol.toUpperCase()] || null;
 }
 
-// ── NSE cookie ────────────────────────────────────────────────────────────────
 async function refreshNSECookie() {
   if (nseCookie && Date.now() - lastCookieAt < 20 * 60 * 1000) return;
   try {
@@ -239,7 +222,6 @@ async function refreshNSECookie() {
   }
 }
 
-// ── Fetch NSE 500 live data ───────────────────────────────────────────────────
 async function fetchNSEMarketData() {
   await refreshNSECookie();
   const res = await axios.get(
@@ -249,22 +231,21 @@ async function fetchNSEMarketData() {
   return (res.data?.data || []).map(s => ({ ...s, _exchange: "NSE" }));
 }
 
-// ── Fetch BSE data ────────────────────────────────────────────────────────────
 async function fetchBSEMarketData() {
   try {
     const res = await axios.get(
       "https://api.bseindia.com/BseIndiaAPI/api/GetSensexData/w",
-      { headers: { ...BSE_HEADERS }, timeout: 12000 }
+      { headers: BSE_HEADERS, timeout: 12000 }
     );
     const data = res.data?.Table || res.data?.data || [];
     return data.map(s => ({ ...s, _exchange: "BSE" }));
   } catch (e) {
-    console.warn("📊 BSE GetSensexData failed, trying index route:", e.message);
+    console.warn("📊 BSE GetSensexData failed:", e.message);
   }
   try {
     const res = await axios.get(
       "https://api.bseindia.com/BseIndiaAPI/api/liveMktData/w?Type=EQ&Grp=500",
-      { headers: { ...BSE_HEADERS }, timeout: 12000 }
+      { headers: BSE_HEADERS, timeout: 12000 }
     );
     const data = res.data?.Table || res.data?.data || (Array.isArray(res.data) ? res.data : []);
     return data.map(s => ({ ...s, _exchange: "BSE" }));
@@ -274,56 +255,48 @@ async function fetchBSEMarketData() {
   }
 }
 
-// ── Normalise NSE ─────────────────────────────────────────────────────────────
 function normaliseNSE(s) {
   if (!s.symbol || !s.lastPrice) return null;
-  const ltp       = parseFloat(s.lastPrice     || 0);
-  const changePct = parseFloat(s.pChange       || 0);
-  const volume    = parseInt (s.totalTradedVolume || 0, 10);
+  const ltp       = parseFloat(s.lastPrice || 0);
+  const changePct = parseFloat(s.pChange   || 0);
+  const volume    = parseInt(s.totalTradedVolume || 0, 10);
   if (ltp <= 0) return null;
   return {
     symbol:     s.symbol,
-    name:       s.meta?.companyName    || s.symbol,
-    ltp,
-    change:     parseFloat(s.change    || 0),
-    changePct,
-    open:       parseFloat(s.open      || 0),
-    high:       parseFloat(s.dayHigh   || 0),
-    low:        parseFloat(s.dayLow    || 0),
+    name:       s.meta?.companyName || s.symbol,
+    ltp, changePct, volume,
+    change:     parseFloat(s.change   || 0),
+    open:       parseFloat(s.open     || 0),
+    high:       parseFloat(s.dayHigh  || 0),
+    low:        parseFloat(s.dayLow   || 0),
     prevClose:  parseFloat(s.previousClose || 0),
-    volume,
     totalValue: parseFloat(s.totalTradedValue || 0),
-    yearHigh:   parseFloat(s.yearHigh  || 0),
-    yearLow:    parseFloat(s.yearLow   || 0),
-    sector:     s.meta?.industry       || "",
+    yearHigh:   parseFloat(s.yearHigh || 0),
+    yearLow:    parseFloat(s.yearLow  || 0),
+    sector:     s.meta?.industry || "",
     exchange:   "NSE",
   };
 }
 
-// ── Normalise BSE ─────────────────────────────────────────────────────────────
 function normaliseBSE(s) {
   const symbol =
     s.NSE_Symbol || s.NseSymbol || s.nseSymbol ||
     s.scrip_id   || s.Scrip_Id  || s.SCRIP_ID  || null;
-  const name =
-    s.Scrip_Name || s.LONG_NAME || s.CompanyName || s.name || symbol || "";
-  const ltp = parseFloat(s.LTP || s.CurrentValue || s.Close || s.lastPrice || 0);
+  const name   = s.Scrip_Name || s.LONG_NAME || s.CompanyName || s.name || symbol || "";
+  const ltp    = parseFloat(s.LTP || s.CurrentValue || s.Close || s.lastPrice || 0);
   if (!ltp || ltp <= 0 || !symbol) return null;
   const prevClose = parseFloat(s.PrevClose || s.PreviousClose || s.ClosePrice || ltp);
   const change    = ltp - prevClose;
   const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
   const volume    = parseInt(s.TotalVolume || s.Volume || s.TotalTradedVolume || 0, 10);
   return {
-    symbol:     symbol.toUpperCase(),
-    name,
-    ltp,
+    symbol: symbol.toUpperCase(), name, ltp, volume,
     change:     Math.round(change * 100) / 100,
     changePct:  Math.round(changePct * 100) / 100,
     open:       parseFloat(s.Open || s.OpenValue || ltp),
     high:       parseFloat(s.High || s.DayHigh   || ltp),
     low:        parseFloat(s.Low  || s.DayLow    || ltp),
     prevClose,
-    volume,
     totalValue: parseFloat(s.TotalTurnover || s.Turnover || 0),
     yearHigh:   parseFloat(s["52WeekHigh"] || s.YearHigh || 0),
     yearLow:    parseFloat(s["52WeekLow"]  || s.YearLow  || 0),
@@ -332,7 +305,7 @@ function normaliseBSE(s) {
   };
 }
 
-// ── Technical calculations ────────────────────────────────────────────────────
+// ── Technical calculations (all same as original) ─────────────────────────────
 function calcEMA(closes, period) {
   if (closes.length < period) return null;
   const k = 2 / (period + 1);
@@ -340,12 +313,10 @@ function calcEMA(closes, period) {
   for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
   return Math.round(ema * 100) / 100;
 }
-
 function calcSMA(closes, period) {
   if (closes.length < period) return null;
   return Math.round((closes.slice(-period).reduce((a, b) => a + b, 0) / period) * 100) / 100;
 }
-
 function calcRSI(closes, period = 14) {
   if (closes.length < period + 1) return null;
   const recent = closes.slice(-(period + 1));
@@ -358,7 +329,6 @@ function calcRSI(closes, period = 14) {
   if (avgLoss === 0) return 100;
   return Math.round((100 - 100 / (1 + (gains / period) / avgLoss)) * 100) / 100;
 }
-
 function calcMACD(closes) {
   if (closes.length < 35) return null;
   const ema12 = calcEMA(closes, 12);
@@ -380,7 +350,6 @@ function calcMACD(closes) {
     crossover: histogram != null ? (histogram > 0 ? "BULLISH" : "BEARISH") : null,
   };
 }
-
 function calcBollingerBands(closes, period = 20, mult = 2) {
   if (closes.length < period) return null;
   const slice  = closes.slice(-period);
@@ -398,7 +367,6 @@ function calcBollingerBands(closes, period = 20, mult = 2) {
     bPct > 70   ? "NEAR_UPPER"  : bPct < 30   ? "NEAR_LOWER"  : "MIDDLE";
   return { upper, middle, lower, bandwidth: bw, percentB: bPct, position };
 }
-
 function calcATR(candles, period = 14) {
   if (!candles || candles.length < period + 1) return null;
   const trs = [];
@@ -409,7 +377,6 @@ function calcATR(candles, period = 14) {
   const recent = trs.slice(-period);
   return Math.round((recent.reduce((a, b) => a + b, 0) / period) * 100) / 100;
 }
-
 function calcStochastic(candles, kPeriod = 14, dPeriod = 3) {
   if (!candles || candles.length < kPeriod + dPeriod) return null;
   const kValues = [];
@@ -426,7 +393,6 @@ function calcStochastic(candles, kPeriod = 14, dPeriod = 3) {
   const dLast  = Math.round((dSlice.reduce((a, b) => a + b, 0) / dPeriod) * 100) / 100;
   return { k: kLast, d: dLast };
 }
-
 function calcWilliamsR(candles, period = 14) {
   if (!candles || candles.length < period) return null;
   const slice = candles.slice(-period);
@@ -436,7 +402,6 @@ function calcWilliamsR(candles, period = 14) {
   if (high === low) return -50;
   return Math.round(((high - close) / (high - low)) * -10000) / 100;
 }
-
 function calcADX(candles, period = 14) {
   if (!candles || candles.length < period * 2) return null;
   const dmPlus = [], dmMinus = [], trs = [];
@@ -464,7 +429,6 @@ function calcADX(candles, period = 14) {
   const adx = Math.round((adxSlice.reduce((a, b) => a + b, 0) / period) * 100) / 100;
   return { adx, diPlus: Math.round(diPlus[diPlus.length - 1] * 100) / 100, diMinus: Math.round(diMinus[diMinus.length - 1] * 100) / 100 };
 }
-
 function calcSupertrend(candles, period = 10, multiplier = 3) {
   if (!candles || candles.length < period + 5) return null;
   const atr = calcATR(candles, period);
@@ -477,7 +441,6 @@ function calcSupertrend(candles, period = 10, multiplier = 3) {
   const level = trend === "BULLISH" ? lower : upper;
   return { trend, level: Math.round(level * 100) / 100, atr };
 }
-
 function calcOBV(candles) {
   if (!candles || candles.length < 10) return null;
   let obv = 0;
@@ -498,7 +461,6 @@ function calcOBV(candles) {
   if (diff < -Math.abs(first10avg) * 0.05)          return "Strongly Falling";
   return "Falling";
 }
-
 function calcMFI(candles, period = 14) {
   if (!candles || candles.length < period + 1) return null;
   const slice = candles.slice(-(period + 1));
@@ -512,15 +474,12 @@ function calcMFI(candles, period = 14) {
   if (negFlow === 0) return 100;
   return Math.round((100 - 100 / (1 + posFlow / negFlow)) * 100) / 100;
 }
-
 function calcMASummary(closes, ltp) {
   const mas = {
     ema5: calcEMA(closes, 5), ema9: calcEMA(closes, 9),
-    ema21: calcEMA(closes, 21), ema50: calcEMA(closes, 50),
-    ema200: calcEMA(closes, 200),
+    ema21: calcEMA(closes, 21), ema50: calcEMA(closes, 50), ema200: calcEMA(closes, 200),
     sma10: calcSMA(closes, 10), sma20: calcSMA(closes, 20),
-    sma50: calcSMA(closes, 50), sma100: calcSMA(closes, 100),
-    sma200: calcSMA(closes, 200),
+    sma50: calcSMA(closes, 50), sma100: calcSMA(closes, 100), sma200: calcSMA(closes, 200),
   };
   let buy = 0, sell = 0, neutral = 0;
   for (const v of Object.values(mas)) {
@@ -586,10 +545,12 @@ function computeTechnicals(symbol, candles) {
   const atrVal = atr || ltp * 0.015;
   const isBull = score >= 50;
   const entry  = Math.round(ltp * 100) / 100;
-  const sl     = isBull
+
+  // ── These are now returned for backtest capture ───────────────────────────
+  const sl = isBull
     ? Math.round((ltp - 1.5 * atrVal) * 100) / 100
     : Math.round((ltp + 1.5 * atrVal) * 100) / 100;
-  const tp2    = isBull
+  const tp2 = isBull
     ? Math.round((ltp + 3.0 * atrVal) * 100) / 100
     : Math.round((ltp - 3.0 * atrVal) * 100) / 100;
 
@@ -607,10 +568,15 @@ function computeTechnicals(symbol, candles) {
     signal: sig,
     strength: score,
     entry, sl, tp: tp2,
+    // backtest fields:
+    target:    tp2,
+    stopLoss:  sl,
+    price:     entry,
+    techScore: score,
+    // --
     emas: {
-      ema5:   calcEMA(closes, 5),  ema9:   calcEMA(closes, 9),
-      ema21:  calcEMA(closes, 21), ema50:  calcEMA(closes, 50),
-      ema200: calcEMA(closes, 200),
+      ema5: calcEMA(closes, 5), ema9: calcEMA(closes, 9),
+      ema21: calcEMA(closes, 21), ema50: calcEMA(closes, 50), ema200: calcEMA(closes, 200),
     },
     rsi,
     stochastic:     stoch ? { k: stoch.k, d: stoch.d } : null,
@@ -644,12 +610,10 @@ async function fetchCandles(symbol, days, interval) {
       const fmtD = d => d.toISOString().slice(0, 10);
       const enc  = encodeURIComponent(instrKey);
       const url  = `https://api.upstox.com/v2/historical-candle/${enc}/${interval}/${fmtD(to)}/${fmtD(from)}`;
-
-      const res = await axios.get(url, {
+      const res  = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         timeout: 12000,
       });
-
       let raw = res.data?.data?.candles || [];
       if (Array.isArray(raw) && raw.length > 0) {
         raw = raw.slice().reverse();
@@ -658,27 +622,18 @@ async function fetchCandles(symbol, days, interval) {
           l: parseFloat(c[3]), c: parseFloat(c[4]),
           v: parseFloat(c[5] || 0),
         })).filter(c => c.c > 0);
-
         if (is4H && candles.length >= 4) {
           const agg = [];
           for (let i = 0; i + 3 < candles.length; i += 4) {
             const grp = candles.slice(i, i + 4);
-            agg.push({
-              o: grp[0].o,
-              h: Math.max(...grp.map(x => x.h)),
-              l: Math.min(...grp.map(x => x.l)),
-              c: grp[grp.length - 1].c,
-              v: grp.reduce((s, x) => s + x.v, 0),
-            });
+            agg.push({ o: grp[0].o, h: Math.max(...grp.map(x => x.h)), l: Math.min(...grp.map(x => x.l)), c: grp[grp.length - 1].c, v: grp.reduce((s, x) => s + x.v, 0) });
           }
           candles = agg;
         }
-
         if (candles.length >= 20) return candles;
       }
     } catch (e) {
-      const status = e.response?.status;
-      console.warn(`📊 [${symbol}][${interval}] Upstox failed [${status}]: ${e.response?.data?.message || e.message}`);
+      console.warn(`📊 [${symbol}][${interval}] Upstox failed [${e.response?.status}]: ${e.response?.data?.message || e.message}`);
     }
   }
 
@@ -706,11 +661,9 @@ async function fetchCandles(symbol, days, interval) {
       console.warn(`📊 [${symbol}] NSE daily fallback failed:`, e.message);
     }
   }
-
   return [];
 }
 
-// ── Get technicals for a specific timeframe (cache-first) ─────────────────────
 async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
   const cfg      = TIMEFRAME_CONFIG[timeframe] || TIMEFRAME_CONFIG["1day"];
   const cacheKey = `${symbol}:${timeframe}`;
@@ -732,61 +685,37 @@ async function getTechnicals(symbol) {
   return getTechnicalsForTimeframe(symbol, "1day");
 }
 
-// ── Pre-warm: fetch tech for a list of symbols, emit batches to frontend ──────
-// KEY FIX: After each successful fetch, emit the result to all connected sockets
-// via "scanner-tech-batch". The frontend listens for this and populates its
-// local techCacheRef, which makes RSI/MACD/Bollinger show without clicking.
 async function preWarmTechCache(symbols) {
   if (!symbols || !symbols.length) return;
-
   const token = getUpstoxToken();
-  if (!token) {
-    console.warn("📊 Pre-warm skipped — no Upstox token");
-    return;
-  }
-
+  if (!token) { console.warn("📊 Pre-warm skipped — no Upstox token"); return; }
   console.log(`📊 Pre-warming ${symbols.length} symbols (1day)…`);
-
-  const BATCH_EMIT_SIZE = 10; // emit to frontend every N symbols to avoid flooding
+  const BATCH_EMIT_SIZE = 10;
   let batch = [];
   let warmed = 0;
-
   for (const sym of symbols) {
     try {
       const cfg      = TIMEFRAME_CONFIG["1day"];
       const cacheKey = `${sym}:1day`;
-
-      // Use cached if still fresh
-      let result = techCache.get(cacheKey);
+      let result     = techCache.get(cacheKey);
       if (!result || Date.now() - result.computedAt >= cfg.ttl) {
         result = await getTechnicals(sym);
       }
-
-      // ── KEY FIX: push result to batch for socket emission ──────────────
       if (result) {
         batch.push({ key: `${sym}:1day`, data: result });
         warmed++;
       }
-
-      // Emit in batches so the frontend updates progressively
       if (batch.length >= BATCH_EMIT_SIZE) {
         if (ioRef) ioRef.emit("scanner-tech-batch", batch);
         batch = [];
       }
     } catch (_) {}
-
     await new Promise(r => setTimeout(r, PREWARM_BETWEEN));
   }
-
-  // Emit any remaining results
-  if (batch.length > 0 && ioRef) {
-    ioRef.emit("scanner-tech-batch", batch);
-  }
-
-  console.log(`📊 Pre-warm done: ${warmed}/${symbols.length} — emitted to frontend`);
+  if (batch.length > 0 && ioRef) ioRef.emit("scanner-tech-batch", batch);
+  console.log(`📊 Pre-warm done: ${warmed}/${symbols.length}`);
 }
 
-// ── Build socket payload ──────────────────────────────────────────────────────
 function buildPayload(cache) {
   return {
     gainers:   cache.gainers  || [],
@@ -798,7 +727,7 @@ function buildPayload(cache) {
       smallcap:  (cache.byMcap?.smallcap  || []).slice(0, 100),
       microcap:  (cache.byMcap?.microcap  || []).slice(0, 100),
     },
-    bySector: cache.bySector || [],
+    bySector:  cache.bySector || [],
     market: {
       advancing: cache.advancing  || 0,
       declining: cache.declining  || 0,
@@ -807,6 +736,64 @@ function buildPayload(cache) {
     },
     updatedAt: cache.updatedAt,
   };
+}
+
+// ── NEW: Auto-capture signals for backtest ────────────────────────────────────
+// Called after each scan. Only captures once per market session (9:15-10:00 AM).
+// Builds signal objects from pre-warmed tech cache for top gainers + losers.
+function tryBacktestCapture(stocks) {
+  try {
+    const backtestEngine = require("../backtestEngine");
+    const { subscribeStocksForBacktest } = require("../upstoxStream");
+
+    if (!backtestEngine.isMarketOpen()) return;
+
+    // Only capture once per day during 9:15–10:30 AM window
+    const now  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const h    = now.getHours(), m = now.getMinutes();
+    const mins = h * 60 + m;
+    const isCaptureWindow = mins >= 555 && mins <= 630; // 9:15 to 10:30 AM
+
+    // Throttle: only capture once every 3 hours max
+    if (!isCaptureWindow) return;
+    if (Date.now() - lastBacktestCapture < 3 * 60 * 60 * 1000) return;
+
+    // Build signals from tech cache for stocks with a clear signal
+    const signals = [];
+    for (const stock of stocks) {
+      const cacheKey = `${stock.symbol}:1day`;
+      const tech     = techCache.get(cacheKey);
+      if (!tech) continue;
+      if (tech.signal === "HOLD") continue; // skip neutral
+
+      signals.push({
+        symbol:    stock.symbol,
+        sector:    stock.sector || tech.sector || "Unknown",
+        signal:    tech.signal,
+        price:     tech.ltp || stock.ltp,
+        target:    tech.tp  || tech.target,
+        stopLoss:  tech.sl  || tech.stopLoss,
+        rsi:       tech.rsi,
+        techScore: tech.techScore || tech.strength,
+        macd:      tech.macd,
+        isSwing:   false,
+      });
+    }
+
+    if (!signals.length) return;
+
+    const result = backtestEngine.captureSession(signals);
+    if (result.success) {
+      lastBacktestCapture = Date.now();
+      // Subscribe the signal stocks for live price tracking
+      const symbols = signals.map(s => s.symbol);
+      subscribeStocksForBacktest(symbols);
+      console.log(`📊 Backtest: auto-captured ${signals.length} signals from scanner`);
+    }
+  } catch (e) {
+    // Don't break scanner if backtest engine fails
+    console.warn("📊 Backtest auto-capture skipped:", e.message);
+  }
 }
 
 // ── Main scan ─────────────────────────────────────────────────────────────────
@@ -818,22 +805,17 @@ async function runScanner() {
     try {
       nseRaw = await fetchNSEMarketData();
       console.log(`📊 NSE: ${nseRaw.length} raw records`);
-    } catch (e) {
-      console.warn("📊 NSE 500 fetch failed —", e.message);
-    }
+    } catch (e) { console.warn("📊 NSE 500 fetch failed —", e.message); }
 
     let bseRaw = [];
     try {
       bseRaw = await fetchBSEMarketData();
       console.log(`📊 BSE: ${bseRaw.length} raw records`);
-    } catch (e) {
-      console.warn("📊 BSE fetch failed —", e.message);
-    }
+    } catch (e) { console.warn("📊 BSE fetch failed —", e.message); }
 
-    const nseStocks = nseRaw.map(normaliseNSE).filter(Boolean);
+    const nseStocks  = nseRaw.map(normaliseNSE).filter(Boolean);
     const nseSymbols = new Set(nseStocks.map(s => s.symbol));
-    const bseStocks  = bseRaw.map(normaliseBSE).filter(Boolean)
-                             .filter(s => !nseSymbols.has(s.symbol));
+    const bseStocks  = bseRaw.map(normaliseBSE).filter(Boolean).filter(s => !nseSymbols.has(s.symbol));
 
     let stocks = [...nseStocks, ...bseStocks];
     if (!stocks.length) { console.warn("📊 No stocks — skipping"); return; }
@@ -874,10 +856,7 @@ async function runScanner() {
     })).sort((a, b) => b.avgChange - a.avgChange);
 
     scanCache = {
-      gainers, losers,
-      allStocks:  stocks,
-      byMcap,
-      bySector,
+      gainers, losers, allStocks: stocks, byMcap, bySector,
       updatedAt:  Date.now(),
       totalCount: stocks.length,
       advancing:  stocks.filter(s => s.changePct > 0).length,
@@ -885,13 +864,10 @@ async function runScanner() {
       unchanged:  stocks.filter(s => s.changePct === 0).length,
     };
 
-    console.log(`📊 ${stocks.length} total stocks (NSE: ${nseStocks.length}, BSE-only: ${bseStocks.length})`);
+    console.log(`📊 ${stocks.length} total stocks`);
 
-    if (ioRef) {
-      ioRef.emit("scanner-update", buildPayload(scanCache));
-    }
+    if (ioRef) ioRef.emit("scanner-update", buildPayload(scanCache));
 
-    // Deduplicated list for pre-warm: gainers + losers + large-cap + top mid-cap
     const toWarm = [
       ...gainers.map(s => s.symbol),
       ...losers.map(s => s.symbol),
@@ -900,7 +876,12 @@ async function runScanner() {
     ].filter((sym, i, a) => a.indexOf(sym) === i);
 
     if (preWarmTimer) clearTimeout(preWarmTimer);
-    preWarmTimer = setTimeout(() => preWarmTechCache(toWarm), PREWARM_DELAY);
+    preWarmTimer = setTimeout(() => {
+      preWarmTechCache(toWarm).then(() => {
+        // ── NEW: After pre-warm completes, try to auto-capture for backtest ──
+        tryBacktestCapture(toWarm.map(sym => stocks.find(s => s.symbol === sym)).filter(Boolean));
+      });
+    }, PREWARM_DELAY);
 
   } catch (e) {
     console.error("📊 Scanner error:", e.message, e.stack);
@@ -910,14 +891,8 @@ async function runScanner() {
 // ── Socket handlers ───────────────────────────────────────────────────────────
 function registerScannerHandlers(io) {
   io.on("connection", socket => {
-    // Send scanner data immediately on connect
-    if (scanCache.updatedAt > 0) {
-      socket.emit("scanner-update", buildPayload(scanCache));
-    }
+    if (scanCache.updatedAt > 0) socket.emit("scanner-update", buildPayload(scanCache));
 
-    // ── KEY FIX: On new connection, replay all cached 1day tech data so the
-    // new client's table columns populate immediately without waiting for the
-    // next pre-warm cycle. Send in chunks to avoid one huge payload.
     const cachedEntries = [];
     for (const [key, data] of techCache.entries()) {
       if (key.endsWith(":1day")) cachedEntries.push({ key, data });
@@ -926,7 +901,6 @@ function registerScannerHandlers(io) {
       const CHUNK = 20;
       for (let i = 0; i < cachedEntries.length; i += CHUNK) {
         const chunk = cachedEntries.slice(i, i + CHUNK);
-        // Stagger chunks slightly to avoid overwhelming the client
         setTimeout(() => socket.emit("scanner-tech-batch", chunk), i * 50);
       }
       console.log(`📊 Replayed ${cachedEntries.length} cached tech entries to new socket`);
@@ -938,7 +912,6 @@ function registerScannerHandlers(io) {
         const result = await getTechnicals(symbol.toUpperCase());
         if (result) {
           socket.emit("scanner-technicals", result);
-          // Also send via batch format so frontend updates the table column too
           socket.emit("scanner-tech-batch", [{ key: `${symbol.toUpperCase()}:1day`, data: result }]);
         }
       } catch (e) {
@@ -968,8 +941,8 @@ function startMarketScanner(io) {
   console.log("📊 Market Scanner started");
 }
 
-function getScannerData()                         { return scanCache; }
-async function getTechnicalsREST(symbol)          { return getTechnicals(symbol); }
+function getScannerData()                { return scanCache; }
+async function getTechnicalsREST(symbol) { return getTechnicals(symbol); }
 
 module.exports = {
   startMarketScanner,

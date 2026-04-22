@@ -1,20 +1,12 @@
 /**
  * upstoxStream.js
- * Place at: server/services/upstoxStream.js
+ * Location: server/services/upstoxStream.js   ← REPLACE EXISTING
  *
- * FIX: circular dependency causing registerLTPTick = null
- *
- * Root cause: upstoxStream.js was doing:
- *   ({ registerLTPTick } = require("../coordinator"))
- *   at module load time. But coordinator.js requires upstoxStream.js
- *   during its own load — so when upstoxStream runs that require(),
- *   coordinator's exports object is still empty → registerLTPTick = null.
- *   LTP ticks never reached gannIntegration → Gann panel blank.
- *
- * Fix: remove the require("../coordinator") entirely from this file.
- *   Instead expose setLTPTickHandler(fn) — same pattern already used
- *   for setOITickHandler. server.js calls it after both modules are loaded.
- *   Zero circular dependency. LTP ticks now flow correctly.
+ * Changes from original:
+ *  1. Added backtestEngine injection (setBacktestEngine) — no circular deps
+ *  2. Added subscribeStocksForBacktest() — subscribes active signal stocks
+ *  3. In parseAndEmit: stock LTP ticks now forwarded to backtestEngine.onLTPTick
+ *     so WIN/LOSS resolves automatically when price hits target or SL
  */
 
 "use strict";
@@ -31,18 +23,11 @@ let currentToken = null;
 let ioRef        = null;
 let reconnTimer  = null;
 
-// ── Injected handlers (set via setters after all modules load) ────────────────
-let ltpTickHandler = null;   // replaces circular require("../coordinator")
-let oiTickHandler  = null;
+// ── Injected handlers ─────────────────────────────────────────────────────────
+let ltpTickHandler  = null;
+let oiTickHandler   = null;
+let backtestEngine  = null;   // ← NEW: injected from server.js
 
-/**
- * FIX: Call this from server.js AFTER coordinator is loaded.
- * Replaces the broken require("../coordinator") pattern.
- *
- * In server.js .finally() block, add:
- *   const { registerLTPTick } = require("./coordinator");
- *   setLTPTickHandler(registerLTPTick);
- */
 function setLTPTickHandler(fn) {
   if (typeof fn === "function") {
     ltpTickHandler = fn;
@@ -52,6 +37,17 @@ function setLTPTickHandler(fn) {
 
 function setOITickHandler(handler) {
   oiTickHandler = handler;
+}
+
+// ── NEW: Inject backtestEngine after all modules are loaded ───────────────────
+// Call from server.js .finally() block AFTER backtestEngine.init(io):
+//   const { setBacktestEngine } = require("./services/upstoxStream");
+//   setBacktestEngine(require("./services/backtestEngine"));
+function setBacktestEngine(engine) {
+  if (engine && typeof engine.onLTPTick === "function") {
+    backtestEngine = engine;
+    console.log("✅ Upstox: Backtest engine wired — stock LTP → auto WIN/LOSS resolution");
+  }
 }
 
 // ── Index instruments ─────────────────────────────────────────────────────────
@@ -76,6 +72,9 @@ const GANN_SYMBOL_MAP = {
 // ── Option instruments ────────────────────────────────────────────────────────
 const optionInstruments = new Set();
 
+// ── NEW: Stock instruments for backtest live tracking ─────────────────────────
+const stockInstruments = new Set();
+
 function subscribeOptions(instrKeys) {
   if (!instrKeys || !instrKeys.length) return;
   const newKeys = instrKeys.filter(k => !optionInstruments.has(k));
@@ -89,6 +88,28 @@ function subscribeOptions(instrKeys) {
     } catch (e) {
       console.warn("⚠️ Upstox option subscribe error:", e.message);
     }
+  }
+}
+
+// ── NEW: Subscribe stock symbols for backtest live price tracking ──────────────
+// Called from marketScanner after captureSession()
+// symbols: ["RELIANCE", "TCS", ...]
+function subscribeStocksForBacktest(symbols) {
+  if (!symbols || !symbols.length) return;
+  const keys    = symbols.map(s => `NSE_EQ|${s.toUpperCase()}`);
+  const newKeys = keys.filter(k => !stockInstruments.has(k));
+  if (!newKeys.length) return;
+  newKeys.forEach(k => stockInstruments.add(k));
+  if (streamer) {
+    try {
+      streamer.subscribe(newKeys, "ltpc");
+      console.log(`📡 Upstox: subscribed ${newKeys.length} stocks for backtest live tracking`);
+    } catch (e) {
+      console.warn("⚠️ Upstox stock backtest subscribe error:", e.message);
+    }
+  } else {
+    // Streamer not yet connected — they'll be subscribed on next "open" event
+    console.log(`📡 Upstox: queued ${newKeys.length} stocks (streamer not yet open)`);
   }
 }
 
@@ -109,6 +130,7 @@ function parseAndEmit(raw) {
       const ff   = feed?.ff || feed;
       const name = NAME_MAP[key];
 
+      // ── INDEX tick ────────────────────────────────────────────────────────
       if (name) {
         const ltpc =
           ff?.indexFF?.ltpc  ||
@@ -134,7 +156,7 @@ function parseAndEmit(raw) {
               _ts:    Date.now(),
             });
 
-            // FIX: use injected handler instead of circular require
+            // Gann + composite engine
             if (typeof ltpTickHandler === "function") {
               const gannSym = GANN_SYMBOL_MAP[name] || name;
               ltpTickHandler(gannSym, price);
@@ -144,16 +166,36 @@ function parseAndEmit(raw) {
         continue;
       }
 
-      // Option tick
+      // ── OPTION tick ───────────────────────────────────────────────────────
       if (key.startsWith("NSE_FO|") || key.startsWith("BSE_FO|")) {
         if (oiTickHandler) oiTickHandler(key, ff || {});
+        continue;
+      }
+
+      // ── STOCK tick (NSE_EQ|) — NEW: forward to backtest engine ───────────
+      if (key.startsWith("NSE_EQ|") || key.startsWith("BSE_EQ|")) {
+        if (backtestEngine) {
+          const ltpc =
+            ff?.equityFF?.ltpc ||
+            ff?.marketFF?.ltpc ||
+            feed?.ltpc         ||
+            null;
+          if (ltpc) {
+            const price = parseFloat(ltpc.ltp || 0);
+            if (price > 0) {
+              const symbol = key.replace("NSE_EQ|", "").replace("BSE_EQ|", "");
+              backtestEngine.onLTPTick(symbol, price);
+            }
+          }
+        }
+        continue;
       }
     }
 
     if (updates.length > 0 && ioRef) {
       ioRef.emit("market-tick", updates);
     }
-  } catch (e) {
+  } catch (_) {
     // silently skip malformed ticks
   }
 }
@@ -171,14 +213,8 @@ function stopStreamer() {
 }
 
 function startStreamer(accessToken, io) {
-  if (!UpstoxClient) {
-    console.log("⚠️  upstox-js-sdk not available");
-    return;
-  }
-  if (!accessToken) {
-    console.log("⚠️  Upstox stream: no access token");
-    return;
-  }
+  if (!UpstoxClient) { console.log("⚠️  upstox-js-sdk not available"); return; }
+  if (!accessToken)  { console.log("⚠️  Upstox stream: no access token"); return; }
 
   currentToken = accessToken;
   ioRef        = io;
@@ -193,12 +229,16 @@ function startStreamer(accessToken, io) {
 
     streamer.on("open", () => {
       console.log("✅ Upstox Market WebSocket connected");
+
+      // Subscribe indexes
       try {
         streamer.subscribe(INDEX_INSTRUMENTS, "ltpc");
         console.log("📡 Upstox: subscribed 3 index instruments (ltpc)");
       } catch (e) {
         console.log("⚠️  Upstox index subscribe error:", e.message);
       }
+
+      // Subscribe options (if any queued)
       if (optionInstruments.size > 0) {
         try {
           streamer.subscribe(Array.from(optionInstruments), "full_d30");
@@ -207,6 +247,17 @@ function startStreamer(accessToken, io) {
           console.log("⚠️  Upstox option subscribe error:", e.message);
         }
       }
+
+      // ── NEW: Subscribe stocks queued for backtest tracking ────────────────
+      if (stockInstruments.size > 0) {
+        try {
+          streamer.subscribe(Array.from(stockInstruments), "ltpc");
+          console.log(`📡 Upstox: subscribed ${stockInstruments.size} stocks for backtest`);
+        } catch (e) {
+          console.log("⚠️  Upstox stock backtest subscribe error:", e.message);
+        }
+      }
+
       if (ioRef) ioRef.emit("upstox-status", { connected: true });
     });
 
@@ -241,6 +292,9 @@ module.exports = {
   stopStreamer,
   subscribeOptions,
   setOITickHandler,
-  setLTPTickHandler,   // NEW — wire this in server.js
+  setLTPTickHandler,
   getAccessToken,
+  // NEW exports:
+  setBacktestEngine,
+  subscribeStocksForBacktest,
 };
