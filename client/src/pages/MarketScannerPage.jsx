@@ -16,9 +16,79 @@ const fmtK  = (n) => {
   if (n >= 1e5) return (n / 1e5).toFixed(2) + " L";
   return n.toLocaleString("en-IN");
 };
-const clr   = (v) => v > 0 ? "#22c55e" : v < 0 ? "#ef4444" : "#888";
+const clr   = (v) => v > 0 ? "#4ade80" : v < 0 ? "#f87171" : "#9ca3af";
 const arrow = (v) => v > 0 ? "▲" : v < 0 ? "▼" : "—";
 const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
+
+// ── ACCESS CONTROL ─────────────────────────────────────────────────────────────
+// Change these to your preferred credentials
+const ACCESS_PIN = "MARKET2024";
+const SESSION_KEY = "mscanner_auth";
+
+function AccessGate({ onAuth }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [shake, setShake] = useState(false);
+
+  const handleSubmit = () => {
+    if (pin.toUpperCase() === ACCESS_PIN) {
+      sessionStorage.setItem(SESSION_KEY, "1");
+      onAuth();
+    } else {
+      setError("Incorrect access code");
+      setShake(true);
+      setTimeout(() => setShake(false), 600);
+      setPin("");
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#060a10", display: "flex",
+      alignItems: "center", justifyContent: "center", fontFamily: "'JetBrains Mono','Fira Code',monospace",
+    }}>
+      <div style={{
+        background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 12,
+        padding: "40px 48px", textAlign: "center", maxWidth: 380, width: "100%",
+        animation: shake ? "shake 0.5s" : "none",
+      }}>
+        <style>{`@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}`}</style>
+        <div style={{ fontSize: 32, marginBottom: 16 }}>🔐</div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: "#e2eaf4", marginBottom: 6 }}>Market Scanner</div>
+        <div style={{ fontSize: 12, color: "#7a8fa6", marginBottom: 28 }}>Enter your access code to continue</div>
+        <input
+          type="password"
+          placeholder="Access code…"
+          value={pin}
+          onChange={e => setPin(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && handleSubmit()}
+          autoFocus
+          style={{
+            width: "100%", background: "#111620", border: "1px solid #1e2a3a",
+            borderRadius: 8, padding: "12px 16px", color: "#e2eaf4", fontSize: 14,
+            fontFamily: "inherit", outline: "none", marginBottom: 12, letterSpacing: 3,
+            textAlign: "center",
+          }}
+        />
+        {error && <div style={{ color: "#f87171", fontSize: 12, marginBottom: 12 }}>{error}</div>}
+        <button
+          type="button"
+          onClick={handleSubmit}
+          style={{
+            width: "100%", background: "#3b82f6", border: "none", borderRadius: 8,
+            padding: "12px", color: "#fff", fontSize: 14, fontWeight: 700,
+            cursor: "pointer", fontFamily: "inherit",
+          }}
+        >
+          Access Scanner →
+        </button>
+        <div style={{ fontSize: 10, color: "#3d5068", marginTop: 20 }}>
+          Unauthorized access is prohibited
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Theme tokens ──────────────────────────────────────────────────────────────
 const T = {
@@ -28,16 +98,20 @@ const T = {
   bgItem:    "#111620",
   border:    "#1e2a3a",
   borderSub: "#192130",
-  textPri:   "#e2eaf4",
-  textSec:   "#7a8fa6",
-  textDim:   "#3d5068",
-  green:     "#22c55e",
-  red:       "#ef4444",
-  yellow:    "#f59e0b",
-  blue:      "#3b82f6",
-  purple:    "#a78bfa",
-  indigo:    "#818cf8",
-  orange:    "#f97316",
+  // FIX: much brighter text for visibility
+  textPri:   "#f0f6ff",   // was #e2eaf4 — now near-white
+  textSec:   "#94a3b8",   // was #7a8fa6 — brighter
+  textDim:   "#4a6080",   // was #3d5068 — brighter
+  // FIX: brighter status colors
+  green:     "#4ade80",   // was #22c55e
+  red:       "#f87171",   // was #ef4444
+  yellow:    "#fbbf24",   // was #f59e0b
+  blue:      "#60a5fa",   // was #3b82f6
+  purple:    "#c4b5fd",   // was #a78bfa
+  indigo:    "#a5b4fc",   // was #818cf8
+  orange:    "#fb923c",   // was #f97316
+  // Price specifically — make it pop
+  price:     "#ffffff",
 };
 
 // ── Timeframes ────────────────────────────────────────────────────────────────
@@ -63,18 +137,18 @@ function MiniBar({ value, max = 100, color = T.blue }) {
 
 function SigBadge({ signal }) {
   const map = {
-    "STRONG BUY":  { bg: "#14532d", color: "#22c55e" },
-    "BUY":         { bg: "#052e16", color: "#4ade80" },
-    "HOLD":        { bg: "#431407", color: "#f59e0b" },
-    "NEUTRAL":     { bg: "#1a2030", color: "#7a8fa6" },
-    "SELL":        { bg: "#450a0a", color: "#f87171" },
-    "STRONG SELL": { bg: "#3b0a0a", color: "#ef4444" },
-    "N/A":         { bg: "#1a2030", color: "#3d5068" },
+    "STRONG BUY":  { bg: "#14532d", color: "#4ade80" },
+    "BUY":         { bg: "#052e16", color: "#86efac" },
+    "HOLD":        { bg: "#431407", color: "#fbbf24" },
+    "NEUTRAL":     { bg: "#1a2030", color: "#94a3b8" },
+    "SELL":        { bg: "#450a0a", color: "#fca5a5" },
+    "STRONG SELL": { bg: "#3b0a0a", color: "#f87171" },
+    "N/A":         { bg: "#1a2030", color: "#4a6080" },
   };
   const s = map[signal] || map["N/A"];
   return (
     <span style={{
-      background: s.bg, color: s.color, border: `1px solid ${s.color}44`,
+      background: s.bg, color: s.color, border: `1px solid ${s.color}55`,
       fontSize: 9, fontWeight: 700, padding: "2px 7px",
       borderRadius: 3, letterSpacing: "0.5px", whiteSpace: "nowrap",
     }}>{signal || "N/A"}</span>
@@ -87,8 +161,8 @@ function ExBadge({ exchange }) {
     <span style={{
       fontSize: 8, fontWeight: 700, padding: "1px 5px", borderRadius: 2,
       background: isBSE ? "#1a1a40" : "#0a2010",
-      color: isBSE ? "#818cf8" : "#4ade80",
-      border: `1px solid ${isBSE ? "#818cf844" : "#4ade8044"}`,
+      color: isBSE ? "#a5b4fc" : "#86efac",
+      border: `1px solid ${isBSE ? "#a5b4fc44" : "#86efac44"}`,
       marginLeft: 3,
     }}>{exchange || "NSE"}</span>
   );
@@ -110,7 +184,7 @@ function McapBadge({ bucket, label }) {
   );
 }
 
-// ── Stock row ─────────────────────────────────────────────────────────────────
+// ── Stock row — FIX: improved contrast ───────────────────────────────────────
 function StockRow({ stock, rank, onSelect, selected, tech }) {
   const pct = stock.changePct;
   return (
@@ -127,16 +201,18 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
     >
       <td style={{ padding: "7px 8px", color: T.textDim, fontSize: 10, width: 28 }}>{rank}</td>
       <td style={{ padding: "7px 8px" }}>
+        {/* FIX: Symbol now white/bright, name also brighter */}
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ fontWeight: 700, fontSize: 12, color: T.textPri }}>{stock.symbol}</span>
+          <span style={{ fontWeight: 800, fontSize: 13, color: "#ffffff" }}>{stock.symbol}</span>
           <ExBadge exchange={stock.exchange} />
         </div>
-        <div style={{ fontSize: 10, color: T.textDim, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <div style={{ fontSize: 10, color: "#6b8aad", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {stock.name}
         </div>
       </td>
       <td style={{ padding: "7px 8px", textAlign: "right" }}>
-        <div style={{ fontWeight: 700, fontSize: 13, color: T.textPri }}>₹{fmt(stock.ltp)}</div>
+        {/* FIX: price is pure white, larger */}
+        <div style={{ fontWeight: 800, fontSize: 14, color: "#ffffff" }}>₹{fmt(stock.ltp)}</div>
       </td>
       <td style={{ padding: "7px 8px", textAlign: "right" }}>
         <div style={{ color: clr(pct), fontWeight: 700, fontSize: 12 }}>
@@ -146,7 +222,7 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
           {stock.change > 0 ? "+" : ""}{fmt(stock.change)}
         </div>
       </td>
-      <td style={{ padding: "7px 8px", textAlign: "right", color: T.textSec, fontSize: 11 }}>
+      <td style={{ padding: "7px 8px", textAlign: "right", color: "#94a3b8", fontSize: 11 }}>
         {fmtK(stock.volume)}
       </td>
       <td style={{ padding: "7px 8px" }}>
@@ -162,7 +238,7 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
                 background: tech.rsi > 70 ? T.red : tech.rsi < 30 ? T.green : T.yellow,
               }} />
             </div>
-            <span style={{ color: tech.rsi > 70 ? T.red : tech.rsi < 30 ? T.green : T.yellow, fontSize: 11, fontWeight: 600 }}>
+            <span style={{ color: tech.rsi > 70 ? T.red : tech.rsi < 30 ? T.green : T.yellow, fontSize: 12, fontWeight: 700 }}>
               {fmt(tech.rsi, 1)}
             </span>
           </div>
@@ -205,7 +281,7 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
   );
 }
 
-// ── Technical Detail Panel ────────────────────────────────────────────────────
+// ── Technical Detail Panel (unchanged logic, updated colors) ─────────────────
 function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClose }) {
   if (!symbol) return null;
 
@@ -242,23 +318,18 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
       overflowY: "auto", zIndex: 100, padding: "16px 14px",
       boxShadow: "-12px 0 48px rgba(0,0,0,0.7)",
     }}>
-      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: T.textPri, letterSpacing: "0.5px" }}>{symbol}</div>
           <div style={{ fontSize: 11, color: T.textSec }}>Technical Analysis · Multi-timeframe</div>
         </div>
-        <button
-          type="button"
-          onClick={e => { e.preventDefault(); onClose(); }}
-          style={{
-            background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec,
-            width: 28, height: 28, borderRadius: 5, cursor: "pointer", fontSize: 14,
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>✕</button>
+        <button type="button" onClick={e => { e.preventDefault(); onClose(); }} style={{
+          background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec,
+          width: 28, height: 28, borderRadius: 5, cursor: "pointer", fontSize: 14,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>✕</button>
       </div>
 
-      {/* Timeframe bar */}
       <div style={{
         display: "flex", gap: 2, marginBottom: 14,
         background: "#080d14", padding: 3, borderRadius: 7, border: `1px solid ${T.border}`,
@@ -278,7 +349,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
         <div style={{ textAlign: "center", padding: "50px 0", color: T.textSec }}>
           <div style={{ fontSize: 26, marginBottom: 8 }}>⏳</div>
           <div style={{ fontSize: 13 }}>Loading {timeframe} data…</div>
-          <div style={{ fontSize: 11, color: T.textDim, marginTop: 4 }}>Fetching candles from Upstox</div>
         </div>
       )}
 
@@ -286,18 +356,15 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
         <div style={{ textAlign: "center", padding: "50px 0", color: T.textSec }}>
           <div style={{ fontSize: 26, marginBottom: 8 }}>📭</div>
           <div style={{ fontSize: 13 }}>No data for {timeframe}</div>
-          <div style={{ fontSize: 11, color: T.textDim, marginTop: 4 }}>
-            Check Upstox token · instrument key may be missing
-          </div>
+          <div style={{ fontSize: 11, color: T.textDim, marginTop: 4 }}>Check Upstox token</div>
         </div>
       )}
 
       {!loading && tech && (
         <>
-          {/* ── Live Signal Card ── */}
           <div style={{
             background: sigBg,
-            border: `1px solid ${tech.signal?.includes("BUY") ? "#22c55e44" : tech.signal?.includes("SELL") ? "#ef444444" : "#f59e0b44"}`,
+            border: `1px solid ${tech.signal?.includes("BUY") ? "#4ade8044" : tech.signal?.includes("SELL") ? "#f8717144" : "#fbbf2444"}`,
             borderRadius: 10, padding: "14px 16px", marginBottom: 10,
           }}>
             <div style={{ fontSize: 10, color: T.textSec, fontWeight: 700, letterSpacing: "0.8px", marginBottom: 10 }}>
@@ -313,11 +380,9 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
                 <text x="28" y="33" textAnchor="middle" fontSize="13" fontWeight="700" fill={scoreColor}>{tech.techScore}</text>
               </svg>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 20, fontWeight: 800, color: scoreColor, marginBottom: 3 }}>
-                  {tech.signal}
-                </div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: scoreColor, marginBottom: 3 }}>{tech.signal}</div>
                 <div style={{ height: 6, background: "#1a2030", borderRadius: 3, overflow: "hidden" }}>
-                  <div style={{ width: `${tech.strength || tech.techScore}%`, height: "100%", background: scoreColor, borderRadius: 3, transition: "width 0.4s" }} />
+                  <div style={{ width: `${tech.strength || tech.techScore}%`, height: "100%", background: scoreColor, borderRadius: 3 }} />
                 </div>
                 <div style={{ fontSize: 11, color: T.textSec, marginTop: 4 }}>
                   {(tech.strength || tech.techScore)}/100 · {(tech.strength || tech.techScore) >= 65 ? "Strong" : (tech.strength || tech.techScore) >= 50 ? "Moderate" : "Weak"}
@@ -338,30 +403,21 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
             </div>
           </div>
 
-          {/* ── Momentum ── */}
           <Card title="Momentum">
-            {/* RSI */}
             <div style={{ marginBottom: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                 <span style={{ fontSize: 11, color: T.textSec }}>RSI (14)</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: tech.rsi > 70 ? T.red : tech.rsi < 30 ? T.green : T.yellow }}>
-                  {fmt(tech.rsi, 1)}
-                </span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: tech.rsi > 70 ? T.red : tech.rsi < 30 ? T.green : T.yellow }}>{fmt(tech.rsi, 1)}</span>
               </div>
               <MiniBar value={tech.rsi || 0} color={tech.rsi > 70 ? T.red : tech.rsi < 30 ? T.green : T.yellow} />
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-                <span style={{ fontSize: 9, color: T.textDim }}>OS 30</span>
-                <span style={{ fontSize: 9, color: T.textDim }}>70 OB</span>
-              </div>
               <div style={{ fontSize: 11, color: tech.rsi > 70 ? T.red : tech.rsi < 30 ? T.green : T.textSec, marginTop: 4 }}>
-                {tech.rsi > 70 ? "⚠️ Overbought — potential reversal" : tech.rsi < 30 ? "✅ Oversold — potential bounce" : "RSI in neutral zone"}
+                {tech.rsi > 70 ? "⚠️ Overbought" : tech.rsi < 30 ? "✅ Oversold" : "RSI neutral zone"}
               </div>
             </div>
-            {/* Stochastic */}
             {tech.stochastic && (
-              <div style={{ marginBottom: 10, paddingTop: 8, borderTop: `1px solid ${T.borderSub}` }}>
+              <div style={{ paddingTop: 8, borderTop: `1px solid ${T.borderSub}` }}>
                 <div style={{ fontSize: 11, color: T.textSec, marginBottom: 5 }}>Stochastic %K / %D</div>
-                <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <div style={{ display: "flex", gap: 8 }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
                       <span style={{ fontSize: 9, color: T.textDim }}>%K</span>
@@ -377,48 +433,10 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
                     <MiniBar value={tech.stochastic.d} color={T.blue} />
                   </div>
                 </div>
-                <div style={{ fontSize: 11, color: T.textSec }}>
-                  {tech.stochastic.k > tech.stochastic.d ? "Bullish cross" : "Bearish cross"} · {tech.stochastic.k > 80 ? "Overbought" : tech.stochastic.k < 20 ? "Oversold" : "Neutral"}
-                </div>
-              </div>
-            )}
-            {/* Williams %R */}
-            {tech.williamsR != null && (
-              <div style={{ paddingTop: 8, borderTop: `1px solid ${T.borderSub}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, color: T.textSec }}>Williams %R</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: tech.williamsR > -20 ? T.red : tech.williamsR < -80 ? T.green : T.yellow }}>
-                    {fmt(tech.williamsR, 1)}
-                  </span>
-                </div>
-                <MiniBar value={clamp(100 + tech.williamsR, 0, 100)} color={tech.williamsR > -20 ? T.red : tech.williamsR < -80 ? T.green : T.yellow} />
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-                  <span style={{ fontSize: 9, color: T.textDim }}>OB -20</span>
-                  <span style={{ fontSize: 9, color: T.textDim }}>-80 OS</span>
-                </div>
-                <div style={{ fontSize: 11, color: T.textSec, marginTop: 3 }}>
-                  {tech.williamsR > -20 ? "Overbought zone" : tech.williamsR < -80 ? "Oversold zone" : "Mid range"}
-                </div>
-              </div>
-            )}
-            {/* MFI */}
-            {tech.mfi != null && (
-              <div style={{ paddingTop: 8, borderTop: `1px solid ${T.borderSub}`, marginTop: 8 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, color: T.textSec }}>MFI (Money Flow)</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: tech.mfi > 80 ? T.red : tech.mfi < 20 ? T.green : T.yellow }}>
-                    {fmt(tech.mfi, 1)}
-                  </span>
-                </div>
-                <MiniBar value={tech.mfi} color={tech.mfi > 80 ? T.red : tech.mfi < 20 ? T.green : T.yellow} />
-                <div style={{ fontSize: 11, color: T.textSec, marginTop: 3 }}>
-                  {tech.mfi > 80 ? "Overbought" : tech.mfi < 20 ? "Oversold" : "Neutral"} · {tech.mfi > 50 ? "Money flowing in" : "Money flowing out"}
-                </div>
               </div>
             )}
           </Card>
 
-          {/* ── Trend ── */}
           <Card title="Trend">
             {tech.macd && (
               <div style={{ marginBottom: 10 }}>
@@ -429,9 +447,9 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
                 <div style={{
                   marginTop: 8, padding: "5px 10px", borderRadius: 5, textAlign: "center",
                   background: tech.macd.crossover === "BULLISH" ? "#052e16" : "#3b0a0a",
-                  color:      tech.macd.crossover === "BULLISH" ? T.green : T.red,
+                  color: tech.macd.crossover === "BULLISH" ? T.green : T.red,
                   fontSize: 12, fontWeight: 700,
-                  border: `1px solid ${tech.macd.crossover === "BULLISH" ? "#22c55e44" : "#ef444444"}`,
+                  border: `1px solid ${tech.macd.crossover === "BULLISH" ? "#4ade8044" : "#f8717144"}`,
                 }}>
                   {tech.macd.crossover === "BULLISH" ? "▲ Bullish Crossover" : "▼ Bearish Crossover"}
                 </div>
@@ -441,20 +459,12 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.borderSub}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                   <span style={{ fontSize: 11, color: T.textSec }}>ADX + DMI</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: tech.adx.adx > 40 ? T.green : tech.adx.adx > 25 ? T.yellow : T.textSec }}>
-                    {fmt(tech.adx.adx, 1)}
-                  </span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: tech.adx.adx > 40 ? T.green : tech.adx.adx > 25 ? T.yellow : T.textSec }}>{fmt(tech.adx.adx, 1)}</span>
                 </div>
                 <MiniBar value={clamp(tech.adx.adx * 2, 0, 100)} color={tech.adx.adx > 40 ? T.green : tech.adx.adx > 25 ? T.yellow : T.textSec} />
-                <div style={{ fontSize: 11, color: T.textSec, marginTop: 3, marginBottom: 6 }}>
-                  {tech.adx.adx > 40 ? "Strong trend" : tech.adx.adx > 25 ? "Trending" : "Weak / ranging"}
-                </div>
-                <div style={{ display: "flex", gap: 12 }}>
+                <div style={{ display: "flex", gap: 12, marginTop: 6 }}>
                   <span style={{ fontSize: 12, color: T.green, fontWeight: 600 }}>+DI {fmt(tech.adx.diPlus, 1)}</span>
                   <span style={{ fontSize: 12, color: T.red,   fontWeight: 600 }}>−DI {fmt(tech.adx.diMinus, 1)}</span>
-                  <span style={{ fontSize: 11, color: T.textSec }}>
-                    {tech.adx.diPlus > tech.adx.diMinus ? "Bulls stronger" : "Bears stronger"}
-                  </span>
                 </div>
               </div>
             )}
@@ -466,32 +476,21 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
                     {tech.supertrend.trend}
                   </span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
-                  <div>
-                    <div style={{ fontSize: 10, color: T.textDim }}>Level</div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: T.textPri }}>₹{fmt(tech.supertrend.level)}</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 10, color: T.textDim }}>Price vs level</div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: tech.ltp > tech.supertrend.level ? T.green : T.red }}>
-                      {tech.ltp > tech.supertrend.level ? "Above — bullish" : "Below — bearish"}
-                      {" "}({fmt(Math.abs((tech.ltp - tech.supertrend.level) / tech.supertrend.level * 100), 1)}%)
-                    </div>
-                  </div>
+                <div style={{ fontSize: 11, color: tech.ltp > tech.supertrend.level ? T.green : T.red, marginTop: 5 }}>
+                  Level ₹{fmt(tech.supertrend.level)} · {tech.ltp > tech.supertrend.level ? "Above — bullish" : "Below — bearish"}
                 </div>
               </div>
             )}
           </Card>
 
-          {/* ── Volatility ── */}
           <Card title="Volatility">
             {tech.bollingerBands && (
               <div style={{ marginBottom: 10 }}>
                 <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
                   {[
-                    { label: "Upper",    value: tech.bollingerBands.upper,  color: T.red     },
-                    { label: "Mid SMA20",value: tech.bollingerBands.middle, color: T.textSec },
-                    { label: "Lower",    value: tech.bollingerBands.lower,  color: T.green   },
+                    { label: "Upper",     value: tech.bollingerBands.upper,  color: T.red     },
+                    { label: "Mid SMA20", value: tech.bollingerBands.middle, color: T.textSec },
+                    { label: "Lower",     value: tech.bollingerBands.lower,  color: T.green   },
                   ].map(({ label, value, color }) => (
                     <div key={label} style={{ flex: 1, background: "#0d1117", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
                       <div style={{ fontSize: 9, color, marginBottom: 2 }}>{label}</div>
@@ -501,52 +500,24 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
                 </div>
                 <div style={{ fontSize: 10, color: T.textSec, marginBottom: 3 }}>%B position ({tech.bollingerBands.percentB}%)</div>
                 <MiniBar value={tech.bollingerBands.percentB} color={T.blue} />
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-                  <span style={{ fontSize: 9, color: T.textDim }}>0% lower</span>
-                  <span style={{ fontSize: 9, color: T.textDim }}>100% upper</span>
-                </div>
                 <div style={{ marginTop: 6, fontSize: 11, color: T.textSec }}>
-                  BW {fmt(tech.bollingerBands.bandwidth, 1)}% · {tech.bollingerBands.bandwidth < 3 ? "🔔 Squeeze — breakout imminent" : tech.bollingerBands.bandwidth > 8 ? "Expanding volatility" : "Normal"}
+                  BW {fmt(tech.bollingerBands.bandwidth, 1)}% · {tech.bollingerBands.bandwidth < 3 ? "🔔 Squeeze" : tech.bollingerBands.bandwidth > 8 ? "Expanding" : "Normal"}
                 </div>
               </div>
             )}
             {tech.atr != null && (
               <div style={{ paddingTop: 8, borderTop: `1px solid ${T.borderSub}` }}>
                 <Row label="ATR" value={`₹${fmt(tech.atr, 1)}`} color={tech.atr > tech.ltp * 0.03 ? T.red : T.textSec} />
-                <div style={{ fontSize: 11, color: T.textSec, marginTop: 3 }}>
-                  {tech.atr > tech.ltp * 0.03 ? "High volatility" : "Normal volatility"}
-                </div>
               </div>
             )}
           </Card>
 
-          {/* ── Volume ── */}
           <Card title="Volume">
-            <div style={{ marginBottom: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 11, color: T.textSec }}>OBV Trend</span>
-                <span style={{ fontSize: 12, fontWeight: 700, color:
-                  tech.obv?.includes("Strongly") ? T.green :
-                  tech.obv?.includes("Rising")   ? "#4ade80" :
-                  tech.obv?.includes("Falling")  ? T.red : T.textSec }}>
-                  {tech.obv || "—"}
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: T.textSec, marginTop: 3 }}>
-                {tech.obv?.includes("Rising") ? "Buyers in control" : tech.obv?.includes("Falling") ? "Sellers in control" : "No clear direction"}
-              </div>
-            </div>
-            {tech.volRatio != null && (
-              <div style={{ marginBottom: 8, paddingTop: 8, borderTop: `1px solid ${T.borderSub}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, color: T.textSec }}>Volume Ratio</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: tech.volRatio > 1.2 ? T.green : tech.volRatio < 0.8 ? T.red : T.textSec }}>
-                    {fmt(tech.volRatio, 2)}x
-                  </span>
-                </div>
-                <MiniBar value={clamp(tech.volRatio * 50, 0, 100)} color={tech.volRatio > 1.2 ? T.green : tech.volRatio < 0.8 ? T.red : T.textSec} />
-                <div style={{ fontSize: 11, color: T.textSec, marginTop: 3 }}>
-                  {tech.volRatio > 1.2 ? "Above avg volume" : tech.volRatio < 0.8 ? "Below avg volume" : "Average volume"}
+            {tech.obv && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 11, color: T.textSec }}>OBV Trend</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: tech.obv?.includes("Rising") ? T.green : tech.obv?.includes("Falling") ? T.red : T.textSec }}>{tech.obv}</span>
                 </div>
               </div>
             )}
@@ -556,22 +527,13 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
                   <span style={{ fontSize: 11, color: T.textSec }}>VWAP</span>
                   <span style={{ fontSize: 12, fontWeight: 600, color: tech.vwapDiff > 0 ? T.green : T.red }}>₹{fmt(tech.vwap)}</span>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ flex: 1 }}>
-                    <MiniBar value={clamp(50 + (tech.vwapDiff || 0) * 5, 0, 100)} color={tech.vwapDiff > 0 ? T.green : T.red} />
-                  </div>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: tech.vwapDiff > 0 ? T.green : T.red }}>
-                    {tech.vwapDiff > 0 ? "+" : ""}{fmt(tech.vwapDiff, 2)}%
-                  </span>
-                </div>
-                <div style={{ fontSize: 11, color: T.textSec, marginTop: 4 }}>
-                  {tech.vwapDiff > 0 ? "Trading above VWAP — bullish intraday" : "Below VWAP — bearish bias"}
+                <div style={{ fontSize: 11, color: T.textSec }}>
+                  {tech.vwapDiff > 0 ? "+" : ""}{fmt(tech.vwapDiff, 2)}% · {tech.vwapDiff > 0 ? "Above VWAP bullish" : "Below VWAP bearish"}
                 </div>
               </div>
             )}
           </Card>
 
-          {/* ── Moving Average Summary ── */}
           <Card title="Moving Average Summary">
             {tech.maSummary && (
               <>
@@ -579,24 +541,17 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
                   textAlign: "center", padding: "10px", borderRadius: 7, marginBottom: 10,
                   background: tech.maSummary.summary?.includes("BUY")  ? "#052e16" :
                               tech.maSummary.summary?.includes("SELL") ? "#3b0a0a" : "#431407",
-                  border: `1px solid ${tech.maSummary.summary?.includes("BUY") ? "#22c55e44" : tech.maSummary.summary?.includes("SELL") ? "#ef444444" : "#f59e0b44"}`,
                 }}>
                   <div style={{ fontSize: 17, fontWeight: 800, color:
                     tech.maSummary.summary?.includes("BUY")  ? T.green :
                     tech.maSummary.summary?.includes("SELL") ? T.red   : T.yellow }}>
                     {tech.maSummary.summary}
                   </div>
-                  <div style={{ fontSize: 11, color: T.textSec, marginTop: 2 }}>
+                  <div style={{ fontSize: 11, color: T.textSec }}>
                     {tech.maSummary.buy}B · {tech.maSummary.sell}S · {tech.maSummary.neutral}N
                   </div>
                 </div>
-                {[
-                  ["EMA 5",   tech.emas?.ema5],
-                  ["EMA 9",   tech.emas?.ema9],
-                  ["EMA 21",  tech.emas?.ema21],
-                  ["EMA 50",  tech.emas?.ema50],
-                  ["EMA 200", tech.emas?.ema200],
-                ].map(([label, val]) => {
+                {[["EMA 5", tech.emas?.ema5], ["EMA 21", tech.emas?.ema21], ["EMA 50", tech.emas?.ema50], ["EMA 200", tech.emas?.ema200]].map(([label, val]) => {
                   const sig = !val ? "N/A" : tech.ltp > val * 1.001 ? "BUY" : tech.ltp < val * 0.999 ? "SELL" : "NEUTRAL";
                   return (
                     <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: `1px solid ${T.borderSub}` }}>
@@ -629,14 +584,11 @@ function GainLossCard({ title, stocks, onSelect, accent, onViewAll }) {
         display: "flex", justifyContent: "space-between", alignItems: "center",
       }}>
         <span style={{ fontWeight: 800, fontSize: 11, color: accent, letterSpacing: "0.8px" }}>{title}</span>
-        <button
-          type="button"
-          onClick={e => { e.preventDefault(); e.stopPropagation(); onViewAll(); }}
-          style={{
-            fontSize: 9, color: accent, background: `${accent}18`,
-            border: `1px solid ${accent}44`, borderRadius: 3, padding: "2px 7px",
-            cursor: "pointer", fontWeight: 700,
-          }}>VIEW ALL ↓</button>
+        <button type="button" onClick={e => { e.preventDefault(); e.stopPropagation(); onViewAll(); }} style={{
+          fontSize: 9, color: accent, background: `${accent}18`,
+          border: `1px solid ${accent}44`, borderRadius: 3, padding: "2px 7px",
+          cursor: "pointer", fontWeight: 700,
+        }}>VIEW ALL ↓</button>
       </div>
       <div style={{ maxHeight: 300, overflowY: "auto" }}>
         {(stocks || []).slice(0, 15).map(s => (
@@ -647,10 +599,10 @@ function GainLossCard({ title, stocks, onSelect, accent, onViewAll }) {
           >
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                <span style={{ fontWeight: 700, fontSize: 12, color: T.textPri }}>{s.symbol}</span>
+                <span style={{ fontWeight: 800, fontSize: 13, color: "#ffffff" }}>{s.symbol}</span>
                 <ExBadge exchange={s.exchange} />
               </div>
-              <div style={{ fontSize: 10, color: T.textDim }}>₹{fmt(s.ltp)}</div>
+              <div style={{ fontSize: 10, color: "#6b8aad" }}>₹{fmt(s.ltp)}</div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ color: accent, fontWeight: 800, fontSize: 13 }}>{s.changePct > 0 ? "+" : ""}{fmt(s.changePct)}%</div>
@@ -669,9 +621,7 @@ function SectorBar({ sector }) {
   const width = Math.min(Math.abs(sector.avgChange) * 15, 100);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: `1px solid ${T.borderSub}` }}>
-      <div style={{ width: 140, fontSize: 11, color: T.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {sector.sector}
-      </div>
+      <div style={{ width: 140, fontSize: 11, color: T.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sector.sector}</div>
       <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 6 }}>
         <div style={{ width: 80, height: 4, background: "#1a2030", borderRadius: 2 }}>
           <div style={{ width: `${width}%`, height: "100%", borderRadius: 2, background: bull ? T.green : T.red }} />
@@ -705,8 +655,245 @@ function BreadthBar({ advancing, declining, unchanged, total }) {
   );
 }
 
+// ── ACCURACY TRACKER PANEL ────────────────────────────────────────────────────
+const SIGNALS_KEY = "mscanner_signals";
+
+function loadSavedSignals() {
+  try { return JSON.parse(localStorage.getItem(SIGNALS_KEY) || "[]"); } catch { return []; }
+}
+function saveSavedSignals(arr) {
+  try { localStorage.setItem(SIGNALS_KEY, JSON.stringify(arr)); } catch {}
+}
+
+function AccuracyPanel({ onClose, techCacheRef }) {
+  const [signals, setSignals] = useState(loadSavedSignals);
+  const [tab, setTab] = useState("tracker");
+
+  // Add current snapshot of all cached 1day signals
+  const captureSnapshot = () => {
+    const now = Date.now();
+    const newEntries = [];
+    for (const [key, data] of Object.entries(techCacheRef.current)) {
+      if (!key.endsWith(":1day")) continue;
+      const sym = key.replace(":1day", "");
+      // Don't duplicate if already captured within last 30 min
+      const alreadyHave = signals.find(s => s.symbol === sym && now - s.capturedAt < 30 * 60 * 1000);
+      if (alreadyHave) continue;
+      newEntries.push({
+        id: `${sym}_${now}`,
+        symbol: sym,
+        signal: data.signal,
+        techScore: data.techScore,
+        ltp: data.ltp,
+        entry: data.entry,
+        sl: data.sl,
+        tp: data.tp,
+        rsi: data.rsi,
+        macdCross: data.macd?.crossover,
+        capturedAt: now,
+        capturedDate: new Date(now).toLocaleDateString("en-IN"),
+        capturedTime: new Date(now).toLocaleTimeString("en-IN"),
+        // User fills in later:
+        outcome: null,  // "WIN" | "LOSS" | "PENDING" | "SKIP"
+        exitPrice: null,
+        exitDate: null,
+        notes: "",
+      });
+    }
+    const updated = [...signals, ...newEntries];
+    setSignals(updated);
+    saveSavedSignals(updated);
+    alert(`✅ Captured ${newEntries.length} new signals (${updated.length} total)`);
+  };
+
+  const updateOutcome = (id, outcome) => {
+    const updated = signals.map(s => s.id === id ? { ...s, outcome } : s);
+    setSignals(updated);
+    saveSavedSignals(updated);
+  };
+
+  const updateExitPrice = (id, exitPrice) => {
+    const updated = signals.map(s => s.id === id ? { ...s, exitPrice: parseFloat(exitPrice) || null } : s);
+    setSignals(updated);
+    saveSavedSignals(updated);
+  };
+
+  const deleteSignal = (id) => {
+    const updated = signals.filter(s => s.id !== id);
+    setSignals(updated);
+    saveSavedSignals(updated);
+  };
+
+  const downloadCSV = () => {
+    const headers = ["Symbol","Signal","Score","LTP at Capture","Entry","SL","Target","RSI","MACD Cross","Captured Date","Captured Time","Outcome","Exit Price","P&L %","Notes"];
+    const rows = signals.map(s => {
+      const pl = s.exitPrice && s.entry
+        ? ((s.exitPrice - s.entry) / s.entry * 100).toFixed(2)
+        : "";
+      return [
+        s.symbol, s.signal, s.techScore, s.ltp, s.entry, s.sl, s.tp,
+        s.rsi?.toFixed(1) || "", s.macdCross || "",
+        s.capturedDate, s.capturedTime,
+        s.outcome || "PENDING", s.exitPrice || "", pl, `"${s.notes || ""}"`
+      ].join(",");
+    });
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `market_signals_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Calculate accuracy stats
+  const resolved = signals.filter(s => s.outcome === "WIN" || s.outcome === "LOSS");
+  const wins = resolved.filter(s => s.outcome === "WIN").length;
+  const accuracy = resolved.length > 0 ? ((wins / resolved.length) * 100).toFixed(1) : "—";
+  const pending = signals.filter(s => !s.outcome || s.outcome === "PENDING").length;
+  const buySigs = resolved.filter(s => s.signal?.includes("BUY"));
+  const buyAcc = buySigs.length > 0 ? ((buySigs.filter(s => s.outcome === "WIN").length / buySigs.length) * 100).toFixed(1) : "—";
+  const sellSigs = resolved.filter(s => s.signal?.includes("SELL"));
+  const sellAcc = sellSigs.length > 0 ? ((sellSigs.filter(s => s.outcome === "WIN").length / sellSigs.length) * 100).toFixed(1) : "—";
+
+  return (
+    <div style={{
+      position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh",
+      background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center",
+    }}>
+      <div style={{
+        background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12,
+        width: "min(900px, 95vw)", maxHeight: "90vh", display: "flex", flexDirection: "column",
+        overflow: "hidden", fontFamily: "'JetBrains Mono','Fira Code',monospace",
+      }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: `1px solid ${T.border}`, background: "#080d14", flexShrink: 0 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: T.textPri }}>📊 Signal Accuracy Tracker</div>
+            <div style={{ fontSize: 11, color: T.textSec }}>Capture signals, track outcomes, measure accuracy</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button type="button" onClick={captureSnapshot} style={{
+              background: "#14532d", border: "1px solid #4ade8044", color: T.green,
+              padding: "7px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700,
+            }}>📸 Capture Signals</button>
+            <button type="button" onClick={downloadCSV} style={{
+              background: "#1e2a3a", border: `1px solid ${T.border}`, color: T.textSec,
+              padding: "7px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700,
+            }}>⬇ Download CSV</button>
+            <button type="button" onClick={onClose} style={{
+              background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec,
+              width: 30, height: 30, borderRadius: 5, cursor: "pointer", fontSize: 16,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>✕</button>
+          </div>
+        </div>
+
+        {/* Stats bar */}
+        <div style={{ display: "flex", gap: 12, padding: "12px 18px", borderBottom: `1px solid ${T.border}`, background: "#080d14", flexShrink: 0 }}>
+          {[
+            { label: "Total Signals", value: signals.length, color: T.blue },
+            { label: "Resolved", value: resolved.length, color: T.textSec },
+            { label: "Wins", value: wins, color: T.green },
+            { label: "Losses", value: resolved.length - wins, color: T.red },
+            { label: "Pending", value: pending, color: T.yellow },
+            { label: "Accuracy", value: accuracy + (accuracy !== "—" ? "%" : ""), color: parseFloat(accuracy) >= 55 ? T.green : T.red },
+            { label: "Buy Acc", value: buyAcc + (buyAcc !== "—" ? "%" : ""), color: T.blue },
+            { label: "Sell Acc", value: sellAcc + (sellAcc !== "—" ? "%" : ""), color: T.orange },
+          ].map(({ label, value, color }) => (
+            <div key={label} style={{ background: T.bgItem, border: `1px solid ${T.borderSub}`, borderRadius: 8, padding: "8px 12px", minWidth: 80, textAlign: "center" }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color }}>{value}</div>
+              <div style={{ fontSize: 9, color: T.textDim, marginTop: 2 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, overflow: "auto", padding: "0 0 8px 0" }}>
+          {signals.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "60px 0", color: T.textDim }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
+              <div style={{ fontSize: 14, color: T.textSec, marginBottom: 8 }}>No signals captured yet</div>
+              <div style={{ fontSize: 12 }}>Click "Capture Signals" to snapshot current RSI/MACD/Signal data for all loaded stocks</div>
+            </div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ background: "#060a10", position: "sticky", top: 0 }}>
+                  {["Symbol","Signal","Score","LTP","Entry","SL","Target","RSI","MACD","Date","Outcome","Exit ₹","P&L",""].map(h => (
+                    <th key={h} style={{ padding: "8px 10px", color: T.textDim, fontSize: 9, fontWeight: 700, textAlign: "left", borderBottom: `1px solid ${T.border}`, letterSpacing: "0.5px" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[...signals].reverse().map(s => {
+                  const pl = s.exitPrice && s.entry ? ((s.exitPrice - s.entry) / s.entry * 100) : null;
+                  return (
+                    <tr key={s.id} style={{ borderBottom: `1px solid ${T.borderSub}` }}
+                      onMouseEnter={e => e.currentTarget.style.background = "#0d1520"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                    >
+                      <td style={{ padding: "6px 10px", color: "#ffffff", fontWeight: 700 }}>{s.symbol}</td>
+                      <td style={{ padding: "6px 10px" }}><SigBadge signal={s.signal} /></td>
+                      <td style={{ padding: "6px 10px", color: s.techScore >= 60 ? T.green : s.techScore <= 40 ? T.red : T.yellow, fontWeight: 700 }}>{s.techScore}</td>
+                      <td style={{ padding: "6px 10px", color: "#ffffff" }}>₹{fmt(s.ltp)}</td>
+                      <td style={{ padding: "6px 10px", color: T.blue }}>₹{fmt(s.entry)}</td>
+                      <td style={{ padding: "6px 10px", color: T.red }}>₹{fmt(s.sl)}</td>
+                      <td style={{ padding: "6px 10px", color: T.green }}>₹{fmt(s.tp)}</td>
+                      <td style={{ padding: "6px 10px", color: s.rsi > 70 ? T.red : s.rsi < 30 ? T.green : T.yellow }}>{s.rsi?.toFixed(1)}</td>
+                      <td style={{ padding: "6px 10px", color: s.macdCross === "BULLISH" ? T.green : T.red, fontSize: 10 }}>{s.macdCross === "BULLISH" ? "▲" : "▼"} {s.macdCross || "—"}</td>
+                      <td style={{ padding: "6px 10px", color: T.textDim, fontSize: 10 }}>{s.capturedDate}</td>
+                      <td style={{ padding: "6px 10px" }}>
+                        <select value={s.outcome || ""} onChange={e => updateOutcome(s.id, e.target.value || null)}
+                          style={{ background: "#111620", border: `1px solid ${T.border}`, color: T.textPri, fontSize: 10, borderRadius: 4, padding: "2px 4px" }}>
+                          <option value="">Pending</option>
+                          <option value="WIN">✅ WIN</option>
+                          <option value="LOSS">❌ LOSS</option>
+                          <option value="SKIP">⏭ SKIP</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: "6px 10px" }}>
+                        <input type="number" placeholder="0.00" value={s.exitPrice || ""}
+                          onChange={e => updateExitPrice(s.id, e.target.value)}
+                          style={{ width: 70, background: "#111620", border: `1px solid ${T.border}`, color: "#ffffff", fontSize: 10, borderRadius: 4, padding: "2px 6px" }}
+                        />
+                      </td>
+                      <td style={{ padding: "6px 10px", fontWeight: 700, color: pl === null ? T.textDim : pl >= 0 ? T.green : T.red }}>
+                        {pl === null ? "—" : `${pl >= 0 ? "+" : ""}${pl.toFixed(2)}%`}
+                      </td>
+                      <td style={{ padding: "6px 10px" }}>
+                        <button type="button" onClick={() => deleteSignal(s.id)} style={{
+                          background: "none", border: "none", color: T.textDim, cursor: "pointer", fontSize: 12,
+                        }}>🗑</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div style={{ padding: "8px 18px", borderTop: `1px solid ${T.border}`, fontSize: 10, color: T.textDim, background: "#080d14", flexShrink: 0 }}>
+          💡 Capture signals when market opens → set outcome after stock moves → Download CSV for detailed analysis
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function MarketScannerPage() {
+  // ── Auth gate ─────────────────────────────────────────────────────────────
+  const [authed, setAuthed] = useState(() => sessionStorage.getItem(SESSION_KEY) === "1");
+
+  if (!authed) return <AccessGate onAuth={() => setAuthed(true)} />;
+
+  return <ScannerBody />;
+}
+
+function ScannerBody() {
   const [data,        setData]        = useState(null);
   const [selectedSym, setSelectedSym] = useState(null);
   const [tech,        setTech]        = useState(null);
@@ -716,10 +903,10 @@ export default function MarketScannerPage() {
   const [sortBy,      setSortBy]      = useState("gainers");
   const [searchQ,     setSearchQ]     = useState("");
   const [updatedAt,   setUpdatedAt]   = useState(null);
+  const [showAccuracy, setShowAccuracy] = useState(false);
+  // FIX: removed 150 limit — show all, but virtualize with a "show more" if needed
+  const [displayLimit, setDisplayLimit] = useState(500);
 
-  // techVersion: bumping this integer forces React to re-render StockRow keys,
-  // causing rows to re-read techCacheRef and display RSI/MACD/Bollinger values
-  // that arrived via the pre-warm socket batch — without needing a click.
   const [techVersion, setTechVersion] = useState(0);
 
   const techCacheRef   = useRef({});
@@ -729,57 +916,43 @@ export default function MarketScannerPage() {
 
   useEffect(() => { activeTFRef.current = activeTF; }, [activeTF]);
 
-  // ── Get stocks for the active tab ─────────────────────────────────────────
   const getStocksForTab = useCallback((d, t) => {
     if (!d) return [];
-    if (t === "gainers")  return d.gainers             || [];
-    if (t === "losers")   return d.losers              || [];
-    if (t === "all")      return d.allStocks           || [];
-    if (t === "largecap") return d.byMcap?.largecap    || [];
-    if (t === "midcap")   return d.byMcap?.midcap      || [];
-    if (t === "smallcap") return d.byMcap?.smallcap    || [];
-    if (t === "microcap") return d.byMcap?.microcap    || [];
+    if (t === "gainers")  return d.gainers          || [];
+    if (t === "losers")   return d.losers           || [];
+    if (t === "all")      return d.allStocks        || [];
+    if (t === "largecap") return d.byMcap?.largecap || [];
+    if (t === "midcap")   return d.byMcap?.midcap   || [];
+    if (t === "smallcap") return d.byMcap?.smallcap || [];
+    if (t === "microcap") return d.byMcap?.microcap || [];
     return [];
   }, []);
 
-  // ── Socket listeners ──────────────────────────────────────────────────────
   useEffect(() => {
     const socket = getSocket();
 
-    // Main market data update
     socket.on("scanner-update", d => {
       setData(d);
       setUpdatedAt(new Date(d.updatedAt));
-      // Bump version so any already-cached tech shows up in the refreshed table
       setTechVersion(v => v + 1);
     });
 
-    // ── KEY FIX: Listen for pre-warmed tech batches from the server.
-    // The server emits these after each pre-warm cycle AND replays all cached
-    // 1day entries to every newly-connected socket. This means RSI/MACD/
-    // Bollinger columns fill automatically — no clicking required.
     socket.on("scanner-tech-batch", (batch) => {
       if (!Array.isArray(batch) || batch.length === 0) return;
       let changed = false;
       for (const { key, data: techData } of batch) {
         if (key && techData) {
-          // Only update if this is newer than what we have (avoid stale overwrites)
           const existing = techCacheRef.current[key];
           if (!existing || techData.computedAt > existing.computedAt) {
             techCacheRef.current[key] = techData;
             changed = true;
-
-            // If this is the currently-open panel, refresh it too
             if (selectedSymRef.current) {
               const panelKey = `${selectedSymRef.current}:${activeTFRef.current}`;
-              if (key === panelKey) {
-                setTech(techData);
-              }
+              if (key === panelKey) setTech(techData);
             }
           }
         }
       }
-      // One version bump per batch — triggers a single re-render for all rows
       if (changed) setTechVersion(v => v + 1);
     });
 
@@ -789,20 +962,16 @@ export default function MarketScannerPage() {
     };
   }, []);
 
-  // ── Fetch technicals on demand (click or timeframe change) ────────────────
   const handleSelect = useCallback(async (symbol, timeframe) => {
     const tf  = timeframe || activeTFRef.current || "1day";
     const key = `${symbol}:${tf}`;
     selectedSymRef.current = symbol;
     setSelectedSym(symbol);
-
-    // Serve from cache immediately if available
     if (techCacheRef.current[key]) {
       setTech(techCacheRef.current[key]);
       setTechLoading(false);
       return;
     }
-
     setTech(null);
     setTechLoading(true);
     try {
@@ -810,18 +979,15 @@ export default function MarketScannerPage() {
       const json = await res.json();
       if (json && !json.error) {
         techCacheRef.current[key] = json;
-        // Bump version so the table column for this stock also updates
         setTechVersion(v => v + 1);
         if (selectedSymRef.current === symbol) {
           setTech(json);
           setTechLoading(false);
         }
       } else {
-        console.warn("Technicals error:", json.error);
         if (selectedSymRef.current === symbol) setTechLoading(false);
       }
-    } catch (e) {
-      console.error("Technicals fetch failed:", e);
+    } catch {
       if (selectedSymRef.current === symbol) setTechLoading(false);
     }
   }, []);
@@ -838,7 +1004,6 @@ export default function MarketScannerPage() {
     setTimeout(() => tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
   }, []);
 
-  // ── Derived lists ─────────────────────────────────────────────────────────
   const stocks   = getStocksForTab(data, tab);
   const filtered = searchQ
     ? stocks.filter(s => s.symbol.includes(searchQ.toUpperCase()) || (s.name || "").toLowerCase().includes(searchQ.toLowerCase()))
@@ -851,7 +1016,6 @@ export default function MarketScannerPage() {
     return 0;
   });
 
-  // ── Tab config ────────────────────────────────────────────────────────────
   const TABS = [
     { id: "gainers",  label: "Top Gainers",  accent: T.green  },
     { id: "losers",   label: "Top Losers",   accent: T.red    },
@@ -876,13 +1040,19 @@ export default function MarketScannerPage() {
 
         {data?.market && (
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ background: "#052e16", border: `1px solid #22c55e44`, borderRadius: 20, padding: "3px 11px", fontSize: 11, color: T.green, fontWeight: 700 }}>▲ {market.advancing}</span>
-            <span style={{ background: "#3b0a0a", border: `1px solid #ef444444`, borderRadius: 20, padding: "3px 11px", fontSize: 11, color: T.red,   fontWeight: 700 }}>▼ {market.declining}</span>
-            <span style={{ background: "#1a2030", border: `1px solid #3d506844`, borderRadius: 20, padding: "3px 11px", fontSize: 11, color: T.textSec }}>— {market.unchanged}</span>
+            <span style={{ background: "#052e16", border: `1px solid #4ade8044`, borderRadius: 20, padding: "3px 11px", fontSize: 11, color: T.green, fontWeight: 700 }}>▲ {market.advancing}</span>
+            <span style={{ background: "#3b0a0a", border: `1px solid #f8717144`, borderRadius: 20, padding: "3px 11px", fontSize: 11, color: T.red,   fontWeight: 700 }}>▼ {market.declining}</span>
+            <span style={{ background: "#1a2030", border: `1px solid #4a608044`, borderRadius: 20, padding: "3px 11px", fontSize: 11, color: T.textSec }}>— {market.unchanged}</span>
             <BreadthBar advancing={market.advancing} declining={market.declining} unchanged={market.unchanged} total={market.total} />
             <span style={{ fontSize: 10, color: T.textDim }}>{market.total} stocks</span>
           </div>
         )}
+
+        {/* Accuracy tracker button */}
+        <button type="button" onClick={() => setShowAccuracy(true)} style={{
+          background: "#1e2a3a", border: `1px solid ${T.border}`, color: T.textSec,
+          padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 6,
+        }}>📈 Accuracy Tracker</button>
 
         <div style={{ marginLeft: "auto", fontSize: 10, color: T.textDim }}>
           {updatedAt ? `Updated ${updatedAt.toLocaleTimeString("en-IN")}` : "Connecting…"}
@@ -903,28 +1073,23 @@ export default function MarketScannerPage() {
         {/* ── Tabs ── */}
         <div ref={tableRef} style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
           {TABS.map(t => (
-            <button
-              type="button"
-              key={t.id}
-              onClick={e => { e.preventDefault(); setTab(t.id); }}
-              style={{
-                padding: "5px 13px", borderRadius: 5, fontSize: 11, fontWeight: 700,
-                cursor: "pointer", border: "1px solid",
-                borderColor: tab === t.id ? t.accent : T.border,
-                background:  tab === t.id ? `${t.accent}18` : T.bgPanel,
-                color:       tab === t.id ? t.accent : T.textDim,
-                transition: "all 0.15s",
-              }}
-            >
+            <button type="button" key={t.id} onClick={e => { e.preventDefault(); setTab(t.id); setDisplayLimit(500); }} style={{
+              padding: "5px 13px", borderRadius: 5, fontSize: 11, fontWeight: 700,
+              cursor: "pointer", border: "1px solid",
+              borderColor: tab === t.id ? t.accent : T.border,
+              background:  tab === t.id ? `${t.accent}18` : T.bgPanel,
+              color:       tab === t.id ? t.accent : T.textDim,
+              transition: "all 0.15s",
+            }}>
               {t.label}
               {data && t.id !== "sector" && (
                 <span style={{ marginLeft: 5, fontSize: 9, color: tab === t.id ? t.accent : T.textDim, opacity: 0.7 }}>
-                  {t.id === "gainers"  ? (data.gainers?.length  || 0)             :
-                   t.id === "losers"   ? (data.losers?.length   || 0)             :
-                   t.id === "all"      ? (data.allStocks?.length || 0)            :
-                   t.id === "largecap" ? (data.byMcap?.largecap?.length || 0)     :
-                   t.id === "midcap"   ? (data.byMcap?.midcap?.length   || 0)     :
-                   t.id === "smallcap" ? (data.byMcap?.smallcap?.length || 0)     :
+                  {t.id === "gainers"  ? (data.gainers?.length  || 0)         :
+                   t.id === "losers"   ? (data.losers?.length   || 0)         :
+                   t.id === "all"      ? (data.allStocks?.length || 0)        :
+                   t.id === "largecap" ? (data.byMcap?.largecap?.length || 0) :
+                   t.id === "midcap"   ? (data.byMcap?.midcap?.length   || 0) :
+                   t.id === "smallcap" ? (data.byMcap?.smallcap?.length || 0) :
                    t.id === "microcap" ? (data.byMcap?.microcap?.length || 0) : ""}
                 </span>
               )}
@@ -948,26 +1113,25 @@ export default function MarketScannerPage() {
                 onChange={e => setSearchQ(e.target.value)}
                 style={{
                   background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 6,
-                  color: T.textPri, padding: "6px 12px", fontSize: 12, width: 220,
+                  color: "#ffffff", padding: "6px 12px", fontSize: 12, width: 220,
                   outline: "none", fontFamily: "inherit",
                 }}
               />
               <div style={{ display: "flex", gap: 4 }}>
                 {[{ id: "gainers", label: "% ↑" }, { id: "losers", label: "% ↓" }, { id: "volume", label: "Vol" }, { id: "value", label: "Value" }].map(s => (
-                  <button
-                    type="button"
-                    key={s.id}
-                    onClick={e => { e.preventDefault(); setSortBy(s.id); }}
-                    style={{
-                      padding: "5px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer",
-                      border: "1px solid", fontWeight: 700,
-                      borderColor: sortBy === s.id ? T.indigo : T.border,
-                      background:  sortBy === s.id ? `${T.indigo}22` : T.bgPanel,
-                      color:       sortBy === s.id ? T.indigo : T.textDim,
-                    }}>{s.label}</button>
+                  <button type="button" key={s.id} onClick={e => { e.preventDefault(); setSortBy(s.id); }} style={{
+                    padding: "5px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer",
+                    border: "1px solid", fontWeight: 700,
+                    borderColor: sortBy === s.id ? T.indigo : T.border,
+                    background:  sortBy === s.id ? `${T.indigo}22` : T.bgPanel,
+                    color:       sortBy === s.id ? T.indigo : T.textDim,
+                  }}>{s.label}</button>
                 ))}
               </div>
-              <span style={{ marginLeft: "auto", fontSize: 11, color: T.textDim }}>{sorted.length} stocks</span>
+              {/* FIX: Show actual count, not 150 cap */}
+              <span style={{ marginLeft: "auto", fontSize: 11, color: T.textDim }}>
+                Showing {Math.min(sorted.length, displayLimit)} of {sorted.length} stocks
+              </span>
             </div>
 
             {/* Table */}
@@ -980,9 +1144,6 @@ export default function MarketScannerPage() {
               <div style={{ textAlign: "center", padding: "60px 0", color: T.textDim }}>
                 <div style={{ fontSize: 30, marginBottom: 8 }}>📭</div>
                 <div style={{ color: T.textSec }}>No stocks in this category yet</div>
-                <div style={{ fontSize: 11, color: T.textDim, marginTop: 6 }}>
-                  {tab === "largecap" || tab === "midcap" ? "Market cap classification is loading — check back in a moment" : ""}
-                </div>
               </div>
             ) : (
               <div style={{ background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
@@ -991,7 +1152,7 @@ export default function MarketScannerPage() {
                     <tr style={{ background: "#080d14", borderBottom: `1px solid ${T.border}` }}>
                       {["#", "Symbol", "LTP", "Change", "Volume", "Cap", "RSI", "MACD", "Bollinger", "MA Signal"].map(h => (
                         <th key={h} style={{
-                          padding: "8px 8px", fontSize: 10, color: T.textDim, fontWeight: 700,
+                          padding: "8px 8px", fontSize: 10, color: "#94a3b8", fontWeight: 700,
                           textAlign: ["LTP", "Change", "Volume"].includes(h) ? "right" : "left",
                           letterSpacing: "0.5px",
                           position: "sticky", top: 0, background: "#080d14", zIndex: 1,
@@ -1000,10 +1161,9 @@ export default function MarketScannerPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sorted.slice(0, 150).map((s, i) => (
+                    {/* FIX: No more 150 cap — use displayLimit (default 500) */}
+                    {sorted.slice(0, displayLimit).map((s, i) => (
                       <StockRow
-                        // techVersion in the key forces React to re-mount each row
-                        // when new batch tech data arrives, so columns update instantly
                         key={`${s.symbol}-${techVersion}`}
                         stock={s}
                         rank={i + 1}
@@ -1014,9 +1174,20 @@ export default function MarketScannerPage() {
                     ))}
                   </tbody>
                 </table>
-                {sorted.length > 150 && (
-                  <div style={{ textAlign: "center", padding: "10px", fontSize: 11, color: T.textDim, borderTop: `1px solid ${T.borderSub}` }}>
-                    Showing 150 of {sorted.length} — use search to filter
+                {/* FIX: Load More button instead of hard cap */}
+                {sorted.length > displayLimit && (
+                  <div style={{ textAlign: "center", padding: "12px", borderTop: `1px solid ${T.borderSub}` }}>
+                    <button type="button" onClick={() => setDisplayLimit(l => l + 500)} style={{
+                      background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec,
+                      padding: "8px 20px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700,
+                    }}>
+                      Load more ({sorted.length - displayLimit} remaining)
+                    </button>
+                  </div>
+                )}
+                {sorted.length <= displayLimit && sorted.length > 0 && (
+                  <div style={{ textAlign: "center", padding: "8px", fontSize: 10, color: T.textDim, borderTop: `1px solid ${T.borderSub}` }}>
+                    ✅ All {sorted.length} stocks shown
                   </div>
                 )}
               </div>
@@ -1041,6 +1212,11 @@ export default function MarketScannerPage() {
             activeTFRef.current = "1day";
           }}
         />
+      )}
+
+      {/* Accuracy Tracker Modal */}
+      {showAccuracy && (
+        <AccuracyPanel onClose={() => setShowAccuracy(false)} techCacheRef={techCacheRef} />
       )}
     </div>
   );
