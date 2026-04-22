@@ -81,7 +81,6 @@ function SigBadge({ signal }) {
   );
 }
 
-// ── Exchange badge ────────────────────────────────────────────────────────────
 function ExBadge({ exchange }) {
   const isBSE = exchange === "BSE";
   return (
@@ -95,7 +94,6 @@ function ExBadge({ exchange }) {
   );
 }
 
-// ── McapBadge ─────────────────────────────────────────────────────────────────
 function McapBadge({ bucket, label }) {
   const styles = {
     largecap:  { bg: "#1e2060", color: T.indigo  },
@@ -250,7 +248,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
           <div style={{ fontSize: 20, fontWeight: 800, color: T.textPri, letterSpacing: "0.5px" }}>{symbol}</div>
           <div style={{ fontSize: 11, color: T.textSec }}>Technical Analysis · Multi-timeframe</div>
         </div>
-        {/* FIX: type="button" + preventDefault to stop any form-submit / navigation */}
         <button
           type="button"
           onClick={e => { e.preventDefault(); onClose(); }}
@@ -267,7 +264,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
         background: "#080d14", padding: 3, borderRadius: 7, border: `1px solid ${T.border}`,
       }}>
         {TIMEFRAMES.map(tf => (
-          /* FIX: type="button" on every button in the panel */
           <button type="button" key={tf.id} onClick={e => { e.preventDefault(); onTimeframeChange(tf.id); }} style={{
             flex: 1, padding: "5px 0", fontSize: 10, fontWeight: 700,
             borderRadius: 5, cursor: "pointer", border: "none",
@@ -633,7 +629,6 @@ function GainLossCard({ title, stocks, onSelect, accent, onViewAll }) {
         display: "flex", justifyContent: "space-between", alignItems: "center",
       }}>
         <span style={{ fontWeight: 800, fontSize: 11, color: accent, letterSpacing: "0.8px" }}>{title}</span>
-        {/* FIX: type="button" + preventDefault stops any accidental form submit / navigation */}
         <button
           type="button"
           onClick={e => { e.preventDefault(); e.stopPropagation(); onViewAll(); }}
@@ -722,10 +717,9 @@ export default function MarketScannerPage() {
   const [searchQ,     setSearchQ]     = useState("");
   const [updatedAt,   setUpdatedAt]   = useState(null);
 
-  // ── FIX 1: techVersion state ──────────────────────────────────────────────
-  // techCacheRef is a plain object ref — React doesn't re-render when it changes.
-  // Bumping techVersion forces StockRow keys to change, causing React to re-read
-  // the latest cached tech data from the ref and show RSI/MACD/Bollinger columns.
+  // techVersion: bumping this integer forces React to re-render StockRow keys,
+  // causing rows to re-read techCacheRef and display RSI/MACD/Bollinger values
+  // that arrived via the pre-warm socket batch — without needing a click.
   const [techVersion, setTechVersion] = useState(0);
 
   const techCacheRef   = useRef({});
@@ -748,26 +742,61 @@ export default function MarketScannerPage() {
     return [];
   }, []);
 
-  // ── Socket ────────────────────────────────────────────────────────────────
+  // ── Socket listeners ──────────────────────────────────────────────────────
   useEffect(() => {
     const socket = getSocket();
+
+    // Main market data update
     socket.on("scanner-update", d => {
       setData(d);
       setUpdatedAt(new Date(d.updatedAt));
-      // FIX 1b: bump version on every live update so pre-warmed tech data
-      // that arrived since the last render becomes visible in the table columns
+      // Bump version so any already-cached tech shows up in the refreshed table
       setTechVersion(v => v + 1);
     });
-    return () => { socket.off("scanner-update"); };
+
+    // ── KEY FIX: Listen for pre-warmed tech batches from the server.
+    // The server emits these after each pre-warm cycle AND replays all cached
+    // 1day entries to every newly-connected socket. This means RSI/MACD/
+    // Bollinger columns fill automatically — no clicking required.
+    socket.on("scanner-tech-batch", (batch) => {
+      if (!Array.isArray(batch) || batch.length === 0) return;
+      let changed = false;
+      for (const { key, data: techData } of batch) {
+        if (key && techData) {
+          // Only update if this is newer than what we have (avoid stale overwrites)
+          const existing = techCacheRef.current[key];
+          if (!existing || techData.computedAt > existing.computedAt) {
+            techCacheRef.current[key] = techData;
+            changed = true;
+
+            // If this is the currently-open panel, refresh it too
+            if (selectedSymRef.current) {
+              const panelKey = `${selectedSymRef.current}:${activeTFRef.current}`;
+              if (key === panelKey) {
+                setTech(techData);
+              }
+            }
+          }
+        }
+      }
+      // One version bump per batch — triggers a single re-render for all rows
+      if (changed) setTechVersion(v => v + 1);
+    });
+
+    return () => {
+      socket.off("scanner-update");
+      socket.off("scanner-tech-batch");
+    };
   }, []);
 
-  // ── Fetch technicals ──────────────────────────────────────────────────────
+  // ── Fetch technicals on demand (click or timeframe change) ────────────────
   const handleSelect = useCallback(async (symbol, timeframe) => {
     const tf  = timeframe || activeTFRef.current || "1day";
     const key = `${symbol}:${tf}`;
     selectedSymRef.current = symbol;
     setSelectedSym(symbol);
 
+    // Serve from cache immediately if available
     if (techCacheRef.current[key]) {
       setTech(techCacheRef.current[key]);
       setTechLoading(false);
@@ -781,9 +810,7 @@ export default function MarketScannerPage() {
       const json = await res.json();
       if (json && !json.error) {
         techCacheRef.current[key] = json;
-        // FIX 1c: bump version after every successful tech fetch so the table
-        // row for this symbol immediately shows RSI/MACD/Bollinger without
-        // needing to click the stock a second time
+        // Bump version so the table column for this stock also updates
         setTechVersion(v => v + 1);
         if (selectedSymRef.current === symbol) {
           setTech(json);
@@ -847,7 +874,6 @@ export default function MarketScannerPage() {
           <div style={{ fontSize: 10, color: T.textDim }}>NSE 500 + BSE · Live data + Upstox historical</div>
         </div>
 
-        {/* Breadth pills */}
         {data?.market && (
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <span style={{ background: "#052e16", border: `1px solid #22c55e44`, borderRadius: 20, padding: "3px 11px", fontSize: 11, color: T.green, fontWeight: 700 }}>▲ {market.advancing}</span>
@@ -877,7 +903,6 @@ export default function MarketScannerPage() {
         {/* ── Tabs ── */}
         <div ref={tableRef} style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
           {TABS.map(t => (
-            // FIX 2: type="button" + preventDefault on every tab button
             <button
               type="button"
               key={t.id}
@@ -892,7 +917,6 @@ export default function MarketScannerPage() {
               }}
             >
               {t.label}
-              {/* Stock count badge */}
               {data && t.id !== "sector" && (
                 <span style={{ marginLeft: 5, fontSize: 9, color: tab === t.id ? t.accent : T.textDim, opacity: 0.7 }}>
                   {t.id === "gainers"  ? (data.gainers?.length  || 0)             :
@@ -930,7 +954,6 @@ export default function MarketScannerPage() {
               />
               <div style={{ display: "flex", gap: 4 }}>
                 {[{ id: "gainers", label: "% ↑" }, { id: "losers", label: "% ↓" }, { id: "volume", label: "Vol" }, { id: "value", label: "Value" }].map(s => (
-                  // FIX 2b: type="button" + preventDefault on sort buttons
                   <button
                     type="button"
                     key={s.id}
@@ -979,9 +1002,8 @@ export default function MarketScannerPage() {
                   <tbody>
                     {sorted.slice(0, 150).map((s, i) => (
                       <StockRow
-                        // FIX 1d: include techVersion in the key so React re-renders
-                        // every row when new tech data is cached, making RSI/MACD/
-                        // Bollinger columns populate without needing to click stocks
+                        // techVersion in the key forces React to re-mount each row
+                        // when new batch tech data arrives, so columns update instantly
                         key={`${s.symbol}-${techVersion}`}
                         stock={s}
                         rank={i + 1}

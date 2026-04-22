@@ -4,16 +4,10 @@
  * marketScanner.js
  * Location: server/services/intelligence/marketScanner.js
  *
- * COMPLETE REWRITE — all fixes applied:
- * 1. mcapDB keyed by BSE code (e.g. "514028") with symbol field — build symbol→bucket map correctly
- * 2. mcapDB has no "mcap" field — use lastPrice × estimated shares heuristic for bucketing
- * 3. BSE stocks fetched from BSE API and merged with NSE 500
- * 4. allStocks emitted in every socket payload so "All Stocks" tab works
- * 5. Pre-warm now covers all gainers/losers/largecap (not just 50)
- * 6. getInstrumentKey now directly uses instrumentMap from server (no race condition)
- * 7. Upstox token getter reads from upstoxStream correctly
- * 8. 4H aggregation fixed
- * 9. All 13 technical indicators returned (Stochastic, Williams %R, ADX, Supertrend, OBV, VWAP, MFI)
+ * FIX: Pre-warmed tech data now pushed to all connected sockets after each
+ * batch completes via "scanner-tech-batch" event. Frontend listens for this
+ * event and populates its techCacheRef, making RSI/MACD/Bollinger columns
+ * fill in without requiring a click on each stock.
  */
 
 const axios = require("axios");
@@ -31,7 +25,7 @@ const TIMEFRAME_CONFIG = {
   "5min":   { interval: "5minute",  days: 10,   candles: 200, ttl: 2  * 60 * 1000 },
   "15min":  { interval: "15minute", days: 30,   candles: 200, ttl: 5  * 60 * 1000 },
   "1hour":  { interval: "60minute", days: 60,   candles: 200, ttl: 10 * 60 * 1000 },
-  "4hour":  { interval: "60minute", days: 120,  candles: 200, ttl: 15 * 60 * 1000 }, // fetch 1H, aggregate to 4H
+  "4hour":  { interval: "60minute", days: 120,  candles: 200, ttl: 15 * 60 * 1000 },
   "1day":   { interval: "day",      days: 365,  candles: 250, ttl: 15 * 60 * 1000 },
   "1week":  { interval: "week",     days: 730,  candles: 104, ttl: 30 * 60 * 1000 },
   "1month": { interval: "month",    days: 1825, candles: 60,  ttl: 60 * 60 * 1000 },
@@ -56,8 +50,6 @@ const BSE_HEADERS = {
 };
 
 // ── Market cap buckets ────────────────────────────────────────────────────────
-// Since mcapDB has no mcap field, we use lastPrice heuristic
-// This is approximate — large-cap stocks generally trade at higher prices with high volumes
 const MCAP_BUCKETS = {
   largecap:  { label: "Large Cap"  },
   midcap:    { label: "Mid Cap"    },
@@ -80,9 +72,8 @@ let lastCookieAt = 0;
 let ioRef        = null;
 let preWarmTimer = null;
 
-// ── Symbol → mcap bucket map (built from mcapDB at startup) ──────────────────
-// mcapDB structure: { "514028": { name, isin, symbol, lastPrice, updatedAt } }
-let symbolBucketMap = {}; // e.g. { "RAJKSYN": "microcap", "RELIANCE": "largecap" }
+// ── Symbol → mcap bucket map ──────────────────────────────────────────────────
+let symbolBucketMap = {};
 
 function buildSymbolBucketMap() {
   try {
@@ -91,7 +82,6 @@ function buildSymbolBucketMap() {
     if (!raw || !raw.trim()) return;
     const db = JSON.parse(raw);
 
-    // Known large-cap NSE symbols (Nifty 50 + top stocks)
     const KNOWN_LARGECAP = new Set([
       "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","SBIN","AXISBANK","KOTAKBANK",
       "LT","WIPRO","BAJFINANCE","BHARTIARTL","HINDUNILVR","NTPC","SUNPHARMA",
@@ -120,7 +110,6 @@ function buildSymbolBucketMap() {
       "MARICO","COLPAL","PGHH","EMAMILTD","JYOTHYLAB",
     ]);
 
-    // Known mid-cap symbols
     const KNOWN_MIDCAP = new Set([
       "EXIDEIND","JPPOWER","BALRAMCHIN","MOTHERSON","HEXT","TARIL",
       "360ONE","ECLERX","3MINDIA","AIAENG","APARINDS","ATUL","BASF",
@@ -148,16 +137,13 @@ function buildSymbolBucketMap() {
     for (const [, entry] of Object.entries(db)) {
       const sym = (entry.symbol || "").toUpperCase();
       if (!sym) continue;
-      if (KNOWN_LARGECAP.has(sym)) {
-        symbolBucketMap[sym] = "largecap";
-      } else if (KNOWN_MIDCAP.has(sym)) {
-        symbolBucketMap[sym] = "midcap";
-      } else {
-        // Heuristic: use lastPrice as a rough proxy
+      if (KNOWN_LARGECAP.has(sym))      symbolBucketMap[sym] = "largecap";
+      else if (KNOWN_MIDCAP.has(sym))   symbolBucketMap[sym] = "midcap";
+      else {
         const lp = entry.lastPrice || 0;
-        if (lp >= 2000)      symbolBucketMap[sym] = "midcap";   // higher price often = established company
-        else if (lp >= 500)  symbolBucketMap[sym] = "smallcap";
-        else                 symbolBucketMap[sym] = "microcap";
+        if (lp >= 2000)     symbolBucketMap[sym] = "midcap";
+        else if (lp >= 500) symbolBucketMap[sym] = "smallcap";
+        else                symbolBucketMap[sym] = "microcap";
       }
     }
     console.log(`📊 Symbol bucket map built: ${Object.keys(symbolBucketMap).length} symbols`);
@@ -166,31 +152,21 @@ function buildSymbolBucketMap() {
   }
 }
 
-// Call once at load time
 buildSymbolBucketMap();
 
-// ── Get mcap bucket for a stock ───────────────────────────────────────────────
+// ── Get mcap bucket ───────────────────────────────────────────────────────────
 function getMcapBucket(symbol, ltp, volume) {
-  // 1. Check pre-built map from mcapDB
   if (symbolBucketMap[symbol]) return symbolBucketMap[symbol];
-
-  // 2. Heuristic fallback using live price + volume
-  // Large cap: high-priced stocks with significant volume
   if (ltp >= 1000 && volume >= 500000)  return "largecap";
   if (ltp >= 500  && volume >= 200000)  return "largecap";
   if (ltp >= 200  && volume >= 1000000) return "largecap";
-
-  // Mid cap
   if (ltp >= 500  && volume >= 50000)   return "midcap";
   if (ltp >= 100  && volume >= 200000)  return "midcap";
-
-  // Small cap
   if (ltp >= 50   && volume >= 10000)   return "smallcap";
-
   return "microcap";
 }
 
-// ── Upstox token — deferred getter ───────────────────────────────────────────
+// ── Upstox token ──────────────────────────────────────────────────────────────
 function getUpstoxToken() {
   try {
     const { getAccessToken } = require("../upstoxStream");
@@ -211,7 +187,6 @@ function getInstrumentKey(symbol) {
     }
   } catch (_) {}
 
-  // Hard-coded fallback
   const FALLBACK = {
     "RELIANCE":   "NSE_EQ|INE002A01018", "TCS":        "NSE_EQ|INE467B01029",
     "HDFCBANK":   "NSE_EQ|INE040A01034", "INFY":       "NSE_EQ|INE009A01021",
@@ -275,24 +250,17 @@ async function fetchNSEMarketData() {
 }
 
 // ── Fetch BSE data ────────────────────────────────────────────────────────────
-// Fetches BSE 500 index stocks
 async function fetchBSEMarketData() {
   try {
-    // BSE 500 index
     const res = await axios.get(
       "https://api.bseindia.com/BseIndiaAPI/api/GetSensexData/w",
-      {
-        headers: { ...BSE_HEADERS },
-        timeout: 12000,
-      }
+      { headers: { ...BSE_HEADERS }, timeout: 12000 }
     );
     const data = res.data?.Table || res.data?.data || [];
     return data.map(s => ({ ...s, _exchange: "BSE" }));
   } catch (e) {
     console.warn("📊 BSE GetSensexData failed, trying index route:", e.message);
   }
-
-  // Fallback: try BSE 500 constituents
   try {
     const res = await axios.get(
       "https://api.bseindia.com/BseIndiaAPI/api/liveMktData/w?Type=EQ&Grp=500",
@@ -306,7 +274,7 @@ async function fetchBSEMarketData() {
   }
 }
 
-// ── Normalise a raw NSE stock record ─────────────────────────────────────────
+// ── Normalise NSE ─────────────────────────────────────────────────────────────
 function normaliseNSE(s) {
   if (!s.symbol || !s.lastPrice) return null;
   const ltp       = parseFloat(s.lastPrice     || 0);
@@ -332,29 +300,19 @@ function normaliseNSE(s) {
   };
 }
 
-// ── Normalise a raw BSE stock record ─────────────────────────────────────────
+// ── Normalise BSE ─────────────────────────────────────────────────────────────
 function normaliseBSE(s) {
-  // BSE API fields vary — cover common variants
   const symbol =
     s.NSE_Symbol || s.NseSymbol || s.nseSymbol ||
     s.scrip_id   || s.Scrip_Id  || s.SCRIP_ID  || null;
-
   const name =
     s.Scrip_Name || s.LONG_NAME || s.CompanyName || s.name || symbol || "";
-
-  const ltp =
-    parseFloat(s.LTP || s.CurrentValue || s.Close || s.lastPrice || 0);
-
-  if (!ltp || ltp <= 0) return null;
-
+  const ltp = parseFloat(s.LTP || s.CurrentValue || s.Close || s.lastPrice || 0);
+  if (!ltp || ltp <= 0 || !symbol) return null;
   const prevClose = parseFloat(s.PrevClose || s.PreviousClose || s.ClosePrice || ltp);
   const change    = ltp - prevClose;
   const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
   const volume    = parseInt(s.TotalVolume || s.Volume || s.TotalTradedVolume || 0, 10);
-
-  // We need an NSE symbol to fetch Upstox candles — skip if unavailable
-  if (!symbol) return null;
-
   return {
     symbol:     symbol.toUpperCase(),
     name,
@@ -416,8 +374,8 @@ function calcMACD(closes) {
   const signal    = series.length >= 9 ? calcEMA(series, 9) : null;
   const histogram = signal != null ? Math.round((macdLine - signal) * 100) / 100 : null;
   return {
-    macd:      macdLine,
-    signal:    signal != null ? Math.round(signal * 100) / 100 : null,
+    macd: macdLine,
+    signal: signal != null ? Math.round(signal * 100) / 100 : null,
     histogram,
     crossover: histogram != null ? (histogram > 0 ? "BULLISH" : "BEARISH") : null,
   };
@@ -481,7 +439,7 @@ function calcWilliamsR(candles, period = 14) {
 
 function calcADX(candles, period = 14) {
   if (!candles || candles.length < period * 2) return null;
-  const dmPlus  = [], dmMinus = [], trs = [];
+  const dmPlus = [], dmMinus = [], trs = [];
   for (let i = 1; i < candles.length; i++) {
     const upMove   = candles[i].h - candles[i - 1].h;
     const downMove = candles[i - 1].l - candles[i].l;
@@ -493,10 +451,7 @@ function calcADX(candles, period = 14) {
   const smooth = (arr) => {
     let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
     const out = [s];
-    for (let i = period; i < arr.length; i++) {
-      s = s - s / period + arr[i];
-      out.push(s);
-    }
+    for (let i = period; i < arr.length; i++) { s = s - s / period + arr[i]; out.push(s); }
     return out;
   };
   const sTR  = smooth(trs);
@@ -504,17 +459,10 @@ function calcADX(candles, period = 14) {
   const sDMM = smooth(dmMinus);
   const diPlus  = sTR.map((v, i) => v > 0 ? Math.round((sDMP[i] / v) * 10000) / 100 : 0);
   const diMinus = sTR.map((v, i) => v > 0 ? Math.round((sDMM[i] / v) * 10000) / 100 : 0);
-  const dx      = diPlus.map((p, i) => {
-    const m = diMinus[i], s = p + m;
-    return s > 0 ? Math.abs(p - m) / s * 100 : 0;
-  });
+  const dx      = diPlus.map((p, i) => { const m = diMinus[i], s = p + m; return s > 0 ? Math.abs(p - m) / s * 100 : 0; });
   const adxSlice = dx.slice(-period);
   const adx = Math.round((adxSlice.reduce((a, b) => a + b, 0) / period) * 100) / 100;
-  return {
-    adx,
-    diPlus:  Math.round(diPlus[diPlus.length - 1]   * 100) / 100,
-    diMinus: Math.round(diMinus[diMinus.length - 1] * 100) / 100,
-  };
+  return { adx, diPlus: Math.round(diPlus[diPlus.length - 1] * 100) / 100, diMinus: Math.round(diMinus[diMinus.length - 1] * 100) / 100 };
 }
 
 function calcSupertrend(candles, period = 10, multiplier = 3) {
@@ -567,11 +515,11 @@ function calcMFI(candles, period = 14) {
 
 function calcMASummary(closes, ltp) {
   const mas = {
-    ema5:   calcEMA(closes, 5),   ema9:   calcEMA(closes, 9),
-    ema21:  calcEMA(closes, 21),  ema50:  calcEMA(closes, 50),
+    ema5: calcEMA(closes, 5), ema9: calcEMA(closes, 9),
+    ema21: calcEMA(closes, 21), ema50: calcEMA(closes, 50),
     ema200: calcEMA(closes, 200),
-    sma10:  calcSMA(closes, 10),  sma20:  calcSMA(closes, 20),
-    sma50:  calcSMA(closes, 50),  sma100: calcSMA(closes, 100),
+    sma10: calcSMA(closes, 10), sma20: calcSMA(closes, 20),
+    sma50: calcSMA(closes, 50), sma100: calcSMA(closes, 100),
     sma200: calcSMA(closes, 200),
   };
   let buy = 0, sell = 0, neutral = 0;
@@ -587,7 +535,7 @@ function calcMASummary(closes, ltp) {
   return { buy, sell, neutral, total: buy + sell + neutral, summary };
 }
 
-// ── Full technicals ───────────────────────────────────────────────────────────
+// ── Full technicals computation ───────────────────────────────────────────────
 function computeTechnicals(symbol, candles) {
   if (!candles || candles.length < 20) return null;
 
@@ -606,7 +554,6 @@ function computeTechnicals(symbol, candles) {
   const obv    = calcOBV(candles);
   const mfi    = calcMFI(candles);
 
-  // VWAP approximation
   const recentN   = Math.min(candles.length, 78);
   const vwapSlice = candles.slice(-recentN);
   let sumTV = 0, sumV = 0;
@@ -619,7 +566,6 @@ function computeTechnicals(symbol, candles) {
   const vwap     = sumV > 0 ? Math.round((sumTV / sumV) * 100) / 100 : ltp;
   const vwapDiff = Math.round(((ltp - vwap) / vwap) * 10000) / 100;
 
-  // Tech score
   let score = 50;
   if (rsi) {
     if (rsi > 70) score -= 10; else if (rsi < 30) score += 10;
@@ -643,7 +589,7 @@ function computeTechnicals(symbol, candles) {
   const sl     = isBull
     ? Math.round((ltp - 1.5 * atrVal) * 100) / 100
     : Math.round((ltp + 1.5 * atrVal) * 100) / 100;
-  const tp     = isBull
+  const tp2    = isBull
     ? Math.round((ltp + 3.0 * atrVal) * 100) / 100
     : Math.round((ltp - 3.0 * atrVal) * 100) / 100;
 
@@ -660,7 +606,7 @@ function computeTechnicals(symbol, candles) {
     symbol, ltp,
     signal: sig,
     strength: score,
-    entry, sl, tp,
+    entry, sl, tp: tp2,
     emas: {
       ema5:   calcEMA(closes, 5),  ema9:   calcEMA(closes, 9),
       ema21:  calcEMA(closes, 21), ema50:  calcEMA(closes, 50),
@@ -685,18 +631,11 @@ function computeTechnicals(symbol, candles) {
   };
 }
 
-// ── Historical candles — Upstox PRIMARY, NSE fallback ────────────────────────
+// ── Historical candles ────────────────────────────────────────────────────────
 async function fetchCandles(symbol, days, interval) {
   const token    = getUpstoxToken();
   const instrKey = getInstrumentKey(symbol);
-  const is4H     = interval === "240minute"; // handled by config mapping to 60minute
-
-  if (!token) {
-    console.warn(`📊 [${symbol}][${interval}] No Upstox token`);
-  }
-  if (!instrKey) {
-    console.warn(`📊 [${symbol}][${interval}] No instrument key`);
-  }
+  const is4H     = interval === "240minute";
 
   if (token && instrKey) {
     try {
@@ -712,10 +651,7 @@ async function fetchCandles(symbol, days, interval) {
       });
 
       let raw = res.data?.data?.candles || [];
-      if (!Array.isArray(raw) || raw.length === 0) {
-        console.warn(`📊 [${symbol}][${interval}] Upstox returned 0 candles`);
-      } else {
-        // Upstox returns newest-first — reverse to oldest-first
+      if (Array.isArray(raw) && raw.length > 0) {
         raw = raw.slice().reverse();
         let candles = raw.map(c => ({
           o: parseFloat(c[1]), h: parseFloat(c[2]),
@@ -723,7 +659,6 @@ async function fetchCandles(symbol, days, interval) {
           v: parseFloat(c[5] || 0),
         })).filter(c => c.c > 0);
 
-        // 4H aggregation: group every 4 × 1H candles
         if (is4H && candles.length >= 4) {
           const agg = [];
           for (let i = 0; i + 3 < candles.length; i += 4) {
@@ -739,19 +674,11 @@ async function fetchCandles(symbol, days, interval) {
           candles = agg;
         }
 
-        if (candles.length >= 20) {
-          console.log(`📊 [${symbol}][${interval}] ${candles.length} candles`);
-          return candles;
-        }
-        console.warn(`📊 [${symbol}][${interval}] Only ${candles.length} usable candles`);
+        if (candles.length >= 20) return candles;
       }
     } catch (e) {
       const status = e.response?.status;
-      const msg    = e.response?.data?.message || e.message;
-      console.warn(`📊 [${symbol}][${interval}] Upstox failed [${status}]: ${msg}`);
-      if (status === 401) console.warn("   ↳ Token expired — reconnect via /auth/upstox");
-      if (status === 429) console.warn("   ↳ Rate limited — increase PREWARM_BETWEEN");
-      if (status === 400) console.warn("   ↳ Bad instrument key:", symbol, instrKey);
+      console.warn(`📊 [${symbol}][${interval}] Upstox failed [${status}]: ${e.response?.data?.message || e.message}`);
     }
   }
 
@@ -774,10 +701,7 @@ async function fetchCandles(symbol, days, interval) {
         c: parseFloat(r.CH_CLOSING_PRICE    || r.close  || 0),
         v: parseFloat(r.CH_TOT_TRADED_QTY   || r.volume || 0),
       })).filter(c => c.c > 0);
-      if (candles.length >= 20) {
-        console.log(`📊 [${symbol}][day] NSE fallback: ${candles.length} candles`);
-        return candles;
-      }
+      if (candles.length >= 20) return candles;
     } catch (e) {
       console.warn(`📊 [${symbol}] NSE daily fallback failed:`, e.message);
     }
@@ -794,10 +718,8 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
   if (cached && Date.now() - cached.computedAt < cfg.ttl) return cached;
 
   const candles = await fetchCandles(symbol, cfg.days, cfg.interval);
-  if (!candles || candles.length < 20) {
-    console.warn(`📊 [${symbol}][${timeframe}] Not enough candles (${candles?.length || 0})`);
-    return null;
-  }
+  if (!candles || candles.length < 20) return null;
+
   const result = computeTechnicals(symbol, candles);
   if (result) {
     result.timeframe = timeframe;
@@ -810,27 +732,58 @@ async function getTechnicals(symbol) {
   return getTechnicalsForTimeframe(symbol, "1day");
 }
 
-// ── Background pre-warm ───────────────────────────────────────────────────────
+// ── Pre-warm: fetch tech for a list of symbols, emit batches to frontend ──────
+// KEY FIX: After each successful fetch, emit the result to all connected sockets
+// via "scanner-tech-batch". The frontend listens for this and populates its
+// local techCacheRef, which makes RSI/MACD/Bollinger show without clicking.
 async function preWarmTechCache(symbols) {
   if (!symbols || !symbols.length) return;
+
   const token = getUpstoxToken();
   if (!token) {
     console.warn("📊 Pre-warm skipped — no Upstox token");
     return;
   }
+
   console.log(`📊 Pre-warming ${symbols.length} symbols (1day)…`);
+
+  const BATCH_EMIT_SIZE = 10; // emit to frontend every N symbols to avoid flooding
+  let batch = [];
   let warmed = 0;
+
   for (const sym of symbols) {
     try {
-      const cfg    = TIMEFRAME_CONFIG["1day"];
-      const cached = techCache.get(`${sym}:1day`);
-      if (cached && Date.now() - cached.computedAt < cfg.ttl) { warmed++; continue; }
-      await getTechnicals(sym);
-      warmed++;
+      const cfg      = TIMEFRAME_CONFIG["1day"];
+      const cacheKey = `${sym}:1day`;
+
+      // Use cached if still fresh
+      let result = techCache.get(cacheKey);
+      if (!result || Date.now() - result.computedAt >= cfg.ttl) {
+        result = await getTechnicals(sym);
+      }
+
+      // ── KEY FIX: push result to batch for socket emission ──────────────
+      if (result) {
+        batch.push({ key: `${sym}:1day`, data: result });
+        warmed++;
+      }
+
+      // Emit in batches so the frontend updates progressively
+      if (batch.length >= BATCH_EMIT_SIZE) {
+        if (ioRef) ioRef.emit("scanner-tech-batch", batch);
+        batch = [];
+      }
     } catch (_) {}
+
     await new Promise(r => setTimeout(r, PREWARM_BETWEEN));
   }
-  console.log(`📊 Pre-warm done: ${warmed}/${symbols.length}`);
+
+  // Emit any remaining results
+  if (batch.length > 0 && ioRef) {
+    ioRef.emit("scanner-tech-batch", batch);
+  }
+
+  console.log(`📊 Pre-warm done: ${warmed}/${symbols.length} — emitted to frontend`);
 }
 
 // ── Build socket payload ──────────────────────────────────────────────────────
@@ -861,7 +814,6 @@ async function runScanner() {
   try {
     console.log("📊 Scanner: running…");
 
-    // ── Fetch NSE 500 ──────────────────────────────────────────────────────
     let nseRaw = [];
     try {
       nseRaw = await fetchNSEMarketData();
@@ -870,7 +822,6 @@ async function runScanner() {
       console.warn("📊 NSE 500 fetch failed —", e.message);
     }
 
-    // ── Fetch BSE ──────────────────────────────────────────────────────────
     let bseRaw = [];
     try {
       bseRaw = await fetchBSEMarketData();
@@ -879,47 +830,34 @@ async function runScanner() {
       console.warn("📊 BSE fetch failed —", e.message);
     }
 
-    // ── Normalise NSE ──────────────────────────────────────────────────────
     const nseStocks = nseRaw.map(normaliseNSE).filter(Boolean);
-
-    // ── Normalise BSE — only add symbols NOT already in NSE ────────────────
     const nseSymbols = new Set(nseStocks.map(s => s.symbol));
     const bseStocks  = bseRaw.map(normaliseBSE).filter(Boolean)
                              .filter(s => !nseSymbols.has(s.symbol));
 
-    // ── Merge ──────────────────────────────────────────────────────────────
     let stocks = [...nseStocks, ...bseStocks];
     if (!stocks.length) { console.warn("📊 No stocks — skipping"); return; }
 
-    // ── Classify market cap ────────────────────────────────────────────────
     stocks = stocks.map(s => {
       const bucket = getMcapBucket(s.symbol, s.ltp, s.volume);
-      return {
-        ...s,
-        mcapBucket: bucket,
-        mcapLabel:  MCAP_BUCKETS[bucket]?.label || "Micro Cap",
-      };
+      return { ...s, mcapBucket: bucket, mcapLabel: MCAP_BUCKETS[bucket]?.label || "Micro Cap" };
     });
 
-    // ── Sort + top lists ───────────────────────────────────────────────────
     const sorted  = [...stocks].sort((a, b) => b.changePct - a.changePct);
     const gainers = sorted.filter(s => s.changePct > 0).slice(0, 20);
     const losers  = [...sorted].reverse().filter(s => s.changePct < 0).slice(0, 20);
 
-    // ── By market cap ──────────────────────────────────────────────────────
     const byMcap = { largecap: [], midcap: [], smallcap: [], microcap: [] };
     for (const s of stocks) {
       const bucket = s.mcapBucket || "microcap";
       if (byMcap[bucket]) byMcap[bucket].push(s);
     }
-    // Sort each bucket by absolute % change (most active first)
     for (const bucket of Object.keys(byMcap)) {
       byMcap[bucket].sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct));
     }
 
     console.log(`📊 Buckets — Large: ${byMcap.largecap.length}, Mid: ${byMcap.midcap.length}, Small: ${byMcap.smallcap.length}, Micro: ${byMcap.microcap.length}`);
 
-    // ── By sector ──────────────────────────────────────────────────────────
     const sectorMap = {};
     for (const s of stocks) {
       if (!s.sector) continue;
@@ -935,7 +873,6 @@ async function runScanner() {
       topGainer: [...ss].sort((a, b) => b.changePct - a.changePct)[0],
     })).sort((a, b) => b.avgChange - a.avgChange);
 
-    // ── Update cache ───────────────────────────────────────────────────────
     scanCache = {
       gainers, losers,
       allStocks:  stocks,
@@ -948,21 +885,19 @@ async function runScanner() {
       unchanged:  stocks.filter(s => s.changePct === 0).length,
     };
 
-    console.log(`📊 ${stocks.length} total stocks (NSE: ${nseStocks.length}, BSE-only: ${bseStocks.length}) — ${scanCache.advancing}↑ ${scanCache.declining}↓`);
+    console.log(`📊 ${stocks.length} total stocks (NSE: ${nseStocks.length}, BSE-only: ${bseStocks.length})`);
 
-    // ── Emit to all connected sockets ──────────────────────────────────────
     if (ioRef) {
       ioRef.emit("scanner-update", buildPayload(scanCache));
     }
 
-    // ── Pre-warm technicals ────────────────────────────────────────────────
-    // Cover gainers + losers + all large-cap + top mid-cap
+    // Deduplicated list for pre-warm: gainers + losers + large-cap + top mid-cap
     const toWarm = [
       ...gainers.map(s => s.symbol),
       ...losers.map(s => s.symbol),
       ...byMcap.largecap.map(s => s.symbol),
       ...byMcap.midcap.slice(0, 30).map(s => s.symbol),
-    ].filter((sym, i, a) => a.indexOf(sym) === i); // deduplicate
+    ].filter((sym, i, a) => a.indexOf(sym) === i);
 
     if (preWarmTimer) clearTimeout(preWarmTimer);
     preWarmTimer = setTimeout(() => preWarmTechCache(toWarm), PREWARM_DELAY);
@@ -975,16 +910,37 @@ async function runScanner() {
 // ── Socket handlers ───────────────────────────────────────────────────────────
 function registerScannerHandlers(io) {
   io.on("connection", socket => {
-    // Send cached data immediately on connect
+    // Send scanner data immediately on connect
     if (scanCache.updatedAt > 0) {
       socket.emit("scanner-update", buildPayload(scanCache));
+    }
+
+    // ── KEY FIX: On new connection, replay all cached 1day tech data so the
+    // new client's table columns populate immediately without waiting for the
+    // next pre-warm cycle. Send in chunks to avoid one huge payload.
+    const cachedEntries = [];
+    for (const [key, data] of techCache.entries()) {
+      if (key.endsWith(":1day")) cachedEntries.push({ key, data });
+    }
+    if (cachedEntries.length > 0) {
+      const CHUNK = 20;
+      for (let i = 0; i < cachedEntries.length; i += CHUNK) {
+        const chunk = cachedEntries.slice(i, i + CHUNK);
+        // Stagger chunks slightly to avoid overwhelming the client
+        setTimeout(() => socket.emit("scanner-tech-batch", chunk), i * 50);
+      }
+      console.log(`📊 Replayed ${cachedEntries.length} cached tech entries to new socket`);
     }
 
     socket.on("get-technicals", async ({ symbol } = {}) => {
       if (!symbol) return;
       try {
         const result = await getTechnicals(symbol.toUpperCase());
-        if (result) socket.emit("scanner-technicals", result);
+        if (result) {
+          socket.emit("scanner-technicals", result);
+          // Also send via batch format so frontend updates the table column too
+          socket.emit("scanner-tech-batch", [{ key: `${symbol.toUpperCase()}:1day`, data: result }]);
+        }
       } catch (e) {
         console.warn("📊 Socket technicals error:", e.message);
       }
@@ -998,11 +954,7 @@ function registerScannerHandlers(io) {
       if (sortBy === "losers")   stocks.sort((a, b) => a.changePct  - b.changePct);
       if (sortBy === "volume")   stocks.sort((a, b) => b.volume     - a.volume);
       if (sortBy === "value")    stocks.sort((a, b) => b.totalValue - a.totalValue);
-      if (sortBy === "52whigh")  stocks.sort((a, b) => (b.ltp / b.yearHigh) - (a.ltp / a.yearHigh));
-      socket.emit("scanner-stocks", {
-        stocks: stocks.slice(0, limit || 100),
-        total:  stocks.length,
-      });
+      socket.emit("scanner-stocks", { stocks: stocks.slice(0, limit || 100), total: stocks.length });
     });
   });
 }
