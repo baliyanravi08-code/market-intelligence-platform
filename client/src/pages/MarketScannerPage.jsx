@@ -21,7 +21,6 @@ const arrow = (v) => v > 0 ? "▲" : v < 0 ? "▼" : "—";
 const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
 
 // ── ACCESS CONTROL ─────────────────────────────────────────────────────────────
-// Change these to your preferred credentials
 const ACCESS_PIN = "MARKET2024";
 const SESSION_KEY = "mscanner_auth";
 
@@ -67,19 +66,15 @@ function AccessGate({ onAuth }) {
             width: "100%", background: "#111620", border: "1px solid #1e2a3a",
             borderRadius: 8, padding: "12px 16px", color: "#e2eaf4", fontSize: 14,
             fontFamily: "inherit", outline: "none", marginBottom: 12, letterSpacing: 3,
-            textAlign: "center",
+            textAlign: "center", boxSizing: "border-box",
           }}
         />
         {error && <div style={{ color: "#f87171", fontSize: 12, marginBottom: 12 }}>{error}</div>}
-        <button
-          type="button"
-          onClick={handleSubmit}
-          style={{
-            width: "100%", background: "#3b82f6", border: "none", borderRadius: 8,
-            padding: "12px", color: "#fff", fontSize: 14, fontWeight: 700,
-            cursor: "pointer", fontFamily: "inherit",
-          }}
-        >
+        <button type="button" onClick={handleSubmit} style={{
+          width: "100%", background: "#3b82f6", border: "none", borderRadius: 8,
+          padding: "12px", color: "#fff", fontSize: 14, fontWeight: 700,
+          cursor: "pointer", fontFamily: "inherit",
+        }}>
           Access Scanner →
         </button>
         <div style={{ fontSize: 10, color: "#3d5068", marginTop: 20 }}>
@@ -98,23 +93,19 @@ const T = {
   bgItem:    "#111620",
   border:    "#1e2a3a",
   borderSub: "#192130",
-  // FIX: much brighter text for visibility
-  textPri:   "#f0f6ff",   // was #e2eaf4 — now near-white
-  textSec:   "#94a3b8",   // was #7a8fa6 — brighter
-  textDim:   "#4a6080",   // was #3d5068 — brighter
-  // FIX: brighter status colors
-  green:     "#4ade80",   // was #22c55e
-  red:       "#f87171",   // was #ef4444
-  yellow:    "#fbbf24",   // was #f59e0b
-  blue:      "#60a5fa",   // was #3b82f6
-  purple:    "#c4b5fd",   // was #a78bfa
-  indigo:    "#a5b4fc",   // was #818cf8
-  orange:    "#fb923c",   // was #f97316
-  // Price specifically — make it pop
+  textPri:   "#f0f6ff",
+  textSec:   "#94a3b8",
+  textDim:   "#4a6080",
+  green:     "#4ade80",
+  red:       "#f87171",
+  yellow:    "#fbbf24",
+  blue:      "#60a5fa",
+  purple:    "#c4b5fd",
+  indigo:    "#a5b4fc",
+  orange:    "#fb923c",
   price:     "#ffffff",
 };
 
-// ── Timeframes ────────────────────────────────────────────────────────────────
 const TIMEFRAMES = [
   { id: "5min",   label: "5m"  },
   { id: "15min",  label: "15m" },
@@ -125,7 +116,6 @@ const TIMEFRAMES = [
   { id: "1month", label: "1M"  },
 ];
 
-// ── Shared small components ───────────────────────────────────────────────────
 function MiniBar({ value, max = 100, color = T.blue }) {
   const pct = clamp((value / max) * 100, 0, 100);
   return (
@@ -184,7 +174,6 @@ function McapBadge({ bucket, label }) {
   );
 }
 
-// ── Stock row — FIX: improved contrast ───────────────────────────────────────
 function StockRow({ stock, rank, onSelect, selected, tech }) {
   const pct = stock.changePct;
   return (
@@ -201,7 +190,6 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
     >
       <td style={{ padding: "7px 8px", color: T.textDim, fontSize: 10, width: 28 }}>{rank}</td>
       <td style={{ padding: "7px 8px" }}>
-        {/* FIX: Symbol now white/bright, name also brighter */}
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <span style={{ fontWeight: 800, fontSize: 13, color: "#ffffff" }}>{stock.symbol}</span>
           <ExBadge exchange={stock.exchange} />
@@ -211,7 +199,6 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
         </div>
       </td>
       <td style={{ padding: "7px 8px", textAlign: "right" }}>
-        {/* FIX: price is pure white, larger */}
         <div style={{ fontWeight: 800, fontSize: 14, color: "#ffffff" }}>₹{fmt(stock.ltp)}</div>
       </td>
       <td style={{ padding: "7px 8px", textAlign: "right" }}>
@@ -228,7 +215,6 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
       <td style={{ padding: "7px 8px" }}>
         <McapBadge bucket={stock.mcapBucket} label={stock.mcapLabel} />
       </td>
-      {/* RSI */}
       <td style={{ padding: "7px 8px" }}>
         {tech ? (
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -244,7 +230,6 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
           </div>
         ) : <span style={{ color: T.textDim, fontSize: 11 }}>—</span>}
       </td>
-      {/* MACD */}
       <td style={{ padding: "7px 8px" }}>
         {tech?.macd ? (
           <span style={{ color: tech.macd.crossover === "BULLISH" ? T.green : T.red, fontSize: 11, fontWeight: 700 }}>
@@ -252,7 +237,6 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
           </span>
         ) : <span style={{ color: T.textDim, fontSize: 11 }}>—</span>}
       </td>
-      {/* Bollinger */}
       <td style={{ padding: "7px 8px" }}>
         {tech?.bollingerBands ? (
           <span style={{ fontSize: 11, fontWeight: 600, color:
@@ -271,7 +255,6 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
           </span>
         ) : <span style={{ color: T.textDim, fontSize: 11 }}>—</span>}
       </td>
-      {/* MA Signal */}
       <td style={{ padding: "7px 8px" }}>
         {tech?.maSummary
           ? <SigBadge signal={tech.maSummary.summary} />
@@ -281,26 +264,22 @@ function StockRow({ stock, rank, onSelect, selected, tech }) {
   );
 }
 
-// ── Technical Detail Panel (unchanged logic, updated colors) ─────────────────
+// ── Technical Panel ───────────────────────────────────────────────────────────
 function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClose }) {
   if (!symbol) return null;
-
   const scoreColor = tech
     ? tech.techScore >= 60 ? T.green : tech.techScore <= 40 ? T.red : T.yellow
     : T.textSec;
-
   const sigBg = tech
     ? tech.signal?.includes("BUY")  ? "#14532d"
     : tech.signal?.includes("SELL") ? "#3b0a0a" : "#431407"
     : "#1a2030";
-
   const Card = ({ title, children }) => (
     <div style={{ background: T.bgItem, border: `1px solid ${T.border}`, borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
       <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, letterSpacing: "0.9px", marginBottom: 10, textTransform: "uppercase" }}>{title}</div>
       {children}
     </div>
   );
-
   const Row = ({ label, value, color = T.textPri, badge }) => (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: `1px solid ${T.borderSub}` }}>
       <span style={{ fontSize: 11, color: T.textSec }}>{label}</span>
@@ -310,7 +289,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
       </div>
     </div>
   );
-
   return (
     <div style={{
       position: "fixed", right: 0, top: 0, width: 370, height: "100vh",
@@ -329,7 +307,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
           display: "flex", alignItems: "center", justifyContent: "center",
         }}>✕</button>
       </div>
-
       <div style={{
         display: "flex", gap: 2, marginBottom: 14,
         background: "#080d14", padding: 3, borderRadius: 7, border: `1px solid ${T.border}`,
@@ -344,14 +321,12 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
           }}>{tf.label}</button>
         ))}
       </div>
-
       {loading && (
         <div style={{ textAlign: "center", padding: "50px 0", color: T.textSec }}>
           <div style={{ fontSize: 26, marginBottom: 8 }}>⏳</div>
           <div style={{ fontSize: 13 }}>Loading {timeframe} data…</div>
         </div>
       )}
-
       {!loading && !tech && (
         <div style={{ textAlign: "center", padding: "50px 0", color: T.textSec }}>
           <div style={{ fontSize: 26, marginBottom: 8 }}>📭</div>
@@ -359,7 +334,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
           <div style={{ fontSize: 11, color: T.textDim, marginTop: 4 }}>Check Upstox token</div>
         </div>
       )}
-
       {!loading && tech && (
         <>
           <div style={{
@@ -402,7 +376,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
               ))}
             </div>
           </div>
-
           <Card title="Momentum">
             <div style={{ marginBottom: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
@@ -418,25 +391,19 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
               <div style={{ paddingTop: 8, borderTop: `1px solid ${T.borderSub}` }}>
                 <div style={{ fontSize: 11, color: T.textSec, marginBottom: 5 }}>Stochastic %K / %D</div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                      <span style={{ fontSize: 9, color: T.textDim }}>%K</span>
-                      <span style={{ fontSize: 11, color: T.textPri, fontWeight: 600 }}>{fmt(tech.stochastic.k, 1)}</span>
+                  {[["K", tech.stochastic.k], ["D", tech.stochastic.d]].map(([label, val]) => (
+                    <div key={label} style={{ flex: 1 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                        <span style={{ fontSize: 9, color: T.textDim }}>%{label}</span>
+                        <span style={{ fontSize: 11, color: T.textPri, fontWeight: 600 }}>{fmt(val, 1)}</span>
+                      </div>
+                      <MiniBar value={val} color={val > 80 ? T.red : val < 20 ? T.green : T.yellow} />
                     </div>
-                    <MiniBar value={tech.stochastic.k} color={tech.stochastic.k > 80 ? T.red : tech.stochastic.k < 20 ? T.green : T.yellow} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                      <span style={{ fontSize: 9, color: T.textDim }}>%D</span>
-                      <span style={{ fontSize: 11, color: T.textPri, fontWeight: 600 }}>{fmt(tech.stochastic.d, 1)}</span>
-                    </div>
-                    <MiniBar value={tech.stochastic.d} color={T.blue} />
-                  </div>
+                  ))}
                 </div>
               </div>
             )}
           </Card>
-
           <Card title="Trend">
             {tech.macd && (
               <div style={{ marginBottom: 10 }}>
@@ -482,7 +449,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
               </div>
             )}
           </Card>
-
           <Card title="Volatility">
             {tech.bollingerBands && (
               <div style={{ marginBottom: 10 }}>
@@ -511,7 +477,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
               </div>
             )}
           </Card>
-
           <Card title="Volume">
             {tech.obv && (
               <div style={{ marginBottom: 8 }}>
@@ -533,7 +498,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
               </div>
             )}
           </Card>
-
           <Card title="Moving Average Summary">
             {tech.maSummary && (
               <>
@@ -564,7 +528,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
               </>
             )}
           </Card>
-
           <div style={{ fontSize: 10, color: T.textDim, textAlign: "center", paddingBottom: 20 }}>
             Updated {new Date(tech.computedAt).toLocaleTimeString("en-IN")} · {timeframe}
           </div>
@@ -574,7 +537,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
   );
 }
 
-// ── Gainers/Losers strip ──────────────────────────────────────────────────────
 function GainLossCard({ title, stocks, onSelect, accent, onViewAll }) {
   return (
     <div style={{ background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden", flex: 1 }}>
@@ -615,7 +577,6 @@ function GainLossCard({ title, stocks, onSelect, accent, onViewAll }) {
   );
 }
 
-// ── Sector bar ────────────────────────────────────────────────────────────────
 function SectorBar({ sector }) {
   const bull  = sector.avgChange >= 0;
   const width = Math.min(Math.abs(sector.avgChange) * 15, 100);
@@ -637,7 +598,6 @@ function SectorBar({ sector }) {
   );
 }
 
-// ── Market breadth bar ────────────────────────────────────────────────────────
 function BreadthBar({ advancing, declining, unchanged, total }) {
   if (!total) return null;
   const advPct = Math.round((advancing / total) * 100);
@@ -655,133 +615,287 @@ function BreadthBar({ advancing, declining, unchanged, total }) {
   );
 }
 
-// ── ACCURACY TRACKER PANEL ────────────────────────────────────────────────────
-const SIGNALS_KEY = "mscanner_signals";
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── BACKTEST ENGINE ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
 
-function loadSavedSignals() {
-  try { return JSON.parse(localStorage.getItem(SIGNALS_KEY) || "[]"); } catch { return []; }
+const BT_KEY = "mscanner_backtest_v2";
+const BT_SETTINGS_KEY = "mscanner_bt_settings";
+
+function btLoad() {
+  try { return JSON.parse(localStorage.getItem(BT_KEY) || "{}"); } catch { return {}; }
 }
-function saveSavedSignals(arr) {
-  try { localStorage.setItem(SIGNALS_KEY, JSON.stringify(arr)); } catch {}
+function btSave(db) {
+  try { localStorage.setItem(BT_KEY, JSON.stringify(db)); } catch(e) {
+    console.warn("Storage full — trimming old data");
+    // Keep last 30 days only
+    const keys = Object.keys(db).sort();
+    const trimmed = {};
+    keys.slice(-30).forEach(k => trimmed[k] = db[k]);
+    localStorage.setItem(BT_KEY, JSON.stringify(trimmed));
+  }
 }
 
-function AccuracyPanel({ onClose, techCacheRef }) {
-  const [signals, setSignals] = useState(loadSavedSignals);
-  const [tab, setTab] = useState("tracker");
+// db structure: { "2024-04-22": { signals: [...], capturedAt: timestamp } }
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
 
-  // Add current snapshot of all cached 1day signals
-  const captureSnapshot = () => {
-    const now = Date.now();
-    const newEntries = [];
-    for (const [key, data] of Object.entries(techCacheRef.current)) {
-      if (!key.endsWith(":1day")) continue;
-      const sym = key.replace(":1day", "");
-      // Don't duplicate if already captured within last 30 min
-      const alreadyHave = signals.find(s => s.symbol === sym && now - s.capturedAt < 30 * 60 * 1000);
-      if (alreadyHave) continue;
-      newEntries.push({
-        id: `${sym}_${now}`,
-        symbol: sym,
-        signal: data.signal,
-        techScore: data.techScore,
-        ltp: data.ltp,
-        entry: data.entry,
-        sl: data.sl,
-        tp: data.tp,
-        rsi: data.rsi,
-        macdCross: data.macd?.crossover,
-        capturedAt: now,
-        capturedDate: new Date(now).toLocaleDateString("en-IN"),
-        capturedTime: new Date(now).toLocaleTimeString("en-IN"),
-        // User fills in later:
-        outcome: null,  // "WIN" | "LOSS" | "PENDING" | "SKIP"
-        exitPrice: null,
-        exitDate: null,
-        notes: "",
-      });
-    }
-    const updated = [...signals, ...newEntries];
-    setSignals(updated);
-    saveSavedSignals(updated);
-    alert(`✅ Captured ${newEntries.length} new signals (${updated.length} total)`);
+function autoCapture(techCacheRef) {
+  const db = btLoad();
+  const key = todayKey();
+  if (db[key]) return { count: 0, alreadyDone: true };
+
+  const signals = [];
+  const now = Date.now();
+  for (const [cacheKey, data] of Object.entries(techCacheRef.current)) {
+    if (!cacheKey.endsWith(":1day")) continue;
+    const sym = cacheKey.replace(":1day", "");
+    signals.push({
+      id: `${sym}_${now}`,
+      symbol: sym,
+      signal: data.signal,
+      techScore: data.techScore,
+      ltp: data.ltp,
+      entry: data.entry,
+      sl: data.sl,
+      tp: data.tp,
+      rsi: data.rsi,
+      macdCross: data.macd?.crossover,
+      bias: data.bias,
+      volRatio: data.volRatio,
+      outcome: null,
+      exitPrice: null,
+      notes: "",
+    });
+  }
+
+  if (signals.length === 0) return { count: 0, alreadyDone: false };
+
+  db[key] = { signals, capturedAt: now, date: key };
+  btSave(db);
+  return { count: signals.length, alreadyDone: false };
+}
+
+function manualCapture(techCacheRef) {
+  const db = btLoad();
+  const key = todayKey();
+  const now = Date.now();
+  const existing = db[key]?.signals || [];
+  const existingSyms = new Set(existing.map(s => s.symbol));
+
+  const newSignals = [];
+  for (const [cacheKey, data] of Object.entries(techCacheRef.current)) {
+    if (!cacheKey.endsWith(":1day")) continue;
+    const sym = cacheKey.replace(":1day", "");
+    if (existingSyms.has(sym)) continue;
+    newSignals.push({
+      id: `${sym}_${now}`,
+      symbol: sym,
+      signal: data.signal,
+      techScore: data.techScore,
+      ltp: data.ltp,
+      entry: data.entry,
+      sl: data.sl,
+      tp: data.tp,
+      rsi: data.rsi,
+      macdCross: data.macd?.crossover,
+      bias: data.bias,
+      volRatio: data.volRatio,
+      outcome: null,
+      exitPrice: null,
+      notes: "",
+    });
+  }
+
+  if (!db[key]) db[key] = { signals: [], capturedAt: now, date: key };
+  db[key].signals = [...existing, ...newSignals];
+  btSave(db);
+  return newSignals.length;
+}
+
+function updateSignal(date, id, patch) {
+  const db = btLoad();
+  if (!db[date]) return;
+  db[date].signals = db[date].signals.map(s => s.id === id ? { ...s, ...patch } : s);
+  btSave(db);
+}
+
+function deleteSignalFromDB(date, id) {
+  const db = btLoad();
+  if (!db[date]) return;
+  db[date].signals = db[date].signals.filter(s => s.id !== id);
+  btSave(db);
+}
+
+// ── Analytics ─────────────────────────────────────────────────────────────────
+function computeAnalytics(db) {
+  const allSignals = Object.values(db).flatMap(d => d.signals || []);
+  const resolved = allSignals.filter(s => s.outcome === "WIN" || s.outcome === "LOSS");
+  const wins = resolved.filter(s => s.outcome === "WIN");
+
+  const overallAcc = resolved.length > 0 ? (wins.length / resolved.length * 100).toFixed(1) : null;
+
+  // By signal type
+  const bySignal = {};
+  for (const s of resolved) {
+    if (!bySignal[s.signal]) bySignal[s.signal] = { wins: 0, total: 0 };
+    bySignal[s.signal].total++;
+    if (s.outcome === "WIN") bySignal[s.signal].wins++;
+  }
+
+  // By RSI bucket
+  const rsiBuckets = { "<30": { wins: 0, total: 0 }, "30-50": { wins: 0, total: 0 }, "50-60": { wins: 0, total: 0 }, "60-70": { wins: 0, total: 0 }, ">70": { wins: 0, total: 0 } };
+  for (const s of resolved) {
+    const r = s.rsi;
+    const bucket = r < 30 ? "<30" : r < 50 ? "30-50" : r < 60 ? "50-60" : r < 70 ? "60-70" : ">70";
+    rsiBuckets[bucket].total++;
+    if (s.outcome === "WIN") rsiBuckets[bucket].wins++;
+  }
+
+  // By MACD
+  const byMacd = { BULLISH: { wins: 0, total: 0 }, BEARISH: { wins: 0, total: 0 } };
+  for (const s of resolved) {
+    const m = s.macdCross || "BEARISH";
+    if (!byMacd[m]) byMacd[m] = { wins: 0, total: 0 };
+    byMacd[m].total++;
+    if (s.outcome === "WIN") byMacd[m].wins++;
+  }
+
+  // By score bucket
+  const byScore = { "<40": { wins: 0, total: 0 }, "40-60": { wins: 0, total: 0 }, "60-75": { wins: 0, total: 0 }, ">75": { wins: 0, total: 0 } };
+  for (const s of resolved) {
+    const sc = s.techScore;
+    const bucket = sc < 40 ? "<40" : sc < 60 ? "40-60" : sc < 75 ? "60-75" : ">75";
+    byScore[bucket].total++;
+    if (s.outcome === "WIN") byScore[bucket].wins++;
+  }
+
+  // Daily accuracy trend (last 14 days)
+  const days = Object.keys(db).sort().slice(-14);
+  const dailyTrend = days.map(d => {
+    const r = (db[d].signals || []).filter(s => s.outcome === "WIN" || s.outcome === "LOSS");
+    const w = r.filter(s => s.outcome === "WIN").length;
+    return { date: d, accuracy: r.length > 0 ? (w / r.length * 100).toFixed(1) : null, total: r.length, wins: w };
+  });
+
+  // P&L stats
+  const withPL = resolved.filter(s => s.exitPrice && s.entry);
+  const pls = withPL.map(s => ((s.exitPrice - s.entry) / s.entry * 100));
+  const avgPL = pls.length > 0 ? (pls.reduce((a, b) => a + b, 0) / pls.length).toFixed(2) : null;
+  const bestTrade = pls.length > 0 ? Math.max(...pls).toFixed(2) : null;
+  const worstTrade = pls.length > 0 ? Math.min(...pls).toFixed(2) : null;
+
+  return { overallAcc, resolved: resolved.length, wins: wins.length, total: allSignals.length, pending: allSignals.filter(s => !s.outcome).length, bySignal, rsiBuckets, byMacd, byScore, dailyTrend, avgPL, bestTrade, worstTrade };
+}
+
+// ── Backtest Panel ────────────────────────────────────────────────────────────
+function BacktestPanel({ onClose, techCacheRef }) {
+  const [db, setDb] = useState(btLoad);
+  const [activeDate, setActiveDate] = useState(todayKey());
+  const [btTab, setBtTab] = useState("tracker");
+  const [filterSig, setFilterSig] = useState("ALL");
+  const [filterOutcome, setFilterOutcome] = useState("ALL");
+  const [captureMsg, setCaptureMsg] = useState("");
+  const [search, setSearch] = useState("");
+
+  const refresh = () => setDb(btLoad());
+
+  const handleCapture = () => {
+    const result = manualCapture(techCacheRef);
+    refresh();
+    setCaptureMsg(result > 0 ? `✅ Captured ${result} new signals` : "⚠️ All signals already captured for today");
+    setTimeout(() => setCaptureMsg(""), 3000);
   };
 
-  const updateOutcome = (id, outcome) => {
-    const updated = signals.map(s => s.id === id ? { ...s, outcome } : s);
-    setSignals(updated);
-    saveSavedSignals(updated);
+  const handleOutcome = (date, id, outcome) => {
+    updateSignal(date, id, { outcome });
+    refresh();
   };
 
-  const updateExitPrice = (id, exitPrice) => {
-    const updated = signals.map(s => s.id === id ? { ...s, exitPrice: parseFloat(exitPrice) || null } : s);
-    setSignals(updated);
-    saveSavedSignals(updated);
+  const handleExitPrice = (date, id, exitPrice) => {
+    updateSignal(date, id, { exitPrice: parseFloat(exitPrice) || null });
+    refresh();
   };
 
-  const deleteSignal = (id) => {
-    const updated = signals.filter(s => s.id !== id);
-    setSignals(updated);
-    saveSavedSignals(updated);
+  const handleDelete = (date, id) => {
+    deleteSignalFromDB(date, id);
+    refresh();
   };
 
   const downloadCSV = () => {
-    const headers = ["Symbol","Signal","Score","LTP at Capture","Entry","SL","Target","RSI","MACD Cross","Captured Date","Captured Time","Outcome","Exit Price","P&L %","Notes"];
-    const rows = signals.map(s => {
-      const pl = s.exitPrice && s.entry
-        ? ((s.exitPrice - s.entry) / s.entry * 100).toFixed(2)
-        : "";
-      return [
-        s.symbol, s.signal, s.techScore, s.ltp, s.entry, s.sl, s.tp,
-        s.rsi?.toFixed(1) || "", s.macdCross || "",
-        s.capturedDate, s.capturedTime,
-        s.outcome || "PENDING", s.exitPrice || "", pl, `"${s.notes || ""}"`
-      ].join(",");
+    const allSignals = Object.entries(db).flatMap(([date, d]) =>
+      (d.signals || []).map(s => ({ ...s, date }))
+    );
+    const headers = ["Date","Symbol","Signal","TechScore","LTP","Entry","SL","Target","RSI","MACD","Bias","VolRatio","Outcome","ExitPrice","PL%","Notes"];
+    const rows = allSignals.map(s => {
+      const pl = s.exitPrice && s.entry ? ((s.exitPrice - s.entry) / s.entry * 100).toFixed(2) : "";
+      return [s.date, s.symbol, s.signal, s.techScore, s.ltp, s.entry, s.sl, s.tp,
+        s.rsi?.toFixed(1) || "", s.macdCross || "", s.bias || "", s.volRatio || "",
+        s.outcome || "PENDING", s.exitPrice || "", pl, `"${s.notes || ""}"`].join(",");
     });
     const csv = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `market_signals_${new Date().toISOString().slice(0,10)}.csv`;
+    a.download = `backtest_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  // Calculate accuracy stats
-  const resolved = signals.filter(s => s.outcome === "WIN" || s.outcome === "LOSS");
-  const wins = resolved.filter(s => s.outcome === "WIN").length;
-  const accuracy = resolved.length > 0 ? ((wins / resolved.length) * 100).toFixed(1) : "—";
-  const pending = signals.filter(s => !s.outcome || s.outcome === "PENDING").length;
-  const buySigs = resolved.filter(s => s.signal?.includes("BUY"));
-  const buyAcc = buySigs.length > 0 ? ((buySigs.filter(s => s.outcome === "WIN").length / buySigs.length) * 100).toFixed(1) : "—";
-  const sellSigs = resolved.filter(s => s.signal?.includes("SELL"));
-  const sellAcc = sellSigs.length > 0 ? ((sellSigs.filter(s => s.outcome === "WIN").length / sellSigs.length) * 100).toFixed(1) : "—";
+  const analytics = computeAnalytics(db);
+  const dates = Object.keys(db).sort().reverse();
+  const dayData = db[activeDate];
+  let signals = dayData?.signals || [];
+  if (filterSig !== "ALL") signals = signals.filter(s => s.signal === filterSig);
+  if (filterOutcome !== "ALL") signals = signals.filter(s => filterOutcome === "PENDING" ? !s.outcome : s.outcome === filterOutcome);
+  if (search) signals = signals.filter(s => s.symbol.includes(search.toUpperCase()));
+
+  const AccBar = ({ label, wins, total, color }) => {
+    const pct = total > 0 ? (wins / total * 100) : 0;
+    return (
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+          <span style={{ fontSize: 11, color: T.textSec }}>{label}</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: pct >= 55 ? T.green : pct >= 40 ? T.yellow : T.red }}>
+            {total > 0 ? `${pct.toFixed(0)}%` : "—"} ({wins}/{total})
+          </span>
+        </div>
+        <div style={{ height: 5, background: "#1a2030", borderRadius: 3 }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: color || (pct >= 55 ? T.green : pct >= 40 ? T.yellow : T.red), borderRadius: 3, transition: "width 0.4s" }} />
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div style={{
       position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh",
-      background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center",
+      background: "rgba(0,0,0,0.85)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center",
     }}>
       <div style={{
-        background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12,
-        width: "min(900px, 95vw)", maxHeight: "90vh", display: "flex", flexDirection: "column",
+        background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 14,
+        width: "min(1100px, 97vw)", maxHeight: "94vh", display: "flex", flexDirection: "column",
         overflow: "hidden", fontFamily: "'JetBrains Mono','Fira Code',monospace",
       }}>
-        {/* Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: `1px solid ${T.border}`, background: "#080d14", flexShrink: 0 }}>
+
+        {/* ── Header ── */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: `1px solid ${T.border}`, background: "#080d14", flexShrink: 0 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: T.textPri }}>📊 Signal Accuracy Tracker</div>
-            <div style={{ fontSize: 11, color: T.textSec }}>Capture signals, track outcomes, measure accuracy</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: T.textPri }}>🔬 Backtest Lab</div>
+            <div style={{ fontSize: 11, color: T.textSec }}>Auto-captures daily signals · Track outcomes · Measure accuracy</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button type="button" onClick={captureSnapshot} style={{
+            {captureMsg && <span style={{ fontSize: 11, color: captureMsg.startsWith("✅") ? T.green : T.yellow }}>{captureMsg}</span>}
+            <button type="button" onClick={handleCapture} style={{
               background: "#14532d", border: "1px solid #4ade8044", color: T.green,
               padding: "7px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700,
-            }}>📸 Capture Signals</button>
+            }}>📸 Capture Now</button>
             <button type="button" onClick={downloadCSV} style={{
               background: "#1e2a3a", border: `1px solid ${T.border}`, color: T.textSec,
               padding: "7px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700,
-            }}>⬇ Download CSV</button>
+            }}>⬇ Export CSV</button>
             <button type="button" onClick={onClose} style={{
               background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec,
               width: 30, height: 30, borderRadius: 5, cursor: "pointer", fontSize: 16,
@@ -790,131 +904,351 @@ function AccuracyPanel({ onClose, techCacheRef }) {
           </div>
         </div>
 
-        {/* Stats bar */}
-        <div style={{ display: "flex", gap: 12, padding: "12px 18px", borderBottom: `1px solid ${T.border}`, background: "#080d14", flexShrink: 0 }}>
+        {/* ── Summary Stats Bar ── */}
+        <div style={{ display: "flex", gap: 10, padding: "12px 20px", borderBottom: `1px solid ${T.border}`, background: "#080d14", flexShrink: 0, flexWrap: "wrap" }}>
           {[
-            { label: "Total Signals", value: signals.length, color: T.blue },
-            { label: "Resolved", value: resolved.length, color: T.textSec },
-            { label: "Wins", value: wins, color: T.green },
-            { label: "Losses", value: resolved.length - wins, color: T.red },
-            { label: "Pending", value: pending, color: T.yellow },
-            { label: "Accuracy", value: accuracy + (accuracy !== "—" ? "%" : ""), color: parseFloat(accuracy) >= 55 ? T.green : T.red },
-            { label: "Buy Acc", value: buyAcc + (buyAcc !== "—" ? "%" : ""), color: T.blue },
-            { label: "Sell Acc", value: sellAcc + (sellAcc !== "—" ? "%" : ""), color: T.orange },
+            { label: "Total Signals", value: analytics.total, color: T.blue },
+            { label: "Resolved", value: analytics.resolved, color: T.textSec },
+            { label: "Wins", value: analytics.wins, color: T.green },
+            { label: "Losses", value: analytics.resolved - analytics.wins, color: T.red },
+            { label: "Pending", value: analytics.pending, color: T.yellow },
+            { label: "Overall Acc", value: analytics.overallAcc ? analytics.overallAcc + "%" : "—", color: parseFloat(analytics.overallAcc) >= 55 ? T.green : T.red },
+            { label: "Avg P&L", value: analytics.avgPL ? (analytics.avgPL > 0 ? "+" : "") + analytics.avgPL + "%" : "—", color: parseFloat(analytics.avgPL) >= 0 ? T.green : T.red },
+            { label: "Best Trade", value: analytics.bestTrade ? "+" + analytics.bestTrade + "%" : "—", color: T.green },
+            { label: "Days Tracked", value: dates.length, color: T.indigo },
           ].map(({ label, value, color }) => (
-            <div key={label} style={{ background: T.bgItem, border: `1px solid ${T.borderSub}`, borderRadius: 8, padding: "8px 12px", minWidth: 80, textAlign: "center" }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color }}>{value}</div>
+            <div key={label} style={{ background: T.bgItem, border: `1px solid ${T.borderSub}`, borderRadius: 8, padding: "8px 12px", minWidth: 78, textAlign: "center", flex: "0 0 auto" }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color }}>{value}</div>
               <div style={{ fontSize: 9, color: T.textDim, marginTop: 2 }}>{label}</div>
             </div>
           ))}
         </div>
 
-        {/* Content */}
-        <div style={{ flex: 1, overflow: "auto", padding: "0 0 8px 0" }}>
-          {signals.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "60px 0", color: T.textDim }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
-              <div style={{ fontSize: 14, color: T.textSec, marginBottom: 8 }}>No signals captured yet</div>
-              <div style={{ fontSize: 12 }}>Click "Capture Signals" to snapshot current RSI/MACD/Signal data for all loaded stocks</div>
-            </div>
-          ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-              <thead>
-                <tr style={{ background: "#060a10", position: "sticky", top: 0 }}>
-                  {["Symbol","Signal","Score","LTP","Entry","SL","Target","RSI","MACD","Date","Outcome","Exit ₹","P&L",""].map(h => (
-                    <th key={h} style={{ padding: "8px 10px", color: T.textDim, fontSize: 9, fontWeight: 700, textAlign: "left", borderBottom: `1px solid ${T.border}`, letterSpacing: "0.5px" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {[...signals].reverse().map(s => {
-                  const pl = s.exitPrice && s.entry ? ((s.exitPrice - s.entry) / s.entry * 100) : null;
-                  return (
-                    <tr key={s.id} style={{ borderBottom: `1px solid ${T.borderSub}` }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#0d1520"}
-                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                    >
-                      <td style={{ padding: "6px 10px", color: "#ffffff", fontWeight: 700 }}>{s.symbol}</td>
-                      <td style={{ padding: "6px 10px" }}><SigBadge signal={s.signal} /></td>
-                      <td style={{ padding: "6px 10px", color: s.techScore >= 60 ? T.green : s.techScore <= 40 ? T.red : T.yellow, fontWeight: 700 }}>{s.techScore}</td>
-                      <td style={{ padding: "6px 10px", color: "#ffffff" }}>₹{fmt(s.ltp)}</td>
-                      <td style={{ padding: "6px 10px", color: T.blue }}>₹{fmt(s.entry)}</td>
-                      <td style={{ padding: "6px 10px", color: T.red }}>₹{fmt(s.sl)}</td>
-                      <td style={{ padding: "6px 10px", color: T.green }}>₹{fmt(s.tp)}</td>
-                      <td style={{ padding: "6px 10px", color: s.rsi > 70 ? T.red : s.rsi < 30 ? T.green : T.yellow }}>{s.rsi?.toFixed(1)}</td>
-                      <td style={{ padding: "6px 10px", color: s.macdCross === "BULLISH" ? T.green : T.red, fontSize: 10 }}>{s.macdCross === "BULLISH" ? "▲" : "▼"} {s.macdCross || "—"}</td>
-                      <td style={{ padding: "6px 10px", color: T.textDim, fontSize: 10 }}>{s.capturedDate}</td>
-                      <td style={{ padding: "6px 10px" }}>
-                        <select value={s.outcome || ""} onChange={e => updateOutcome(s.id, e.target.value || null)}
-                          style={{ background: "#111620", border: `1px solid ${T.border}`, color: T.textPri, fontSize: 10, borderRadius: 4, padding: "2px 4px" }}>
-                          <option value="">Pending</option>
-                          <option value="WIN">✅ WIN</option>
-                          <option value="LOSS">❌ LOSS</option>
-                          <option value="SKIP">⏭ SKIP</option>
-                        </select>
-                      </td>
-                      <td style={{ padding: "6px 10px" }}>
-                        <input type="number" placeholder="0.00" value={s.exitPrice || ""}
-                          onChange={e => updateExitPrice(s.id, e.target.value)}
-                          style={{ width: 70, background: "#111620", border: `1px solid ${T.border}`, color: "#ffffff", fontSize: 10, borderRadius: 4, padding: "2px 6px" }}
-                        />
-                      </td>
-                      <td style={{ padding: "6px 10px", fontWeight: 700, color: pl === null ? T.textDim : pl >= 0 ? T.green : T.red }}>
-                        {pl === null ? "—" : `${pl >= 0 ? "+" : ""}${pl.toFixed(2)}%`}
-                      </td>
-                      <td style={{ padding: "6px 10px" }}>
-                        <button type="button" onClick={() => deleteSignal(s.id)} style={{
-                          background: "none", border: "none", color: T.textDim, cursor: "pointer", fontSize: 12,
-                        }}>🗑</button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
+        {/* ── Sub Tabs ── */}
+        <div style={{ display: "flex", gap: 2, padding: "8px 20px", background: "#080d14", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
+          {[
+            { id: "tracker", label: "📋 Daily Tracker" },
+            { id: "analytics", label: "📊 Analytics" },
+            { id: "trend", label: "📈 Daily Trend" },
+          ].map(t => (
+            <button key={t.id} type="button" onClick={() => setBtTab(t.id)} style={{
+              padding: "5px 14px", borderRadius: 5, fontSize: 11, fontWeight: 700,
+              cursor: "pointer", border: "1px solid",
+              borderColor: btTab === t.id ? T.blue : T.border,
+              background: btTab === t.id ? `${T.blue}18` : "transparent",
+              color: btTab === t.id ? T.blue : T.textDim,
+            }}>{t.label}</button>
+          ))}
         </div>
 
-        <div style={{ padding: "8px 18px", borderTop: `1px solid ${T.border}`, fontSize: 10, color: T.textDim, background: "#080d14", flexShrink: 0 }}>
-          💡 Capture signals when market opens → set outcome after stock moves → Download CSV for detailed analysis
+        {/* ── Content ── */}
+        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+
+          {/* Left: date sidebar */}
+          <div style={{ width: 130, borderRight: `1px solid ${T.border}`, overflowY: "auto", background: "#080d14", flexShrink: 0 }}>
+            <div style={{ padding: "8px 10px", fontSize: 9, color: T.textDim, fontWeight: 700, letterSpacing: "0.8px" }}>SESSIONS</div>
+            {dates.length === 0 && (
+              <div style={{ padding: "12px 10px", fontSize: 10, color: T.textDim }}>No data yet</div>
+            )}
+            {dates.map(d => {
+              const dData = db[d];
+              const r = (dData.signals || []).filter(s => s.outcome === "WIN" || s.outcome === "LOSS");
+              const w = r.filter(s => s.outcome === "WIN").length;
+              const acc = r.length > 0 ? (w / r.length * 100).toFixed(0) : null;
+              const isToday = d === todayKey();
+              return (
+                <div key={d} onClick={() => setActiveDate(d)} style={{
+                  padding: "8px 10px", cursor: "pointer", borderBottom: `1px solid ${T.borderSub}`,
+                  background: activeDate === d ? `${T.blue}18` : "transparent",
+                  borderLeft: activeDate === d ? `2px solid ${T.blue}` : "2px solid transparent",
+                }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: activeDate === d ? T.blue : T.textSec }}>
+                    {isToday ? "Today" : d.slice(5)}
+                  </div>
+                  <div style={{ fontSize: 9, color: T.textDim }}>{dData.signals?.length || 0} signals</div>
+                  {acc !== null && (
+                    <div style={{ fontSize: 9, fontWeight: 700, color: parseFloat(acc) >= 55 ? T.green : T.red }}>{acc}% acc</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Right: main content */}
+          <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+
+            {btTab === "tracker" && (
+              <>
+                {/* Filters */}
+                <div style={{ display: "flex", gap: 8, padding: "10px 16px", borderBottom: `1px solid ${T.border}`, flexShrink: 0, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: T.textSec, fontWeight: 700 }}>{activeDate}</span>
+                  <input placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)}
+                    style={{ background: T.bgItem, border: `1px solid ${T.border}`, color: "#fff", padding: "4px 10px", borderRadius: 4, fontSize: 11, width: 120, outline: "none", fontFamily: "inherit" }} />
+                  {["ALL","STRONG BUY","BUY","HOLD","SELL","STRONG SELL"].map(s => (
+                    <button key={s} type="button" onClick={() => setFilterSig(s)} style={{
+                      fontSize: 9, padding: "3px 8px", borderRadius: 3, cursor: "pointer", fontWeight: 700,
+                      border: `1px solid ${filterSig === s ? T.blue : T.border}`,
+                      background: filterSig === s ? `${T.blue}22` : "transparent",
+                      color: filterSig === s ? T.blue : T.textDim,
+                    }}>{s}</button>
+                  ))}
+                  <span style={{ color: T.border }}>|</span>
+                  {["ALL","WIN","LOSS","PENDING"].map(o => (
+                    <button key={o} type="button" onClick={() => setFilterOutcome(o)} style={{
+                      fontSize: 9, padding: "3px 8px", borderRadius: 3, cursor: "pointer", fontWeight: 700,
+                      border: `1px solid ${filterOutcome === o ? T.yellow : T.border}`,
+                      background: filterOutcome === o ? `${T.yellow}18` : "transparent",
+                      color: filterOutcome === o ? T.yellow : T.textDim,
+                    }}>{o}</button>
+                  ))}
+                  <span style={{ marginLeft: "auto", fontSize: 10, color: T.textDim }}>{signals.length} rows</span>
+                </div>
+
+                {signals.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "60px 0", color: T.textDim }}>
+                    <div style={{ fontSize: 36, marginBottom: 12 }}>
+                      {dates.length === 0 ? "📭" : "🔍"}
+                    </div>
+                    <div style={{ fontSize: 14, color: T.textSec, marginBottom: 8 }}>
+                      {dates.length === 0 ? "No sessions captured yet" : "No signals match filters"}
+                    </div>
+                    <div style={{ fontSize: 12, color: T.textDim }}>
+                      {dates.length === 0 ? 'Click "Capture Now" or wait — auto-capture fires at 9:15 AM' : "Try different filters"}
+                    </div>
+                  </div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ background: "#060a10", position: "sticky", top: 0, zIndex: 2 }}>
+                        {["Symbol","Signal","Score","LTP","Entry","SL","Target","RSI","MACD","Vol×","Outcome","Exit ₹","P&L",""].map(h => (
+                          <th key={h} style={{ padding: "8px 8px", color: T.textDim, fontSize: 9, fontWeight: 700, textAlign: "left", borderBottom: `1px solid ${T.border}` }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {signals.map(s => {
+                        const pl = s.exitPrice && s.entry ? ((s.exitPrice - s.entry) / s.entry * 100) : null;
+                        const outcomeColor = s.outcome === "WIN" ? T.green : s.outcome === "LOSS" ? T.red : T.textDim;
+                        return (
+                          <tr key={s.id}
+                            style={{ borderBottom: `1px solid ${T.borderSub}` }}
+                            onMouseEnter={e => e.currentTarget.style.background = "#0d1520"}
+                            onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                          >
+                            <td style={{ padding: "6px 8px", color: "#fff", fontWeight: 700 }}>{s.symbol}</td>
+                            <td style={{ padding: "6px 8px" }}><SigBadge signal={s.signal} /></td>
+                            <td style={{ padding: "6px 8px", fontWeight: 700, color: s.techScore >= 60 ? T.green : s.techScore <= 40 ? T.red : T.yellow }}>{s.techScore}</td>
+                            <td style={{ padding: "6px 8px", color: "#fff" }}>₹{fmt(s.ltp)}</td>
+                            <td style={{ padding: "6px 8px", color: T.blue }}>₹{fmt(s.entry)}</td>
+                            <td style={{ padding: "6px 8px", color: T.red }}>₹{fmt(s.sl)}</td>
+                            <td style={{ padding: "6px 8px", color: T.green }}>₹{fmt(s.tp)}</td>
+                            <td style={{ padding: "6px 8px", color: s.rsi > 70 ? T.red : s.rsi < 30 ? T.green : T.yellow }}>{s.rsi?.toFixed(1) || "—"}</td>
+                            <td style={{ padding: "6px 8px", color: s.macdCross === "BULLISH" ? T.green : T.red, fontSize: 10 }}>{s.macdCross === "BULLISH" ? "▲" : "▼"} {s.macdCross || "—"}</td>
+                            <td style={{ padding: "6px 8px", color: (s.volRatio || 1) > 1.5 ? T.orange : T.textSec }}>{s.volRatio?.toFixed(1) || "—"}×</td>
+                            <td style={{ padding: "6px 8px" }}>
+                              <select value={s.outcome || ""} onChange={e => handleOutcome(activeDate, s.id, e.target.value || null)}
+                                style={{ background: "#111620", border: `1px solid ${outcomeColor}44`, color: outcomeColor, fontSize: 10, borderRadius: 4, padding: "3px 5px", cursor: "pointer" }}>
+                                <option value="">Pending</option>
+                                <option value="WIN">✅ WIN</option>
+                                <option value="LOSS">❌ LOSS</option>
+                                <option value="SKIP">⏭ SKIP</option>
+                              </select>
+                            </td>
+                            <td style={{ padding: "6px 8px" }}>
+                              <input type="number" placeholder="0.00" value={s.exitPrice || ""}
+                                onChange={e => handleExitPrice(activeDate, s.id, e.target.value)}
+                                style={{ width: 72, background: "#111620", border: `1px solid ${T.border}`, color: "#fff", fontSize: 10, borderRadius: 4, padding: "3px 6px", fontFamily: "inherit" }}
+                              />
+                            </td>
+                            <td style={{ padding: "6px 8px", fontWeight: 700, color: pl === null ? T.textDim : pl >= 0 ? T.green : T.red }}>
+                              {pl === null ? "—" : `${pl >= 0 ? "+" : ""}${pl.toFixed(2)}%`}
+                            </td>
+                            <td style={{ padding: "6px 8px" }}>
+                              <button type="button" onClick={() => handleDelete(activeDate, s.id)} style={{ background: "none", border: "none", color: T.textDim, cursor: "pointer", fontSize: 12 }}>🗑</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+
+            {btTab === "analytics" && (
+              <div style={{ padding: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+
+                {/* By Signal Type */}
+                <div style={{ background: T.bgItem, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, letterSpacing: "0.8px", marginBottom: 14 }}>ACCURACY BY SIGNAL TYPE</div>
+                  {Object.entries(analytics.bySignal).length === 0
+                    ? <div style={{ fontSize: 12, color: T.textDim }}>No resolved signals yet</div>
+                    : Object.entries(analytics.bySignal).map(([sig, { wins, total }]) => (
+                      <AccBar key={sig} label={sig} wins={wins} total={total} color={sig.includes("BUY") ? T.green : sig.includes("SELL") ? T.red : T.yellow} />
+                    ))
+                  }
+                </div>
+
+                {/* By RSI */}
+                <div style={{ background: T.bgItem, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, letterSpacing: "0.8px", marginBottom: 14 }}>ACCURACY BY RSI RANGE</div>
+                  {Object.entries(analytics.rsiBuckets).map(([bucket, { wins, total }]) => (
+                    <AccBar key={bucket} label={`RSI ${bucket}`} wins={wins} total={total} />
+                  ))}
+                </div>
+
+                {/* By Tech Score */}
+                <div style={{ background: T.bgItem, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, letterSpacing: "0.8px", marginBottom: 14 }}>ACCURACY BY TECH SCORE</div>
+                  {Object.entries(analytics.byScore).map(([bucket, { wins, total }]) => (
+                    <AccBar key={bucket} label={`Score ${bucket}`} wins={wins} total={total} color={T.indigo} />
+                  ))}
+                </div>
+
+                {/* By MACD */}
+                <div style={{ background: T.bgItem, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, letterSpacing: "0.8px", marginBottom: 14 }}>ACCURACY BY MACD CROSSOVER</div>
+                  {Object.entries(analytics.byMacd).map(([cross, { wins, total }]) => (
+                    <AccBar key={cross} label={cross} wins={wins} total={total} color={cross === "BULLISH" ? T.green : T.red} />
+                  ))}
+                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.borderSub}` }}>
+                    <div style={{ fontSize: 11, color: T.textDim, fontWeight: 700, letterSpacing: "0.8px", marginBottom: 8 }}>P&L STATS</div>
+                    {[
+                      { label: "Avg P&L per trade", value: analytics.avgPL ? (analytics.avgPL > 0 ? "+" : "") + analytics.avgPL + "%" : "—", color: parseFloat(analytics.avgPL) >= 0 ? T.green : T.red },
+                      { label: "Best trade", value: analytics.bestTrade ? "+" + analytics.bestTrade + "%" : "—", color: T.green },
+                      { label: "Worst trade", value: analytics.worstTrade ? analytics.worstTrade + "%" : "—", color: T.red },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: `1px solid ${T.borderSub}` }}>
+                        <span style={{ fontSize: 11, color: T.textSec }}>{label}</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color }}>{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {btTab === "trend" && (
+              <div style={{ padding: 20 }}>
+                <div style={{ background: T.bgItem, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, letterSpacing: "0.8px", marginBottom: 16 }}>DAILY ACCURACY TREND (LAST 14 DAYS)</div>
+                  {analytics.dailyTrend.length === 0 ? (
+                    <div style={{ fontSize: 12, color: T.textDim }}>No data yet — capture signals and mark outcomes daily</div>
+                  ) : (
+                    <>
+                      {/* Simple bar chart */}
+                      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 120, marginBottom: 12 }}>
+                        {analytics.dailyTrend.map(d => {
+                          const acc = parseFloat(d.accuracy);
+                          const height = d.accuracy ? Math.max(8, acc * 1.2) : 8;
+                          const color = d.accuracy ? (acc >= 60 ? T.green : acc >= 45 ? T.yellow : T.red) : T.textDim;
+                          return (
+                            <div key={d.date} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                              <div style={{ fontSize: 9, color, fontWeight: 700 }}>{d.accuracy ? d.accuracy + "%" : "—"}</div>
+                              <div style={{ width: "100%", height, background: color, borderRadius: "2px 2px 0 0", opacity: d.accuracy ? 1 : 0.3, minHeight: 4, transition: "height 0.4s" }} />
+                              <div style={{ fontSize: 8, color: T.textDim, transform: "rotate(-45deg)", whiteSpace: "nowrap" }}>{d.date.slice(5)}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Table */}
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                        <thead>
+                          <tr>
+                            {["Date","Signals","Resolved","Wins","Accuracy"].map(h => (
+                              <th key={h} style={{ padding: "6px 8px", fontSize: 9, color: T.textDim, fontWeight: 700, textAlign: "left", borderBottom: `1px solid ${T.border}` }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analytics.dailyTrend.map(d => (
+                            <tr key={d.date}
+                              style={{ borderBottom: `1px solid ${T.borderSub}`, cursor: "pointer" }}
+                              onClick={() => { setActiveDate(d.date); setBtTab("tracker"); }}
+                              onMouseEnter={e => e.currentTarget.style.background = "#0d1520"}
+                              onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                            >
+                              <td style={{ padding: "6px 8px", color: d.date === todayKey() ? T.blue : T.textSec, fontWeight: d.date === todayKey() ? 700 : 400 }}>{d.date} {d.date === todayKey() ? "(today)" : ""}</td>
+                              <td style={{ padding: "6px 8px", color: T.textPri }}>{db[d.date]?.signals?.length || 0}</td>
+                              <td style={{ padding: "6px 8px", color: T.textSec }}>{d.total}</td>
+                              <td style={{ padding: "6px 8px", color: T.green }}>{d.wins}</td>
+                              <td style={{ padding: "6px 8px", fontWeight: 700, color: d.accuracy ? (parseFloat(d.accuracy) >= 60 ? T.green : parseFloat(d.accuracy) >= 45 ? T.yellow : T.red) : T.textDim }}>
+                                {d.accuracy ? d.accuracy + "%" : "No resolved"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: "8px 20px", borderTop: `1px solid ${T.border}`, fontSize: 10, color: T.textDim, background: "#080d14", flexShrink: 0, display: "flex", justifyContent: "space-between" }}>
+          <span>💡 Auto-captures at 9:15 AM · All data stored locally in browser · Click any date on left to view that session</span>
+          <span style={{ color: T.textDim }}>{Object.keys(db).length} sessions · {Object.values(db).reduce((a, d) => a + (d.signals?.length || 0), 0)} total signals</span>
         </div>
       </div>
     </div>
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── MAIN PAGE ───────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export default function MarketScannerPage() {
-  // ── Auth gate ─────────────────────────────────────────────────────────────
   const [authed, setAuthed] = useState(() => sessionStorage.getItem(SESSION_KEY) === "1");
-
   if (!authed) return <AccessGate onAuth={() => setAuthed(true)} />;
-
   return <ScannerBody />;
 }
 
 function ScannerBody() {
-  const [data,        setData]        = useState(null);
-  const [selectedSym, setSelectedSym] = useState(null);
-  const [tech,        setTech]        = useState(null);
-  const [techLoading, setTechLoading] = useState(false);
-  const [activeTF,    setActiveTF]    = useState("1day");
-  const [tab,         setTab]         = useState("gainers");
-  const [sortBy,      setSortBy]      = useState("gainers");
-  const [searchQ,     setSearchQ]     = useState("");
-  const [updatedAt,   setUpdatedAt]   = useState(null);
-  const [showAccuracy, setShowAccuracy] = useState(false);
-  // FIX: removed 150 limit — show all, but virtualize with a "show more" if needed
+  const [data,          setData]          = useState(null);
+  const [selectedSym,  setSelectedSym]   = useState(null);
+  const [tech,          setTech]          = useState(null);
+  const [techLoading,  setTechLoading]   = useState(false);
+  const [activeTF,     setActiveTF]      = useState("1day");
+  const [tab,           setTab]           = useState("gainers");
+  const [sortBy,        setSortBy]        = useState("gainers");
+  const [searchQ,       setSearchQ]       = useState("");
+  const [updatedAt,    setUpdatedAt]     = useState(null);
+  const [showBacktest, setShowBacktest]  = useState(false);
   const [displayLimit, setDisplayLimit] = useState(500);
-
-  const [techVersion, setTechVersion] = useState(0);
+  const [techVersion,  setTechVersion]  = useState(0);
+  const [autoCapMsg,   setAutoCapMsg]   = useState("");
 
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
   const activeTFRef    = useRef("1day");
   const tableRef       = useRef(null);
+  const autoCapFired   = useRef(false);
 
   useEffect(() => { activeTFRef.current = activeTF; }, [activeTF]);
+
+  // ── Auto-capture at 9:15 AM ─────────────────────────────────────────────────
+  useEffect(() => {
+    const tryAutoCapture = () => {
+      if (autoCapFired.current) return;
+      const now = new Date();
+      const h = now.getHours(), m = now.getMinutes();
+      // Fire between 9:15 and 9:30 AM
+      if (h === 9 && m >= 15 && m <= 30) {
+        const result = autoCapture(techCacheRef);
+        if (result.count > 0) {
+          setAutoCapMsg(`📸 Auto-captured ${result.count} signals at ${now.toLocaleTimeString("en-IN")}`);
+          setTimeout(() => setAutoCapMsg(""), 6000);
+        }
+        autoCapFired.current = true;
+      }
+    };
+    tryAutoCapture();
+    const interval = setInterval(tryAutoCapture, 60000); // check every minute
+    return () => clearInterval(interval);
+  }, []);
 
   const getStocksForTab = useCallback((d, t) => {
     if (!d) return [];
@@ -930,13 +1264,11 @@ function ScannerBody() {
 
   useEffect(() => {
     const socket = getSocket();
-
     socket.on("scanner-update", d => {
       setData(d);
       setUpdatedAt(new Date(d.updatedAt));
       setTechVersion(v => v + 1);
     });
-
     socket.on("scanner-tech-batch", (batch) => {
       if (!Array.isArray(batch) || batch.length === 0) return;
       let changed = false;
@@ -955,7 +1287,6 @@ function ScannerBody() {
       }
       if (changed) setTechVersion(v => v + 1);
     });
-
     return () => {
       socket.off("scanner-update");
       socket.off("scanner-tech-batch");
@@ -1028,9 +1359,12 @@ function ScannerBody() {
   ];
 
   const market = data?.market || {};
+  const totalBtSignals = (() => { try { const db = JSON.parse(localStorage.getItem(BT_KEY) || "{}"); return Object.values(db).reduce((a, d) => a + (d.signals?.length || 0), 0); } catch { return 0; } })();
+  const todayBtCount = (() => { try { const db = JSON.parse(localStorage.getItem(BT_KEY) || "{}"); return db[todayKey()]?.signals?.length || 0; } catch { return 0; } })();
 
   return (
     <div style={{ background: T.bg, minHeight: "100vh", color: T.textPri, fontFamily: "'JetBrains Mono','Fira Code','Courier New',monospace" }}>
+
       {/* ── Header ── */}
       <div style={{ background: "#080d14", borderBottom: `1px solid ${T.border}`, padding: "12px 20px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
         <div>
@@ -1048,11 +1382,27 @@ function ScannerBody() {
           </div>
         )}
 
-        {/* Accuracy tracker button */}
-        <button type="button" onClick={() => setShowAccuracy(true)} style={{
-          background: "#1e2a3a", border: `1px solid ${T.border}`, color: T.textSec,
-          padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 6,
-        }}>📈 Accuracy Tracker</button>
+        {/* Auto-cap notification */}
+        {autoCapMsg && (
+          <div style={{ background: "#052e16", border: "1px solid #4ade8044", borderRadius: 6, padding: "4px 12px", fontSize: 11, color: T.green, fontWeight: 600 }}>
+            {autoCapMsg}
+          </div>
+        )}
+
+        {/* Backtest button with badge */}
+        <button type="button" onClick={() => setShowBacktest(true)} style={{
+          background: "#1a1040", border: `1px solid ${T.indigo}44`, color: T.indigo,
+          padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700,
+          display: "flex", alignItems: "center", gap: 6, position: "relative",
+        }}>
+          🔬 Backtest Lab
+          {totalBtSignals > 0 && (
+            <span style={{ background: T.indigo, color: "#fff", fontSize: 9, fontWeight: 800, padding: "1px 5px", borderRadius: 10 }}>{totalBtSignals}</span>
+          )}
+          {todayBtCount > 0 && (
+            <span style={{ fontSize: 9, color: T.green }}>✓ today</span>
+          )}
+        </button>
 
         <div style={{ marginLeft: "auto", fontSize: 10, color: T.textDim }}>
           {updatedAt ? `Updated ${updatedAt.toLocaleTimeString("en-IN")}` : "Connecting…"}
@@ -1062,7 +1412,6 @@ function ScannerBody() {
       {/* ── Body ── */}
       <div style={{ padding: "16px 20px 40px", paddingRight: selectedSym ? "390px" : "20px", transition: "padding-right 0.2s" }}>
 
-        {/* Gainers + Losers strip */}
         {data && (
           <div style={{ display: "flex", gap: 12, marginBottom: 18 }}>
             <GainLossCard title="TOP GAINERS" stocks={data.gainers} onSelect={sym => handleSelect(sym)} accent={T.green} onViewAll={() => handleViewAll("gainers")} />
@@ -1070,7 +1419,6 @@ function ScannerBody() {
           </div>
         )}
 
-        {/* ── Tabs ── */}
         <div ref={tableRef} style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
           {TABS.map(t => (
             <button type="button" key={t.id} onClick={e => { e.preventDefault(); setTab(t.id); setDisplayLimit(500); }} style={{
@@ -1097,7 +1445,6 @@ function ScannerBody() {
           ))}
         </div>
 
-        {/* ── Sector view ── */}
         {tab === "sector" ? (
           <div style={{ background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 10, padding: "14px 16px" }}>
             <div style={{ fontSize: 11, color: T.textDim, fontWeight: 700, letterSpacing: "1px", marginBottom: 10 }}>SECTOR PERFORMANCE — NSE 500 + BSE</div>
@@ -1105,7 +1452,6 @@ function ScannerBody() {
           </div>
         ) : (
           <>
-            {/* Search + sort toolbar */}
             <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
               <input
                 placeholder="Search symbol or name…"
@@ -1128,13 +1474,11 @@ function ScannerBody() {
                   }}>{s.label}</button>
                 ))}
               </div>
-              {/* FIX: Show actual count, not 150 cap */}
               <span style={{ marginLeft: "auto", fontSize: 11, color: T.textDim }}>
                 Showing {Math.min(sorted.length, displayLimit)} of {sorted.length} stocks
               </span>
             </div>
 
-            {/* Table */}
             {!data ? (
               <div style={{ textAlign: "center", padding: "60px 0", color: T.textDim }}>
                 <div style={{ fontSize: 30, marginBottom: 8 }}>📡</div>
@@ -1161,7 +1505,6 @@ function ScannerBody() {
                     </tr>
                   </thead>
                   <tbody>
-                    {/* FIX: No more 150 cap — use displayLimit (default 500) */}
                     {sorted.slice(0, displayLimit).map((s, i) => (
                       <StockRow
                         key={`${s.symbol}-${techVersion}`}
@@ -1174,7 +1517,6 @@ function ScannerBody() {
                     ))}
                   </tbody>
                 </table>
-                {/* FIX: Load More button instead of hard cap */}
                 {sorted.length > displayLimit && (
                   <div style={{ textAlign: "center", padding: "12px", borderTop: `1px solid ${T.borderSub}` }}>
                     <button type="button" onClick={() => setDisplayLimit(l => l + 500)} style={{
@@ -1196,7 +1538,6 @@ function ScannerBody() {
         )}
       </div>
 
-      {/* Tech Panel */}
       {selectedSym && (
         <TechPanel
           symbol={selectedSym}
@@ -1214,9 +1555,8 @@ function ScannerBody() {
         />
       )}
 
-      {/* Accuracy Tracker Modal */}
-      {showAccuracy && (
-        <AccuracyPanel onClose={() => setShowAccuracy(false)} techCacheRef={techCacheRef} />
+      {showBacktest && (
+        <BacktestPanel onClose={() => setShowBacktest(false)} techCacheRef={techCacheRef} />
       )}
     </div>
   );
