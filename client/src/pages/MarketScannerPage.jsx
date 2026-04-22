@@ -250,11 +250,15 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
           <div style={{ fontSize: 20, fontWeight: 800, color: T.textPri, letterSpacing: "0.5px" }}>{symbol}</div>
           <div style={{ fontSize: 11, color: T.textSec }}>Technical Analysis · Multi-timeframe</div>
         </div>
-        <button onClick={onClose} style={{
-          background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec,
-          width: 28, height: 28, borderRadius: 5, cursor: "pointer", fontSize: 14,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>✕</button>
+        {/* FIX: type="button" + preventDefault to stop any form-submit / navigation */}
+        <button
+          type="button"
+          onClick={e => { e.preventDefault(); onClose(); }}
+          style={{
+            background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec,
+            width: 28, height: 28, borderRadius: 5, cursor: "pointer", fontSize: 14,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>✕</button>
       </div>
 
       {/* Timeframe bar */}
@@ -263,7 +267,8 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
         background: "#080d14", padding: 3, borderRadius: 7, border: `1px solid ${T.border}`,
       }}>
         {TIMEFRAMES.map(tf => (
-          <button key={tf.id} onClick={() => onTimeframeChange(tf.id)} style={{
+          /* FIX: type="button" on every button in the panel */
+          <button type="button" key={tf.id} onClick={e => { e.preventDefault(); onTimeframeChange(tf.id); }} style={{
             flex: 1, padding: "5px 0", fontSize: 10, fontWeight: 700,
             borderRadius: 5, cursor: "pointer", border: "none",
             background: timeframe === tf.id ? T.indigo : "transparent",
@@ -628,11 +633,15 @@ function GainLossCard({ title, stocks, onSelect, accent, onViewAll }) {
         display: "flex", justifyContent: "space-between", alignItems: "center",
       }}>
         <span style={{ fontWeight: 800, fontSize: 11, color: accent, letterSpacing: "0.8px" }}>{title}</span>
-        <button onClick={onViewAll} style={{
-          fontSize: 9, color: accent, background: `${accent}18`,
-          border: `1px solid ${accent}44`, borderRadius: 3, padding: "2px 7px",
-          cursor: "pointer", fontWeight: 700,
-        }}>VIEW ALL ↓</button>
+        {/* FIX: type="button" + preventDefault stops any accidental form submit / navigation */}
+        <button
+          type="button"
+          onClick={e => { e.preventDefault(); e.stopPropagation(); onViewAll(); }}
+          style={{
+            fontSize: 9, color: accent, background: `${accent}18`,
+            border: `1px solid ${accent}44`, borderRadius: 3, padding: "2px 7px",
+            cursor: "pointer", fontWeight: 700,
+          }}>VIEW ALL ↓</button>
       </div>
       <div style={{ maxHeight: 300, overflowY: "auto" }}>
         {(stocks || []).slice(0, 15).map(s => (
@@ -713,6 +722,12 @@ export default function MarketScannerPage() {
   const [searchQ,     setSearchQ]     = useState("");
   const [updatedAt,   setUpdatedAt]   = useState(null);
 
+  // ── FIX 1: techVersion state ──────────────────────────────────────────────
+  // techCacheRef is a plain object ref — React doesn't re-render when it changes.
+  // Bumping techVersion forces StockRow keys to change, causing React to re-read
+  // the latest cached tech data from the ref and show RSI/MACD/Bollinger columns.
+  const [techVersion, setTechVersion] = useState(0);
+
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
   const activeTFRef    = useRef("1day");
@@ -739,6 +754,9 @@ export default function MarketScannerPage() {
     socket.on("scanner-update", d => {
       setData(d);
       setUpdatedAt(new Date(d.updatedAt));
+      // FIX 1b: bump version on every live update so pre-warmed tech data
+      // that arrived since the last render becomes visible in the table columns
+      setTechVersion(v => v + 1);
     });
     return () => { socket.off("scanner-update"); };
   }, []);
@@ -763,6 +781,10 @@ export default function MarketScannerPage() {
       const json = await res.json();
       if (json && !json.error) {
         techCacheRef.current[key] = json;
+        // FIX 1c: bump version after every successful tech fetch so the table
+        // row for this symbol immediately shows RSI/MACD/Bollinger without
+        // needing to click the stock a second time
+        setTechVersion(v => v + 1);
         if (selectedSymRef.current === symbol) {
           setTech(json);
           setTechLoading(false);
@@ -855,14 +877,20 @@ export default function MarketScannerPage() {
         {/* ── Tabs ── */}
         <div ref={tableRef} style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
           {TABS.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              padding: "5px 13px", borderRadius: 5, fontSize: 11, fontWeight: 700,
-              cursor: "pointer", border: "1px solid",
-              borderColor: tab === t.id ? t.accent : T.border,
-              background:  tab === t.id ? `${t.accent}18` : T.bgPanel,
-              color:       tab === t.id ? t.accent : T.textDim,
-              transition: "all 0.15s",
-            }}>
+            // FIX 2: type="button" + preventDefault on every tab button
+            <button
+              type="button"
+              key={t.id}
+              onClick={e => { e.preventDefault(); setTab(t.id); }}
+              style={{
+                padding: "5px 13px", borderRadius: 5, fontSize: 11, fontWeight: 700,
+                cursor: "pointer", border: "1px solid",
+                borderColor: tab === t.id ? t.accent : T.border,
+                background:  tab === t.id ? `${t.accent}18` : T.bgPanel,
+                color:       tab === t.id ? t.accent : T.textDim,
+                transition: "all 0.15s",
+              }}
+            >
               {t.label}
               {/* Stock count badge */}
               {data && t.id !== "sector" && (
@@ -902,13 +930,18 @@ export default function MarketScannerPage() {
               />
               <div style={{ display: "flex", gap: 4 }}>
                 {[{ id: "gainers", label: "% ↑" }, { id: "losers", label: "% ↓" }, { id: "volume", label: "Vol" }, { id: "value", label: "Value" }].map(s => (
-                  <button key={s.id} onClick={() => setSortBy(s.id)} style={{
-                    padding: "5px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer",
-                    border: "1px solid", fontWeight: 700,
-                    borderColor: sortBy === s.id ? T.indigo : T.border,
-                    background:  sortBy === s.id ? `${T.indigo}22` : T.bgPanel,
-                    color:       sortBy === s.id ? T.indigo : T.textDim,
-                  }}>{s.label}</button>
+                  // FIX 2b: type="button" + preventDefault on sort buttons
+                  <button
+                    type="button"
+                    key={s.id}
+                    onClick={e => { e.preventDefault(); setSortBy(s.id); }}
+                    style={{
+                      padding: "5px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer",
+                      border: "1px solid", fontWeight: 700,
+                      borderColor: sortBy === s.id ? T.indigo : T.border,
+                      background:  sortBy === s.id ? `${T.indigo}22` : T.bgPanel,
+                      color:       sortBy === s.id ? T.indigo : T.textDim,
+                    }}>{s.label}</button>
                 ))}
               </div>
               <span style={{ marginLeft: "auto", fontSize: 11, color: T.textDim }}>{sorted.length} stocks</span>
@@ -946,7 +979,10 @@ export default function MarketScannerPage() {
                   <tbody>
                     {sorted.slice(0, 150).map((s, i) => (
                       <StockRow
-                        key={s.symbol}
+                        // FIX 1d: include techVersion in the key so React re-renders
+                        // every row when new tech data is cached, making RSI/MACD/
+                        // Bollinger columns populate without needing to click stocks
+                        key={`${s.symbol}-${techVersion}`}
                         stock={s}
                         rank={i + 1}
                         onSelect={sym => handleSelect(sym)}
