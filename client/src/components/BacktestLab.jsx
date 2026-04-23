@@ -200,10 +200,19 @@ export default function BacktestLab({ onClose, socket }) {
       fetchSignals(date);
     });
 
+    // ✅ NEW: 3:25 PM auto-expiry result
+    socket.on("backtest-expiry-complete", ({ date, wins, losses, expired, total }) => {
+      showToast(`⏰ Market closed · ${wins}W ${losses}L ${expired} expired of ${total} signals`, "info");
+      fetchSignals(date);   // re-fetch so all PENDING → WIN/LOSS/EXPIRED
+      fetchSessions();      // update sidebar accuracy numbers
+      if (tab === "analytics") fetchAnalytics(); // refresh charts too
+    });
+
     return () => {
       socket.off("backtest-live-tick");
       socket.off("backtest-resolved");
       socket.off("backtest-session-captured");
+      socket.off("backtest-expiry-complete"); // ✅ cleanup
     };
   }, [socket, fetchSessions, fetchSignals]);
 
