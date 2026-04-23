@@ -542,16 +542,22 @@ function computeTechnicals(symbol, candles) {
   if (st?.trend === "BEARISH") score -= 5;
   score = Math.max(0, Math.min(100, Math.round(score)));
 
-  const atrVal = atr || ltp * 0.015;
-  const isBull = score >= 50;
-  const entry  = Math.round(ltp * 100) / 100;
+  // AFTER — use first 5min candle open as entry (gap-adjusted)
+const atrVal  = atr || ltp * 0.015;
+const isBull  = score >= 50;
+// Use today's open (first candle) if available, else fall back to ltp
+// candles[0] is oldest, candles[last] is most recent
+// For intraday entry: use the open of the most recent session's first candle
+const todayOpen = candles[candles.length - 1]?.o || ltp;
+const entry  = Math.round(todayOpen * 100) / 100;
 
-  const sl = isBull
-    ? Math.round((ltp - 1.5 * atrVal) * 100) / 100
-    : Math.round((ltp + 1.5 * atrVal) * 100) / 100;
-  const tp2 = isBull
-    ? Math.round((ltp + 3.0 * atrVal) * 100) / 100
-    : Math.round((ltp - 3.0 * atrVal) * 100) / 100;
+  // AFTER
+const sl = isBull
+  ? Math.round((entry - 1.5 * atrVal) * 100) / 100
+  : Math.round((entry + 1.5 * atrVal) * 100) / 100
+const tp2 = isBull
+  ? Math.round((entry + 3.0 * atrVal) * 100) / 100
+  : Math.round((entry - 3.0 * atrVal) * 100) / 100
 
   const volSlice  = candles.slice(-21);
   const avgVol    = volSlice.slice(0, 20).reduce((a, c) => a + (c.v || 0), 0) / 20;
