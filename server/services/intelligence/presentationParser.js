@@ -625,7 +625,7 @@ async function parsePresentation({ scrip, company, pdfUrl, filingDate, headline 
     await Model.findOneAndUpdate(
       { scrip, pdfUrl },
       { $set: doc },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     console.log(`✅ Guidance saved: ${company} — rev:${guidance.revenue.length} ebitda:${guidance.ebitda.length} capex:${guidance.capex.length} orders:${guidance.orders.length}`);
   } catch (err) {

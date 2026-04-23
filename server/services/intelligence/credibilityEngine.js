@@ -171,7 +171,7 @@ async function saveActualResult(scrip, company, quarter, actuals) {
     await Model.findOneAndUpdate(
       { scrip: String(scrip), quarter },
       { $set: doc },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     console.log(`📊 Actual saved: ${company} ${quarter} rev:${actuals.revenueCr || "?"} ebitda:${actuals.ebitdaPct || "?"}%`);
   } catch (err) {
@@ -478,7 +478,7 @@ async function recomputeCredibility(scrip, company) {
     await Model.findOneAndUpdate(
       { scrip: String(scrip) },
       { $set: credDoc },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   } catch (err) {
     console.log(`⚠️ Credibility save failed: ${err.message}`);
