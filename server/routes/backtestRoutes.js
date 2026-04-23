@@ -32,56 +32,24 @@ router.post("/capture", (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ✅ FIX: POST /api/backtest/capture-now — frontend "Capture Now" button calls this
-// Pulls latest signals directly from marketScanner (no body needed)
-router.post("/capture-now", (req, res) => {
+// POST /api/backtest/capture-now
+// Pulls directly from marketScanner tech cache — bypasses all timing/market-open checks
+router.post("/capture-now", async (req, res) => {
   try {
-    let getScannerData;
+    let forceCaptureNow;
     try {
-      ({ getScannerData } = require("../services/intelligence/marketScanner"));
+      ({ forceCaptureNow } = require("../services/intelligence/marketScanner"));
     } catch (e) {
       return res.status(500).json({ error: "marketScanner not available: " + e.message });
     }
 
-    const scannerData = getScannerData();
-    if (!scannerData || !scannerData.updatedAt) {
-      return res.json({ success: false, error: "Scanner not ready yet — wait for first scan to complete" });
+    if (typeof forceCaptureNow !== "function") {
+      return res.status(500).json({ error: "forceCaptureNow not exported from marketScanner — add it to module.exports" });
     }
 
-    // Collect all signals from scanner output
-    const signals = [];
-    const seen    = new Set();
-
-    const addSignal = (stock) => {
-      const sym = (stock.symbol || stock.stock || "").toUpperCase();
-      if (!sym || seen.has(sym)) return;
-      seen.add(sym);
-      signals.push({
-        symbol:     sym,
-        signal:     stock.signal || stock.type || "BUY",
-        price:      stock.ltp   || stock.price || stock.entry || 0,
-        entry:      stock.ltp   || stock.price || stock.entry || 0,
-        target:     stock.target    || stock.tp || 0,
-        stopLoss:   stock.stopLoss  || stock.sl || 0,
-        rsi:        stock.rsi       || 50,
-        techScore:  stock.techScore || stock.score || stock.strength || 0,
-        sector:     stock.sector    || stock.industry || "Unknown",
-        macd:       stock.macd      || null,
-        isSwing:    !!(stock.isSwing || (stock.signal || "").toLowerCase().includes("swing")),
-      });
-    };
-
-    // Pull from all scanner buckets
-    (scannerData.gainers  || []).forEach(addSignal);
-    (scannerData.losers   || []).forEach(addSignal);
-    Object.values(scannerData.byMcap || {}).forEach(arr => arr.forEach(addSignal));
-
-    if (!signals.length) {
-      return res.json({ success: false, error: "No signals found in scanner data right now" });
-    }
-
-    const result = engine.captureSession(signals);
-    res.json({ ...result, count: result.count || signals.length });
+    const result = await forceCaptureNow();
+    if (result.error) return res.json({ success: false, error: result.error });
+    res.json({ success: true, count: result.count, sessionKey: result.sessionKey });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

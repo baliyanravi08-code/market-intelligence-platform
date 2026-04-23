@@ -746,7 +746,8 @@ function tryBacktestCapture(stocks) {
     const backtestEngine = require("../backtestEngine");
     const { subscribeStocksForBacktest } = require("../upstoxStream");
 
-    if (!backtestEngine.isMarketOpen()) return;
+    // allow capture anytime — market check removed
+// if (!backtestEngine.isMarketOpen()) return;
 
     const now  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
     const h    = now.getHours(), m = now.getMinutes();
@@ -783,7 +784,8 @@ if (lastBacktestCapture === todayKey) return;
 
     const result = backtestEngine.captureSession(signals);
     if (result.success) {
-      lastBacktestCapture = todayKey;
+  lastBacktestCapture = todayKey;
+  console.log(`✅ Backtest captured: ${signals.length} signals`);
       const symbols = signals.map(s => s.symbol);
       subscribeStocksForBacktest(symbols);
       console.log(`📊 Backtest: auto-captured ${signals.length} signals from scanner`);
@@ -962,4 +964,44 @@ module.exports = {
   getScannerData,
   getTechnicalsREST,
   getTechnicalsForTimeframe,
+  forceCaptureNow: async function () {
+    const backtestEngine = require("../backtestEngine");
+    const { subscribeStocksForBacktest } = require("../upstoxStream");
+
+    const stocks  = scanCache.allStocks || [];
+    const signals = [];
+    const seen    = new Set();
+
+    for (const stock of stocks) {
+      const sym = stock.symbol;
+      if (!sym || seen.has(sym)) continue;
+      seen.add(sym);
+
+      const tech = techCache.get(`${sym}:1day`);
+      if (!tech || tech.signal === "HOLD") continue;
+
+      signals.push({
+        symbol:    sym,
+        sector:    stock.sector || tech.sector || "Unknown",
+        signal:    tech.signal,
+        price:     tech.ltp    || stock.ltp,
+        target:    tech.tp     || tech.target,
+        stopLoss:  tech.sl     || tech.stopLoss,
+        rsi:       tech.rsi,
+        techScore: tech.techScore || tech.strength,
+        macd:      tech.macd,
+        isSwing:   false,
+      });
+    }
+
+    if (!signals.length) {
+      return { error: "No signals in tech cache yet — wait for pre-warm to complete" };
+    }
+
+    const result = backtestEngine.captureSession(signals);
+    if (result.success) {
+      subscribeStocksForBacktest(signals.map(s => s.symbol));
+    }
+    return result;
+  },
 };
