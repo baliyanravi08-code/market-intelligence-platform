@@ -2,11 +2,12 @@
  * upstoxStream.js
  * Location: server/services/upstoxStream.js   ← REPLACE EXISTING
  *
- * Changes from original:
- *  1. Added backtestEngine injection (setBacktestEngine) — no circular deps
- *  2. Added subscribeStocksForBacktest() — subscribes active signal stocks
- *  3. In parseAndEmit: stock LTP ticks now forwarded to backtestEngine.onLTPTick
- *     so WIN/LOSS resolves automatically when price hits target or SL
+ * FIXES:
+ *  1. Stock subscriptions now persist across reconnects — on every "open" event,
+ *     ALL queued stocks are re-subscribed automatically via resubscribeAll()
+ *  2. Day-end price display fixed — tracks prevClose per symbol in prevCloseCache
+ *     so % change never resets to zero when Upstox sends cp=0 after market close
+ *  3. Backtest engine wired for auto WIN/LOSS resolution
  */
 
 "use strict";
@@ -24,9 +25,9 @@ let ioRef        = null;
 let reconnTimer  = null;
 
 // ── Injected handlers ─────────────────────────────────────────────────────────
-let ltpTickHandler  = null;
-let oiTickHandler   = null;
-let backtestEngine  = null;   // ← NEW: injected from server.js
+let ltpTickHandler = null;
+let oiTickHandler  = null;
+let backtestEngine = null;
 
 function setLTPTickHandler(fn) {
   if (typeof fn === "function") {
@@ -39,10 +40,6 @@ function setOITickHandler(handler) {
   oiTickHandler = handler;
 }
 
-// ── NEW: Inject backtestEngine after all modules are loaded ───────────────────
-// Call from server.js .finally() block AFTER backtestEngine.init(io):
-//   const { setBacktestEngine } = require("./services/upstoxStream");
-//   setBacktestEngine(require("./services/backtestEngine"));
 function setBacktestEngine(engine) {
   if (engine && typeof engine.onLTPTick === "function") {
     backtestEngine = engine;
@@ -72,8 +69,27 @@ const GANN_SYMBOL_MAP = {
 // ── Option instruments ────────────────────────────────────────────────────────
 const optionInstruments = new Set();
 
-// ── NEW: Stock instruments for backtest live tracking ─────────────────────────
+// ── Stock instruments for backtest live tracking ──────────────────────────────
+// Stored as a Set so they survive reconnects — resubscribeAll() uses this Set
 const stockInstruments = new Set();
+
+// ── FIX 2: Per-symbol prevClose cache ────────────────────────────────────────
+// Upstox sends ltpc.cp = previous close. After market hours / on reconnect,
+// cp often comes as 0 which makes % change show as 0%. We cache the first valid
+// cp per symbol so the correct % is always shown even after reconnects.
+const prevCloseCache = new Map();
+
+function getSafePrevClose(key, ltpc, currentPrice) {
+  const cp = parseFloat(ltpc.cp || 0);
+  if (cp > 0) {
+    prevCloseCache.set(key, cp);   // cache valid value
+    return cp;
+  }
+  // cp=0 (post-market / reconnect) — use our cached value
+  const cached = prevCloseCache.get(key);
+  if (cached && cached > 0) return cached;
+  return currentPrice; // last resort — shows 0% change, better than wrong %
+}
 
 function subscribeOptions(instrKeys) {
   if (!instrKeys || !instrKeys.length) return;
@@ -91,9 +107,9 @@ function subscribeOptions(instrKeys) {
   }
 }
 
-// ── NEW: Subscribe stock symbols for backtest live price tracking ──────────────
-// Called from marketScanner after captureSession()
-// symbols: ["RELIANCE", "TCS", ...]
+// ── FIX 1: subscribeStocksForBacktest ────────────────────────────────────────
+// Adds keys to stockInstruments Set. resubscribeAll() (called on every "open")
+// will re-subscribe the full Set so reconnects never lose subscriptions.
 function subscribeStocksForBacktest(symbols) {
   if (!symbols || !symbols.length) return;
   const keys    = symbols.map(s => `NSE_EQ|${s.toUpperCase()}`);
@@ -105,11 +121,10 @@ function subscribeStocksForBacktest(symbols) {
       streamer.subscribe(newKeys, "ltpc");
       console.log(`📡 Upstox: subscribed ${newKeys.length} stocks for backtest live tracking`);
     } catch (e) {
-      console.warn("⚠️ Upstox stock backtest subscribe error:", e.message);
+      console.warn("⚠️ Upstox stock subscribe error:", e.message);
     }
   } else {
-    // Streamer not yet connected — they'll be subscribed on next "open" event
-    console.log(`📡 Upstox: queued ${newKeys.length} stocks (streamer not yet open)`);
+    console.log(`📡 Upstox: queued ${newKeys.length} stocks (will subscribe on next connect)`);
   }
 }
 
@@ -140,8 +155,9 @@ function parseAndEmit(raw) {
 
         if (ltpc) {
           const price = parseFloat(ltpc.ltp || 0);
-          const prev  = parseFloat(ltpc.cp  || price);
           if (price) {
+            // FIX 2: safe prevClose — never resets to 0% after market close
+            const prev = getSafePrevClose(name, ltpc, price);
             const diff = parseFloat((price - prev).toFixed(2));
             const pct  = prev > 0 ? parseFloat(((diff / prev) * 100).toFixed(2)) : 0;
             const up   = diff >= 0;
@@ -156,7 +172,6 @@ function parseAndEmit(raw) {
               _ts:    Date.now(),
             });
 
-            // Gann + composite engine
             if (typeof ltpTickHandler === "function") {
               const gannSym = GANN_SYMBOL_MAP[name] || name;
               ltpTickHandler(gannSym, price);
@@ -172,7 +187,7 @@ function parseAndEmit(raw) {
         continue;
       }
 
-      // ── STOCK tick (NSE_EQ|) — NEW: forward to backtest engine ───────────
+      // ── STOCK tick — forward to backtest engine ───────────────────────────
       if (key.startsWith("NSE_EQ|") || key.startsWith("BSE_EQ|")) {
         if (backtestEngine) {
           const ltpc =
@@ -212,6 +227,41 @@ function stopStreamer() {
   }
 }
 
+// ── FIX 1: resubscribeAll — called on every "open" event ─────────────────────
+// Subscribes indexes + options + ALL backtest stocks from their Sets.
+// This means reconnects automatically restore all subscriptions.
+function resubscribeAll() {
+  if (!streamer) return;
+
+  // Indexes (always)
+  try {
+    streamer.subscribe(INDEX_INSTRUMENTS, "ltpc");
+    console.log("📡 Upstox: subscribed 3 index instruments (ltpc)");
+  } catch (e) {
+    console.log("⚠️  Upstox index subscribe error:", e.message);
+  }
+
+  // Options (if any)
+  if (optionInstruments.size > 0) {
+    try {
+      streamer.subscribe(Array.from(optionInstruments), "full_d30");
+      console.log(`📡 Upstox: re-subscribed ${optionInstruments.size} option instruments`);
+    } catch (e) {
+      console.log("⚠️  Upstox option subscribe error:", e.message);
+    }
+  }
+
+  // FIX 1: Backtest stocks — re-subscribed on EVERY reconnect
+  if (stockInstruments.size > 0) {
+    try {
+      streamer.subscribe(Array.from(stockInstruments), "ltpc");
+      console.log(`📡 Upstox: re-subscribed ${stockInstruments.size} backtest stocks`);
+    } catch (e) {
+      console.log("⚠️  Upstox stock re-subscribe error:", e.message);
+    }
+  }
+}
+
 function startStreamer(accessToken, io) {
   if (!UpstoxClient) { console.log("⚠️  upstox-js-sdk not available"); return; }
   if (!accessToken)  { console.log("⚠️  Upstox stream: no access token"); return; }
@@ -229,35 +279,8 @@ function startStreamer(accessToken, io) {
 
     streamer.on("open", () => {
       console.log("✅ Upstox Market WebSocket connected");
-
-      // Subscribe indexes
-      try {
-        streamer.subscribe(INDEX_INSTRUMENTS, "ltpc");
-        console.log("📡 Upstox: subscribed 3 index instruments (ltpc)");
-      } catch (e) {
-        console.log("⚠️  Upstox index subscribe error:", e.message);
-      }
-
-      // Subscribe options (if any queued)
-      if (optionInstruments.size > 0) {
-        try {
-          streamer.subscribe(Array.from(optionInstruments), "full_d30");
-          console.log(`📡 Upstox: subscribed ${optionInstruments.size} option instruments`);
-        } catch (e) {
-          console.log("⚠️  Upstox option subscribe error:", e.message);
-        }
-      }
-
-      // ── NEW: Subscribe stocks queued for backtest tracking ────────────────
-      if (stockInstruments.size > 0) {
-        try {
-          streamer.subscribe(Array.from(stockInstruments), "ltpc");
-          console.log(`📡 Upstox: subscribed ${stockInstruments.size} stocks for backtest`);
-        } catch (e) {
-          console.log("⚠️  Upstox stock backtest subscribe error:", e.message);
-        }
-      }
-
+      // FIX 1: always resubscribe ALL instruments after every connect/reconnect
+      resubscribeAll();
       if (ioRef) ioRef.emit("upstox-status", { connected: true });
     });
 
@@ -294,7 +317,6 @@ module.exports = {
   setOITickHandler,
   setLTPTickHandler,
   getAccessToken,
-  // NEW exports:
   setBacktestEngine,
   subscribeStocksForBacktest,
 };
