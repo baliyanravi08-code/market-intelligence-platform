@@ -303,6 +303,9 @@ app.get("/auth/upstox/status", (req, res) => {
 });
 
 // ── /api/market ───────────────────────────────────────────────────────────────
+// Per-index prevClose cache for REST endpoint (same fix as WebSocket stream)
+const restPrevCloseCache = {};
+
 async function fetchUpstoxMarket() {
   const keys = Object.values(UPSTOX_INSTRUMENTS).join(",");
   const res  = await axios.get(
@@ -314,11 +317,28 @@ async function fetchUpstoxMarket() {
     const key   = UPSTOX_INSTRUMENTS[name];
     const quote = data[key] || data[key.replace("|", ":")] || null;
     if (!quote) return { name, price: "—", change: "—", pct: "—", up: null };
-    const price     = quote.last_price || 0;
-    const prevClose = quote.ohlc?.close || price;
-    const diff      = price - prevClose;
-    const pct       = prevClose > 0 ? (diff / prevClose) * 100 : 0;
-    const up        = diff >= 0;
+    const price = quote.last_price || 0;
+
+    // FIX: ohlc.close resets to 0 after market hours causing 0% display.
+    // Use net_change from Upstox directly if available — it's always correct.
+    // Fallback: cache the first valid prevClose we see for the day.
+    let prevClose = 0;
+    if (quote.net_change != null && price > 0) {
+      // net_change = ltp - prevClose, so prevClose = ltp - net_change
+      prevClose = price - quote.net_change;
+    } else {
+      const ohlcClose = quote.ohlc?.close || 0;
+      if (ohlcClose > 0) {
+        restPrevCloseCache[name] = ohlcClose;
+        prevClose = ohlcClose;
+      } else {
+        prevClose = restPrevCloseCache[name] || price;
+      }
+    }
+
+    const diff = price - prevClose;
+    const pct  = prevClose > 0 ? (diff / prevClose) * 100 : 0;
+    const up   = diff >= 0;
     return {
       name,
       price:  price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
