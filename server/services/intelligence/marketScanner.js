@@ -70,7 +70,7 @@ let ioRef        = null;
 let preWarmTimer = null;
 
 // ── Track last backtest capture time ──────────────────────────────────────────
-let lastBacktestCapture = 0;
+let lastBacktestCapture = "";
 
 // ── Symbol → mcap bucket map ──────────────────────────────────────────────────
 let symbolBucketMap = {};
@@ -751,10 +751,12 @@ function tryBacktestCapture(stocks) {
     const now  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
     const h    = now.getHours(), m = now.getMinutes();
     const mins = h * 60 + m;
-    const isCaptureWindow = mins >= 555 && mins <= 630;
+    const isCaptureWindow = mins >= 555 && mins <= 920; // 9:15 to 15:20
 
     if (!isCaptureWindow) return;
-    if (Date.now() - lastBacktestCapture < 3 * 60 * 60 * 1000) return;
+    const today = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+const todayKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`;
+if (lastBacktestCapture === todayKey) return;
 
     const signals = [];
     for (const stock of stocks) {
@@ -781,7 +783,7 @@ function tryBacktestCapture(stocks) {
 
     const result = backtestEngine.captureSession(signals);
     if (result.success) {
-      lastBacktestCapture = Date.now();
+      lastBacktestCapture = todayKey;
       const symbols = signals.map(s => s.symbol);
       subscribeStocksForBacktest(symbols);
       console.log(`📊 Backtest: auto-captured ${signals.length} signals from scanner`);

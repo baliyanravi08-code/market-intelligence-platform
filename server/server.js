@@ -1,6 +1,6 @@
 // Only load .env locally — Render injects env vars automatically
 if (process.env.NODE_ENV !== "production") {
-  require("dotenv").config();
+  require("dotenv").config({ path: require("path").join(__dirname, "../.env") });
 }
 
 const express = require("express");
