@@ -1,6 +1,6 @@
 /**
  * upstoxStream.js
- * Location: server/services/upstoxStream.js   ← REPLACE EXISTING
+ * Location: server/services/upstoxStream.js
  *
  * FIXES:
  *  1. Stock subscriptions now persist across reconnects — on every "open" event,
@@ -8,6 +8,12 @@
  *  2. Day-end price display fixed — tracks prevClose per symbol in prevCloseCache
  *     so % change never resets to zero when Upstox sends cp=0 after market close
  *  3. Backtest engine wired for auto WIN/LOSS resolution
+ *  4. Stock ticks now always emit backtest-live-tick to frontend for live prices
+ *  5. NEW: subscribeWithInstrumentKeys(keys) — accepts pre-resolved NSE_EQ|ISIN keys
+ *     directly, bypassing the NSE_EQ|SYMBOL mapping in subscribeStocksForBacktest.
+ *     This is the correct path for scanner stock subscriptions.
+ *  6. FIX: parseAndEmit now extracts symbol name from instrument key properly
+ *     so backtest-live-tick fires even when key format is NSE_EQ|INE002A01018
  */
 
 "use strict";
@@ -69,26 +75,29 @@ const GANN_SYMBOL_MAP = {
 // ── Option instruments ────────────────────────────────────────────────────────
 const optionInstruments = new Set();
 
-// ── Stock instruments for backtest live tracking ──────────────────────────────
-// Stored as a Set so they survive reconnects — resubscribeAll() uses this Set
-const stockInstruments = new Set();
+// ── Stock instruments for live tracking ──────────────────────────────────────
+// FIX: Two sets — one for ISIN-based keys (NSE_EQ|INE002A01018),
+// one for symbol-based keys (NSE_EQ|RELIANCE). Both work with Upstox WS,
+// but ISIN-based keys are more reliable.
+const stockInstruments = new Set();           // symbol-based: NSE_EQ|RELIANCE
+const stockInstrumentKeys = new Set();         // ISIN-based:   NSE_EQ|INE002A01018
 
-// ── FIX 2: Per-symbol prevClose cache ────────────────────────────────────────
-// Upstox sends ltpc.cp = previous close. After market hours / on reconnect,
-// cp often comes as 0 which makes % change show as 0%. We cache the first valid
-// cp per symbol so the correct % is always shown even after reconnects.
+// FIX: Reverse map from instrument key → trading symbol
+// so parseAndEmit can emit backtest-live-tick with the right symbol
+const instrKeyToSymbol = new Map();
+
+// ── Per-symbol prevClose cache ────────────────────────────────────────────────
 const prevCloseCache = new Map();
 
 function getSafePrevClose(key, ltpc, currentPrice) {
   const cp = parseFloat(ltpc.cp || 0);
   if (cp > 0) {
-    prevCloseCache.set(key, cp);   // cache valid value
+    prevCloseCache.set(key, cp);
     return cp;
   }
-  // cp=0 (post-market / reconnect) — use our cached value
   const cached = prevCloseCache.get(key);
   if (cached && cached > 0) return cached;
-  return currentPrice; // last resort — shows 0% change, better than wrong %
+  return currentPrice;
 }
 
 function subscribeOptions(instrKeys) {
@@ -107,24 +116,60 @@ function subscribeOptions(instrKeys) {
   }
 }
 
-// ── FIX 1: subscribeStocksForBacktest ────────────────────────────────────────
-// Adds keys to stockInstruments Set. resubscribeAll() (called on every "open")
-// will re-subscribe the full Set so reconnects never lose subscriptions.
+// ── subscribeStocksForBacktest ────────────────────────────────────────────────
+// Legacy path: converts symbol → NSE_EQ|SYMBOL format.
+// Still works but subscribeWithInstrumentKeys is preferred for scanner stocks.
 function subscribeStocksForBacktest(symbols) {
   if (!symbols || !symbols.length) return;
   const keys    = symbols.map(s => `NSE_EQ|${s.toUpperCase()}`);
   const newKeys = keys.filter(k => !stockInstruments.has(k));
   if (!newKeys.length) return;
   newKeys.forEach(k => stockInstruments.add(k));
+  // Build reverse map: NSE_EQ|RELIANCE → RELIANCE
+  for (const sym of symbols) {
+    instrKeyToSymbol.set(`NSE_EQ|${sym.toUpperCase()}`, sym.toUpperCase());
+  }
   if (streamer) {
     try {
       streamer.subscribe(newKeys, "ltpc");
-      console.log(`📡 Upstox: subscribed ${newKeys.length} stocks for backtest live tracking`);
+      console.log(`📡 Upstox: subscribed ${newKeys.length} stocks (symbol format) for live tracking`);
     } catch (e) {
       console.warn("⚠️ Upstox stock subscribe error:", e.message);
     }
   } else {
     console.log(`📡 Upstox: queued ${newKeys.length} stocks (will subscribe on next connect)`);
+  }
+}
+
+// ── subscribeWithInstrumentKeys ───────────────────────────────────────────────
+// FIX: New export — accepts pre-resolved instrument keys like NSE_EQ|INE002A01018.
+// Called by marketScanner after resolving keys from the instrument master.
+// Also accepts a symbolMap to populate instrKeyToSymbol for backtest-live-tick.
+function subscribeWithInstrumentKeys(instrKeys, symbolMap) {
+  if (!instrKeys || !instrKeys.length) return;
+  const newKeys = instrKeys.filter(k => !stockInstrumentKeys.has(k));
+  if (!newKeys.length) {
+    console.log("📡 Upstox: all instrument keys already subscribed");
+    return;
+  }
+  newKeys.forEach(k => stockInstrumentKeys.add(k));
+
+  // Build reverse map if provided
+  if (symbolMap && typeof symbolMap === "object") {
+    for (const [sym, key] of Object.entries(symbolMap)) {
+      instrKeyToSymbol.set(key, sym.toUpperCase());
+    }
+  }
+
+  if (streamer) {
+    try {
+      streamer.subscribe(newKeys, "ltpc");
+      console.log(`📡 Upstox: subscribed ${newKeys.length} stocks (instrument key format) for live tracking`);
+    } catch (e) {
+      console.warn("⚠️ Upstox instrument key subscribe error:", e.message);
+    }
+  } else {
+    console.log(`📡 Upstox: queued ${newKeys.length} instrument keys (will subscribe on next connect)`);
   }
 }
 
@@ -156,7 +201,6 @@ function parseAndEmit(raw) {
         if (ltpc) {
           const price = parseFloat(ltpc.ltp || 0);
           if (price) {
-            // FIX 2: safe prevClose — never resets to 0% after market close
             const prev = getSafePrevClose(name, ltpc, price);
             const diff = parseFloat((price - prev).toFixed(2));
             const pct  = prev > 0 ? parseFloat(((diff / prev) * 100).toFixed(2)) : 0;
@@ -187,20 +231,30 @@ function parseAndEmit(raw) {
         continue;
       }
 
-      // ── STOCK tick — forward to backtest engine ───────────────────────────
+      // ── STOCK tick ────────────────────────────────────────────────────────
       if (key.startsWith("NSE_EQ|") || key.startsWith("BSE_EQ|")) {
-        if (backtestEngine) {
-          const ltpc =
-            ff?.equityFF?.ltpc ||
-            ff?.marketFF?.ltpc ||
-            feed?.ltpc         ||
-            null;
-          if (ltpc) {
-            const price = parseFloat(ltpc.ltp || 0);
-            if (price > 0) {
-              const symbol = key.replace("NSE_EQ|", "").replace("BSE_EQ|", "");
-              backtestEngine.onLTPTick(symbol, price);
+        const ltpc =
+          ff?.equityFF?.ltpc ||
+          ff?.marketFF?.ltpc ||
+          feed?.ltpc         ||
+          null;
+        if (ltpc) {
+          const price = parseFloat(ltpc.ltp || 0);
+          if (price > 0) {
+            // FIX: Resolve symbol from key.
+            // - instrKeyToSymbol covers ISIN-based keys (NSE_EQ|INE002A01018 → RELIANCE)
+            // - Fallback: strip prefix for symbol-based keys (NSE_EQ|RELIANCE → RELIANCE)
+            let symbol = instrKeyToSymbol.get(key);
+            if (!symbol) {
+              // Symbol-format key: NSE_EQ|RELIANCE → RELIANCE
+              symbol = key.replace(/^(NSE_EQ|BSE_EQ)\|/, "");
             }
+
+            // Always emit to frontend — every subscribed stock gets live price
+            if (ioRef) ioRef.emit("backtest-live-tick", { symbol, price });
+
+            // Also forward to backtest engine for WIN/LOSS auto-resolution
+            if (backtestEngine) backtestEngine.onLTPTick(symbol, price);
           }
         }
         continue;
@@ -227,9 +281,7 @@ function stopStreamer() {
   }
 }
 
-// ── FIX 1: resubscribeAll — called on every "open" event ─────────────────────
-// Subscribes indexes + options + ALL backtest stocks from their Sets.
-// This means reconnects automatically restore all subscriptions.
+// ── resubscribeAll — called on every "open" event ─────────────────────────────
 function resubscribeAll() {
   if (!streamer) return;
 
@@ -251,13 +303,23 @@ function resubscribeAll() {
     }
   }
 
-  // FIX 1: Backtest stocks — re-subscribed on EVERY reconnect
+  // Stocks — symbol-format (legacy)
   if (stockInstruments.size > 0) {
     try {
       streamer.subscribe(Array.from(stockInstruments), "ltpc");
-      console.log(`📡 Upstox: re-subscribed ${stockInstruments.size} backtest stocks`);
+      console.log(`📡 Upstox: re-subscribed ${stockInstruments.size} stocks (symbol format)`);
     } catch (e) {
       console.log("⚠️  Upstox stock re-subscribe error:", e.message);
+    }
+  }
+
+  // Stocks — ISIN instrument key format (new, preferred)
+  if (stockInstrumentKeys.size > 0) {
+    try {
+      streamer.subscribe(Array.from(stockInstrumentKeys), "ltpc");
+      console.log(`📡 Upstox: re-subscribed ${stockInstrumentKeys.size} stocks (instrument key format)`);
+    } catch (e) {
+      console.log("⚠️  Upstox instrument key re-subscribe error:", e.message);
     }
   }
 }
@@ -279,7 +341,6 @@ function startStreamer(accessToken, io) {
 
     streamer.on("open", () => {
       console.log("✅ Upstox Market WebSocket connected");
-      // FIX 1: always resubscribe ALL instruments after every connect/reconnect
       resubscribeAll();
       if (ioRef) ioRef.emit("upstox-status", { connected: true });
     });
@@ -319,4 +380,5 @@ module.exports = {
   getAccessToken,
   setBacktestEngine,
   subscribeStocksForBacktest,
+  subscribeWithInstrumentKeys,   // ← NEW: accepts pre-resolved ISIN-based keys
 };

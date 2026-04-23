@@ -2,13 +2,13 @@
 
 /**
  * marketScanner.js
- * Location: server/services/intelligence/marketScanner.js   ← REPLACE EXISTING
+ * Location: server/services/intelligence/marketScanner.js
  *
- * Changes from original:
- *  1. After each scan completes, signals are auto-captured into backtestEngine
- *  2. Signal stocks are subscribed in Upstox stream for live price tracking
- *  3. computeTechnicals() now returns target/stopLoss/entry for backtest capture
- *  Everything else is identical to the original.
+ * FIXES:
+ *  1. After each scan, top ~100 stocks subscribed for live Upstox ticks
+ *  2. Subscription covers gainers + losers + largecap + midcap + smallcap
+ *  3. subscribeStocksForBacktest Set deduplicates automatically
+ *  4. Backtest auto-capture still works unchanged
  */
 
 const axios = require("axios");
@@ -69,7 +69,7 @@ let lastCookieAt = 0;
 let ioRef        = null;
 let preWarmTimer = null;
 
-// ── NEW: Track last backtest capture time ─────────────────────────────────────
+// ── Track last backtest capture time ──────────────────────────────────────────
 let lastBacktestCapture = 0;
 
 // ── Symbol → mcap bucket map ──────────────────────────────────────────────────
@@ -305,7 +305,7 @@ function normaliseBSE(s) {
   };
 }
 
-// ── Technical calculations (all same as original) ─────────────────────────────
+// ── Technical calculations ────────────────────────────────────────────────────
 function calcEMA(closes, period) {
   if (closes.length < period) return null;
   const k = 2 / (period + 1);
@@ -476,10 +476,10 @@ function calcMFI(candles, period = 14) {
 }
 function calcMASummary(closes, ltp) {
   const mas = {
-    ema5: calcEMA(closes, 5), ema9: calcEMA(closes, 9),
-    ema21: calcEMA(closes, 21), ema50: calcEMA(closes, 50), ema200: calcEMA(closes, 200),
-    sma10: calcSMA(closes, 10), sma20: calcSMA(closes, 20),
-    sma50: calcSMA(closes, 50), sma100: calcSMA(closes, 100), sma200: calcSMA(closes, 200),
+    ema5:  calcEMA(closes, 5),   ema9:   calcEMA(closes, 9),
+    ema21: calcEMA(closes, 21),  ema50:  calcEMA(closes, 50),  ema200: calcEMA(closes, 200),
+    sma10: calcSMA(closes, 10),  sma20:  calcSMA(closes, 20),
+    sma50: calcSMA(closes, 50),  sma100: calcSMA(closes, 100), sma200: calcSMA(closes, 200),
   };
   let buy = 0, sell = 0, neutral = 0;
   for (const v of Object.values(mas)) {
@@ -546,7 +546,6 @@ function computeTechnicals(symbol, candles) {
   const isBull = score >= 50;
   const entry  = Math.round(ltp * 100) / 100;
 
-  // ── These are now returned for backtest capture ───────────────────────────
   const sl = isBull
     ? Math.round((ltp - 1.5 * atrVal) * 100) / 100
     : Math.round((ltp + 1.5 * atrVal) * 100) / 100;
@@ -568,14 +567,12 @@ function computeTechnicals(symbol, candles) {
     signal: sig,
     strength: score,
     entry, sl, tp: tp2,
-    // backtest fields:
     target:    tp2,
     stopLoss:  sl,
     price:     entry,
     techScore: score,
-    // --
     emas: {
-      ema5: calcEMA(closes, 5), ema9: calcEMA(closes, 9),
+      ema5:  calcEMA(closes, 5),  ema9:  calcEMA(closes, 9),
       ema21: calcEMA(closes, 21), ema50: calcEMA(closes, 50), ema200: calcEMA(closes, 200),
     },
     rsi,
@@ -637,7 +634,6 @@ async function fetchCandles(symbol, days, interval) {
     }
   }
 
-  // NSE daily fallback
   if (interval === "day") {
     await refreshNSECookie();
     try {
@@ -738,9 +734,7 @@ function buildPayload(cache) {
   };
 }
 
-// ── NEW: Auto-capture signals for backtest ────────────────────────────────────
-// Called after each scan. Only captures once per market session (9:15-10:00 AM).
-// Builds signal objects from pre-warmed tech cache for top gainers + losers.
+// ── Auto-capture signals for backtest ─────────────────────────────────────────
 function tryBacktestCapture(stocks) {
   try {
     const backtestEngine = require("../backtestEngine");
@@ -748,23 +742,20 @@ function tryBacktestCapture(stocks) {
 
     if (!backtestEngine.isMarketOpen()) return;
 
-    // Only capture once per day during 9:15–10:30 AM window
     const now  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
     const h    = now.getHours(), m = now.getMinutes();
     const mins = h * 60 + m;
-    const isCaptureWindow = mins >= 555 && mins <= 630; // 9:15 to 10:30 AM
+    const isCaptureWindow = mins >= 555 && mins <= 630;
 
-    // Throttle: only capture once every 3 hours max
     if (!isCaptureWindow) return;
     if (Date.now() - lastBacktestCapture < 3 * 60 * 60 * 1000) return;
 
-    // Build signals from tech cache for stocks with a clear signal
     const signals = [];
     for (const stock of stocks) {
       const cacheKey = `${stock.symbol}:1day`;
       const tech     = techCache.get(cacheKey);
       if (!tech) continue;
-      if (tech.signal === "HOLD") continue; // skip neutral
+      if (tech.signal === "HOLD") continue;
 
       signals.push({
         symbol:    stock.symbol,
@@ -785,13 +776,11 @@ function tryBacktestCapture(stocks) {
     const result = backtestEngine.captureSession(signals);
     if (result.success) {
       lastBacktestCapture = Date.now();
-      // Subscribe the signal stocks for live price tracking
       const symbols = signals.map(s => s.symbol);
       subscribeStocksForBacktest(symbols);
       console.log(`📊 Backtest: auto-captured ${signals.length} signals from scanner`);
     }
   } catch (e) {
-    // Don't break scanner if backtest engine fails
     console.warn("📊 Backtest auto-capture skipped:", e.message);
   }
 }
@@ -868,6 +857,23 @@ async function runScanner() {
 
     if (ioRef) ioRef.emit("scanner-update", buildPayload(scanCache));
 
+    // ── Subscribe top ~100 stocks for live Upstox ticks on EVERY scan ────────
+    try {
+      const { subscribeStocksForBacktest } = require("../upstoxStream");
+      const topSymbols = [
+        ...gainers.map(s => s.symbol),
+        ...losers.map(s => s.symbol),
+        ...byMcap.largecap.slice(0, 30).map(s => s.symbol),
+        ...byMcap.midcap.slice(0, 20).map(s => s.symbol),
+        ...byMcap.smallcap.slice(0, 10).map(s => s.symbol),
+      ].filter((sym, i, arr) => arr.indexOf(sym) === i);
+      console.log(`📊 Scanner: attempting to subscribe ${topSymbols.length} stocks — sample: ${topSymbols.slice(0,3).join(",")}`);
+      subscribeStocksForBacktest(topSymbols);
+      console.log(`📊 Scanner: subscribed ${topSymbols.length} stocks for live ticks`);
+    } catch (e) {
+      console.error("📊 Scanner: stock subscription FAILED —", e.message, e.stack);
+    }
+
     const toWarm = [
       ...gainers.map(s => s.symbol),
       ...losers.map(s => s.symbol),
@@ -878,7 +884,6 @@ async function runScanner() {
     if (preWarmTimer) clearTimeout(preWarmTimer);
     preWarmTimer = setTimeout(() => {
       preWarmTechCache(toWarm).then(() => {
-        // ── NEW: After pre-warm completes, try to auto-capture for backtest ──
         tryBacktestCapture(toWarm.map(sym => stocks.find(s => s.symbol === sym)).filter(Boolean));
       });
     }, PREWARM_DELAY);
