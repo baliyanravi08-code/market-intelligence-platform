@@ -1,602 +1,303 @@
-/**
- * StockChart.jsx
- * Location: client/src/pages/StockChart.jsx
- *
- * FIXES applied:
- *  FIX-D1: Chart divs were conditionally hidden with display:none BEFORE
- *           lightweight-charts tried to measure them. clientWidth = 0 → blank
- *           chart. Fixed by conditionally rendering the divs only when
- *           hasData && !loading && !error (so divs exist and are visible
- *           when the chart library initialises).
- *
- *  FIX-D2: The chart useEffect ran synchronously after React setState, before
- *           the newly-rendered divs had been painted to the DOM. Even with
- *           conditional rendering, the first frame can still measure 0px.
- *           Fixed by wrapping all chart creation inside requestAnimationFrame
- *           so the browser has painted the divs before we measure clientWidth.
- */
-
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import { createChart, CrosshairMode, LineStyle } from "lightweight-charts";
-import { io } from "socket.io-client";
 
-// ── Socket singleton ──────────────────────────────────────────────────────────
-let _socket = null;
-function getSocket() {
-  if (!_socket) _socket = io({ transports: ["websocket"] });
-  return _socket;
-}
-
-// ── Timeframes ─────────────────────────────────────────────────────────────────
-const TIMEFRAMES = [
-  { label: "5m",  value: "5min"  },
-  { label: "15m", value: "15min" },
-  { label: "1H",  value: "1hour" },
-  { label: "4H",  value: "4hour" },
-  { label: "1D",  value: "1day"  },
-  { label: "1W",  value: "1week" },
+const TF_OPTIONS = [
+  { label: "5m",   value: "5min"  },
+  { label: "15m",  value: "15min" },
+  { label: "1H",   value: "1hour" },
+  { label: "4H",   value: "4hour" },
+  { label: "1D",   value: "1day"  },
+  { label: "1W",   value: "1week" },
 ];
 
-// ── Theme ─────────────────────────────────────────────────────────────────────
-const T = {
-  bg:        "#050810",
-  bgPanel:   "#080c18",
-  bgCard:    "#0d1220",
-  border:    "#1a2035",
-  text:      "#c8d6f0",
-  textDim:   "#4a5a80",
-  textMuted: "#2a3550",
-  green:     "#00e676",
-  greenDim:  "rgba(0,230,118,0.15)",
-  red:       "#ff3d57",
-  redDim:    "rgba(255,61,87,0.15)",
-  yellow:    "#ffc947",
-  blue:      "#4fc3f7",
-  purple:    "#b388ff",
-  ema9:      "#ffc947",
-  ema21:     "#4fc3f7",
-  ema50:     "#ff7043",
-  ema200:    "#b388ff",
-  bbUpper:   "rgba(100,160,255,0.5)",
-  bbLower:   "rgba(100,160,255,0.5)",
-  bbMid:     "rgba(100,160,255,0.25)",
-  vwap:      "rgba(255,201,71,0.8)",
+const COLORS = {
+  bg:       "#010812",
+  grid:     "#0d1f35",
+  text:     "#4a8adf",
+  up:       "#00ff9c",
+  down:     "#ff4466",
+  volume:   "#1a3a5c",
+  wick:     "#2a5a8c",
+  cross:    "#4a8adf55",
+  label:    "#b8cfe8",
 };
 
-const SIG_COLOR = {
-  "STRONG BUY":  "#00e676",
-  "BUY":         "#69f0ae",
-  "HOLD":        "#ffc947",
-  "SELL":        "#ff6e6e",
-  "STRONG SELL": "#ff3d57",
-};
+export default function StockChart({ symbol }) {
+  const canvasRef   = useRef(null);
+  const overlayRef  = useRef(null);
+  const [tf, setTf] = useState("1day");
+  const [candles, setCandles]   = useState([]);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState(null);
+  const [crosshair, setCrosshair] = useState(null);
+  const dataRef = useRef([]);
 
-const BASE_CHART = {
-  layout: {
-    background: { color: T.bg },
-    textColor:  T.textDim,
-    fontSize:   11,
-    fontFamily: "'JetBrains Mono','Fira Code',monospace",
-  },
-  grid: {
-    vertLines: { color: "rgba(26,32,53,0.8)" },
-    horzLines: { color: "rgba(26,32,53,0.8)" },
-  },
-  crosshair: {
-    mode:     CrosshairMode.Normal,
-    vertLine: { color: "rgba(100,130,200,0.4)", style: LineStyle.Dashed, labelBackgroundColor: "#1a2035" },
-    horzLine: { color: "rgba(100,130,200,0.4)", style: LineStyle.Dashed, labelBackgroundColor: "#1a2035" },
-  },
-  rightPriceScale: { borderColor: T.border, scaleMargins: { top: 0.05, bottom: 0.05 } },
-  timeScale: { borderColor: T.border, timeVisible: true, secondsVisible: false, fixLeftEdge: true, fixRightEdge: true },
-  handleScroll: true,
-  handleScale:  true,
-};
-
-// ── Indicator helpers ─────────────────────────────────────────────────────────
-function buildEMA(closes, times, period) {
-  if (closes.length < period) return [];
-  const k = 2 / (period + 1);
-  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  const out = [];
-  for (let i = period; i < closes.length; i++) {
-    ema = closes[i] * k + ema * (1 - k);
-    out.push({ time: times[i], value: +ema.toFixed(2) });
-  }
-  return out;
-}
-
-function buildBB(closes, times, period = 20, mult = 2) {
-  const upper = [], lower = [], mid = [];
-  for (let i = period; i < closes.length; i++) {
-    const sl  = closes.slice(i - period, i);
-    const sma = sl.reduce((a, b) => a + b, 0) / period;
-    const std = Math.sqrt(sl.reduce((s, v) => s + (v - sma) ** 2, 0) / period);
-    upper.push({ time: times[i], value: +(sma + mult * std).toFixed(2) });
-    lower.push({ time: times[i], value: +(sma - mult * std).toFixed(2) });
-    mid.push({   time: times[i], value: +sma.toFixed(2) });
-  }
-  return { upper, lower, mid };
-}
-
-function buildRSI(closes, times, period = 14) {
-  const out = [];
-  for (let i = period + 1; i < closes.length; i++) {
-    const sl = closes.slice(i - period - 1, i);
-    let g = 0, l = 0;
-    for (let j = 1; j < sl.length; j++) {
-      const d = sl[j] - sl[j - 1];
-      if (d > 0) g += d; else l -= d;
-    }
-    const al = l / period;
-    const rsi = al === 0 ? 100 : 100 - 100 / (1 + (g / period) / al);
-    out.push({ time: times[i], value: +rsi.toFixed(2) });
-  }
-  return out;
-}
-
-function buildMACD(closes, times) {
-  const ema = (arr, p) => {
-    const k = 2 / (p + 1);
-    let e = arr.slice(0, p).reduce((a, b) => a + b, 0) / p;
-    return arr.slice(p).map(v => { e = v * k + e * (1 - k); return e; });
-  };
-  const e12 = ema(closes, 12);
-  const e26 = ema(closes, 26);
-  const mv  = e12.slice(14).map((v, i) => v - e26[i]);
-  const sv  = ema(mv, 9);
-  const res = { macd: [], signal: [], histogram: [] };
-  for (let i = 9; i < mv.length; i++) {
-    const t = times[26 + i];
-    if (!t) continue;
-    res.macd.push({      time: t, value: +mv[i].toFixed(4) });
-    res.signal.push({    time: t, value: +sv[i - 9].toFixed(4) });
-    res.histogram.push({ time: t, value: +(mv[i] - sv[i - 9]).toFixed(4) });
-  }
-  return res;
-}
-
-function buildStoch(candles, times, period = 14) {
-  const kRaw = [];
-  for (let i = period - 1; i < candles.length; i++) {
-    const sl  = candles.slice(i - period + 1, i + 1);
-    const hi  = Math.max(...sl.map(c => c.high));
-    const lo  = Math.min(...sl.map(c => c.low));
-    const cl  = candles[i].close;
-    const kv  = hi === lo ? 50 : ((cl - lo) / (hi - lo)) * 100;
-    kRaw.push({ time: times[i], value: +kv.toFixed(2) });
-  }
-  const d = [];
-  for (let i = 2; i < kRaw.length; i++) {
-    d.push({ time: kRaw[i].time, value: +((kRaw[i].value + kRaw[i-1].value + kRaw[i-2].value) / 3).toFixed(2) });
-  }
-  return { k: kRaw, d };
-}
-
-// ── Component ─────────────────────────────────────────────────────────────────
-export default function StockChart() {
-  const { symbol } = useParams();
-  const navigate   = useNavigate();
-
-  const [tf,      setTf]      = useState("1day");
-  const [tech,    setTech]    = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState(null);
-  const [live,    setLive]    = useState(null);
-  const [cross,   setCross]   = useState(null);
-  const [inds, setInds] = useState({
-    ema9: true, ema21: true, ema50: true, ema200: false,
-    bb: true, vwap: true, supertrend: true,
-    volume: true, rsi: true, macd: true, stoch: false,
-  });
-
-  const mainRef  = useRef(null);
-  const volRef   = useRef(null);
-  const rsiRef   = useRef(null);
-  const macdRef  = useRef(null);
-  const stochRef = useRef(null);
-  const charts   = useRef({});
-  const candleSr = useRef(null);
-  const liveL    = useRef(null);
-
-  // ── Fetch ─────────────────────────────────────────────────────────────────
-  const fetchData = useCallback(async () => {
-    if (!symbol) return;
+  // ── Fetch candles from server ──────────────────────────────────────────────
+  const fetchCandles = useCallback(async (sym, timeframe) => {
+    if (!sym) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/scanner/technicals/${symbol.toUpperCase()}?timeframe=${tf}`
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const days = ["5min","15min","1hour"].includes(timeframe) ? 10
+                 : timeframe === "4hour" ? 30
+                 : timeframe === "1week" ? 365
+                 : 180;
+      const res  = await fetch(`/api/candles/${sym}?tf=${timeframe}&days=${days}`);
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setTech(data);
-      setLive(data.ltp);
+      if (!data.ok) {
+        setError(data.error || "No data");
+        setCandles([]);
+        return;
+      }
+      if (!data.candles || data.candles.length === 0) {
+        setError("No candle data returned");
+        setCandles([]);
+        return;
+      }
+      setCandles(data.candles);
+      dataRef.current = data.candles;
     } catch (e) {
-      setError(e.message);
+      setError("Fetch failed: " + e.message);
+      setCandles([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [symbol, tf]);
+  }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  // ── Live price socket ─────────────────────────────────────────────────────
   useEffect(() => {
-    const socket = getSocket();
-    const onTick = ({ symbol: sym, price }) => {
-      if (sym === symbol?.toUpperCase()) setLive(price);
-    };
-    const onBatch = (batch) => {
-      const match = batch.find(b => b.key === `${symbol?.toUpperCase()}:${tf}`);
-      if (match?.data?.ltp) setLive(match.data.ltp);
-    };
-    socket.on("backtest-live-tick", onTick);
-    socket.on("scanner-tech-batch", onBatch);
-    return () => { socket.off("backtest-live-tick", onTick); socket.off("scanner-tech-batch", onBatch); };
-  }, [symbol, tf]);
+    if (symbol) fetchCandles(symbol, tf);
+  }, [symbol, tf, fetchCandles]);
 
-  // ── Update live price line ────────────────────────────────────────────────
+  // ── Draw chart ────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!live || !liveL.current) return;
-    try { liveL.current.setPrice(live); } catch {}
-  }, [live]);
+    const canvas = canvasRef.current;
+    if (!canvas || candles.length === 0) return;
 
-  // ── Build / rebuild charts when data changes ──────────────────────────────
-  useEffect(() => {
-    if (loading || !tech) return;
+    const ctx    = canvas.getContext("2d");
+    const W      = canvas.width;
+    const H      = canvas.height;
+    const PAD    = { top: 20, right: 60, bottom: 60, left: 10 };
+    const chartW = W - PAD.left - PAD.right;
+    const chartH = H - PAD.top - PAD.bottom;
+    const volH   = Math.floor(chartH * 0.18);
+    const priceH = chartH - volH - 10;
 
-    // Destroy old charts
-    Object.values(charts.current).forEach(c => { try { c.remove(); } catch {} });
-    charts.current = {};
-    candleSr.current = null;
-    liveL.current    = null;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = COLORS.bg;
+    ctx.fillRect(0, 0, W, H);
 
-    const candles = tech._candles || [];
-    if (!candles.length) return;
+    const data   = candles;
+    const n      = data.length;
+    const candleW = Math.max(1, Math.floor(chartW / n) - 1);
+    const gap     = Math.max(1, Math.floor(chartW / n));
 
-    // FIX-D2: requestAnimationFrame ensures chart container divs are
-    // visible and have been painted with non-zero width before
-    // lightweight-charts initialises. Without this, even conditionally-
-    // rendered divs may still measure 0px on the same render frame.
-    const raf = requestAnimationFrame(() => {
-      if (!mainRef.current) return;
-      const containerW = mainRef.current.clientWidth;
-      if (containerW === 0) return; // not painted yet — next render will retry
+    // Price range
+    const highs  = data.map(c => c.high);
+    const lows   = data.map(c => c.low);
+    const maxP   = Math.max(...highs);
+    const minP   = Math.min(...lows);
+    const rangeP = maxP - minP || 1;
+    const maxVol = Math.max(...data.map(c => c.volume)) || 1;
 
-      const times  = candles.map(c => c.time);
-      const closes = candles.map(c => c.close);
+    const px = (price) => PAD.top + priceH - ((price - minP) / rangeP) * priceH;
+    const vx = (vol)   => PAD.top + priceH + 10 + volH - (vol / maxVol) * volH;
+    const cx = (i)     => PAD.left + i * gap + gap / 2;
 
-      // ── MAIN candlestick chart ────────────────────────────────────────────
-      const mc = createChart(mainRef.current, { ...BASE_CHART, height: 420, width: containerW });
-      charts.current.main = mc;
+    // Grid lines
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth   = 0.5;
+    for (let g = 0; g <= 5; g++) {
+      const y = PAD.top + (priceH / 5) * g;
+      ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
+      const price = maxP - (rangeP / 5) * g;
+      ctx.fillStyle  = COLORS.text;
+      ctx.font       = "11px monospace";
+      ctx.textAlign  = "left";
+      ctx.fillText(price.toFixed(0), W - PAD.right + 4, y + 4);
+    }
 
-      const cs = mc.addCandlestickSeries({
-        upColor: T.green, downColor: T.red,
-        borderUpColor: T.green, borderDownColor: T.red,
-        wickUpColor: T.green, wickDownColor: T.red,
-      });
-      cs.setData(candles);
-      candleSr.current = cs;
+    // Candles
+    data.forEach((c, i) => {
+      const x    = cx(i);
+      const isUp = c.close >= c.open;
+      const col  = isUp ? COLORS.up : COLORS.down;
 
-      // Live price line
-      liveL.current = cs.createPriceLine({
-        price: live || tech.ltp, color: T.yellow,
-        lineWidth: 1, lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true, title: "LIVE",
-      });
+      // Wick
+      ctx.strokeStyle = col;
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, px(c.high));
+      ctx.lineTo(x, px(c.low));
+      ctx.stroke();
 
-      // Entry / Target / SL lines
-      if (tech.entry) cs.createPriceLine({ price: tech.entry, color: T.blue,  lineWidth: 1, lineStyle: LineStyle.Solid,  axisLabelVisible: true, title: "ENTRY" });
-      if (tech.tp)    cs.createPriceLine({ price: tech.tp,    color: T.green, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: "TGT"   });
-      if (tech.sl)    cs.createPriceLine({ price: tech.sl,    color: T.red,   lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: "SL"    });
+      // Body
+      const bodyTop = px(Math.max(c.open, c.close));
+      const bodyBot = px(Math.min(c.open, c.close));
+      const bodyH   = Math.max(1, bodyBot - bodyTop);
+      ctx.fillStyle = col;
+      ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
 
-      // EMA overlays
-      if (inds.ema9) {
-        mc.addLineSeries({ color: T.ema9,   lineWidth: 1, title: "EMA9",   priceLineVisible: false, lastValueVisible: true }).setData(buildEMA(closes, times, 9));
-      }
-      if (inds.ema21) {
-        mc.addLineSeries({ color: T.ema21,  lineWidth: 1, title: "EMA21",  priceLineVisible: false, lastValueVisible: true }).setData(buildEMA(closes, times, 21));
-      }
-      if (inds.ema50) {
-        mc.addLineSeries({ color: T.ema50,  lineWidth: 1, title: "EMA50",  priceLineVisible: false, lastValueVisible: true }).setData(buildEMA(closes, times, 50));
-      }
-      if (inds.ema200) {
-        mc.addLineSeries({ color: T.ema200, lineWidth: 1, title: "EMA200", priceLineVisible: false, lastValueVisible: true }).setData(buildEMA(closes, times, 200));
-      }
-
-      // Bollinger Bands
-      if (inds.bb) {
-        const bb = buildBB(closes, times);
-        mc.addLineSeries({ color: T.bbUpper, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: LineStyle.Dotted }).setData(bb.upper);
-        mc.addLineSeries({ color: T.bbLower, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: LineStyle.Dotted }).setData(bb.lower);
-        mc.addLineSeries({ color: T.bbMid,   lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: LineStyle.Dashed  }).setData(bb.mid);
-      }
-
-      // VWAP
-      if (inds.vwap && tech.vwap) {
-        const vwapSeries = mc.addLineSeries({ color: T.vwap, lineWidth: 1, title: "VWAP", priceLineVisible: false, lastValueVisible: true });
-        vwapSeries.setData(times.slice(-78).map(t => ({ time: t, value: tech.vwap })));
-      }
-
-      // Supertrend
-      if (inds.supertrend && tech.supertrend?.level) {
-        const stColor = tech.supertrend.trend === "BULLISH" ? T.green : T.red;
-        mc.addLineSeries({ color: stColor, lineWidth: 2, title: "ST", priceLineVisible: false, lastValueVisible: true })
-          .setData(times.slice(-60).map(t => ({ time: t, value: tech.supertrend.level })));
-      }
-
-      // Crosshair
-      mc.subscribeCrosshairMove(p => {
-        if (!p.time || !p.seriesData) return;
-        const bar = p.seriesData.get(cs);
-        if (bar) setCross({ time: p.time, ...bar });
-      });
-
-      // ── VOLUME panel ──────────────────────────────────────────────────────
-      if (inds.volume && volRef.current) {
-        const vc = createChart(volRef.current, {
-          ...BASE_CHART, height: 80, width: volRef.current.clientWidth,
-          rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0 }, borderColor: T.border },
-          timeScale: { visible: false },
-        });
-        charts.current.vol = vc;
-        const vs = vc.addHistogramSeries({ priceFormat: { type: "volume" } });
-        vs.priceScale().applyOptions({ scaleMargins: { top: 0.2, bottom: 0 } });
-        vs.setData(candles.map(c => ({
-          time: c.time, value: c.volume || 0,
-          color: c.close >= c.open ? "rgba(0,230,118,0.4)" : "rgba(255,61,87,0.4)",
-        })));
-        mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) vc.timeScale().setVisibleLogicalRange(r); });
-      }
-
-      // ── RSI panel ─────────────────────────────────────────────────────────
-      if (inds.rsi && rsiRef.current) {
-        const rc = createChart(rsiRef.current, {
-          ...BASE_CHART, height: 100, width: rsiRef.current.clientWidth,
-          rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderColor: T.border },
-          timeScale: { visible: false },
-        });
-        charts.current.rsi = rc;
-        rc.addLineSeries({ color: T.purple, lineWidth: 1, title: "RSI", priceLineVisible: false, lastValueVisible: true })
-          .setData(buildRSI(closes, times, 14));
-        const tSlice = times.slice(-120);
-        rc.addLineSeries({ color: "rgba(255,61,87,0.4)",   lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 70 })));
-        rc.addLineSeries({ color: "rgba(0,230,118,0.4)",   lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 30 })));
-        rc.addLineSeries({ color: "rgba(100,130,200,0.3)", lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 50 })));
-        mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) rc.timeScale().setVisibleLogicalRange(r); });
-      }
-
-      // ── MACD panel ────────────────────────────────────────────────────────
-      if (inds.macd && macdRef.current) {
-        const mcc = createChart(macdRef.current, {
-          ...BASE_CHART, height: 100, width: macdRef.current.clientWidth,
-          rightPriceScale: { scaleMargins: { top: 0.2, bottom: 0.2 }, borderColor: T.border },
-          timeScale: { visible: false },
-        });
-        charts.current.macd = mcc;
-        const md = buildMACD(closes, times);
-        mcc.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false })
-          .setData(md.histogram.map(d => ({ ...d, color: d.value >= 0 ? "rgba(0,230,118,0.6)" : "rgba(255,61,87,0.6)" })));
-        mcc.addLineSeries({ color: T.blue,   lineWidth: 1, title: "MACD",   priceLineVisible: false, lastValueVisible: true }).setData(md.macd);
-        mcc.addLineSeries({ color: T.yellow, lineWidth: 1, title: "Signal", priceLineVisible: false, lastValueVisible: true, lineStyle: LineStyle.Dashed }).setData(md.signal);
-        mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) mcc.timeScale().setVisibleLogicalRange(r); });
-      }
-
-      // ── STOCHASTIC panel ──────────────────────────────────────────────────
-      if (inds.stoch && stochRef.current) {
-        const sc = createChart(stochRef.current, {
-          ...BASE_CHART, height: 80, width: stochRef.current.clientWidth,
-          rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderColor: T.border },
-          timeScale: { visible: false },
-        });
-        charts.current.stoch = sc;
-        const st = buildStoch(candles, times, 14);
-        sc.addLineSeries({ color: T.blue,   lineWidth: 1, title: "%K", priceLineVisible: false, lastValueVisible: true }).setData(st.k);
-        sc.addLineSeries({ color: T.yellow, lineWidth: 1, title: "%D", priceLineVisible: false, lastValueVisible: true, lineStyle: LineStyle.Dashed }).setData(st.d);
-        const tSlice = times.slice(-100);
-        sc.addLineSeries({ color: "rgba(255,61,87,0.3)",  lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 80 })));
-        sc.addLineSeries({ color: "rgba(0,230,118,0.3)",  lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 20 })));
-        mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) sc.timeScale().setVisibleLogicalRange(r); });
-      }
-
-      // Resize observer
-      const ro = new ResizeObserver(() => {
-        if (mainRef.current)  mc.applyOptions({ width: mainRef.current.clientWidth });
-        if (volRef.current   && charts.current.vol)   charts.current.vol.applyOptions({ width: volRef.current.clientWidth });
-        if (rsiRef.current   && charts.current.rsi)   charts.current.rsi.applyOptions({ width: rsiRef.current.clientWidth });
-        if (macdRef.current  && charts.current.macd)  charts.current.macd.applyOptions({ width: macdRef.current.clientWidth });
-        if (stochRef.current && charts.current.stoch) charts.current.stoch.applyOptions({ width: stochRef.current.clientWidth });
-      });
-      if (mainRef.current) ro.observe(mainRef.current);
-
-      setTimeout(() => mc.timeScale().fitContent(), 80);
-
-      // Store cleanup for ResizeObserver — returned via outer cleanup
-      charts.current._ro = ro;
+      // Volume bar
+      ctx.fillStyle   = col + "88";
+      const volTop    = vx(c.volume);
+      const volBottom = PAD.top + priceH + 10 + volH;
+      ctx.fillRect(x - candleW / 2, volTop, candleW, volBottom - volTop);
     });
 
-    return () => {
-      cancelAnimationFrame(raf);
-      if (charts.current._ro) {
-        try { charts.current._ro.disconnect(); } catch {}
-      }
-    };
-  }, [tech, loading, inds]);
+    // X-axis time labels
+    ctx.fillStyle = COLORS.label;
+    ctx.font      = "10px monospace";
+    ctx.textAlign = "center";
+    const step = Math.max(1, Math.floor(n / 8));
+    for (let i = 0; i < n; i += step) {
+      const d   = new Date(data[i].time);
+      const lbl = ["5min","15min","1hour","4hour"].includes(tf)
+        ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+        : d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+      ctx.fillText(lbl, cx(i), H - 10);
+    }
 
-  // ── Render ────────────────────────────────────────────────────────────────
-  const sig      = tech?.signal || "—";
-  const sigColor = SIG_COLOR[sig] || T.textDim;
-  const hasData  = !!(tech?._candles?.length);
+    // Store layout for crosshair
+    canvas._layout = { PAD, chartW, chartH, priceH, volH, gap, n, minP, maxP, rangeP, data, px, cx };
+
+  }, [candles, tf]);
+
+  // ── Crosshair ─────────────────────────────────────────────────────────────
+  const handleMouseMove = (e) => {
+    const canvas = canvasRef.current;
+    const overlay = overlayRef.current;
+    if (!canvas || !canvas._layout || candles.length === 0) return;
+
+    const rect   = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const { PAD, gap, n, data, px, cx } = canvas._layout;
+
+    const i = Math.round((mouseX - PAD.left) / gap - 0.5);
+    if (i < 0 || i >= n) { setCrosshair(null); return; }
+
+    const c = data[i];
+    setCrosshair({
+      x:      cx(i),
+      y:      mouseY,
+      candle: c,
+      i,
+    });
+  };
+
+  // ── Summary stats ─────────────────────────────────────────────────────────
+  const last    = candles[candles.length - 1];
+  const first   = candles[0];
+  const chg     = last && first ? last.close - first.open : 0;
+  const chgPct  = first?.open > 0 ? (chg / first.open) * 100 : 0;
+  const isUp    = chg >= 0;
 
   return (
-    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'JetBrains Mono',monospace" }}>
+    <div style={{ background: COLORS.bg, border: "1px solid #0d2a45", borderRadius: 8, padding: 12, userSelect: "none" }}>
 
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: `1px solid ${T.border}`, background: T.bgPanel, position: "sticky", top: 0, zIndex: 100, flexWrap: "wrap", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <button onClick={() => navigate(-1)} style={{ background: "none", border: `1px solid ${T.border}`, color: T.textDim, cursor: "pointer", padding: "4px 10px", borderRadius: 6, fontSize: 12 }}>← Back</button>
-          <span style={{ fontSize: 20, fontWeight: 700, color: "#fff", letterSpacing: 1 }}>{symbol?.toUpperCase()}</span>
-          {tech && <span style={{ fontSize: 12, color: sigColor, padding: "2px 10px", background: `${sigColor}18`, borderRadius: 20, border: `1px solid ${sigColor}44` }}>{sig}</span>}
-          {live && <span style={{ fontSize: 18, fontWeight: 700, color: T.yellow }}>₹{live.toLocaleString("en-IN", { maximumFractionDigits: 2 })} <span style={{ fontSize: 10, color: T.textDim }}>LIVE</span></span>}
+          <span style={{ color: "#00cfff", fontFamily: "monospace", fontWeight: "bold", fontSize: 15 }}>
+            {symbol}
+          </span>
+          {last && (
+            <>
+              <span style={{ color: "#e8f4ff", fontFamily: "monospace", fontSize: 14 }}>
+                ₹{last.close.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+              </span>
+              <span style={{ color: isUp ? COLORS.up : COLORS.down, fontFamily: "monospace", fontSize: 13 }}>
+                {isUp ? "+" : ""}{chg.toFixed(2)} ({isUp ? "+" : ""}{chgPct.toFixed(2)}%)
+              </span>
+            </>
+          )}
         </div>
 
-        {/* Timeframe switcher */}
-        <div style={{ display: "flex", gap: 3, background: T.bgCard, borderRadius: 8, padding: 3, border: `1px solid ${T.border}` }}>
-          {TIMEFRAMES.map(t => (
-            <button key={t.value} onClick={() => setTf(t.value)} style={{
-              padding: "4px 10px", fontSize: 11, fontWeight: 600,
-              background: tf === t.value ? "rgba(100,130,200,0.2)" : "none",
-              color:      tf === t.value ? T.blue : T.textDim,
-              border:     tf === t.value ? `1px solid rgba(100,130,200,0.3)` : "1px solid transparent",
-              borderRadius: 5, cursor: "pointer",
-            }}>{t.label}</button>
-          ))}
-        </div>
-
-        {/* Indicator toggles */}
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {[
-            { key: "ema9",       label: "EMA9",  color: T.ema9   },
-            { key: "ema21",      label: "EMA21", color: T.ema21  },
-            { key: "ema50",      label: "EMA50", color: T.ema50  },
-            { key: "ema200",     label: "200",   color: T.ema200 },
-            { key: "bb",         label: "BB",    color: T.blue   },
-            { key: "vwap",       label: "VWAP",  color: T.vwap   },
-            { key: "supertrend", label: "ST",    color: T.green  },
-            { key: "rsi",        label: "RSI",   color: T.purple },
-            { key: "macd",       label: "MACD",  color: T.blue   },
-            { key: "stoch",      label: "STOCH", color: T.yellow },
-          ].map(ind => (
-            <button key={ind.key} onClick={() => setInds(p => ({ ...p, [ind.key]: !p[ind.key] }))} style={{
-              padding: "2px 7px", fontSize: 10, fontWeight: 600,
-              background: inds[ind.key] ? `${ind.color}18` : "none",
-              color:      inds[ind.key] ? ind.color : T.textMuted,
-              border:     `1px solid ${inds[ind.key] ? ind.color + "44" : T.border}`,
-              borderRadius: 4, cursor: "pointer",
-            }}>{ind.label}</button>
+        {/* Timeframe selector */}
+        <div style={{ display: "flex", gap: 4 }}>
+          {TF_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setTf(opt.value)}
+              style={{
+                padding:    "3px 10px",
+                borderRadius: 4,
+                border:     `1px solid ${tf === opt.value ? "#00cfff" : "#0d2a45"}`,
+                background: tf === opt.value ? "#00cfff22" : "transparent",
+                color:      tf === opt.value ? "#00cfff" : "#4a8adf",
+                fontFamily: "monospace",
+                fontSize:   12,
+                cursor:     "pointer",
+              }}
+            >
+              {opt.label}
+            </button>
           ))}
         </div>
       </div>
 
-      {/* Stats bar */}
-      {tech && (
-        <div style={{ display: "flex", borderBottom: `1px solid ${T.border}`, background: T.bgPanel, overflowX: "auto" }}>
-          {[
-            { label: "RSI",        value: tech.rsi?.toFixed(1),                       color: tech.rsi > 70 ? T.red : tech.rsi < 30 ? T.green : T.text },
-            { label: "MACD",       value: tech.macd?.crossover,                        color: tech.macd?.crossover === "BULLISH" ? T.green : T.red },
-            { label: "Score",      value: tech.techScore,                               color: tech.techScore >= 60 ? T.green : tech.techScore <= 40 ? T.red : T.yellow },
-            { label: "ATR",        value: tech.atr?.toFixed(2),                        color: T.text },
-            { label: "VWAP",       value: tech.vwap ? `₹${tech.vwap}` : "—",          color: T.yellow },
-            { label: "Entry",      value: tech.entry ? `₹${tech.entry}` : "—",        color: T.blue },
-            { label: "Target",     value: tech.tp ? `₹${tech.tp}` : "—",              color: T.green },
-            { label: "SL",         value: tech.sl ? `₹${tech.sl}` : "—",              color: T.red },
-            { label: "Vol×",       value: tech.volRatio ? `${tech.volRatio}x` : "—",  color: tech.volRatio > 2 ? T.green : T.text },
-            { label: "MA Signal",  value: tech.maSummary?.summary,                     color: SIG_COLOR[tech.maSummary?.summary] || T.text },
-            { label: "Supertrend", value: tech.supertrend?.trend,                      color: tech.supertrend?.trend === "BULLISH" ? T.green : T.red },
-            { label: "ADX",        value: tech.adx?.adx?.toFixed(1),                  color: tech.adx?.adx > 25 ? T.yellow : T.textDim },
-            { label: "Stoch K",    value: tech.stochastic?.k?.toFixed(1),             color: tech.stochastic?.k > 80 ? T.red : tech.stochastic?.k < 20 ? T.green : T.text },
-            { label: "OBV",        value: tech.obv,                                    color: (tech.obv || "").includes("Rising") ? T.green : T.red },
-            { label: "MFI",        value: tech.mfi?.toFixed(1),                        color: tech.mfi > 80 ? T.red : tech.mfi < 20 ? T.green : T.text },
-          ].map(({ label, value, color }) => (
-            <div key={label} style={{ padding: "7px 14px", borderRight: `1px solid ${T.border}`, minWidth: 80, flexShrink: 0 }}>
-              <div style={{ fontSize: 9, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 2 }}>{label}</div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: color || T.text }}>{value ?? "—"}</div>
-            </div>
-          ))}
+      {/* Crosshair tooltip */}
+      {crosshair && (
+        <div style={{
+          fontFamily: "monospace", fontSize: 11, color: COLORS.label,
+          marginBottom: 6, display: "flex", gap: 16,
+          background: "#0d1f35", padding: "4px 10px", borderRadius: 4,
+        }}>
+          <span>O: <b style={{ color: "#e8f4ff" }}>{crosshair.candle.open.toFixed(2)}</b></span>
+          <span>H: <b style={{ color: COLORS.up }}>{crosshair.candle.high.toFixed(2)}</b></span>
+          <span>L: <b style={{ color: COLORS.down }}>{crosshair.candle.low.toFixed(2)}</b></span>
+          <span>C: <b style={{ color: "#e8f4ff" }}>{crosshair.candle.close.toFixed(2)}</b></span>
+          <span>V: <b style={{ color: "#4a8adf" }}>{(crosshair.candle.volume / 1e5).toFixed(2)}L</b></span>
+          <span style={{ color: "#4a8adf" }}>
+            {new Date(crosshair.candle.time).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}
+          </span>
         </div>
       )}
 
-      {/* Chart area */}
-      <div style={{ padding: "0 0 24px" }}>
-
-        {/* Loading */}
+      {/* Canvas */}
+      <div style={{ position: "relative" }}>
         {loading && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 460, gap: 12, color: T.textDim }}>
-            <div style={{ width: 18, height: 18, border: `2px solid ${T.border}`, borderTopColor: T.blue, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-            Loading {symbol} [{tf}]…
-            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          <div style={{
+            position: "absolute", inset: 0, display: "flex",
+            alignItems: "center", justifyContent: "center",
+            background: "#010812cc", borderRadius: 6, zIndex: 10,
+          }}>
+            <span style={{ color: "#00cfff", fontFamily: "monospace" }}>Loading {tf} candles...</span>
           </div>
         )}
-
-        {/* Error */}
-        {!loading && error && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 400, gap: 16, color: T.textDim }}>
-            <div style={{ fontSize: 36 }}>📡</div>
-            <div>No chart data for <strong>{symbol}</strong> [{tf}]</div>
-            <div style={{ fontSize: 12, color: T.textMuted }}>{error}</div>
-            <button onClick={fetchData} style={{ padding: "8px 20px", background: T.greenDim, color: T.green, border: `1px solid ${T.green}44`, borderRadius: 8, cursor: "pointer" }}>Retry</button>
+        {error && !loading && (
+          <div style={{
+            position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            background: "#010812cc", borderRadius: 6, zIndex: 10, gap: 8,
+          }}>
+            <span style={{ color: "#ff4466", fontFamily: "monospace", fontSize: 13 }}>⚠️ {error}</span>
+            {error.includes("token") || error.includes("auth") ? (
+              <a href="/auth/upstox" style={{ color: "#00cfff", fontFamily: "monospace", fontSize: 12 }}>
+                Click here to connect Upstox →
+              </a>
+            ) : (
+              <button
+                onClick={() => fetchCandles(symbol, tf)}
+                style={{ color: "#00cfff", background: "transparent", border: "1px solid #00cfff44", padding: "4px 12px", borderRadius: 4, fontFamily: "monospace", cursor: "pointer" }}
+              >
+                Retry
+              </button>
+            )}
           </div>
         )}
+        <canvas
+          ref={canvasRef}
+          width={820}
+          height={420}
+          style={{ width: "100%", height: "auto", borderRadius: 6, cursor: "crosshair", display: "block" }}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={() => setCrosshair(null)}
+        />
+      </div>
 
-        {/* No candles */}
-        {!loading && !error && tech && !hasData && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 12, color: T.textDim }}>
-            <div style={{ fontSize: 32 }}>🕯</div>
-            <div>No data for {tf} — Check Upstox connection</div>
-            <div style={{ fontSize: 12, color: T.textMuted }}>Try switching to 1D or click Retry</div>
-            <button onClick={fetchData} style={{ padding: "7px 18px", background: T.greenDim, color: T.green, border: `1px solid ${T.green}44`, borderRadius: 7, cursor: "pointer" }}>Retry</button>
-          </div>
-        )}
-
-        {/*
-          FIX-D1: Chart divs are CONDITIONALLY RENDERED — not just hidden.
-          This guarantees clientWidth > 0 when lightweight-charts initialises,
-          because the div only exists in the DOM when it's actually visible.
-          Previously these divs always existed (display:none when no data),
-          causing clientWidth = 0 → blank chart with no error.
-        */}
-        {hasData && !loading && !error && (
-          <>
-            <div ref={mainRef} style={{ width: "100%" }} />
-
-            {inds.volume && (
-              <div style={{ borderTop: `1px solid ${T.border}` }}>
-                <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>Volume</div>
-                <div ref={volRef} style={{ width: "100%" }} />
-              </div>
-            )}
-
-            {inds.rsi && (
-              <div style={{ borderTop: `1px solid ${T.border}` }}>
-                <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>
-                  RSI(14) — <span style={{ color: tech?.rsi > 70 ? T.red : tech?.rsi < 30 ? T.green : T.purple }}>{tech?.rsi?.toFixed(1)}</span>
-                </div>
-                <div ref={rsiRef} style={{ width: "100%" }} />
-              </div>
-            )}
-
-            {inds.macd && (
-              <div style={{ borderTop: `1px solid ${T.border}` }}>
-                <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>
-                  MACD — <span style={{ color: tech?.macd?.crossover === "BULLISH" ? T.green : T.red }}>{tech?.macd?.crossover}</span>
-                  {" "}Hist: <span style={{ color: (tech?.macd?.histogram || 0) >= 0 ? T.green : T.red }}>{tech?.macd?.histogram?.toFixed(3)}</span>
-                </div>
-                <div ref={macdRef} style={{ width: "100%" }} />
-              </div>
-            )}
-
-            {inds.stoch && (
-              <div style={{ borderTop: `1px solid ${T.border}` }}>
-                <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>
-                  Stoch — K: <span style={{ color: T.blue }}>{tech?.stochastic?.k?.toFixed(1)}</span> D: <span style={{ color: T.yellow }}>{tech?.stochastic?.d?.toFixed(1)}</span>
-                </div>
-                <div ref={stochRef} style={{ width: "100%" }} />
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Crosshair OHLCV tooltip */}
-        {cross && hasData && (
-          <div style={{ position: "fixed", top: 70, left: 16, background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 7, padding: "6px 12px", fontSize: 11, zIndex: 200, pointerEvents: "none" }}>
-            <span style={{ marginRight: 12 }}>O: <span style={{ color: T.text }}>{cross.open?.toFixed(2)}</span></span>
-            <span style={{ marginRight: 12 }}>H: <span style={{ color: T.green }}>{cross.high?.toFixed(2)}</span></span>
-            <span style={{ marginRight: 12 }}>L: <span style={{ color: T.red }}>{cross.low?.toFixed(2)}</span></span>
-            <span>C: <span style={{ color: cross.close >= cross.open ? T.green : T.red }}>{cross.close?.toFixed(2)}</span></span>
-          </div>
-        )}
+      {/* Footer */}
+      <div style={{ marginTop: 6, fontFamily: "monospace", fontSize: 10, color: "#2a5a8c", textAlign: "right" }}>
+        {candles.length > 0 ? `${candles.length} candles · ${tf} · Upstox` : ""}
       </div>
     </div>
   );

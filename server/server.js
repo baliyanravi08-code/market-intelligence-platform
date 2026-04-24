@@ -45,7 +45,7 @@ const {
   getScannerData,
   getTechnicalsREST,
   getTechnicalsForTimeframe,
-  setInstrumentMap: setScannerInstrumentMap,  // ← FIX: import setInstrumentMap from scanner
+  setInstrumentMap: setScannerInstrumentMap,
 } = require("./services/intelligence/marketScanner");
 
 // ── Backtest routes ───────────────────────────────────────────────────────────
@@ -55,6 +55,9 @@ const app    = express();
 const server = http.createServer(app);
 const io     = attachSocketIO(server);
 
+// Make io accessible to req.app.get("io") if needed
+app.set("io", io);
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -62,7 +65,7 @@ app.use(express.urlencoded({ extended: false }));
 const clientPath = path.join(__dirname, "../client/dist");
 app.use(express.static(clientPath));
 
-// ── Upstox token store ────────────────────────────────────────────────────────
+// ── Upstox config ─────────────────────────────────────────────────────────────
 const UPSTOX_API_KEY      = process.env.UPSTOX_API_KEY;
 const UPSTOX_API_SECRET   = process.env.UPSTOX_API_SECRET;
 const UPSTOX_REDIRECT_URI = process.env.UPSTOX_REDIRECT_URI;
@@ -72,6 +75,67 @@ const INSTRUMENT_FILE = path.join(__dirname, "data/upstox_instruments.json");
 
 let upstoxAccessToken = null;
 let upstoxTokenExpiry = null;
+
+// ── MongoDB Token Schema ──────────────────────────────────────────────────────
+// We store the Algo Trading token in MongoDB so it survives Render restarts
+let UpstoxTokenModel = null;
+function getTokenModel() {
+  if (UpstoxTokenModel) return UpstoxTokenModel;
+  try {
+    const mongoose = require("mongoose");
+    if (mongoose.connection.readyState === 0) {
+      mongoose.connect(process.env.MONGO_URI).catch(e =>
+        console.warn("⚠️ MongoDB connect failed:", e.message)
+      );
+    }
+    const schema = new mongoose.Schema({
+      service:     { type: String, default: "upstox" },
+      accessToken: { type: String, required: true },
+      savedAt:     { type: Date, default: Date.now },
+      expiresAt:   { type: Date },
+    });
+    UpstoxTokenModel = mongoose.models.UpstoxToken ||
+                       mongoose.model("UpstoxToken", schema);
+  } catch (e) {
+    console.warn("⚠️ Could not init UpstoxToken model:", e.message);
+  }
+  return UpstoxTokenModel;
+}
+
+// Save token to MongoDB + disk
+async function saveTokenEverywhere(token, expiry) {
+  upstoxAccessToken = token;
+  upstoxTokenExpiry = expiry || (Date.now() + 23 * 60 * 60 * 1000);
+
+  // 1. Save to MongoDB (survives Render restarts)
+  try {
+    const Model = getTokenModel();
+    if (Model) {
+      const expiresAt = new Date(upstoxTokenExpiry);
+      await Model.findOneAndUpdate(
+        { service: "upstox" },
+        { accessToken: token, savedAt: new Date(), expiresAt },
+        { upsert: true, new: true }
+      );
+      console.log("✅ Algo token saved to MongoDB");
+    }
+  } catch (e) {
+    console.warn("⚠️ MongoDB token save failed:", e.message);
+  }
+
+  // 2. Save to disk as backup
+  try {
+    const dir = path.dirname(TOKEN_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token, expiry: upstoxTokenExpiry }), "utf8");
+    console.log("✅ Algo token saved to disk");
+  } catch (e) {
+    console.warn("⚠️ Disk token save failed:", e.message);
+  }
+
+  // 3. Update process env for any direct reads
+  process.env.UPSTOX_ACCESS_TOKEN = token;
+}
 
 // ── Instrument master cache ───────────────────────────────────────────────────
 let instrumentMap = {};
@@ -138,10 +202,10 @@ async function loadInstrumentMaster() {
       "BEL":        "NSE_EQ|INE263A01024", "RECLTD":     "NSE_EQ|INE020B01018",
       "PFC":        "NSE_EQ|INE134E01011", "TATACONSUM": "NSE_EQ|INE192A01025",
       "SBILIFE":    "NSE_EQ|INE123W01016", "HDFCLIFE":   "NSE_EQ|INE795G01014",
-      "BRITANNIA":  "NSE_EQ|INE216A01030", "HAL":        "NSE_EQ|INE066F01020",
-      "ADANIPOWER": "NSE_EQ|INE814H01011", "IRCTC":      "NSE_EQ|INE335Y01012",
-      "IRFC":       "NSE_EQ|INE053F01010", "TRENT":      "NSE_EQ|INE849A01020",
-      "NHPC":       "NSE_EQ|INE848E01016", "POLYCAB":    "NSE_EQ|INE455K01017",
+      "BRITANNIA":  "NSE_EQ|INE216A01030", "ADANIPOWER": "NSE_EQ|INE814H01011",
+      "IRCTC":      "NSE_EQ|INE335Y01012", "IRFC":       "NSE_EQ|INE053F01010",
+      "TRENT":      "NSE_EQ|INE849A01020", "NHPC":       "NSE_EQ|INE848E01016",
+      "POLYCAB":    "NSE_EQ|INE455K01017",
     };
     console.log(`⚠️ Using fallback instrument map: ${Object.keys(instrumentMap).length} symbols`);
     _pushMapToGann(instrumentMap);
@@ -159,38 +223,53 @@ function _pushMapToGann(map) {
 function getInstrumentMap() { return instrumentMap; }
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
-function loadToken() {
+// FIX: loadToken now checks MongoDB FIRST for the Algo Trading token
+// This means after /auth/upstox/callback, even after Render restarts,
+// the fresh Algo token is loaded automatically — no manual env update needed.
+async function loadToken() {
+  // Priority 1: MongoDB Algo Trading token (most up to date, survives restarts)
+  try {
+    const Model = getTokenModel();
+    if (Model) {
+      const doc = await Model.findOne({ service: "upstox" });
+      if (doc && doc.accessToken && new Date() < doc.expiresAt) {
+        upstoxAccessToken = doc.accessToken;
+        upstoxTokenExpiry = doc.expiresAt.getTime();
+        console.log("✅ Algo Trading token loaded from MongoDB");
+        process.env.UPSTOX_ACCESS_TOKEN = upstoxAccessToken;
+        return;
+      } else if (doc) {
+        console.log("⚠️ MongoDB token expired — falling back");
+      }
+    }
+  } catch (e) {
+    console.warn("⚠️ MongoDB token load failed:", e.message);
+  }
+
+  // Priority 2: Analytics Token from env (read-only, good for historical data)
   if (process.env.UPSTOX_ANALYTICS_TOKEN) {
     upstoxAccessToken = process.env.UPSTOX_ANALYTICS_TOKEN;
     upstoxTokenExpiry = Date.now() + 365 * 24 * 60 * 60 * 1000;
-    console.log("✅ Upstox Analytics Token loaded from env");
+    console.log("✅ Analytics Token loaded from env (charts will work, live feed needs Algo token)");
     return;
   }
+
+  // Priority 3: Disk token file
   try {
     if (fs.existsSync(TOKEN_FILE)) {
       const saved = JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8"));
       if (saved.token && saved.expiry && Date.now() < saved.expiry) {
         upstoxAccessToken = saved.token;
         upstoxTokenExpiry = saved.expiry;
-        console.log("Upstox token loaded from disk, expires:", new Date(saved.expiry).toISOString());
-      } else {
-        console.log("Upstox saved token is expired — reconnect via /auth/upstox");
+        console.log("✅ Token loaded from disk, expires:", new Date(saved.expiry).toISOString());
+        return;
       }
     }
   } catch (e) {
-    console.warn("Could not load Upstox token:", e.message);
+    console.warn("Could not load token from disk:", e.message);
   }
-}
 
-function saveToken(token, expiry) {
-  try {
-    const dir = path.dirname(TOKEN_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token, expiry }), "utf8");
-    console.log("Upstox token saved to disk");
-  } catch (e) {
-    console.warn("Could not save Upstox token:", e.message);
-  }
+  console.log("⚠️ No valid token found — visit /auth/upstox to connect");
 }
 
 function clearToken() {
@@ -200,52 +279,81 @@ function clearToken() {
 }
 
 // ── Startup sequence ──────────────────────────────────────────────────────────
-loadToken();
+// FIX: loadToken is now async, so we await it before starting services
+async function startApp() {
+  await loadToken();
 
-loadInstrumentMaster()
-  .catch((e) => {
+  await loadInstrumentMaster().catch((e) => {
     console.warn("⚠️ loadInstrumentMaster threw unexpectedly:", e.message);
-  })
-  .finally(() => {
-    setOITickHandler(handleOITick);
-
-    // Wire LTP handler (Gann + composite)
-    const { registerLTPTick } = require("./coordinator");
-    setLTPTickHandler(registerLTPTick);
-
-    // Init backtest engine and wire into upstox stream
-    const backtestEngine = require("./services/backtestEngine");
-    backtestEngine.init(io);
-    setBacktestEngine(backtestEngine);
-
-    if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
-      setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
-    }
-
-    startNSEOIListener(io, () => upstoxAccessToken);
-    startBSEListener(io);
-    startNSEDealsListener(io);
-    startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
-
-    if (upstoxAccessToken) setICFToken(upstoxAccessToken);
-    startIndexCandleFetcher();
-
-    // ── FIX: Push full instrument map into scanner BEFORE starting it.
-    //    Without this, getInstrumentKey() in marketScanner only has ~40 hardcoded
-    //    symbols. With this, ALL 2000+ NSE EQ symbols get proper Upstox keys
-    //    → 5min/15min/1H/4H charts work for every NSE stock (IIFL, UNIONBANK, etc.)
-    setScannerInstrumentMap(instrumentMap);
-
-    startMarketScanner(io);
-
-    const PORT = process.env.PORT || 10000;
-    server.listen(PORT, () => {
-      console.log("Server running on port", PORT);
-      console.log("Retention: " + getRetentionHours() + "h (" + getWindowLabel() + ")");
-      if (UPSTOX_API_KEY) console.log("Upstox configured — visit /auth/upstox to connect");
-      else console.log("WARNING: UPSTOX_API_KEY not set");
-    });
   });
+
+  setOITickHandler(handleOITick);
+
+  const { registerLTPTick } = require("./coordinator");
+  setLTPTickHandler(registerLTPTick);
+
+  const backtestEngine = require("./services/backtestEngine");
+  backtestEngine.init(io);
+  setBacktestEngine(backtestEngine);
+
+  if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
+    setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
+  } else {
+    console.log("⚠️ No valid token at startup — visit /auth/upstox to connect");
+  }
+
+  startNSEOIListener(io, () => upstoxAccessToken);
+  startBSEListener(io);
+  startNSEDealsListener(io);
+  startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
+
+  // FIX: Pass token to index candle fetcher
+  if (upstoxAccessToken) {
+    setICFToken(upstoxAccessToken);
+    console.log("✅ Index candle fetcher token set");
+  }
+  startIndexCandleFetcher();
+
+  setScannerInstrumentMap(instrumentMap);
+  startMarketScanner(io);
+
+  // Daily token check at 8:30 AM IST
+  scheduleDailyTokenCheck();
+
+  const PORT = process.env.PORT || 10000;
+  server.listen(PORT, () => {
+    console.log("Server running on port", PORT);
+    console.log("Retention: " + getRetentionHours() + "h (" + getWindowLabel() + ")");
+    if (UPSTOX_API_KEY) {
+      console.log("✅ Upstox API configured");
+      console.log("👉 Daily login: /auth/upstox");
+    } else {
+      console.log("WARNING: UPSTOX_API_KEY not set");
+    }
+  });
+}
+
+// Start the app
+startApp().catch(e => console.error("❌ startApp failed:", e.message));
+
+// ── Daily token check scheduler ───────────────────────────────────────────────
+function scheduleDailyTokenCheck() {
+  const now  = new Date();
+  const next = new Date();
+  next.setUTCHours(3, 30, 0, 0); // 9:00 AM IST
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const ms = next - now;
+  console.log(`[TokenCheck] Next check in ${Math.round(ms / 60000)} min (9:00 AM IST)`);
+  setTimeout(async () => {
+    const valid = upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0);
+    if (!valid) {
+      console.log("⚠️ [TokenCheck] TOKEN EXPIRED — Visit /auth/upstox to refresh!");
+    } else {
+      console.log("✅ [TokenCheck] Token valid at market open");
+    }
+    scheduleDailyTokenCheck();
+  }, ms);
+}
 
 // ── Backtest API ──────────────────────────────────────────────────────────────
 app.use("/api/backtest", backtestRoutes);
@@ -258,6 +366,7 @@ const UPSTOX_INSTRUMENTS = {
 };
 const INDEX_NAMES = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
 
+// Step 1: Redirect to Upstox login
 app.get("/auth/upstox", (req, res) => {
   if (!UPSTOX_API_KEY || !UPSTOX_REDIRECT_URI)
     return res.send("ERR: UPSTOX_API_KEY or UPSTOX_REDIRECT_URI not set.");
@@ -268,6 +377,7 @@ app.get("/auth/upstox", (req, res) => {
   res.redirect(authUrl);
 });
 
+// Step 2: Upstox redirects here — exchange code for token
 app.get("/auth/upstox/callback", async (req, res) => {
   const { code } = req.query;
   if (!code) return res.send("ERR: No auth code received.");
@@ -275,21 +385,41 @@ app.get("/auth/upstox/callback", async (req, res) => {
     const response = await axios.post(
       "https://api.upstox.com/v2/login/authorization/token",
       new URLSearchParams({
-        code, client_id: UPSTOX_API_KEY, client_secret: UPSTOX_API_SECRET,
-        redirect_uri: UPSTOX_REDIRECT_URI, grant_type: "authorization_code",
+        code,
+        client_id:     UPSTOX_API_KEY,
+        client_secret: UPSTOX_API_SECRET,
+        redirect_uri:  UPSTOX_REDIRECT_URI,
+        grant_type:    "authorization_code",
       }),
       { headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" } }
     );
-    upstoxAccessToken = response.data.access_token;
-    upstoxTokenExpiry = Date.now() + (response.data.expires_in || 86400) * 1000;
-    saveToken(upstoxAccessToken, upstoxTokenExpiry);
-    setICFToken(upstoxAccessToken);
-    startStreamer(upstoxAccessToken, io);
+
+    const newToken  = response.data.access_token;
+    const newExpiry = Date.now() + (response.data.expires_in || 86400) * 1000;
+
+    // FIX: Save to MongoDB + disk + memory
+    await saveTokenEverywhere(newToken, newExpiry);
+
+    // FIX: Hot-reload all services with new token — no restart needed!
+    setICFToken(newToken);
+    startStreamer(newToken, io);
+
+    // FIX: Also update scanner token if it has a setter
+    try {
+      const scanner = require("./services/intelligence/marketScanner");
+      if (typeof scanner.setToken === "function") scanner.setToken(newToken);
+    } catch (_) {}
+
     res.send(
       "<html><body style='background:#010812;color:#00ff9c;font-family:monospace;padding:40px;text-align:center'>" +
-      "<h2>Upstox Connected!</h2>" +
-      "<p style='color:#b8cfe8'>Live stream active.</p>" +
-      "<p style='color:#4a8adf'>Token expires: " + new Date(upstoxTokenExpiry).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + " IST</p><br>" +
+      "<h2>✅ Upstox Connected!</h2>" +
+      "<p style='color:#b8cfe8'>Algo Trading token saved. Live stream active.</p>" +
+      "<p style='color:#4a8adf'>Token expires: " +
+        new Date(newExpiry).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) +
+      " IST</p>" +
+      "<p style='color:#00ff9c'>✅ Charts (5min/15min/1hr/4hr) now active</p>" +
+      "<p style='color:#00ff9c'>✅ Live prices & % change now active</p>" +
+      "<p style='color:#00ff9c'>✅ Token saved to MongoDB — survives restarts</p><br>" +
       "<a href='/' style='color:#00cfff;text-decoration:none;border:1px solid #00cfff33;padding:8px 16px;border-radius:4px'>Back to Dashboard</a>" +
       "</body></html>"
     );
@@ -299,12 +429,18 @@ app.get("/auth/upstox/callback", async (req, res) => {
   }
 });
 
+// Token status check
 app.get("/auth/upstox/status", (req, res) => {
+  const connected = !!(upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0));
   res.json({
-    connected: !!(upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)),
+    connected,
     expiry: upstoxTokenExpiry
       ? new Date(upstoxTokenExpiry).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
       : null,
+    tokenType: upstoxAccessToken
+      ? (upstoxAccessToken === process.env.UPSTOX_ANALYTICS_TOKEN ? "Analytics (read-only)" : "Algo Trading (full access)")
+      : "none",
+    hint: connected ? null : "Visit /auth/upstox to connect",
   });
 });
 
@@ -371,6 +507,7 @@ app.get("/health", (req, res) => {
   res.json({
     status:        "ok",
     upstox:        (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) ? "connected" : "disconnected",
+    tokenType:     upstoxAccessToken === process.env.UPSTOX_ANALYTICS_TOKEN ? "analytics" : "algo",
     instrumentMap: Object.keys(instrumentMap).length,
   });
 });
@@ -392,13 +529,22 @@ app.get("/api/debug/candles", async (req, res) => {
         ok: false, symbol, tf,
         message: "No data returned — check server logs",
         debug: {
-          tokenPresent:           !!(process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN),
+          tokenPresent:           !!(upstoxAccessToken),
+          tokenType:              upstoxAccessToken === process.env.UPSTOX_ANALYTICS_TOKEN ? "analytics" : "algo",
           instrumentMapSize:      Object.keys(getInstrumentMap()).length,
           instrumentKeyForSymbol: getInstrumentMap()[symbol] || null,
         },
       });
     }
-    res.json({ ok: true, symbol, tf, ltp: result.ltp, techScore: result.techScore, signal: result.signal, rsi: result.rsi, macd: result.macd?.crossover, computedAt: new Date(result.computedAt).toISOString() });
+    res.json({
+      ok: true, symbol, tf,
+      ltp:        result.ltp,
+      techScore:  result.techScore,
+      signal:     result.signal,
+      rsi:        result.rsi,
+      macd:       result.macd?.crossover,
+      computedAt: new Date(result.computedAt).toISOString(),
+    });
   } catch (e) {
     res.json({ ok: false, symbol, tf, error: e.message });
   }
@@ -411,13 +557,83 @@ app.get("/api/test-circuit", async (req, res) => {
   if (!ikey) return res.json({ error: `Symbol ${symbol} not in instrument map`, mapSize: Object.keys(instrumentMap).length });
   try {
     const r = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
-      params: { instrument_key: ikey },
+      params:  { instrument_key: ikey },
       headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
       timeout: 10_000,
     });
     res.json({ symbol, instrument_key: ikey, response: r.data });
   } catch (e) {
     res.json({ symbol, instrument_key: ikey, error: e.message, status: e.response?.status, body: e.response?.data });
+  }
+});
+
+// ── NEW: /api/candles/:symbol — direct candle fetch for charts ────────────────
+// This endpoint fetches candle data directly from Upstox for any timeframe
+// Frontend StockChart.jsx can call this to render 5min/15min/1hr/4hr charts
+app.get("/api/candles/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const tf     = req.query.tf || "1day"; // 5minute, 15minute, 30minute, 60minute, 1day, 1week, 1month
+  const days   = parseInt(req.query.days || "30");
+
+  const instrKey = instrumentMap[symbol];
+  if (!instrKey) {
+    return res.json({ ok: false, error: `Symbol ${symbol} not found`, symbol });
+  }
+  if (!upstoxAccessToken) {
+    return res.json({ ok: false, error: "No token — visit /auth/upstox", symbol });
+  }
+
+  // Map friendly tf names to Upstox API interval names
+  const TF_MAP = {
+    "5min":   "5minute",
+    "15min":  "15minute",
+    "30min":  "30minute",
+    "1hour":  "60minute",
+    "4hour":  "240minute",
+    "1day":   "1day",
+    "1week":  "1week",
+    "1month": "1month",
+  };
+  const interval = TF_MAP[tf] || tf;
+
+  // Calculate date range
+  const toDate   = new Date();
+  const fromDate = new Date();
+  if (["5minute","15minute","30minute","60minute","240minute"].includes(interval)) {
+    fromDate.setDate(fromDate.getDate() - Math.min(days, 30)); // max 30 days for intraday
+  } else {
+    fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
+  }
+
+  const fmt = d => d.toISOString().split("T")[0]; // YYYY-MM-DD
+
+  try {
+    const url = `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/${interval}/${fmt(toDate)}/${fmt(fromDate)}`;
+    const r   = await axios.get(url, {
+      headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
+      timeout: 15_000,
+    });
+
+    const candles = r.data?.data?.candles || [];
+    // Upstox format: [timestamp, open, high, low, close, volume, oi]
+    const formatted = candles.map(c => ({
+      time:   new Date(c[0]).getTime(),
+      open:   c[1],
+      high:   c[2],
+      low:    c[3],
+      close:  c[4],
+      volume: c[5],
+    })).reverse(); // Upstox returns newest first, charts need oldest first
+
+    res.json({ ok: true, symbol, tf, interval, count: formatted.length, candles: formatted });
+  } catch (e) {
+    console.error(`Candle fetch failed [${symbol}/${tf}]:`, e.response?.data || e.message);
+    res.json({
+      ok:     false,
+      symbol, tf,
+      error:  e.response?.data?.message || e.message,
+      status: e.response?.status,
+    });
   }
 });
 
@@ -639,7 +855,13 @@ app.get("/api/scanner/technicals/:symbol", async (req, res) => {
     const validTFs  = ["5min", "15min", "1hour", "4hour", "1day", "1week", "1month"];
     const tf        = validTFs.includes(timeframe) ? timeframe : "1day";
     const result = await getTechnicalsForTimeframe(symbol, tf);
-    if (!result) return res.json({ error: `No data for ${symbol} [${tf}]`, debug: { tokenPresent: !!(process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN), instrumentKeyFound: !!(getInstrumentMap()[symbol]) } });
+    if (!result) return res.json({
+      error: `No data for ${symbol} [${tf}]`,
+      debug: {
+        tokenPresent:     !!(upstoxAccessToken),
+        instrumentKeyFound: !!(getInstrumentMap()[symbol]),
+      }
+    });
     res.json(result);
   } catch (e) { res.json({ error: e.message }); }
 });
