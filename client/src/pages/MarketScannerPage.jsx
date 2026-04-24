@@ -117,14 +117,28 @@ function McapBadge({ bucket, label }) {
   return <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 3, fontWeight: 600, background: s.bg, color: s.color }}>{label || "—"}</span>;
 }
 
-// ── StockRow: reads live price from livePriceMap ──────────────────────────────
+// ── StockRow ──────────────────────────────────────────────────────────────────
+// FIX 8: Derive prevClose from stock.ltp / (1 + changePct/100) when prevClose=0
+// This handles NSE stocks where previousClose was missing in the API response.
+// Without this, live change always shows 0% for those stocks because
+// (livePrice - ltp) / ltp ≈ 0 for small intraday moves.
 function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
-  // Merge live price: livePrice overrides stock.ltp if available
-  const ltp       = livePrice ?? stock.ltp;
-  const prevClose = stock.prevClose || stock.ltp;
-  const change    = livePrice != null ? livePrice - prevClose : stock.change;
-  const pct       = livePrice != null && prevClose > 0 ? ((livePrice - prevClose) / prevClose) * 100 : stock.changePct;
-  const isLive    = livePrice != null;
+  // Resolve a reliable prevClose:
+  // 1. Use stock.prevClose if it's a valid non-zero number
+  // 2. Derive from (ltp / (1 + changePct/100)) when prevClose=0 but changePct!=0
+  // 3. Fall back to stock.ltp (live change will show ~0 but avoids NaN)
+  let prevClose = stock.prevClose || 0;
+  if (prevClose <= 0 && stock.changePct !== 0 && stock.ltp > 0) {
+    prevClose = Math.round((stock.ltp / (1 + stock.changePct / 100)) * 100) / 100;
+  }
+  if (prevClose <= 0) prevClose = stock.ltp;
+
+  const ltp    = livePrice ?? stock.ltp;
+  const change = livePrice != null ? Math.round((livePrice - prevClose) * 100) / 100 : stock.change;
+  const pct    = livePrice != null && prevClose > 0
+    ? Math.round(((livePrice - prevClose) / prevClose) * 10000) / 100
+    : stock.changePct;
+  const isLive = livePrice != null;
 
   return (
     <tr onClick={() => onSelect(stock.symbol)}
@@ -142,7 +156,7 @@ function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
         <div style={{ fontSize: 10, color: "#6b8aad", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stock.name}</div>
       </td>
       <td style={{ padding: "7px 8px", textAlign: "right" }}>
-        <div style={{ fontWeight: 800, fontSize: 14, color: isLive ? "#fff" : "#ffffff" }}>₹{fmt(ltp)}</div>
+        <div style={{ fontWeight: 800, fontSize: 14, color: "#ffffff" }}>₹{fmt(ltp)}</div>
       </td>
       <td style={{ padding: "7px 8px", textAlign: "right" }}>
         <div style={{ color: clr(pct), fontWeight: 700, fontSize: 12 }}>{arrow(pct)} {fmt(Math.abs(pct))}%</div>
@@ -399,7 +413,8 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
   );
 }
 
-// ── GainLossCard: uses livePriceMap for tick-by-tick updates ──────────────────
+// ── GainLossCard ──────────────────────────────────────────────────────────────
+// FIX 8 (same prevClose derivation applied here)
 function GainLossCard({ title, stocks, onSelect, accent, onViewAll, livePriceMap }) {
   return (
     <div style={{ background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden", flex: 1 }}>
@@ -409,12 +424,20 @@ function GainLossCard({ title, stocks, onSelect, accent, onViewAll, livePriceMap
       </div>
       <div style={{ maxHeight: 300, overflowY: "auto" }}>
         {(stocks || []).slice(0, 15).map(s => {
-          const livePrice  = livePriceMap?.[s.symbol];
-          const ltp        = livePrice ?? s.ltp;
-          const prevClose  = s.prevClose || s.ltp;
-          const pct        = livePrice != null && prevClose > 0 ? ((livePrice - prevClose) / prevClose) * 100 : s.changePct;
-          const isLive     = livePrice != null;
-          const pctColor   = accent; // keep card accent colour for consistency
+          const livePrice = livePriceMap?.[s.symbol];
+
+          // FIX: same prevClose derivation as StockRow
+          let prevClose = s.prevClose || 0;
+          if (prevClose <= 0 && s.changePct !== 0 && s.ltp > 0) {
+            prevClose = Math.round((s.ltp / (1 + s.changePct / 100)) * 100) / 100;
+          }
+          if (prevClose <= 0) prevClose = s.ltp;
+
+          const ltp    = livePrice ?? s.ltp;
+          const pct    = livePrice != null && prevClose > 0
+            ? Math.round(((livePrice - prevClose) / prevClose) * 10000) / 100
+            : s.changePct;
+          const isLive = livePrice != null;
 
           return (
             <div key={s.symbol} onClick={() => onSelect(s.symbol)}
@@ -431,7 +454,7 @@ function GainLossCard({ title, stocks, onSelect, accent, onViewAll, livePriceMap
                 <div style={{ fontSize: 10, color: "#6b8aad" }}>₹{fmt(ltp)}</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ color: pctColor, fontWeight: 800, fontSize: 13 }}>{pct > 0 ? "+" : ""}{fmt(pct)}%</div>
+                <div style={{ color: accent, fontWeight: 800, fontSize: 13 }}>{pct > 0 ? "+" : ""}{fmt(pct)}%</div>
                 <div style={{ fontSize: 10, color: T.textDim }}>Vol: {fmtK(s.volume)}</div>
               </div>
             </div>
@@ -474,7 +497,7 @@ function BreadthBar({ advancing, declining, unchanged, total }) {
   );
 }
 
-// ── Backtest engine (localStorage, unchanged) ─────────────────────────────────
+// ── Backtest engine (localStorage) ────────────────────────────────────────────
 const BT_KEY = "mscanner_backtest_v2";
 
 function btLoad() {
@@ -814,12 +837,9 @@ function ScannerBody() {
   const [updatedAt,     setUpdatedAt]      = useState(null);
   const [showBacktest,  setShowBacktest]   = useState(false);
   const [displayLimit,  setDisplayLimit]   = useState(500);
-  const [techVersion,   setTechVersion]    = useState(0);
   const [autoCapMsg,    setAutoCapMsg]     = useState("");
 
-  // ── KEY FIX: live price map symbol → ltp ────────────────────────────────────
-  // Updated from scanner-tech-batch AND backtest-live-tick
-  // Used in StockRow and GainLossCard to show tick-by-tick prices
+  // Live price map: symbol → latest ltp from Upstox WS ticks
   const [livePriceMap, setLivePriceMap] = useState({});
 
   const techCacheRef   = useRef({});
@@ -870,28 +890,25 @@ function ScannerBody() {
       setUpdatedAt(new Date(d.updatedAt));
     });
 
-    // ── KEY FIX: scanner-tech-batch → update livePriceMap AND techCache ────
+    // scanner-tech-batch: update tech cache and extract live LTP from 1day entries
     socket.on("scanner-tech-batch", (batch) => {
       if (!Array.isArray(batch) || !batch.length) return;
 
       const priceUpdates = {};
-      let changed = false;
 
       for (const { key, data: techData } of batch) {
         if (!key || !techData) continue;
         const existing = techCacheRef.current[key];
         if (!existing || techData.computedAt > existing.computedAt) {
           techCacheRef.current[key] = techData;
-          changed = true;
 
-          // Extract live LTP from every tech-batch item (any timeframe)
-          // Use 1day as the authoritative price since it's pre-warmed
+          // Extract live price from 1day tech (the pre-warmed, authoritative price)
           if (key.endsWith(":1day") && techData.ltp) {
             const sym = key.replace(":1day", "");
             priceUpdates[sym] = techData.ltp;
           }
 
-          // Update open panel if it matches
+          // Update open tech panel if it matches
           if (selectedSymRef.current) {
             const panelKey = `${selectedSymRef.current}:${activeTFRef.current}`;
             if (key === panelKey) setTech(techData);
@@ -902,11 +919,9 @@ function ScannerBody() {
       if (Object.keys(priceUpdates).length > 0) {
         setLivePriceMap(prev => ({ ...prev, ...priceUpdates }));
       }
-      if (changed) setTechVersion(v => v + 1);
     });
 
-    // ── KEY FIX: backtest-live-tick → real-time Upstox LTP per stock ──────
-    // This fires for every subscribed stock on every Upstox WS tick
+    // backtest-live-tick: real-time per-tick price from Upstox WS
     socket.on("backtest-live-tick", ({ symbol: sym, price }) => {
       if (sym && price > 0) {
         setLivePriceMap(prev => ({ ...prev, [sym]: price }));
@@ -937,7 +952,6 @@ function ScannerBody() {
       const json = await res.json();
       if (json && !json.error) {
         techCacheRef.current[key] = json;
-        setTechVersion(v => v + 1);
         if (selectedSymRef.current === symbol) { setTech(json); setTechLoading(false); }
       } else {
         if (selectedSymRef.current === symbol) setTechLoading(false);
@@ -962,20 +976,20 @@ function ScannerBody() {
   const stocks   = getStocksForTab(data, tab);
   const filtered = searchQ ? stocks.filter(s => s.symbol.includes(searchQ.toUpperCase()) || (s.name || "").toLowerCase().includes(searchQ.toLowerCase())) : stocks;
 
-  // Sort: if live prices available, use them for sorting gainers/losers in real time
+  // Sort using live prices when available
   const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === "gainers") {
-      const pctA = livePriceMap[a.symbol] && a.prevClose ? ((livePriceMap[a.symbol] - a.prevClose) / a.prevClose) * 100 : a.changePct;
-      const pctB = livePriceMap[b.symbol] && b.prevClose ? ((livePriceMap[b.symbol] - b.prevClose) / b.prevClose) * 100 : b.changePct;
-      return pctB - pctA;
-    }
-    if (sortBy === "losers") {
-      const pctA = livePriceMap[a.symbol] && a.prevClose ? ((livePriceMap[a.symbol] - a.prevClose) / a.prevClose) * 100 : a.changePct;
-      const pctB = livePriceMap[b.symbol] && b.prevClose ? ((livePriceMap[b.symbol] - b.prevClose) / b.prevClose) * 100 : b.changePct;
-      return pctA - pctB;
-    }
-    if (sortBy === "volume")  return b.volume     - a.volume;
-    if (sortBy === "value")   return b.totalValue - a.totalValue;
+    const getPct = (s) => {
+      const lp = livePriceMap[s.symbol];
+      if (!lp) return s.changePct;
+      let pc = s.prevClose || 0;
+      if (pc <= 0 && s.changePct !== 0 && s.ltp > 0) pc = s.ltp / (1 + s.changePct / 100);
+      if (pc <= 0) pc = s.ltp;
+      return pc > 0 ? ((lp - pc) / pc) * 100 : s.changePct;
+    };
+    if (sortBy === "gainers")  return getPct(b) - getPct(a);
+    if (sortBy === "losers")   return getPct(a) - getPct(b);
+    if (sortBy === "volume")   return b.volume     - a.volume;
+    if (sortBy === "value")    return b.totalValue - a.totalValue;
     return 0;
   });
 
@@ -993,9 +1007,7 @@ function ScannerBody() {
   const market = data?.market || {};
   const totalBtSignals = (() => { try { const db = JSON.parse(localStorage.getItem(BT_KEY) || "{}"); return Object.values(db).reduce((a, d) => a + (d.signals?.length || 0), 0); } catch { return 0; } })();
   const todayBtCount   = (() => { try { const db = JSON.parse(localStorage.getItem(BT_KEY) || "{}"); return db[todayKey()]?.signals?.length || 0; } catch { return 0; } })();
-
-  // Count how many symbols have live prices right now
-  const liveCount = Object.keys(livePriceMap).length;
+  const liveCount      = Object.keys(livePriceMap).length;
 
   return (
     <div style={{ background: T.bg, minHeight: "100vh", color: T.textPri, fontFamily: "'JetBrains Mono','Fira Code','Courier New',monospace" }}>
@@ -1017,7 +1029,6 @@ function ScannerBody() {
           </div>
         )}
 
-        {/* Live price count badge */}
         {liveCount > 0 && (
           <div style={{ background: "#052e16", border: "1px solid #4ade8033", borderRadius: 6, padding: "3px 10px", fontSize: 10, color: T.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.green, display: "inline-block", animation: "pulse 1.5s infinite" }} />
@@ -1044,7 +1055,6 @@ function ScannerBody() {
       {/* ── Body ───────────────────────────────────────────────────────────── */}
       <div style={{ padding: "16px 20px 40px", paddingRight: selectedSym ? "390px" : "20px", transition: "padding-right 0.2s" }}>
 
-        {/* Gainers / Losers cards with live prices */}
         {data && (
           <div style={{ display: "flex", gap: 12, marginBottom: 18 }}>
             <GainLossCard title="TOP GAINERS" stocks={data.gainers} onSelect={sym => handleSelect(sym)} accent={T.green} onViewAll={() => handleViewAll("gainers")} livePriceMap={livePriceMap} />
@@ -1121,8 +1131,11 @@ function ScannerBody() {
                   </thead>
                   <tbody>
                     {sorted.slice(0, displayLimit).map((s, i) => (
+                      // FIX 7: stable key uses only symbol — removed techVersion which
+                      // caused all 600 rows to remount on every tech-batch socket event.
+                      // Tech data is passed as a prop so rows update without remounting.
                       <StockRow
-                        key={`${s.symbol}-${techVersion}`}
+                        key={s.symbol}
                         stock={s}
                         rank={i + 1}
                         onSelect={sym => handleSelect(sym)}
