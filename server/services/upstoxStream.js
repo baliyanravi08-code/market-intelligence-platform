@@ -4,17 +4,8 @@
  * upstoxStream.js
  * Location: server/services/upstoxStream.js
  *
- * FIXES:
- *  1. Stock subscriptions persist across reconnects
- *  2. Day-end price display fixed — tracks prevClose per symbol in prevCloseCache
- *  3. Backtest engine wired for auto WIN/LOSS resolution
- *  4. Stock ticks emit backtest-live-tick to frontend for live prices
- *  5. subscribeWithInstrumentKeys(keys) — accepts pre-resolved NSE_EQ|ISIN keys
- *  6. parseAndEmit extracts symbol name from instrument key properly
- *  7. FIX: Stock ticks cache prevClose (cp field) and emit changePct
- *  8. FIX: applyLiveTick called directly on scanner after each stock tick —
- *     previously wired via socket.on("backtest-live-tick") which is dead code
- *     (server cannot receive its own ioRef.emit broadcasts)
+ * FIX: Patches MarketDataStreamerV3's internal streamer.clearSubscriptions
+ *      which doesn't exist in this SDK version, causing a crash on reconnect.
  */
 
 let UpstoxClient = null;
@@ -153,7 +144,6 @@ function getAccessToken() {
   return currentToken || process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
-// ── FIX: Lazy reference to scanner to avoid circular require at module load ───
 let _scanner = null;
 function getScanner() {
   if (!_scanner) {
@@ -244,20 +234,15 @@ function parseAndEmit(raw) {
               symbol = key.replace(/^(NSE_EQ|BSE_EQ)\|/, "");
             }
 
-            // Emit to frontend clients
             if (ioRef) {
               ioRef.emit("backtest-live-tick", { symbol, price, prevClose, change, changePct });
             }
 
-            // FIX: Call scanner's applyLiveTick directly — the server cannot
-            // receive its own ioRef.emit() via socket.on(), so the old
-            // socket.on("backtest-live-tick") in marketScanner was dead code.
             const scanner = getScanner();
             if (scanner && typeof scanner.applyLiveTick === "function") {
               scanner.applyLiveTick({ symbol, price, changePct, change });
             }
 
-            // Forward to backtest engine
             if (backtestEngine) backtestEngine.onLTPTick(symbol, price);
           }
         }
@@ -273,10 +258,57 @@ function parseAndEmit(raw) {
   }
 }
 
+/**
+ * CRITICAL FIX: Patch the internal WebSocket object inside the streamer
+ * to add a no-op clearSubscriptions() method, preventing the SDK crash.
+ * The SDK calls this.streamer.clearSubscriptions() on reconnect, but the
+ * underlying ws object doesn't have this method in this SDK version.
+ */
+function patchStreamerInternals(streamerInstance) {
+  // Patch after a tick so the internal ws is initialized
+  setImmediate(() => {
+    try {
+      // The SDK stores its internal ws as this.streamer inside MarketDataStreamerV3
+      // We need to patch it wherever it lives
+      if (streamerInstance._streamer && typeof streamerInstance._streamer.clearSubscriptions === "undefined") {
+        streamerInstance._streamer.clearSubscriptions = () => {};
+      }
+      // Also patch the streamer property directly (different SDK versions use different names)
+      if (streamerInstance.streamer && typeof streamerInstance.streamer.clearSubscriptions === "undefined") {
+        streamerInstance.streamer.clearSubscriptions = () => {};
+      }
+    } catch (_) {}
+  });
+
+  // Also override the attemptReconnect-like behavior by wrapping
+  // We intercept the close event at the raw ws level
+  const origConnect = streamerInstance.connect?.bind(streamerInstance);
+  if (origConnect) {
+    streamerInstance.connect = function(...args) {
+      const result = origConnect(...args);
+      // After connect, patch internal ws
+      setTimeout(() => {
+        try {
+          if (streamerInstance._streamer && !streamerInstance._streamer.clearSubscriptions) {
+            streamerInstance._streamer.clearSubscriptions = () => {};
+          }
+          if (streamerInstance.streamer && !streamerInstance.streamer.clearSubscriptions) {
+            streamerInstance.streamer.clearSubscriptions = () => {};
+          }
+        } catch (_) {}
+      }, 500);
+      return result;
+    };
+  }
+
+  return streamerInstance;
+}
+
 function stopStreamer() {
   if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
   if (streamer) {
     try {
+      // Safely call clearSubscriptions if available
       if (typeof streamer.clearSubscriptions === "function") streamer.clearSubscriptions();
       streamer.disconnect();
     } catch { /* ok */ }
@@ -335,17 +367,40 @@ function startStreamer(accessToken, io) {
     const oauth2               = defaultClient.authentications["OAUTH2"];
     oauth2.accessToken         = accessToken;
 
-    streamer = new UpstoxClient.MarketDataStreamerV3();
+    const newStreamer = new UpstoxClient.MarketDataStreamerV3();
 
-    streamer.on("open", () => {
+    // ── CRITICAL FIX: Disable SDK's internal reconnect entirely ──────────
+    // The SDK's attemptReconnect calls clearSubscriptions which doesn't exist.
+    // We handle reconnection ourselves in the 'close' event below.
+    if (newStreamer.attemptReconnect) {
+      newStreamer.attemptReconnect = function() {
+        // no-op — we handle reconnect ourselves
+      };
+    }
+
+    // Patch internal streamer object after connect
+    patchStreamerInternals(newStreamer);
+
+    newStreamer.on("open", () => {
       console.log("✅ Upstox Market WebSocket connected");
+      // Patch again after open in case internal ws was re-created
+      setTimeout(() => {
+        try {
+          if (newStreamer._streamer && !newStreamer._streamer.clearSubscriptions) {
+            newStreamer._streamer.clearSubscriptions = () => {};
+          }
+          if (newStreamer.streamer && !newStreamer.streamer.clearSubscriptions) {
+            newStreamer.streamer.clearSubscriptions = () => {};
+          }
+        } catch (_) {}
+      }, 100);
       resubscribeAll();
       if (ioRef) ioRef.emit("upstox-status", { connected: true });
     });
 
-    streamer.on("message", parseAndEmit);
+    newStreamer.on("message", parseAndEmit);
 
-    streamer.on("close", () => {
+    newStreamer.on("close", () => {
       console.log("⚠️  Upstox WS closed — reconnecting in 5s");
       if (ioRef) ioRef.emit("upstox-status", { connected: false });
       streamer    = null;
@@ -354,10 +409,11 @@ function startStreamer(accessToken, io) {
       }, 5000);
     });
 
-    streamer.on("error", (e) => {
+    newStreamer.on("error", (e) => {
       console.log("⚠️  Upstox WS error:", e?.message || e);
     });
 
+    streamer = newStreamer;
     streamer.connect();
     console.log("🔌 Upstox Market WebSocket connecting...");
   } catch (e) {
