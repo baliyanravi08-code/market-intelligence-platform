@@ -6,21 +6,15 @@
  *
  * REWRITE v2 — 5-Layer Signal Filter System
  *
- * Filter 1: Liquidity Gate       — volume ≥ 2L shares, price ≥ ₹20 (no penny traps)
- * Filter 2: Trend Alignment      — price above EMA20 > EMA50 (Stage 2), ADX ≥ 20
- * Filter 3: Indicator Consensus  — RSI + MACD must AGREE with signal direction
- * Filter 4: Volume Confirmation  — today's vol ≥ 1.5× 20-day avg (conviction candle)
- * Filter 5: Risk/Reward Gate     — R:R ≥ 1.5 minimum (prefer ≥ 2)
- *
- * FIXES v3:
- *  1. fetchNSEIntraday — changed from chart-databyindex (index-only) to
- *     chartData?symbol=X&type=EQ (correct equity intraday endpoint)
- *     Also handles both [ts,close] and [ts,o,h,l,c] response formats
- *  2. fetchCandles — for intraday intervals use Upstox /intraday/ endpoint
- *     (today's bars) instead of /historical-candle/ (returns empty for today)
- *  3. Live changePct update — scanner now listens to backtest-live-tick
- *     socket events and updates allStocks/gainers/losers in scanCache in real time
- *     so the scanner list shows live % change, not frozen 0.00%
+ * FIXES v3 (applied):
+ *  1. fetchNSEIntraday — correct NSE equity chartData endpoint
+ *  2. fetchCandles FIX: isToday was always true (both `to` and `now` are
+ *     new Date() in the same tick), forcing /intraday/ endpoint for ALL
+ *     intraday requests → returns empty for 15min/1hour outside market hours.
+ *     Fixed: use `days <= 1` to decide endpoint, not date comparison.
+ *  3. raw.reverse() now uses useIntradayEndpoint flag (not isToday)
+ *  4. applyLiveTick exported so upstoxStream.js can call it directly
+ *  5. getTechnicalsForTimeframe: _candles timestamps are valid Unix seconds
  */
 
 const axios = require("axios");
@@ -75,22 +69,15 @@ let scanCache = {
   advancing: 0, declining: 0, unchanged: 0, totalCount: 0,
 };
 
-// FIX: Fast lookup map symbol → stock object for live tick updates
-// Updated by runScanner, read by applyLiveTick
 let stockBySymbol = new Map();
-
-let techCache    = new Map();
-let nseCookie    = "";
-let lastCookieAt = 0;
-let ioRef        = null;
-let preWarmTimer = null;
-
+let techCache     = new Map();
+let nseCookie     = "";
+let lastCookieAt  = 0;
+let ioRef         = null;
+let preWarmTimer  = null;
 let lastBacktestCapture = "";
-
 let symbolBucketMap = {};
-
-// ── Module-level instrument map ───────────────────────────────────────────────
-let _instrumentMap = {};
+let _instrumentMap  = {};
 
 function setInstrumentMap(map) {
   _instrumentMap = map;
@@ -238,7 +225,6 @@ async function refreshNSECookie() {
   }
 }
 
-// ── NSE: fetch ALL Nifty 500 ──────────────────────────────────────────────────
 async function fetchNSEMarketData() {
   await refreshNSECookie();
 
@@ -342,10 +328,7 @@ function normaliseBSE(s) {
   };
 }
 
-// ── FIX: Live tick handler — updates scanCache in place from WS ticks ─────────
-// Called by the socket "backtest-live-tick" event listener set up in
-// registerScannerHandlers. Updates ltp + changePct on the stock object
-// directly in scanCache.allStocks and re-sorts gainers/losers.
+// ── Live tick handler ─────────────────────────────────────────────────────────
 function applyLiveTick({ symbol, price, changePct, change }) {
   if (!symbol || !price) return;
   const stock = stockBySymbol.get(symbol);
@@ -355,18 +338,16 @@ function applyLiveTick({ symbol, price, changePct, change }) {
   if (changePct != null) stock.changePct = changePct;
   if (change    != null) stock.change    = change;
 
-  // Re-sort gainers / losers in scanCache from updated allStocks
-  // (lightweight — only triggers when a tick arrives, not on interval)
   const sorted  = [...scanCache.allStocks].sort((a, b) => b.changePct - a.changePct);
-  scanCache.gainers = sorted.filter(s => s.changePct > 0).slice(0, 20);
-  scanCache.losers  = [...sorted].reverse().filter(s => s.changePct < 0).slice(0, 20);
+  scanCache.gainers   = sorted.filter(s => s.changePct > 0).slice(0, 20);
+  scanCache.losers    = [...sorted].reverse().filter(s => s.changePct < 0).slice(0, 20);
   scanCache.advancing = scanCache.allStocks.filter(s => s.changePct > 0).length;
   scanCache.declining = scanCache.allStocks.filter(s => s.changePct < 0).length;
   scanCache.unchanged = scanCache.allStocks.filter(s => s.changePct === 0).length;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── SIGNAL FILTER SYSTEM (5 layers) ──────────────────────────────────────────
+// ── SIGNAL FILTER SYSTEM ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
 function passesLiquidityGate(tech, stock) {
@@ -748,27 +729,10 @@ function computeTechnicals(symbol, candles) {
   };
 }
 
-// ── Historical candles ────────────────────────────────────────────────────────
-
-/**
- * FIX: fetchNSEIntraday
- *
- * OLD (broken): /api/chart-databyindex?index=SYMBOL&indices=false
- *   → This endpoint is for INDEX charts (NIFTY, SENSEX), NOT equity stocks.
- *   → Returns empty/error for stock symbols like DATAPATTNS, RELIANCE, etc.
- *
- * NEW (correct): /api/chartData?symbol=SYMBOL&type=EQ
- *   → Correct equity intraday chart endpoint used by NSE website itself.
- *   → Returns { grapthData: [[ts, o, h, l, c], ...] } with full OHLC.
- *
- * Also handles both response formats:
- *   - 5-element: [timestamp, open, high, low, close]  ← preferred
- *   - 2-element: [timestamp, close]                   ← fallback (older API)
- */
+// ── NSE intraday candles ──────────────────────────────────────────────────────
 async function fetchNSEIntraday(symbol) {
   await refreshNSECookie();
 
-  // ── PRIMARY: correct NSE equity intraday endpoint ──────────────────────────
   try {
     const url = `https://www.nseindia.com/api/chartData?symbol=${encodeURIComponent(symbol)}&type=EQ`;
     const res = await axios.get(url, {
@@ -781,53 +745,34 @@ async function fetchNSEIntraday(symbol) {
       throw new Error(`chartData returned ${raw.length} rows`);
     }
 
-    // Detect format: 5-element OHLC vs 2-element close-only
     const isOHLC = Array.isArray(raw[0]) && raw[0].length >= 5;
     const candles = [];
 
     for (let i = 0; i < raw.length; i++) {
       if (isOHLC) {
-        // [timestamp, open, high, low, close]
         const [ts, o, h, l, c] = raw[i];
         const close = parseFloat(c);
         if (!close || close <= 0) continue;
-        candles.push({
-          ts,
-          o: parseFloat(o),
-          h: parseFloat(h),
-          l: parseFloat(l),
-          c: close,
-          v: 0,
-        });
+        candles.push({ ts, o: parseFloat(o), h: parseFloat(h), l: parseFloat(l), c: close, v: 0 });
       } else {
-        // [timestamp, close] — synthesize OHLC from adjacent closes
         const [ts, closeRaw] = raw[i];
         const close = parseFloat(closeRaw);
         if (!close || close <= 0) continue;
         const prev = i > 0 ? (parseFloat(raw[i - 1][1]) || close) : close;
         const next = i < raw.length - 1 ? (parseFloat(raw[i + 1][1]) || close) : close;
-        candles.push({
-          ts,
-          o: prev,
-          h: Math.max(close, prev, next),
-          l: Math.min(close, prev, next),
-          c: close,
-          v: 0,
-        });
+        candles.push({ ts, o: prev, h: Math.max(close, prev, next), l: Math.min(close, prev, next), c: close, v: 0 });
       }
     }
 
     if (candles.length >= 5) {
-      console.log(`📊 [${symbol}] NSE chartData: ${candles.length} intraday candles (${isOHLC ? "OHLC" : "close-only"})`);
+      console.log(`📊 [${symbol}] NSE chartData: ${candles.length} intraday candles`);
       return candles;
     }
     throw new Error(`Only ${candles.length} valid candles after parse`);
-
   } catch (e) {
     console.warn(`📊 [${symbol}] NSE chartData failed: ${e.message}`);
   }
 
-  // ── FALLBACK: quote-equity for single data point ───────────────────────────
   try {
     const res = await axios.get(
       `https://www.nseindia.com/api/quote-equity?symbol=${encodeURIComponent(symbol)}`,
@@ -839,7 +784,6 @@ async function fetchNSEIntraday(symbol) {
       const o = parseFloat(d.open || c);
       const h = parseFloat(d.intraDayHighLow?.max || d.high || c);
       const l = parseFloat(d.intraDayHighLow?.min || d.low  || c);
-      console.log(`📊 [${symbol}] NSE quote fallback: single candle ltp=${c}`);
       return [{ o, h, l, c, v: 0 }];
     }
   } catch (_) {}
@@ -874,26 +818,12 @@ function resampleCandles(candles1min, targetMinutes) {
   return buckets;
 }
 
-function resampleDailyToWeekly(dailyCandles) {
-  const weekly = [];
-  let bucket   = null;
-  for (const c of dailyCandles) {
-    if (!bucket) { bucket = { ...c }; continue; }
-    bucket.h  = Math.max(bucket.h, c.h);
-    bucket.l  = Math.min(bucket.l, c.l);
-    bucket.c  = c.c;
-    bucket.v += (c.v || 0);
-    if (weekly.length === 0 || weekly[weekly.length - 1]._count >= 5) {
-      bucket._count = (bucket._count || 0) + 1;
-      if (bucket._count >= 5) { weekly.push({ ...bucket }); bucket = null; }
-    } else {
-      bucket._count = (bucket._count || 0) + 1;
-    }
-  }
-  if (bucket) weekly.push(bucket);
-  return weekly;
-}
-
+// ── FIX: fetchCandles — isToday bug corrected ─────────────────────────────────
+// OLD BUG: `const isToday = fmtD(to) === fmtD(now)` was ALWAYS true because
+//   both `to` and `now` are `new Date()` in the same synchronous tick.
+//   This meant ALL intraday requests used /intraday/ endpoint which only
+//   returns today's bars — empty outside market hours, empty for 15min history.
+// FIX: Use `days <= 1` as the condition for the intraday endpoint instead.
 async function fetchCandles(symbol, days, interval) {
   const token      = getUpstoxToken();
   const instrKey   = getInstrumentKey(symbol);
@@ -903,23 +833,20 @@ async function fetchCandles(symbol, days, interval) {
   // ── ATTEMPT 1: Upstox API ──────────────────────────────────────────────────
   if (token && instrKey) {
     try {
-      const now    = new Date();
       const to     = new Date();
       const from   = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
       const fmtD   = d => d.toISOString().slice(0, 10);
       const enc    = encodeURIComponent(instrKey);
       const upstoxInterval = is4H ? "60minute" : interval;
 
-      // FIX: Upstox /historical-candle/ endpoint does NOT return today's
-      // intraday bars. Use /historical-candle/intraday/ for today's data.
-      // For multi-day historical (days > 1), use the standard endpoint.
-      const isToday = fmtD(to) === fmtD(now);
+      // FIX: Use days <= 1 to decide endpoint, NOT date comparison.
+      // Both `to` and `new Date()` are the same tick so isToday was always
+      // true, forcing /intraday/ for 15min/1hour which returns empty data.
+      const useIntradayEndpoint = isIntraday && days <= 1;
       let url;
-      if (isIntraday && isToday) {
-        // Intraday endpoint: returns today's bars only, no date range needed
+      if (useIntradayEndpoint) {
         url = `https://api.upstox.com/v2/historical-candle/intraday/${enc}/${upstoxInterval}`;
       } else {
-        // Historical endpoint: returns past N days of OHLC bars
         url = `https://api.upstox.com/v2/historical-candle/${enc}/${upstoxInterval}/${fmtD(to)}/${fmtD(from)}`;
       }
 
@@ -930,8 +857,9 @@ async function fetchCandles(symbol, days, interval) {
 
       let raw = res.data?.data?.candles || [];
       if (Array.isArray(raw) && raw.length > 0) {
-        // Intraday endpoint returns chronological order; historical returns reverse
-        if (!isIntraday || !isToday) raw = raw.slice().reverse();
+        // Intraday endpoint returns chronological; historical returns newest-first → reverse
+        if (!useIntradayEndpoint) raw = raw.slice().reverse();
+
         let candles = raw.map(c => ({
           o: parseFloat(c[1]), h: parseFloat(c[2]),
           l: parseFloat(c[3]), c: parseFloat(c[4]),
@@ -963,7 +891,7 @@ async function fetchCandles(symbol, days, interval) {
     }
   }
 
-  // ── ATTEMPT 2: NSE intraday chart fallback ─────────────────────────────────
+  // ── ATTEMPT 2: NSE intraday fallback ──────────────────────────────────────
   if (isIntraday) {
     try {
       console.log(`📊 [${symbol}][${interval}] Upstox unavailable — trying NSE intraday fallback`);
@@ -986,7 +914,7 @@ async function fetchCandles(symbol, days, interval) {
       console.warn(`📊 [${symbol}] NSE intraday fallback failed:`, e.message);
     }
 
-    // ── ATTEMPT 3: Synthetic intraday from NSE daily data ─────────────────
+    // ── ATTEMPT 3: Synthetic from NSE daily ───────────────────────────────
     try {
       console.log(`📊 [${symbol}][${interval}] Trying synthetic from daily data`);
       const to   = new Date();
@@ -1017,7 +945,7 @@ async function fetchCandles(symbol, days, interval) {
     return [];
   }
 
-  // ── ATTEMPT 2b: NSE daily API fallback ────────────────────────────────────
+  // ── ATTEMPT 2b: NSE daily ─────────────────────────────────────────────────
   if (interval === "day") {
     await refreshNSECookie();
     try {
@@ -1042,7 +970,7 @@ async function fetchCandles(symbol, days, interval) {
     }
   }
 
-  // ── ATTEMPT 2c: NSE weekly/monthly ────────────────────────────────────────
+  // ── ATTEMPT 2c: NSE weekly/monthly ───────────────────────────────────────
   if (interval === "week" || interval === "month") {
     await refreshNSECookie();
     try {
@@ -1094,11 +1022,15 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
   if (result) {
     result.timeframe = timeframe;
 
-    const tfSecs  = TF_SECONDS[timeframe] || TF_SECONDS["1day"];
-    const nowSecs = Math.floor(Date.now() / 1000);
-    const slice   = candles.slice(-500);
+    const tfSecs     = TF_SECONDS[timeframe] || TF_SECONDS["1day"];
+    const nowSecs    = Math.floor(Date.now() / 1000);
+    // Align to nearest bar boundary so bars don't overlap or have gaps
+    const alignedNow = Math.floor(nowSecs / tfSecs) * tfSecs;
+    const slice      = candles.slice(-500);
+
     result._candles = slice.map((c, i) => ({
-      time:   nowSecs - (slice.length - 1 - i) * tfSecs,
+      // Strictly increasing Unix seconds — oldest bar at index 0
+      time:   alignedNow - (slice.length - 1 - i) * tfSecs,
       open:   c.o,
       high:   c.h,
       low:    c.l,
@@ -1168,7 +1100,6 @@ function buildPayload(cache) {
   };
 }
 
-// ── Auto-capture signals for backtest ─────────────────────────────────────────
 function tryBacktestCapture(stocks) {
   try {
     const backtestEngine = require("../backtestEngine");
@@ -1219,10 +1150,7 @@ function tryBacktestCapture(stocks) {
 
     console.log(`📊 Filter results — HOLD:${rejected.hold} | F1(Liq):${rejected.f1} | F2(Trend):${rejected.f2} | F3(Consensus):${rejected.f3} | F4(Vol):${rejected.f4} | F5(RR):${rejected.f5} | PASSED:${signals.length}`);
 
-    if (!signals.length) {
-      console.log("📊 No signals passed all 5 filters — no capture");
-      return;
-    }
+    if (!signals.length) return;
 
     const result = backtestEngine.captureSession(signals);
     if (result.success) {
@@ -1235,7 +1163,6 @@ function tryBacktestCapture(stocks) {
   }
 }
 
-// ── Main scan ─────────────────────────────────────────────────────────────────
 async function runScanner() {
   try {
     console.log("📊 Scanner: running…");
@@ -1264,7 +1191,6 @@ async function runScanner() {
       return { ...s, mcapBucket: bucket, mcapLabel: MCAP_BUCKETS[bucket]?.label || "Micro Cap" };
     });
 
-    // FIX: Rebuild the fast lookup map so applyLiveTick can find stock objects
     stockBySymbol = new Map(stocks.map(s => [s.symbol, s]));
 
     const sorted  = [...stocks].sort((a, b) => b.changePct - a.changePct);
@@ -1345,7 +1271,6 @@ async function runScanner() {
   }
 }
 
-// ── Socket handlers ───────────────────────────────────────────────────────────
 function registerScannerHandlers(io) {
   io.on("connection", socket => {
     if (scanCache.updatedAt > 0) socket.emit("scanner-update", buildPayload(scanCache));
@@ -1360,15 +1285,7 @@ function registerScannerHandlers(io) {
         const chunk = cachedEntries.slice(i, i + CHUNK);
         setTimeout(() => socket.emit("scanner-tech-batch", chunk), i * 50);
       }
-      console.log(`📊 Replayed ${cachedEntries.length} cached tech entries to new socket`);
     }
-
-    // FIX: Forward backtest-live-tick from Upstox WS into applyLiveTick
-    // so the scanner list ltp + changePct updates in real time without
-    // waiting for the next 5-minute NSE scan.
-    socket.on("backtest-live-tick", (tick) => {
-      if (tick && tick.symbol) applyLiveTick(tick);
-    });
 
     socket.on("get-technicals", async ({ symbol } = {}) => {
       if (!symbol) return;
@@ -1396,7 +1313,6 @@ function registerScannerHandlers(io) {
   });
 }
 
-// ── Start ─────────────────────────────────────────────────────────────────────
 function startMarketScanner(io) {
   ioRef = io;
   registerScannerHandlers(io);
@@ -1414,6 +1330,7 @@ module.exports = {
   getTechnicalsREST,
   getTechnicalsForTimeframe,
   setInstrumentMap,
+  applyLiveTick,   // ← exported so upstoxStream.js can call it directly
 
   forceCaptureNow: async function () {
     const backtestEngine = require("../backtestEngine");
@@ -1459,7 +1376,7 @@ module.exports = {
     console.log(`📊 forceCaptureNow — HOLD:${rejected.hold} | F1:${rejected.f1} | F2:${rejected.f2} | F3:${rejected.f3} | F4:${rejected.f4} | F5:${rejected.f5} | PASSED:${signals.length}`);
 
     if (!signals.length) {
-      return { error: "No signals passed all 5 filters — check filter breakdown in server logs" };
+      return { error: "No signals passed all 5 filters" };
     }
 
     const result = backtestEngine.captureSession(signals);

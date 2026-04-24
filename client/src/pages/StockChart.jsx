@@ -2,13 +2,18 @@
  * StockChart.jsx
  * Location: client/src/pages/StockChart.jsx
  *
- * FIXES vs original:
- *  1. Uses tech._candles from API response (now populated by marketScanner v2)
- *  2. Timeframe value "1hour" → "1hour" (matches server TIMEFRAME_CONFIG keys)
- *  3. Stochastic + RSI + MACD panels use correct candle field names (close/high/low)
- *  4. Loading state properly hides "no candle" message
- *  5. 4H timeframe correctly maps to "4hour" key
- *  6. Retry button works after Upstox fallback data arrives
+ * FIXES applied:
+ *  FIX-D1: Chart divs were conditionally hidden with display:none BEFORE
+ *           lightweight-charts tried to measure them. clientWidth = 0 → blank
+ *           chart. Fixed by conditionally rendering the divs only when
+ *           hasData && !loading && !error (so divs exist and are visible
+ *           when the chart library initialises).
+ *
+ *  FIX-D2: The chart useEffect ran synchronously after React setState, before
+ *           the newly-rendered divs had been painted to the DOM. Even with
+ *           conditional rendering, the first frame can still measure 0px.
+ *           Fixed by wrapping all chart creation inside requestAnimationFrame
+ *           so the browser has painted the divs before we measure clientWidth.
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -23,12 +28,12 @@ function getSocket() {
   return _socket;
 }
 
-// ── Timeframes — values must match server TIMEFRAME_CONFIG keys exactly ───────
+// ── Timeframes ─────────────────────────────────────────────────────────────────
 const TIMEFRAMES = [
   { label: "5m",  value: "5min"  },
   { label: "15m", value: "15min" },
-  { label: "1h",  value: "1hour" },
-  { label: "4h",  value: "4hour" },
+  { label: "1H",  value: "1hour" },
+  { label: "4H",  value: "4hour" },
   { label: "1D",  value: "1day"  },
   { label: "1W",  value: "1week" },
 ];
@@ -89,7 +94,7 @@ const BASE_CHART = {
   handleScale:  true,
 };
 
-// ── EMA helper ────────────────────────────────────────────────────────────────
+// ── Indicator helpers ─────────────────────────────────────────────────────────
 function buildEMA(closes, times, period) {
   if (closes.length < period) return [];
   const k = 2 / (period + 1);
@@ -248,144 +253,176 @@ export default function StockChart() {
     candleSr.current = null;
     liveL.current    = null;
 
-    // _candles is populated by marketScanner v2 — array of {time,open,high,low,close,volume}
     const candles = tech._candles || [];
-    if (!candles.length || !mainRef.current) return;
+    if (!candles.length) return;
 
-    const times  = candles.map(c => c.time);
-    const closes = candles.map(c => c.close);
+    // FIX-D2: requestAnimationFrame ensures chart container divs are
+    // visible and have been painted with non-zero width before
+    // lightweight-charts initialises. Without this, even conditionally-
+    // rendered divs may still measure 0px on the same render frame.
+    const raf = requestAnimationFrame(() => {
+      if (!mainRef.current) return;
+      const containerW = mainRef.current.clientWidth;
+      if (containerW === 0) return; // not painted yet — next render will retry
 
-    // ── MAIN candlestick chart ──────────────────────────────────────────────
-    const mc = createChart(mainRef.current, { ...BASE_CHART, height: 420, width: mainRef.current.clientWidth });
-    charts.current.main = mc;
+      const times  = candles.map(c => c.time);
+      const closes = candles.map(c => c.close);
 
-    const cs = mc.addCandlestickSeries({
-      upColor: T.green, downColor: T.red,
-      borderUpColor: T.green, borderDownColor: T.red,
-      wickUpColor: T.green, wickDownColor: T.red,
+      // ── MAIN candlestick chart ────────────────────────────────────────────
+      const mc = createChart(mainRef.current, { ...BASE_CHART, height: 420, width: containerW });
+      charts.current.main = mc;
+
+      const cs = mc.addCandlestickSeries({
+        upColor: T.green, downColor: T.red,
+        borderUpColor: T.green, borderDownColor: T.red,
+        wickUpColor: T.green, wickDownColor: T.red,
+      });
+      cs.setData(candles);
+      candleSr.current = cs;
+
+      // Live price line
+      liveL.current = cs.createPriceLine({
+        price: live || tech.ltp, color: T.yellow,
+        lineWidth: 1, lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true, title: "LIVE",
+      });
+
+      // Entry / Target / SL lines
+      if (tech.entry) cs.createPriceLine({ price: tech.entry, color: T.blue,  lineWidth: 1, lineStyle: LineStyle.Solid,  axisLabelVisible: true, title: "ENTRY" });
+      if (tech.tp)    cs.createPriceLine({ price: tech.tp,    color: T.green, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: "TGT"   });
+      if (tech.sl)    cs.createPriceLine({ price: tech.sl,    color: T.red,   lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: "SL"    });
+
+      // EMA overlays
+      if (inds.ema9) {
+        mc.addLineSeries({ color: T.ema9,   lineWidth: 1, title: "EMA9",   priceLineVisible: false, lastValueVisible: true }).setData(buildEMA(closes, times, 9));
+      }
+      if (inds.ema21) {
+        mc.addLineSeries({ color: T.ema21,  lineWidth: 1, title: "EMA21",  priceLineVisible: false, lastValueVisible: true }).setData(buildEMA(closes, times, 21));
+      }
+      if (inds.ema50) {
+        mc.addLineSeries({ color: T.ema50,  lineWidth: 1, title: "EMA50",  priceLineVisible: false, lastValueVisible: true }).setData(buildEMA(closes, times, 50));
+      }
+      if (inds.ema200) {
+        mc.addLineSeries({ color: T.ema200, lineWidth: 1, title: "EMA200", priceLineVisible: false, lastValueVisible: true }).setData(buildEMA(closes, times, 200));
+      }
+
+      // Bollinger Bands
+      if (inds.bb) {
+        const bb = buildBB(closes, times);
+        mc.addLineSeries({ color: T.bbUpper, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: LineStyle.Dotted }).setData(bb.upper);
+        mc.addLineSeries({ color: T.bbLower, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: LineStyle.Dotted }).setData(bb.lower);
+        mc.addLineSeries({ color: T.bbMid,   lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: LineStyle.Dashed  }).setData(bb.mid);
+      }
+
+      // VWAP
+      if (inds.vwap && tech.vwap) {
+        const vwapSeries = mc.addLineSeries({ color: T.vwap, lineWidth: 1, title: "VWAP", priceLineVisible: false, lastValueVisible: true });
+        vwapSeries.setData(times.slice(-78).map(t => ({ time: t, value: tech.vwap })));
+      }
+
+      // Supertrend
+      if (inds.supertrend && tech.supertrend?.level) {
+        const stColor = tech.supertrend.trend === "BULLISH" ? T.green : T.red;
+        mc.addLineSeries({ color: stColor, lineWidth: 2, title: "ST", priceLineVisible: false, lastValueVisible: true })
+          .setData(times.slice(-60).map(t => ({ time: t, value: tech.supertrend.level })));
+      }
+
+      // Crosshair
+      mc.subscribeCrosshairMove(p => {
+        if (!p.time || !p.seriesData) return;
+        const bar = p.seriesData.get(cs);
+        if (bar) setCross({ time: p.time, ...bar });
+      });
+
+      // ── VOLUME panel ──────────────────────────────────────────────────────
+      if (inds.volume && volRef.current) {
+        const vc = createChart(volRef.current, {
+          ...BASE_CHART, height: 80, width: volRef.current.clientWidth,
+          rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0 }, borderColor: T.border },
+          timeScale: { visible: false },
+        });
+        charts.current.vol = vc;
+        const vs = vc.addHistogramSeries({ priceFormat: { type: "volume" } });
+        vs.priceScale().applyOptions({ scaleMargins: { top: 0.2, bottom: 0 } });
+        vs.setData(candles.map(c => ({
+          time: c.time, value: c.volume || 0,
+          color: c.close >= c.open ? "rgba(0,230,118,0.4)" : "rgba(255,61,87,0.4)",
+        })));
+        mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) vc.timeScale().setVisibleLogicalRange(r); });
+      }
+
+      // ── RSI panel ─────────────────────────────────────────────────────────
+      if (inds.rsi && rsiRef.current) {
+        const rc = createChart(rsiRef.current, {
+          ...BASE_CHART, height: 100, width: rsiRef.current.clientWidth,
+          rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderColor: T.border },
+          timeScale: { visible: false },
+        });
+        charts.current.rsi = rc;
+        rc.addLineSeries({ color: T.purple, lineWidth: 1, title: "RSI", priceLineVisible: false, lastValueVisible: true })
+          .setData(buildRSI(closes, times, 14));
+        const tSlice = times.slice(-120);
+        rc.addLineSeries({ color: "rgba(255,61,87,0.4)",   lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 70 })));
+        rc.addLineSeries({ color: "rgba(0,230,118,0.4)",   lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 30 })));
+        rc.addLineSeries({ color: "rgba(100,130,200,0.3)", lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 50 })));
+        mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) rc.timeScale().setVisibleLogicalRange(r); });
+      }
+
+      // ── MACD panel ────────────────────────────────────────────────────────
+      if (inds.macd && macdRef.current) {
+        const mcc = createChart(macdRef.current, {
+          ...BASE_CHART, height: 100, width: macdRef.current.clientWidth,
+          rightPriceScale: { scaleMargins: { top: 0.2, bottom: 0.2 }, borderColor: T.border },
+          timeScale: { visible: false },
+        });
+        charts.current.macd = mcc;
+        const md = buildMACD(closes, times);
+        mcc.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false })
+          .setData(md.histogram.map(d => ({ ...d, color: d.value >= 0 ? "rgba(0,230,118,0.6)" : "rgba(255,61,87,0.6)" })));
+        mcc.addLineSeries({ color: T.blue,   lineWidth: 1, title: "MACD",   priceLineVisible: false, lastValueVisible: true }).setData(md.macd);
+        mcc.addLineSeries({ color: T.yellow, lineWidth: 1, title: "Signal", priceLineVisible: false, lastValueVisible: true, lineStyle: LineStyle.Dashed }).setData(md.signal);
+        mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) mcc.timeScale().setVisibleLogicalRange(r); });
+      }
+
+      // ── STOCHASTIC panel ──────────────────────────────────────────────────
+      if (inds.stoch && stochRef.current) {
+        const sc = createChart(stochRef.current, {
+          ...BASE_CHART, height: 80, width: stochRef.current.clientWidth,
+          rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderColor: T.border },
+          timeScale: { visible: false },
+        });
+        charts.current.stoch = sc;
+        const st = buildStoch(candles, times, 14);
+        sc.addLineSeries({ color: T.blue,   lineWidth: 1, title: "%K", priceLineVisible: false, lastValueVisible: true }).setData(st.k);
+        sc.addLineSeries({ color: T.yellow, lineWidth: 1, title: "%D", priceLineVisible: false, lastValueVisible: true, lineStyle: LineStyle.Dashed }).setData(st.d);
+        const tSlice = times.slice(-100);
+        sc.addLineSeries({ color: "rgba(255,61,87,0.3)",  lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 80 })));
+        sc.addLineSeries({ color: "rgba(0,230,118,0.3)",  lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 20 })));
+        mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) sc.timeScale().setVisibleLogicalRange(r); });
+      }
+
+      // Resize observer
+      const ro = new ResizeObserver(() => {
+        if (mainRef.current)  mc.applyOptions({ width: mainRef.current.clientWidth });
+        if (volRef.current   && charts.current.vol)   charts.current.vol.applyOptions({ width: volRef.current.clientWidth });
+        if (rsiRef.current   && charts.current.rsi)   charts.current.rsi.applyOptions({ width: rsiRef.current.clientWidth });
+        if (macdRef.current  && charts.current.macd)  charts.current.macd.applyOptions({ width: macdRef.current.clientWidth });
+        if (stochRef.current && charts.current.stoch) charts.current.stoch.applyOptions({ width: stochRef.current.clientWidth });
+      });
+      if (mainRef.current) ro.observe(mainRef.current);
+
+      setTimeout(() => mc.timeScale().fitContent(), 80);
+
+      // Store cleanup for ResizeObserver — returned via outer cleanup
+      charts.current._ro = ro;
     });
-    cs.setData(candles);
-    candleSr.current = cs;
 
-    // Live price line
-    liveL.current = cs.createPriceLine({
-      price: live || tech.ltp, color: T.yellow,
-      lineWidth: 1, lineStyle: LineStyle.Dashed,
-      axisLabelVisible: true, title: "LIVE",
-    });
-
-    // Entry / Target / SL lines
-    if (tech.entry) cs.createPriceLine({ price: tech.entry, color: T.blue,  lineWidth: 1, lineStyle: LineStyle.Solid,  axisLabelVisible: true, title: "ENTRY" });
-    if (tech.tp)    cs.createPriceLine({ price: tech.tp,    color: T.green, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: `TGT` });
-    if (tech.sl)    cs.createPriceLine({ price: tech.sl,    color: T.red,   lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: `SL`  });
-
-    // EMA overlays
-    if (inds.ema9) {
-      const s = mc.addLineSeries({ color: T.ema9, lineWidth: 1, title: "EMA9", priceLineVisible: false, lastValueVisible: true });
-      s.setData(buildEMA(closes, times, 9));
-    }
-    if (inds.ema21) {
-      const s = mc.addLineSeries({ color: T.ema21, lineWidth: 1, title: "EMA21", priceLineVisible: false, lastValueVisible: true });
-      s.setData(buildEMA(closes, times, 21));
-    }
-    if (inds.ema50) {
-      const s = mc.addLineSeries({ color: T.ema50, lineWidth: 1, title: "EMA50", priceLineVisible: false, lastValueVisible: true });
-      s.setData(buildEMA(closes, times, 50));
-    }
-    if (inds.ema200) {
-      const s = mc.addLineSeries({ color: T.ema200, lineWidth: 1, title: "EMA200", priceLineVisible: false, lastValueVisible: true });
-      s.setData(buildEMA(closes, times, 200));
-    }
-
-    // Bollinger Bands
-    if (inds.bb) {
-      const bb = buildBB(closes, times);
-      mc.addLineSeries({ color: T.bbUpper, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: LineStyle.Dotted }).setData(bb.upper);
-      mc.addLineSeries({ color: T.bbLower, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: LineStyle.Dotted }).setData(bb.lower);
-      mc.addLineSeries({ color: T.bbMid,   lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: LineStyle.Dashed  }).setData(bb.mid);
-    }
-
-    // VWAP (single value → horizontal segment on last session)
-    if (inds.vwap && tech.vwap) {
-      const vwapSeries = mc.addLineSeries({ color: T.vwap, lineWidth: 1, title: "VWAP", priceLineVisible: false, lastValueVisible: true });
-      vwapSeries.setData(times.slice(-78).map(t => ({ time: t, value: tech.vwap })));
-    }
-
-    // Supertrend
-    if (inds.supertrend && tech.supertrend?.level) {
-      const stColor = tech.supertrend.trend === "BULLISH" ? T.green : T.red;
-      const stS = mc.addLineSeries({ color: stColor, lineWidth: 2, title: "ST", priceLineVisible: false, lastValueVisible: true });
-      stS.setData(times.slice(-60).map(t => ({ time: t, value: tech.supertrend.level })));
-    }
-
-    // Crosshair data
-    mc.subscribeCrosshairMove(p => {
-      if (!p.time || !p.seriesData) return;
-      const bar = p.seriesData.get(cs);
-      if (bar) setCross({ time: p.time, ...bar });
-    });
-
-    // ── VOLUME panel ────────────────────────────────────────────────────────
-    if (inds.volume && volRef.current) {
-      const vc = createChart(volRef.current, { ...BASE_CHART, height: 80, width: volRef.current.clientWidth, rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0 }, borderColor: T.border }, timeScale: { visible: false } });
-      charts.current.vol = vc;
-      const vs = vc.addHistogramSeries({ priceFormat: { type: "volume" } });
-      vs.priceScale().applyOptions({ scaleMargins: { top: 0.2, bottom: 0 } });
-      vs.setData(candles.map(c => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? "rgba(0,230,118,0.4)" : "rgba(255,61,87,0.4)" })));
-      mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) vc.timeScale().setVisibleLogicalRange(r); });
-    }
-
-    // ── RSI panel ───────────────────────────────────────────────────────────
-    if (inds.rsi && rsiRef.current) {
-      const rc = createChart(rsiRef.current, { ...BASE_CHART, height: 100, width: rsiRef.current.clientWidth, rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderColor: T.border }, timeScale: { visible: false } });
-      charts.current.rsi = rc;
-      const rsiS = rc.addLineSeries({ color: T.purple, lineWidth: 1, title: "RSI", priceLineVisible: false, lastValueVisible: true });
-      rsiS.setData(buildRSI(closes, times, 14));
-      const tSlice = times.slice(-120);
-      rc.addLineSeries({ color: "rgba(255,61,87,0.4)",  lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 70 })));
-      rc.addLineSeries({ color: "rgba(0,230,118,0.4)",  lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 30 })));
-      rc.addLineSeries({ color: "rgba(100,130,200,0.3)", lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 50 })));
-      mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) rc.timeScale().setVisibleLogicalRange(r); });
-    }
-
-    // ── MACD panel ──────────────────────────────────────────────────────────
-    if (inds.macd && macdRef.current) {
-      const mcc = createChart(macdRef.current, { ...BASE_CHART, height: 100, width: macdRef.current.clientWidth, rightPriceScale: { scaleMargins: { top: 0.2, bottom: 0.2 }, borderColor: T.border }, timeScale: { visible: false } });
-      charts.current.macd = mcc;
-      const md = buildMACD(closes, times);
-      const hs = mcc.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
-      hs.setData(md.histogram.map(d => ({ ...d, color: d.value >= 0 ? "rgba(0,230,118,0.6)" : "rgba(255,61,87,0.6)" })));
-      mcc.addLineSeries({ color: T.blue,   lineWidth: 1, title: "MACD",   priceLineVisible: false, lastValueVisible: true }).setData(md.macd);
-      mcc.addLineSeries({ color: T.yellow, lineWidth: 1, title: "Signal", priceLineVisible: false, lastValueVisible: true, lineStyle: LineStyle.Dashed }).setData(md.signal);
-      mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) mcc.timeScale().setVisibleLogicalRange(r); });
-    }
-
-    // ── STOCHASTIC panel ────────────────────────────────────────────────────
-    if (inds.stoch && stochRef.current) {
-      const sc = createChart(stochRef.current, { ...BASE_CHART, height: 80, width: stochRef.current.clientWidth, rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderColor: T.border }, timeScale: { visible: false } });
-      charts.current.stoch = sc;
-      const st = buildStoch(candles, times, 14);
-      sc.addLineSeries({ color: T.blue,   lineWidth: 1, title: "%K", priceLineVisible: false, lastValueVisible: true }).setData(st.k);
-      sc.addLineSeries({ color: T.yellow, lineWidth: 1, title: "%D", priceLineVisible: false, lastValueVisible: true, lineStyle: LineStyle.Dashed }).setData(st.d);
-      const tSlice = times.slice(-100);
-      sc.addLineSeries({ color: "rgba(255,61,87,0.3)",  lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 80 })));
-      sc.addLineSeries({ color: "rgba(0,230,118,0.3)",  lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }).setData(tSlice.map(t => ({ time: t, value: 20 })));
-      mc.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) sc.timeScale().setVisibleLogicalRange(r); });
-    }
-
-    // Resize observer
-    const ro = new ResizeObserver(() => {
-      if (mainRef.current)  mc.applyOptions({ width: mainRef.current.clientWidth });
-      if (volRef.current   && charts.current.vol)   charts.current.vol.applyOptions({ width: volRef.current.clientWidth });
-      if (rsiRef.current   && charts.current.rsi)   charts.current.rsi.applyOptions({ width: rsiRef.current.clientWidth });
-      if (macdRef.current  && charts.current.macd)  charts.current.macd.applyOptions({ width: macdRef.current.clientWidth });
-      if (stochRef.current && charts.current.stoch) charts.current.stoch.applyOptions({ width: stochRef.current.clientWidth });
-    });
-    if (mainRef.current) ro.observe(mainRef.current);
-
-    setTimeout(() => mc.timeScale().fitContent(), 80);
-
-    return () => ro.disconnect();
+    return () => {
+      cancelAnimationFrame(raf);
+      if (charts.current._ro) {
+        try { charts.current._ro.disconnect(); } catch {}
+      }
+    };
   }, [tech, loading, inds]);
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -421,16 +458,16 @@ export default function StockChart() {
         {/* Indicator toggles */}
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
           {[
-            { key: "ema9",   label: "EMA9",  color: T.ema9   },
-            { key: "ema21",  label: "EMA21", color: T.ema21  },
-            { key: "ema50",  label: "EMA50", color: T.ema50  },
-            { key: "ema200", label: "200",   color: T.ema200 },
-            { key: "bb",     label: "BB",    color: T.blue   },
-            { key: "vwap",   label: "VWAP",  color: T.vwap   },
-            { key: "supertrend", label: "ST",color: T.green  },
-            { key: "rsi",    label: "RSI",   color: T.purple },
-            { key: "macd",   label: "MACD",  color: T.blue   },
-            { key: "stoch",  label: "STOCH", color: T.yellow },
+            { key: "ema9",       label: "EMA9",  color: T.ema9   },
+            { key: "ema21",      label: "EMA21", color: T.ema21  },
+            { key: "ema50",      label: "EMA50", color: T.ema50  },
+            { key: "ema200",     label: "200",   color: T.ema200 },
+            { key: "bb",         label: "BB",    color: T.blue   },
+            { key: "vwap",       label: "VWAP",  color: T.vwap   },
+            { key: "supertrend", label: "ST",    color: T.green  },
+            { key: "rsi",        label: "RSI",   color: T.purple },
+            { key: "macd",       label: "MACD",  color: T.blue   },
+            { key: "stoch",      label: "STOCH", color: T.yellow },
           ].map(ind => (
             <button key={ind.key} onClick={() => setInds(p => ({ ...p, [ind.key]: !p[ind.key] }))} style={{
               padding: "2px 7px", fontSize: 10, fontWeight: 600,
@@ -474,7 +511,7 @@ export default function StockChart() {
       {/* Chart area */}
       <div style={{ padding: "0 0 24px" }}>
 
-        {/* Loading spinner */}
+        {/* Loading */}
         {loading && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 460, gap: 12, color: T.textDim }}>
             <div style={{ width: 18, height: 18, border: `2px solid ${T.border}`, borderTopColor: T.blue, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
@@ -493,55 +530,65 @@ export default function StockChart() {
           </div>
         )}
 
-        {/* No candles fallback */}
+        {/* No candles */}
         {!loading && !error && tech && !hasData && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 12, color: T.textDim }}>
             <div style={{ fontSize: 32 }}>🕯</div>
-            <div>Indicators loaded — waiting for candle data</div>
-            <div style={{ fontSize: 12, color: T.textMuted }}>NSE intraday fallback may need a moment. Try Retry or switch to 1D.</div>
+            <div>No data for {tf} — Check Upstox connection</div>
+            <div style={{ fontSize: 12, color: T.textMuted }}>Try switching to 1D or click Retry</div>
             <button onClick={fetchData} style={{ padding: "7px 18px", background: T.greenDim, color: T.green, border: `1px solid ${T.green}44`, borderRadius: 7, cursor: "pointer" }}>Retry</button>
           </div>
         )}
 
-        {/* Charts — always rendered (visibility controlled by CSS display) */}
-        <div ref={mainRef}  style={{ width: "100%", display: loading || error || !hasData ? "none" : "block" }} />
+        {/*
+          FIX-D1: Chart divs are CONDITIONALLY RENDERED — not just hidden.
+          This guarantees clientWidth > 0 when lightweight-charts initialises,
+          because the div only exists in the DOM when it's actually visible.
+          Previously these divs always existed (display:none when no data),
+          causing clientWidth = 0 → blank chart with no error.
+        */}
+        {hasData && !loading && !error && (
+          <>
+            <div ref={mainRef} style={{ width: "100%" }} />
 
-        {inds.volume && (
-          <div style={{ borderTop: `1px solid ${T.border}`, display: loading || error || !hasData ? "none" : "block" }}>
-            <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>Volume</div>
-            <div ref={volRef} style={{ width: "100%" }} />
-          </div>
+            {inds.volume && (
+              <div style={{ borderTop: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>Volume</div>
+                <div ref={volRef} style={{ width: "100%" }} />
+              </div>
+            )}
+
+            {inds.rsi && (
+              <div style={{ borderTop: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>
+                  RSI(14) — <span style={{ color: tech?.rsi > 70 ? T.red : tech?.rsi < 30 ? T.green : T.purple }}>{tech?.rsi?.toFixed(1)}</span>
+                </div>
+                <div ref={rsiRef} style={{ width: "100%" }} />
+              </div>
+            )}
+
+            {inds.macd && (
+              <div style={{ borderTop: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>
+                  MACD — <span style={{ color: tech?.macd?.crossover === "BULLISH" ? T.green : T.red }}>{tech?.macd?.crossover}</span>
+                  {" "}Hist: <span style={{ color: (tech?.macd?.histogram || 0) >= 0 ? T.green : T.red }}>{tech?.macd?.histogram?.toFixed(3)}</span>
+                </div>
+                <div ref={macdRef} style={{ width: "100%" }} />
+              </div>
+            )}
+
+            {inds.stoch && (
+              <div style={{ borderTop: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>
+                  Stoch — K: <span style={{ color: T.blue }}>{tech?.stochastic?.k?.toFixed(1)}</span> D: <span style={{ color: T.yellow }}>{tech?.stochastic?.d?.toFixed(1)}</span>
+                </div>
+                <div ref={stochRef} style={{ width: "100%" }} />
+              </div>
+            )}
+          </>
         )}
 
-        {inds.rsi && (
-          <div style={{ borderTop: `1px solid ${T.border}`, display: loading || error || !hasData ? "none" : "block" }}>
-            <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>
-              RSI(14) — <span style={{ color: tech?.rsi > 70 ? T.red : tech?.rsi < 30 ? T.green : T.purple }}>{tech?.rsi?.toFixed(1)}</span>
-            </div>
-            <div ref={rsiRef} style={{ width: "100%" }} />
-          </div>
-        )}
-
-        {inds.macd && (
-          <div style={{ borderTop: `1px solid ${T.border}`, display: loading || error || !hasData ? "none" : "block" }}>
-            <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>
-              MACD — <span style={{ color: tech?.macd?.crossover === "BULLISH" ? T.green : T.red }}>{tech?.macd?.crossover}</span>
-              {" "}Hist: <span style={{ color: (tech?.macd?.histogram || 0) >= 0 ? T.green : T.red }}>{tech?.macd?.histogram?.toFixed(3)}</span>
-            </div>
-            <div ref={macdRef} style={{ width: "100%" }} />
-          </div>
-        )}
-
-        {inds.stoch && (
-          <div style={{ borderTop: `1px solid ${T.border}`, display: loading || error || !hasData ? "none" : "block" }}>
-            <div style={{ fontSize: 9, color: T.textMuted, padding: "3px 8px", textTransform: "uppercase", letterSpacing: 1 }}>
-              Stoch — K: <span style={{ color: T.blue }}>{tech?.stochastic?.k?.toFixed(1)}</span> D: <span style={{ color: T.yellow }}>{tech?.stochastic?.d?.toFixed(1)}</span>
-            </div>
-            <div ref={stochRef} style={{ width: "100%" }} />
-          </div>
-        )}
-
-        {/* OHLCV crosshair tooltip */}
+        {/* Crosshair OHLCV tooltip */}
         {cross && hasData && (
           <div style={{ position: "fixed", top: 70, left: 16, background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 7, padding: "6px 12px", fontSize: 11, zIndex: 200, pointerEvents: "none" }}>
             <span style={{ marginRight: 12 }}>O: <span style={{ color: T.text }}>{cross.open?.toFixed(2)}</span></span>
