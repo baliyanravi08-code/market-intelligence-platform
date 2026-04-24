@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "main": "server/server.js",
   "scripts": {
-    "build": "npm install && cd client && npm install && npm run build",
-    "start": "node server/server.js"
-  },
+  "postinstall": "node server/patches/fix-upstox-sdk.js",
+  "build": "npm install && cd client && npm install && npm run build",
+  "start": "node server/server.js"
+},
   "dependencies": {
     "axios": "^1.7.0",
     "cheerio": "^1.2.0",
