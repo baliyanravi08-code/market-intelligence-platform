@@ -1,14 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 
-// ── Socket singleton ──────────────────────────────────────────────────────────
 let _socket = null;
 function getSocket() {
   if (!_socket) _socket = io({ transports: ["websocket"] });
   return _socket;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt   = (n, d = 2) => n == null ? "—" : Number(n).toFixed(d);
 const fmtK  = (n) => {
   if (!n) return "—";
@@ -20,7 +18,6 @@ const clr   = (v) => v > 0 ? "#4ade80" : v < 0 ? "#f87171" : "#9ca3af";
 const arrow = (v) => v > 0 ? "▲" : v < 0 ? "▼" : "—";
 const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
 
-// ── ACCESS CONTROL ─────────────────────────────────────────────────────────────
 const ACCESS_PIN = "MARKET2024";
 const SESSION_KEY = "mscanner_auth";
 
@@ -58,7 +55,6 @@ function AccessGate({ onAuth }) {
   );
 }
 
-// ── Theme ─────────────────────────────────────────────────────────────────────
 const T = {
   bg: "#060a10", bgPanel: "#0a0f16", bgCard: "#0d1117", bgItem: "#111620",
   border: "#1e2a3a", borderSub: "#192130",
@@ -117,16 +113,9 @@ function McapBadge({ bucket, label }) {
   return <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 3, fontWeight: 600, background: s.bg, color: s.color }}>{label || "—"}</span>;
 }
 
-// ── StockRow ──────────────────────────────────────────────────────────────────
-// FIX 8: Derive prevClose from stock.ltp / (1 + changePct/100) when prevClose=0
-// This handles NSE stocks where previousClose was missing in the API response.
-// Without this, live change always shows 0% for those stocks because
-// (livePrice - ltp) / ltp ≈ 0 for small intraday moves.
-function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
-  // Resolve a reliable prevClose:
-  // 1. Use stock.prevClose if it's a valid non-zero number
-  // 2. Derive from (ltp / (1 + changePct/100)) when prevClose=0 but changePct!=0
-  // 3. Fall back to stock.ltp (live change will show ~0 but avoids NaN)
+// FIX: StockRow accepts _v prop (techVersion) to force re-render when tech data arrives.
+// _v is not used inside but its presence in props makes React re-render when it changes.
+function StockRow({ stock, rank, onSelect, selected, tech, livePrice, _v }) {
   let prevClose = stock.prevClose || 0;
   if (prevClose <= 0 && stock.changePct !== 0 && stock.ltp > 0) {
     prevClose = Math.round((stock.ltp / (1 + stock.changePct / 100)) * 100) / 100;
@@ -200,7 +189,6 @@ function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
   );
 }
 
-// ── Technical Panel ───────────────────────────────────────────────────────────
 function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClose }) {
   if (!symbol) return null;
   const scoreColor = tech
@@ -236,7 +224,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
         <button type="button" onClick={e => { e.preventDefault(); onClose(); }} style={{ background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec, width: 28, height: 28, borderRadius: 5, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
       </div>
 
-      {/* Timeframe switcher */}
       <div style={{ display: "flex", gap: 2, marginBottom: 14, background: "#080d14", padding: 3, borderRadius: 7, border: `1px solid ${T.border}` }}>
         {TIMEFRAMES.map(tf => (
           <button type="button" key={tf.id} onClick={e => { e.preventDefault(); onTimeframeChange(tf.id); }} style={{ flex: 1, padding: "5px 0", fontSize: 10, fontWeight: 700, borderRadius: 5, cursor: "pointer", border: "none", background: timeframe === tf.id ? T.indigo : "transparent", color: timeframe === tf.id ? "#fff" : T.textDim, transition: "all 0.15s" }}>{tf.label}</button>
@@ -258,7 +245,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
       )}
       {!loading && tech && (
         <>
-          {/* Signal card */}
           <div style={{ background: sigBg, border: `1px solid ${tech.signal?.includes("BUY") ? "#4ade8044" : tech.signal?.includes("SELL") ? "#f8717144" : "#fbbf2444"}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
             <div style={{ fontSize: 10, color: T.textSec, fontWeight: 700, letterSpacing: "0.8px", marginBottom: 10 }}>LIVE SIGNAL · {timeframe.toUpperCase()}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -413,8 +399,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
   );
 }
 
-// ── GainLossCard ──────────────────────────────────────────────────────────────
-// FIX 8 (same prevClose derivation applied here)
 function GainLossCard({ title, stocks, onSelect, accent, onViewAll, livePriceMap }) {
   return (
     <div style={{ background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden", flex: 1 }}>
@@ -426,7 +410,6 @@ function GainLossCard({ title, stocks, onSelect, accent, onViewAll, livePriceMap
         {(stocks || []).slice(0, 15).map(s => {
           const livePrice = livePriceMap?.[s.symbol];
 
-          // FIX: same prevClose derivation as StockRow
           let prevClose = s.prevClose || 0;
           if (prevClose <= 0 && s.changePct !== 0 && s.ltp > 0) {
             prevClose = Math.round((s.ltp / (1 + s.changePct / 100)) * 100) / 100;
@@ -497,7 +480,7 @@ function BreadthBar({ advancing, declining, unchanged, total }) {
   );
 }
 
-// ── Backtest engine (localStorage) ────────────────────────────────────────────
+// ── Backtest engine ───────────────────────────────────────────────────────────
 const BT_KEY = "mscanner_backtest_v2";
 
 function btLoad() {
@@ -647,7 +630,6 @@ function BacktestPanel({ onClose, techCacheRef }) {
             <button type="button" onClick={onClose} style={{ background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec, width: 30, height: 30, borderRadius: 5, cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
           </div>
         </div>
-        {/* Stats bar */}
         <div style={{ display: "flex", gap: 10, padding: "12px 20px", borderBottom: `1px solid ${T.border}`, background: "#080d14", flexShrink: 0, flexWrap: "wrap" }}>
           {[
             { label: "Total Signals", value: analytics.total,     color: T.blue },
@@ -665,14 +647,12 @@ function BacktestPanel({ onClose, techCacheRef }) {
             </div>
           ))}
         </div>
-        {/* Sub tabs */}
         <div style={{ display: "flex", gap: 2, padding: "8px 20px", background: "#080d14", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
           {[{ id: "tracker", label: "📋 Daily Tracker" }, { id: "analytics", label: "📊 Analytics" }, { id: "trend", label: "📈 Daily Trend" }].map(t => (
             <button key={t.id} type="button" onClick={() => setBtTab(t.id)} style={{ padding: "5px 14px", borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "1px solid", borderColor: btTab === t.id ? T.blue : T.border, background: btTab === t.id ? `${T.blue}18` : "transparent", color: btTab === t.id ? T.blue : T.textDim }}>{t.label}</button>
           ))}
         </div>
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-          {/* Date sidebar */}
           <div style={{ width: 130, borderRight: `1px solid ${T.border}`, overflowY: "auto", background: "#080d14", flexShrink: 0 }}>
             <div style={{ padding: "8px 10px", fontSize: 9, color: T.textDim, fontWeight: 700, letterSpacing: "0.8px" }}>SESSIONS</div>
             {dates.length === 0 && <div style={{ padding: "12px 10px", fontSize: 10, color: T.textDim }}>No data yet</div>}
@@ -687,7 +667,6 @@ function BacktestPanel({ onClose, techCacheRef }) {
               );
             })}
           </div>
-          {/* Content */}
           <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
             {btTab === "tracker" && (
               <>
@@ -816,7 +795,7 @@ function BacktestPanel({ onClose, techCacheRef }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ── MAIN PAGE ─────────────────────────────────────────────────────────────────
+// ── MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default function MarketScannerPage() {
@@ -838,9 +817,12 @@ function ScannerBody() {
   const [showBacktest,  setShowBacktest]   = useState(false);
   const [displayLimit,  setDisplayLimit]   = useState(500);
   const [autoCapMsg,    setAutoCapMsg]     = useState("");
+  const [livePriceMap,  setLivePriceMap]   = useState({});
 
-  // Live price map: symbol → latest ltp from Upstox WS ticks
-  const [livePriceMap, setLivePriceMap] = useState({});
+  // FIX: techVersion state — increments when techCacheRef gets new data,
+  // forcing StockRow components to re-render and show RSI/MACD/Bollinger.
+  // Without this, techCacheRef mutations are invisible to React.
+  const [techVersion,   setTechVersion]    = useState(0);
 
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
@@ -850,7 +832,6 @@ function ScannerBody() {
 
   useEffect(() => { activeTFRef.current = activeTF; }, [activeTF]);
 
-  // ── Auto-capture at 9:15 AM ────────────────────────────────────────────────
   useEffect(() => {
     const tryAutoCapture = () => {
       if (autoCapFired.current) return;
@@ -890,25 +871,25 @@ function ScannerBody() {
       setUpdatedAt(new Date(d.updatedAt));
     });
 
-    // scanner-tech-batch: update tech cache and extract live LTP from 1day entries
+    // FIX: Track whether new tech data arrived so we can trigger re-render
     socket.on("scanner-tech-batch", (batch) => {
       if (!Array.isArray(batch) || !batch.length) return;
 
       const priceUpdates = {};
+      let hasNew = false; // FIX: track if any new data was received
 
       for (const { key, data: techData } of batch) {
         if (!key || !techData) continue;
         const existing = techCacheRef.current[key];
         if (!existing || techData.computedAt > existing.computedAt) {
           techCacheRef.current[key] = techData;
+          hasNew = true; // FIX: mark that cache was updated
 
-          // Extract live price from 1day tech (the pre-warmed, authoritative price)
           if (key.endsWith(":1day") && techData.ltp) {
             const sym = key.replace(":1day", "");
             priceUpdates[sym] = techData.ltp;
           }
 
-          // Update open tech panel if it matches
           if (selectedSymRef.current) {
             const panelKey = `${selectedSymRef.current}:${activeTFRef.current}`;
             if (key === panelKey) setTech(techData);
@@ -916,12 +897,15 @@ function ScannerBody() {
         }
       }
 
+      // FIX: Increment techVersion to force StockRow re-renders so they
+      // pick up RSI/MACD/Bollinger/MA Signal from the updated techCacheRef.
+      if (hasNew) setTechVersion(v => v + 1);
+
       if (Object.keys(priceUpdates).length > 0) {
         setLivePriceMap(prev => ({ ...prev, ...priceUpdates }));
       }
     });
 
-    // backtest-live-tick: real-time per-tick price from Upstox WS
     socket.on("backtest-live-tick", ({ symbol: sym, price }) => {
       if (sym && price > 0) {
         setLivePriceMap(prev => ({ ...prev, [sym]: price }));
@@ -948,6 +932,7 @@ function ScannerBody() {
     setTech(null);
     setTechLoading(true);
     try {
+      // FIX: Pass timeframe as query param — server's getTechnicalsREST now reads it
       const res  = await fetch(`/api/scanner/technicals/${symbol}?timeframe=${tf}`);
       const json = await res.json();
       if (json && !json.error) {
@@ -976,7 +961,6 @@ function ScannerBody() {
   const stocks   = getStocksForTab(data, tab);
   const filtered = searchQ ? stocks.filter(s => s.symbol.includes(searchQ.toUpperCase()) || (s.name || "").toLowerCase().includes(searchQ.toLowerCase())) : stocks;
 
-  // Sort using live prices when available
   const sorted = [...filtered].sort((a, b) => {
     const getPct = (s) => {
       const lp = livePriceMap[s.symbol];
@@ -1012,7 +996,6 @@ function ScannerBody() {
   return (
     <div style={{ background: T.bg, minHeight: "100vh", color: T.textPri, fontFamily: "'JetBrains Mono','Fira Code','Courier New',monospace" }}>
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div style={{ background: "#080d14", borderBottom: `1px solid ${T.border}`, padding: "12px 20px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 900, color: T.textPri, letterSpacing: "0.8px" }}>📊 MARKET SCANNER</div>
@@ -1052,7 +1035,6 @@ function ScannerBody() {
         </div>
       </div>
 
-      {/* ── Body ───────────────────────────────────────────────────────────── */}
       <div style={{ padding: "16px 20px 40px", paddingRight: selectedSym ? "390px" : "20px", transition: "padding-right 0.2s" }}>
 
         {data && (
@@ -1062,7 +1044,6 @@ function ScannerBody() {
           </div>
         )}
 
-        {/* Tab bar */}
         <div ref={tableRef} style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
           {TABS.map(t => (
             <button type="button" key={t.id} onClick={e => { e.preventDefault(); setTab(t.id); setDisplayLimit(500); }} style={{
@@ -1131,9 +1112,10 @@ function ScannerBody() {
                   </thead>
                   <tbody>
                     {sorted.slice(0, displayLimit).map((s, i) => (
-                      // FIX 7: stable key uses only symbol — removed techVersion which
-                      // caused all 600 rows to remount on every tech-batch socket event.
-                      // Tech data is passed as a prop so rows update without remounting.
+                      // FIX: Pass _v={techVersion} so React re-renders rows when
+                      // tech cache updates (refs don't trigger re-renders alone).
+                      // The _v prop is intentionally unused inside StockRow —
+                      // its presence in props is what causes React to re-render.
                       <StockRow
                         key={s.symbol}
                         stock={s}
@@ -1142,6 +1124,7 @@ function ScannerBody() {
                         selected={selectedSym === s.symbol}
                         tech={techCacheRef.current[`${s.symbol}:${activeTF}`] || null}
                         livePrice={livePriceMap[s.symbol] ?? null}
+                        _v={techVersion}
                       />
                     ))}
                   </tbody>
@@ -1164,7 +1147,6 @@ function ScannerBody() {
         )}
       </div>
 
-      {/* Tech panel */}
       {selectedSym && (
         <TechPanel
           symbol={selectedSym}

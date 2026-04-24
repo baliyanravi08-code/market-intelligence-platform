@@ -5,14 +5,16 @@
  * Location: server/services/upstoxStream.js
  *
  * FIXES:
- *  1. Stock subscriptions now persist across reconnects
+ *  1. Stock subscriptions persist across reconnects
  *  2. Day-end price display fixed — tracks prevClose per symbol in prevCloseCache
  *  3. Backtest engine wired for auto WIN/LOSS resolution
- *  4. Stock ticks now always emit backtest-live-tick to frontend for live prices
+ *  4. Stock ticks emit backtest-live-tick to frontend for live prices
  *  5. subscribeWithInstrumentKeys(keys) — accepts pre-resolved NSE_EQ|ISIN keys
- *  6. parseAndEmit now extracts symbol name from instrument key properly
- *  7. FIX: Stock ticks now cache prevClose (cp field) and emit changePct
- *     so the scanner list shows real % change, not frozen 0.00%
+ *  6. parseAndEmit extracts symbol name from instrument key properly
+ *  7. FIX: Stock ticks cache prevClose (cp field) and emit changePct
+ *  8. FIX: applyLiveTick called directly on scanner after each stock tick —
+ *     previously wired via socket.on("backtest-live-tick") which is dead code
+ *     (server cannot receive its own ioRef.emit broadcasts)
  */
 
 let UpstoxClient = null;
@@ -27,7 +29,6 @@ let currentToken = null;
 let ioRef        = null;
 let reconnTimer  = null;
 
-// ── Injected handlers ─────────────────────────────────────────────────────────
 let ltpTickHandler = null;
 let oiTickHandler  = null;
 let backtestEngine = null;
@@ -50,7 +51,6 @@ function setBacktestEngine(engine) {
   }
 }
 
-// ── Index instruments ─────────────────────────────────────────────────────────
 const INDEX_INSTRUMENTS = [
   "NSE_INDEX|Nifty 50",
   "BSE_INDEX|SENSEX",
@@ -69,18 +69,11 @@ const GANN_SYMBOL_MAP = {
   "SENSEX":     "SENSEX",
 };
 
-// ── Option instruments ────────────────────────────────────────────────────────
-const optionInstruments = new Set();
-
-// ── Stock instruments for live tracking ──────────────────────────────────────
-const stockInstruments    = new Set(); // symbol-based: NSE_EQ|RELIANCE
-const stockInstrumentKeys = new Set(); // ISIN-based:   NSE_EQ|INE002A01018
-
-// Reverse map from instrument key → trading symbol
-const instrKeyToSymbol = new Map();
-
-// ── Per-symbol prevClose cache (indexes AND stocks) ───────────────────────────
-const prevCloseCache = new Map();
+const optionInstruments    = new Set();
+const stockInstruments     = new Set();
+const stockInstrumentKeys  = new Set();
+const instrKeyToSymbol     = new Map();
+const prevCloseCache       = new Map();
 
 function getSafePrevClose(key, ltpc, currentPrice) {
   const cp = parseFloat(ltpc.cp || 0);
@@ -98,18 +91,16 @@ function subscribeOptions(instrKeys) {
   const newKeys = instrKeys.filter(k => !optionInstruments.has(k));
   if (!newKeys.length) return;
   newKeys.forEach(k => optionInstruments.add(k));
-  console.log(`📡 Upstox: queuing ${newKeys.length} option instruments`);
   if (streamer) {
     try {
       streamer.subscribe(newKeys, "full_d30");
-      console.log(`✅ Upstox: subscribed ${newKeys.length} option instruments (full_d30)`);
+      console.log(`✅ Upstox: subscribed ${newKeys.length} option instruments`);
     } catch (e) {
       console.warn("⚠️ Upstox option subscribe error:", e.message);
     }
   }
 }
 
-// ── subscribeStocksForBacktest ────────────────────────────────────────────────
 function subscribeStocksForBacktest(symbols) {
   if (!symbols || !symbols.length) return;
   const keys    = symbols.map(s => `NSE_EQ|${s.toUpperCase()}`);
@@ -122,7 +113,7 @@ function subscribeStocksForBacktest(symbols) {
   if (streamer) {
     try {
       streamer.subscribe(newKeys, "ltpc");
-      console.log(`📡 Upstox: subscribed ${newKeys.length} stocks (symbol format) for live tracking`);
+      console.log(`📡 Upstox: subscribed ${newKeys.length} stocks for live tracking`);
     } catch (e) {
       console.warn("⚠️ Upstox stock subscribe error:", e.message);
     }
@@ -131,7 +122,6 @@ function subscribeStocksForBacktest(symbols) {
   }
 }
 
-// ── subscribeWithInstrumentKeys ───────────────────────────────────────────────
 function subscribeWithInstrumentKeys(instrKeys, symbolMap) {
   if (!instrKeys || !instrKeys.length) return;
   const newKeys = instrKeys.filter(k => !stockInstrumentKeys.has(k));
@@ -150,12 +140,12 @@ function subscribeWithInstrumentKeys(instrKeys, symbolMap) {
   if (streamer) {
     try {
       streamer.subscribe(newKeys, "ltpc");
-      console.log(`📡 Upstox: subscribed ${newKeys.length} stocks (instrument key format) for live tracking`);
+      console.log(`📡 Upstox: subscribed ${newKeys.length} stocks (instrument key format)`);
     } catch (e) {
       console.warn("⚠️ Upstox instrument key subscribe error:", e.message);
     }
   } else {
-    console.log(`📡 Upstox: queued ${newKeys.length} instrument keys (will subscribe on next connect)`);
+    console.log(`📡 Upstox: queued ${newKeys.length} instrument keys`);
   }
 }
 
@@ -163,7 +153,17 @@ function getAccessToken() {
   return currentToken || process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
-// ── Parse and emit ticks ──────────────────────────────────────────────────────
+// ── FIX: Lazy reference to scanner to avoid circular require at module load ───
+let _scanner = null;
+function getScanner() {
+  if (!_scanner) {
+    try {
+      _scanner = require("./intelligence/marketScanner");
+    } catch (_) {}
+  }
+  return _scanner;
+}
+
 function parseAndEmit(raw) {
   try {
     const text = typeof raw === "string" ? raw : raw.toString("utf-8");
@@ -228,15 +228,10 @@ function parseAndEmit(raw) {
         if (ltpc) {
           const price = parseFloat(ltpc.ltp || 0);
           if (price > 0) {
-            // FIX: Cache prevClose (cp) for stocks — same as indexes
-            // Without this, changePct is always null because cp=0 after market open
             const cp = parseFloat(ltpc.cp || 0);
-            if (cp > 0) {
-              prevCloseCache.set(key, cp);
-            }
+            if (cp > 0) prevCloseCache.set(key, cp);
             const prevClose = prevCloseCache.get(key) || null;
 
-            // Compute live changePct from cached prevClose
             let changePct = null;
             let change    = null;
             if (prevClose && prevClose > 0) {
@@ -244,26 +239,25 @@ function parseAndEmit(raw) {
               changePct = Math.round(((price - prevClose) / prevClose) * 10000) / 100;
             }
 
-            // Resolve symbol name
-            // instrKeyToSymbol covers ISIN-based keys (NSE_EQ|INE002A01018 → RELIANCE)
-            // Fallback strips prefix for symbol-based keys (NSE_EQ|RELIANCE → RELIANCE)
             let symbol = instrKeyToSymbol.get(key);
             if (!symbol) {
               symbol = key.replace(/^(NSE_EQ|BSE_EQ)\|/, "");
             }
 
-            // Emit to frontend with changePct so scanner list updates live
+            // Emit to frontend clients
             if (ioRef) {
-              ioRef.emit("backtest-live-tick", {
-                symbol,
-                price,
-                prevClose,
-                change,
-                changePct,
-              });
+              ioRef.emit("backtest-live-tick", { symbol, price, prevClose, change, changePct });
             }
 
-            // Forward to backtest engine for WIN/LOSS auto-resolution
+            // FIX: Call scanner's applyLiveTick directly — the server cannot
+            // receive its own ioRef.emit() via socket.on(), so the old
+            // socket.on("backtest-live-tick") in marketScanner was dead code.
+            const scanner = getScanner();
+            if (scanner && typeof scanner.applyLiveTick === "function") {
+              scanner.applyLiveTick({ symbol, price, changePct, change });
+            }
+
+            // Forward to backtest engine
             if (backtestEngine) backtestEngine.onLTPTick(symbol, price);
           }
         }
@@ -279,7 +273,6 @@ function parseAndEmit(raw) {
   }
 }
 
-// ── Streamer lifecycle ────────────────────────────────────────────────────────
 function stopStreamer() {
   if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
   if (streamer) {
@@ -291,7 +284,6 @@ function stopStreamer() {
   }
 }
 
-// ── resubscribeAll — called on every "open" event ────────────────────────────
 function resubscribeAll() {
   if (!streamer) return;
 
