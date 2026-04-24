@@ -1066,6 +1066,20 @@ async function preWarmTechCache(symbols) {
       if (result) {
         batch.push({ key: `${sym}:1day`, data: result });
         warmed++;
+
+        // ← Seed changePct/ltp from last two candles so gainers/losers
+        //   show correct % before any live WebSocket tick arrives
+        const stock = stockBySymbol.get(sym);
+        if (stock && result._candles?.length >= 2) {
+          const last = result._candles[result._candles.length - 1];
+          const prev = result._candles[result._candles.length - 2];
+          if (last && prev && prev.close > 0) {
+            stock.ltp       = last.close;
+            stock.changePct = Math.round(((last.close - prev.close) / prev.close) * 10000) / 100;
+            stock.change    = Math.round((last.close  - prev.close) * 100) / 100;
+            stock.prevClose = prev.close;
+          }
+        }
       }
       if (batch.length >= BATCH_EMIT_SIZE) {
         if (ioRef) ioRef.emit("scanner-tech-batch", batch);
