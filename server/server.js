@@ -77,7 +77,6 @@ let upstoxAccessToken = null;
 let upstoxTokenExpiry = null;
 
 // ── MongoDB Token Schema ──────────────────────────────────────────────────────
-// We store the Algo Trading token in MongoDB so it survives Render restarts
 let UpstoxTokenModel = null;
 function getTokenModel() {
   if (UpstoxTokenModel) return UpstoxTokenModel;
@@ -107,7 +106,7 @@ async function saveTokenEverywhere(token, expiry) {
   upstoxAccessToken = token;
   upstoxTokenExpiry = expiry || (Date.now() + 23 * 60 * 60 * 1000);
 
-  // 1. Save to MongoDB (survives Render restarts)
+  // 1. Save to MongoDB
   try {
     const Model = getTokenModel();
     if (Model) {
@@ -133,7 +132,7 @@ async function saveTokenEverywhere(token, expiry) {
     console.warn("⚠️ Disk token save failed:", e.message);
   }
 
-  // 3. Update process env for any direct reads
+  // 3. Update process env
   process.env.UPSTOX_ACCESS_TOKEN = token;
 }
 
@@ -141,6 +140,7 @@ async function saveTokenEverywhere(token, expiry) {
 let instrumentMap = {};
 
 async function loadInstrumentMaster() {
+  // Check disk cache first (valid for 24h)
   try {
     if (fs.existsSync(INSTRUMENT_FILE)) {
       const cached = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
@@ -154,25 +154,37 @@ async function loadInstrumentMaster() {
   } catch (e) { /* rebuild below */ }
 
   try {
-    console.log("📥 Fetching Upstox instrument master...");
-    const res = await axios.get(
-      "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
-      { timeout: 30_000, responseType: "arraybuffer" }
-    );
-    const zlib         = require("zlib");
-    const decompressed = zlib.gunzipSync(Buffer.from(res.data));
-    const instruments  = JSON.parse(decompressed.toString("utf8"));
-    const map = {};
-    for (const inst of instruments) {
-      if (inst.segment === "NSE_EQ" && inst.instrument_type === "EQ") {
-        map[inst.trading_symbol] = inst.instrument_key;
+    console.log("📥 Fetching Upstox instrument master (NSE + BSE)...");
+    const zlib = require("zlib");
+    const map  = {};
+
+    // ── FIX: Load BOTH exchanges so BSE-only stocks (e.g. COCHINSHIP) are found ──
+    const exchanges = [
+      { url: "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz", segment: "NSE_EQ" },
+      { url: "https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz", segment: "BSE_EQ" },
+    ];
+
+    for (const { url, segment } of exchanges) {
+      const res          = await axios.get(url, { timeout: 30_000, responseType: "arraybuffer" });
+      const decompressed = zlib.gunzipSync(Buffer.from(res.data));
+      const instruments  = JSON.parse(decompressed.toString("utf8"));
+
+      for (const inst of instruments) {
+        if (inst.segment === segment && inst.instrument_type === "EQ") {
+          // Prefer NSE key — only store BSE if symbol not already found in NSE
+          if (!map[inst.trading_symbol] || segment === "NSE_EQ") {
+            map[inst.trading_symbol] = inst.instrument_key;
+          }
+        }
       }
+      console.log(`✅ ${segment} loaded`);
     }
+
     instrumentMap = map;
     const dir = path.dirname(INSTRUMENT_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(INSTRUMENT_FILE, JSON.stringify({ _ts: Date.now(), map }), "utf8");
-    console.log(`✅ Instrument master fetched & cached: ${Object.keys(map).length} NSE EQ symbols`);
+    console.log(`✅ Instrument master: ${Object.keys(map).length} symbols (NSE + BSE)`);
     _pushMapToGann(instrumentMap);
   } catch (e) {
     console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
@@ -223,11 +235,8 @@ function _pushMapToGann(map) {
 function getInstrumentMap() { return instrumentMap; }
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
-// FIX: loadToken now checks MongoDB FIRST for the Algo Trading token
-// This means after /auth/upstox/callback, even after Render restarts,
-// the fresh Algo token is loaded automatically — no manual env update needed.
 async function loadToken() {
-  // Priority 1: MongoDB Algo Trading token (most up to date, survives restarts)
+  // Priority 1: MongoDB Algo Trading token
   try {
     const Model = getTokenModel();
     if (Model) {
@@ -246,7 +255,7 @@ async function loadToken() {
     console.warn("⚠️ MongoDB token load failed:", e.message);
   }
 
-  // Priority 2: Analytics Token from env (read-only, good for historical data)
+  // Priority 2: Analytics Token from env
   if (process.env.UPSTOX_ANALYTICS_TOKEN) {
     upstoxAccessToken = process.env.UPSTOX_ANALYTICS_TOKEN;
     upstoxTokenExpiry = Date.now() + 365 * 24 * 60 * 60 * 1000;
@@ -279,7 +288,6 @@ function clearToken() {
 }
 
 // ── Startup sequence ──────────────────────────────────────────────────────────
-// FIX: loadToken is now async, so we await it before starting services
 async function startApp() {
   await loadToken();
 
@@ -307,7 +315,6 @@ async function startApp() {
   startNSEDealsListener(io);
   startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
 
-  // FIX: Pass token to index candle fetcher
   if (upstoxAccessToken) {
     setICFToken(upstoxAccessToken);
     console.log("✅ Index candle fetcher token set");
@@ -317,7 +324,6 @@ async function startApp() {
   setScannerInstrumentMap(instrumentMap);
   startMarketScanner(io);
 
-  // Daily token check at 8:30 AM IST
   scheduleDailyTokenCheck();
 
   const PORT = process.env.PORT || 10000;
@@ -333,7 +339,6 @@ async function startApp() {
   });
 }
 
-// Start the app
 startApp().catch(e => console.error("❌ startApp failed:", e.message));
 
 // ── Daily token check scheduler ───────────────────────────────────────────────
@@ -397,14 +402,11 @@ app.get("/auth/upstox/callback", async (req, res) => {
     const newToken  = response.data.access_token;
     const newExpiry = Date.now() + (response.data.expires_in || 86400) * 1000;
 
-    // FIX: Save to MongoDB + disk + memory
     await saveTokenEverywhere(newToken, newExpiry);
 
-    // FIX: Hot-reload all services with new token — no restart needed!
     setICFToken(newToken);
     startStreamer(newToken, io);
 
-    // FIX: Also update scanner token if it has a setter
     try {
       const scanner = require("./services/intelligence/marketScanner");
       if (typeof scanner.setToken === "function") scanner.setToken(newToken);
@@ -567,12 +569,10 @@ app.get("/api/test-circuit", async (req, res) => {
   }
 });
 
-// ── NEW: /api/candles/:symbol — direct candle fetch for charts ────────────────
-// This endpoint fetches candle data directly from Upstox for any timeframe
-// Frontend StockChart.jsx can call this to render 5min/15min/1hr/4hr charts
+// ── /api/candles/:symbol ──────────────────────────────────────────────────────
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
-  const tf     = req.query.tf || "1day"; // 5minute, 15minute, 30minute, 60minute, 1day, 1week, 1month
+  const tf     = req.query.tf || "1day";
   const days   = parseInt(req.query.days || "30");
 
   const instrKey = instrumentMap[symbol];
@@ -590,17 +590,17 @@ app.get("/api/candles/:symbol", async (req, res) => {
     "30min":  "30minute",
     "1hour":  "60minute",
     "4hour":  "240minute",
-    "1day":   "1day",
-    "1week":  "1week",
-    "1month": "1month",
+    "1day":   "day",
+    "1week":  "week",
+    "1month": "month",
   };
-  const interval = TF_MAP[tf] || tf;
+  const interval = TF_MAP[tf] || "day";
 
   // Calculate date range
   const toDate   = new Date();
   const fromDate = new Date();
   if (["5minute","15minute","30minute","60minute","240minute"].includes(interval)) {
-    fromDate.setDate(fromDate.getDate() - Math.min(days, 30)); // max 30 days for intraday
+    fromDate.setDate(fromDate.getDate() - Math.min(days, 30));
   } else {
     fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
   }
@@ -858,7 +858,7 @@ app.get("/api/scanner/technicals/:symbol", async (req, res) => {
     if (!result) return res.json({
       error: `No data for ${symbol} [${tf}]`,
       debug: {
-        tokenPresent:     !!(upstoxAccessToken),
+        tokenPresent:       !!(upstoxAccessToken),
         instrumentKeyFound: !!(getInstrumentMap()[symbol]),
       }
     });
