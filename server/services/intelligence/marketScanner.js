@@ -79,6 +79,15 @@ let lastBacktestCapture = "";
 
 let symbolBucketMap = {};
 
+// ── FIX: Module-level instrument map — populated by server.js after
+//    loadInstrumentMaster() completes. Eliminates circular require() timing bug.
+let _instrumentMap = {};
+
+function setInstrumentMap(map) {
+  _instrumentMap = map;
+  console.log(`📊 Scanner: instrument map loaded — ${Object.keys(map).length} symbols`);
+}
+
 function buildSymbolBucketMap() {
   try {
     if (!fs.existsSync(MCAP_DB_PATH)) return;
@@ -178,16 +187,15 @@ function getUpstoxToken() {
   return process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
+// ── FIX: getInstrumentKey now uses _instrumentMap pushed from server.js
+//    No more circular require("../../server") — that caused empty {} at startup.
 function getInstrumentKey(symbol) {
-  try {
-    const { getInstrumentMap } = require("../../server");
-    const map = getInstrumentMap();
-    if (map && Object.keys(map).length > 0) {
-      const key = map[symbol] || map[symbol.toUpperCase()];
-      if (key) return key;
-    }
-  } catch (_) {}
+  // Primary: use the full instrument map pushed by server.js after loadInstrumentMaster()
+  // This covers ALL 2000+ NSE EQ symbols (IIFL, UNIONBANK, HAVELLS, CARTRADE, etc.)
+  if (_instrumentMap[symbol]) return _instrumentMap[symbol];
+  if (_instrumentMap[symbol?.toUpperCase()]) return _instrumentMap[symbol.toUpperCase()];
 
+  // Fallback: hardcoded top ~40 symbols in case map hasn't loaded yet
   const FALLBACK = {
     "RELIANCE":   "NSE_EQ|INE002A01018", "TCS":        "NSE_EQ|INE467B01029",
     "HDFCBANK":   "NSE_EQ|INE040A01034", "INFY":       "NSE_EQ|INE009A01021",
@@ -210,7 +218,7 @@ function getInstrumentKey(symbol) {
     "RECLTD":     "NSE_EQ|INE020B01018", "PFC":        "NSE_EQ|INE134E01011",
     "POLYCAB":    "NSE_EQ|INE455K01017", "PERSISTENT": "NSE_EQ|INE262H01021",
   };
-  return FALLBACK[symbol] || FALLBACK[symbol.toUpperCase()] || null;
+  return FALLBACK[symbol] || FALLBACK[symbol?.toUpperCase()] || null;
 }
 
 async function refreshNSECookie() {
@@ -347,7 +355,6 @@ function normaliseBSE(s) {
 function passesLiquidityGate(tech, stock) {
   const price  = tech.ltp || stock?.ltp || 0;
   const volume = tech.volRatio != null
-    // volRatio × avgVol would be ideal but we only have volRatio; use raw stock volume as proxy
     ? (stock?.volume || 0)
     : (stock?.volume || 0);
 
@@ -365,16 +372,14 @@ function passesLiquidityGate(tech, stock) {
 function passesTrendFilter(tech, signalType) {
   const isBuy  = !["SELL", "STRONG SELL", "STRONG_SELL"].includes(signalType);
   const ltp    = tech.ltp || 0;
-  const ema20  = tech.emas?.ema21 || null;   // closest we compute is ema21
+  const ema20  = tech.emas?.ema21 || null;
   const ema50  = tech.emas?.ema50 || null;
   const adx    = tech.adx?.adx   || 0;
 
-  // ADX gate: must be trending
   if (adx > 0 && adx < 20) {
     return { pass: false, reason: `ADX ${adx.toFixed(1)} < 20 (ranging/sideways)` };
   }
 
-  // Trend direction must match signal
   if (ema20 && ema50) {
     if (isBuy  && !(ltp > ema20 && ema20 > ema50)) {
       return { pass: false, reason: `BUY but price ${ltp} not in uptrend (EMA20:${ema20} EMA50:${ema50})` };
@@ -392,12 +397,6 @@ function passesTrendFilter(tech, signalType) {
  * RSI and MACD must AGREE with the signal direction.
  * This is the direct fix for IPCALAB (RSI 27 + Bearish MACD on a BUY),
  * DRREDDY (SELL signal but Bullish MACD), and SUNPHARMA (similar).
- *
- * Rules (from O'Neil CANSLIM + standard algo desk logic):
- *   BUY signal:  RSI must be 38–72 (not oversold panic, not already overbought)
- *                MACD must be BULLISH (histogram > 0)
- *   SELL signal: RSI must be 28–62 (not already oversold, room to fall)
- *                MACD must be BEARISH (histogram < 0)
  */
 function passesConsensusFilter(tech, signalType) {
   const isBuy = !["SELL", "STRONG SELL", "STRONG_SELL"].includes(signalType);
@@ -425,16 +424,10 @@ function passesConsensusFilter(tech, signalType) {
 /**
  * FILTER 4 — Volume Confirmation
  * Today's volume must be ≥ 1.5× the 20-day average.
- * "Volume precedes price" — institutional money shows up in volume first.
- * Used by NSE algo desks and William O'Neil's CANSLIM method.
- * volRatio is already computed in computeTechnicals.
  */
 function passesVolumeConfirmation(tech) {
   const volRatio = tech.volRatio || 0;
-
-  // If we don't have enough history for volRatio, let it through
   if (volRatio === 0 || volRatio === 1) return { pass: true };
-
   if (volRatio < 1.2) {
     return { pass: false, reason: `Volume ratio ${volRatio}× < 1.2× avg — no institutional conviction` };
   }
@@ -443,13 +436,10 @@ function passesVolumeConfirmation(tech) {
 
 /**
  * FILTER 5 — Risk/Reward Gate
- * From Market Wizards (Schwager) and every professional trader:
- * Even a 50% win rate is highly profitable at R:R = 2.
- * Minimum R:R 1.5:1. Prefer ≥ 2:1.
- * Signals with R:R < 1.5 are mathematical losers even with 60% accuracy.
+ * Minimum R:R 1.5:1.
  */
 function passesRRGate(entry, target, stopLoss) {
-  if (!entry || !target || !stopLoss) return { pass: true }; // can't check, let through
+  if (!entry || !target || !stopLoss) return { pass: true };
   const reward = Math.abs(target   - entry);
   const risk   = Math.abs(entry    - stopLoss);
   if (risk   === 0) return { pass: true };
@@ -462,7 +452,6 @@ function passesRRGate(entry, target, stopLoss) {
 
 /**
  * Master filter — runs all 5 gates in sequence.
- * Returns { pass: boolean, reason: string, failedFilter: number }
  */
 function applyAllFilters(tech, stock, signalType) {
   const checks = [
@@ -483,7 +472,7 @@ function applyAllFilters(tech, stock, signalType) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── Technical calculations (unchanged) ───────────────────────────────────────
+// ── Technical calculations ────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
 function calcEMA(closes, period) {
@@ -705,7 +694,6 @@ function computeTechnicals(symbol, candles) {
   const vwap     = sumV > 0 ? Math.round((sumTV / sumV) * 100) / 100 : ltp;
   const vwapDiff = Math.round(((ltp - vwap) / vwap) * 10000) / 100;
 
-  // ── Score calculation ─────────────────────────────────────────────────────
   let score = 50;
   if (rsi) {
     if (rsi > 70) score -= 10; else if (rsi < 30) score += 10;
@@ -735,13 +723,11 @@ function computeTechnicals(symbol, candles) {
     ? Math.round((entry + 3.0 * atrVal) * 100) / 100
     : Math.round((entry - 3.0 * atrVal) * 100) / 100;
 
-  // Volume ratio (today vs 20-day avg)
   const volSlice  = candles.slice(-21);
   const avgVol    = volSlice.slice(0, 20).reduce((a, c) => a + (c.v || 0), 0) / 20;
   const latestVol = volSlice[volSlice.length - 1]?.v || 0;
   const volRatio  = avgVol > 0 ? Math.round((latestVol / avgVol) * 100) / 100 : 1;
 
-  // ── Signal type — raw score-based, filters applied later ─────────────────
   const sig =
     score >= 60 ? (score >= 75 ? "STRONG BUY"  : "BUY") :
     score <= 40 ? (score <= 25 ? "STRONG SELL" : "SELL") : "HOLD";
@@ -778,18 +764,115 @@ function computeTechnicals(symbol, candles) {
 }
 
 // ── Historical candles ────────────────────────────────────────────────────────
+
+async function fetchNSEIntraday(symbol) {
+  await refreshNSECookie();
+  try {
+    const url = `https://www.nseindia.com/api/chart-databyindex?index=${encodeURIComponent(symbol)}&indices=false`;
+    const res = await axios.get(url, {
+      headers: { ...NSE_HEADERS, Cookie: nseCookie },
+      timeout: 12000,
+    });
+
+    const raw = res.data?.grapthData || res.data?.graphData || res.data?.data || [];
+    if (!Array.isArray(raw) || raw.length < 5) return [];
+
+    const candles = [];
+    for (let i = 0; i < raw.length; i++) {
+      const [ts, close] = raw[i];
+      if (!close || close <= 0) continue;
+      const prev  = i > 0 ? (raw[i - 1][1] || close) : close;
+      const next  = i < raw.length - 1 ? (raw[i + 1][1] || close) : close;
+      const high  = Math.max(close, prev, next);
+      const low   = Math.min(close, prev, next);
+      const open  = prev;
+      candles.push({ ts, o: open, h: high, l: low, c: close, v: 0 });
+    }
+    return candles;
+  } catch (e) {
+    console.warn(`📊 [${symbol}] NSE intraday chart failed:`, e.message);
+  }
+
+  try {
+    const res = await axios.get(
+      `https://www.nseindia.com/api/quote-equity?symbol=${encodeURIComponent(symbol)}`,
+      { headers: { ...NSE_HEADERS, Cookie: nseCookie }, timeout: 10000 }
+    );
+    const d = res.data?.priceInfo || res.data;
+    if (d?.lastPrice) {
+      const c = parseFloat(d.lastPrice);
+      const o = parseFloat(d.open || c);
+      const h = parseFloat(d.intraDayHighLow?.max || d.high || c);
+      const l = parseFloat(d.intraDayHighLow?.min || d.low  || c);
+      return [{ o, h, l, c, v: 0 }];
+    }
+  } catch (_) {}
+
+  return [];
+}
+
+function resampleCandles(candles1min, targetMinutes) {
+  if (!candles1min.length) return [];
+  const buckets = [];
+  let bucket    = null;
+  let count     = 0;
+
+  for (const c of candles1min) {
+    if (!bucket) {
+      bucket = { o: c.o, h: c.h, l: c.l, c: c.c, v: c.v || 0 };
+      count  = 1;
+    } else {
+      bucket.h  = Math.max(bucket.h, c.h);
+      bucket.l  = Math.min(bucket.l, c.l);
+      bucket.c  = c.c;
+      bucket.v += (c.v || 0);
+      count++;
+    }
+    if (count >= targetMinutes) {
+      buckets.push({ ...bucket });
+      bucket = null;
+      count  = 0;
+    }
+  }
+  if (bucket && count >= Math.floor(targetMinutes / 2)) buckets.push(bucket);
+  return buckets;
+}
+
+function resampleDailyToWeekly(dailyCandles) {
+  const weekly = [];
+  let bucket   = null;
+  for (const c of dailyCandles) {
+    if (!bucket) { bucket = { ...c }; continue; }
+    bucket.h  = Math.max(bucket.h, c.h);
+    bucket.l  = Math.min(bucket.l, c.l);
+    bucket.c  = c.c;
+    bucket.v += (c.v || 0);
+    if (weekly.length === 0 || weekly[weekly.length - 1]._count >= 5) {
+      bucket._count = (bucket._count || 0) + 1;
+      if (bucket._count >= 5) { weekly.push({ ...bucket }); bucket = null; }
+    } else {
+      bucket._count = (bucket._count || 0) + 1;
+    }
+  }
+  if (bucket) weekly.push(bucket);
+  return weekly;
+}
+
 async function fetchCandles(symbol, days, interval) {
   const token    = getUpstoxToken();
   const instrKey = getInstrumentKey(symbol);
   const is4H     = interval === "240minute";
+  const isIntraday = ["5minute", "15minute", "60minute", "240minute"].includes(interval);
 
+  // ── ATTEMPT 1: Upstox API ──────────────────────────────────────────────────
   if (token && instrKey) {
     try {
       const to   = new Date();
       const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
       const fmtD = d => d.toISOString().slice(0, 10);
       const enc  = encodeURIComponent(instrKey);
-      const url  = `https://api.upstox.com/v2/historical-candle/${enc}/${interval}/${fmtD(to)}/${fmtD(from)}`;
+      const upstoxInterval = is4H ? "60minute" : interval;
+      const url  = `https://api.upstox.com/v2/historical-candle/${enc}/${upstoxInterval}/${fmtD(to)}/${fmtD(from)}`;
       const res  = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         timeout: 12000,
@@ -806,7 +889,13 @@ async function fetchCandles(symbol, days, interval) {
           const agg = [];
           for (let i = 0; i + 3 < candles.length; i += 4) {
             const grp = candles.slice(i, i + 4);
-            agg.push({ o: grp[0].o, h: Math.max(...grp.map(x => x.h)), l: Math.min(...grp.map(x => x.l)), c: grp[grp.length - 1].c, v: grp.reduce((s, x) => s + x.v, 0) });
+            agg.push({
+              o: grp[0].o,
+              h: Math.max(...grp.map(x => x.h)),
+              l: Math.min(...grp.map(x => x.l)),
+              c: grp[grp.length - 1].c,
+              v: grp.reduce((s, x) => s + x.v, 0),
+            });
           }
           candles = agg;
         }
@@ -817,6 +906,61 @@ async function fetchCandles(symbol, days, interval) {
     }
   }
 
+  // ── ATTEMPT 2: NSE intraday chart fallback ─────────────────────────────────
+  if (isIntraday) {
+    try {
+      console.log(`📊 [${symbol}][${interval}] Upstox unavailable — trying NSE intraday fallback`);
+      const raw1min = await fetchNSEIntraday(symbol);
+
+      if (raw1min.length >= 5) {
+        let candles;
+        if      (interval === "5minute")   candles = resampleCandles(raw1min, 5);
+        else if (interval === "15minute")  candles = resampleCandles(raw1min, 15);
+        else if (interval === "60minute")  candles = resampleCandles(raw1min, 60);
+        else if (interval === "240minute") candles = resampleCandles(raw1min, 240);
+        else                               candles = raw1min;
+
+        if (candles && candles.length >= 5) {
+          console.log(`📊 [${symbol}][${interval}] NSE fallback: ${candles.length} candles`);
+          return candles;
+        }
+      }
+    } catch (e) {
+      console.warn(`📊 [${symbol}] NSE intraday fallback failed:`, e.message);
+    }
+
+    // ── ATTEMPT 3: Synthetic intraday from daily data ──────────────────────
+    try {
+      console.log(`📊 [${symbol}][${interval}] Trying synthetic intraday from daily data`);
+      const to   = new Date();
+      const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const fmtD = d => `${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
+      await refreshNSECookie();
+      const res = await axios.get(
+        `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmtD(from)}&to=${fmtD(to)}&csv=false`,
+        { headers: { ...NSE_HEADERS, Cookie: nseCookie }, timeout: 15000 }
+      );
+      const data = (res.data?.data || []).slice().reverse();
+      const daily = data.map(r => ({
+        o: parseFloat(r.CH_OPENING_PRICE    || 0),
+        h: parseFloat(r.CH_TRADE_HIGH_PRICE || 0),
+        l: parseFloat(r.CH_TRADE_LOW_PRICE  || 0),
+        c: parseFloat(r.CH_CLOSING_PRICE    || 0),
+        v: parseFloat(r.CH_TOT_TRADED_QTY   || 0),
+      })).filter(c => c.c > 0);
+
+      if (daily.length >= 5) {
+        console.log(`📊 [${symbol}][${interval}] Synthetic from ${daily.length} daily candles`);
+        return daily;
+      }
+    } catch (e) {
+      console.warn(`📊 [${symbol}] Synthetic intraday fallback failed:`, e.message);
+    }
+
+    return [];
+  }
+
+  // ── ATTEMPT 2b: NSE daily API fallback ────────────────────────────────────
   if (interval === "day") {
     await refreshNSECookie();
     try {
@@ -840,8 +984,45 @@ async function fetchCandles(symbol, days, interval) {
       console.warn(`📊 [${symbol}] NSE daily fallback failed:`, e.message);
     }
   }
+
+  // ── ATTEMPT 2c: NSE weekly/monthly ────────────────────────────────────────
+  if (interval === "week" || interval === "month") {
+    await refreshNSECookie();
+    try {
+      const to   = new Date();
+      const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const fmtD = d => `${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
+      const res  = await axios.get(
+        `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmtD(from)}&to=${fmtD(to)}&csv=false`,
+        { headers: { ...NSE_HEADERS, Cookie: nseCookie }, timeout: 15000 }
+      );
+      const data = (res.data?.data || []).slice().reverse();
+      const daily = data.map(r => ({
+        o: parseFloat(r.CH_OPENING_PRICE    || 0),
+        h: parseFloat(r.CH_TRADE_HIGH_PRICE || 0),
+        l: parseFloat(r.CH_TRADE_LOW_PRICE  || 0),
+        c: parseFloat(r.CH_CLOSING_PRICE    || 0),
+        v: parseFloat(r.CH_TOT_TRADED_QTY   || 0),
+      })).filter(c => c.c > 0);
+      if (daily.length >= 5) return daily;
+    } catch (e) {
+      console.warn(`📊 [${symbol}] NSE weekly/monthly fallback failed:`, e.message);
+    }
+  }
+
   return [];
 }
+
+// ── Timeframe → seconds per bar ───────────────────────────────────────────────
+const TF_SECONDS = {
+  "5min":   5   * 60,
+  "15min":  15  * 60,
+  "1hour":  60  * 60,
+  "4hour":  4   * 60 * 60,
+  "1day":   24  * 60 * 60,
+  "1week":  7   * 24 * 60 * 60,
+  "1month": 30  * 24 * 60 * 60,
+};
 
 async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
   const cfg      = TIMEFRAME_CONFIG[timeframe] || TIMEFRAME_CONFIG["1day"];
@@ -855,6 +1036,19 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
   const result = computeTechnicals(symbol, candles);
   if (result) {
     result.timeframe = timeframe;
+
+    const tfSecs  = TF_SECONDS[timeframe] || TF_SECONDS["1day"];
+    const nowSecs = Math.floor(Date.now() / 1000);
+    const slice   = candles.slice(-500);
+    result._candles = slice.map((c, i) => ({
+      time:   nowSecs - (slice.length - 1 - i) * tfSecs,
+      open:   c.o,
+      high:   c.h,
+      low:    c.l,
+      close:  c.c,
+      volume: c.v || 0,
+    }));
+
     techCache.set(cacheKey, result);
   }
   return result;
@@ -917,7 +1111,7 @@ function buildPayload(cache) {
   };
 }
 
-// ── Auto-capture signals for backtest — NOW WITH ALL 5 FILTERS ────────────────
+// ── Auto-capture signals for backtest ─────────────────────────────────────────
 function tryBacktestCapture(stocks) {
   try {
     const backtestEngine = require("../backtestEngine");
@@ -926,7 +1120,7 @@ function tryBacktestCapture(stocks) {
     const now  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
     const h    = now.getHours(), m = now.getMinutes();
     const mins = h * 60 + m;
-    const isCaptureWindow = mins >= 555 && mins <= 920; // 9:15 to 15:20
+    const isCaptureWindow = mins >= 555 && mins <= 920;
 
     if (!isCaptureWindow) return;
 
@@ -942,15 +1136,11 @@ function tryBacktestCapture(stocks) {
       const tech     = techCache.get(cacheKey);
       if (!tech) continue;
 
-      // Skip HOLD — no directional conviction
       if (tech.signal === "HOLD") { rejected.hold++; continue; }
 
-      // ── Apply all 5 filters ──────────────────────────────────────────────
       const filterResult = applyAllFilters(tech, stock, tech.signal);
       if (!filterResult.pass) {
         rejected[`f${filterResult.failedFilter}`]++;
-        // Uncomment to see why each stock is rejected:
-        // console.log(`❌ ${stock.symbol} rejected at Filter ${filterResult.failedFilter} (${filterResult.filterLabel}): ${filterResult.reason}`);
         continue;
       }
 
@@ -1061,7 +1251,6 @@ async function runScanner() {
 
     if (ioRef) ioRef.emit("scanner-update", buildPayload(scanCache));
 
-    // Subscribe top ~120 stocks for live ticks
     try {
       const { subscribeStocksForBacktest } = require("../upstoxStream");
       const topSymbols = [
@@ -1077,14 +1266,12 @@ async function runScanner() {
       console.error("📊 Scanner: stock subscription FAILED —", e.message, e.stack);
     }
 
-    // Pre-warm tech cache for all stocks (not just top 100)
-    // Now warming all available stocks for better signal coverage
     const toWarm = [
       ...gainers.map(s => s.symbol),
       ...losers.map(s => s.symbol),
       ...byMcap.largecap.map(s => s.symbol),
-      ...byMcap.midcap.map(s => s.symbol),           // was slice(0,30) — now ALL midcap
-      ...byMcap.smallcap.slice(0, 50).map(s => s.symbol), // add smallcap coverage
+      ...byMcap.midcap.map(s => s.symbol),
+      ...byMcap.smallcap.slice(0, 50).map(s => s.symbol),
     ].filter((sym, i, a) => a.indexOf(sym) === i);
 
     if (preWarmTimer) clearTimeout(preWarmTimer);
@@ -1160,6 +1347,7 @@ module.exports = {
   getScannerData,
   getTechnicalsREST,
   getTechnicalsForTimeframe,
+  setInstrumentMap,   // ← FIX: exported so server.js can push the full map after loadInstrumentMaster()
 
   // forceCaptureNow — also applies all 5 filters
   forceCaptureNow: async function () {
@@ -1181,7 +1369,6 @@ module.exports = {
 
       if (tech.signal === "HOLD") { rejected.hold++; continue; }
 
-      // Apply all 5 filters
       const filterResult = applyAllFilters(tech, stock, tech.signal);
       if (!filterResult.pass) {
         rejected[`f${filterResult.failedFilter}`]++;

@@ -17,7 +17,7 @@ const { startCoordinator }  = require("./coordinator");
 const {
   startStreamer, stopStreamer,
   setOITickHandler, setLTPTickHandler,
-  setBacktestEngine,               // ← NEW
+  setBacktestEngine,
 } = require("./services/upstoxStream");
 
 const { commoditiesRoute }  = require("./api/commodities");
@@ -45,10 +45,11 @@ const {
   getScannerData,
   getTechnicalsREST,
   getTechnicalsForTimeframe,
+  setInstrumentMap: setScannerInstrumentMap,  // ← FIX: import setInstrumentMap from scanner
 } = require("./services/intelligence/marketScanner");
 
 // ── Backtest routes ───────────────────────────────────────────────────────────
-const backtestRoutes = require("./routes/backtestRoutes");   // ← NEW
+const backtestRoutes = require("./routes/backtestRoutes");
 
 const app    = express();
 const server = http.createServer(app);
@@ -212,11 +213,10 @@ loadInstrumentMaster()
     const { registerLTPTick } = require("./coordinator");
     setLTPTickHandler(registerLTPTick);
 
-    // ── NEW: Init backtest engine and wire into upstox stream ─────────────
+    // Init backtest engine and wire into upstox stream
     const backtestEngine = require("./services/backtestEngine");
     backtestEngine.init(io);
     setBacktestEngine(backtestEngine);
-    // ─────────────────────────────────────────────────────────────────────
 
     if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
       setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
@@ -230,6 +230,12 @@ loadInstrumentMaster()
     if (upstoxAccessToken) setICFToken(upstoxAccessToken);
     startIndexCandleFetcher();
 
+    // ── FIX: Push full instrument map into scanner BEFORE starting it.
+    //    Without this, getInstrumentKey() in marketScanner only has ~40 hardcoded
+    //    symbols. With this, ALL 2000+ NSE EQ symbols get proper Upstox keys
+    //    → 5min/15min/1H/4H charts work for every NSE stock (IIFL, UNIONBANK, etc.)
+    setScannerInstrumentMap(instrumentMap);
+
     startMarketScanner(io);
 
     const PORT = process.env.PORT || 10000;
@@ -242,7 +248,7 @@ loadInstrumentMaster()
   });
 
 // ── Backtest API ──────────────────────────────────────────────────────────────
-app.use("/api/backtest", backtestRoutes);   // ← NEW
+app.use("/api/backtest", backtestRoutes);
 
 // ── Auth routes ───────────────────────────────────────────────────────────────
 const UPSTOX_INSTRUMENTS = {
@@ -303,7 +309,6 @@ app.get("/auth/upstox/status", (req, res) => {
 });
 
 // ── /api/market ───────────────────────────────────────────────────────────────
-// Per-index prevClose cache for REST endpoint (same fix as WebSocket stream)
 const restPrevCloseCache = {};
 
 async function fetchUpstoxMarket() {
@@ -319,12 +324,8 @@ async function fetchUpstoxMarket() {
     if (!quote) return { name, price: "—", change: "—", pct: "—", up: null };
     const price = quote.last_price || 0;
 
-    // FIX: ohlc.close resets to 0 after market hours causing 0% display.
-    // Use net_change from Upstox directly if available — it's always correct.
-    // Fallback: cache the first valid prevClose we see for the day.
     let prevClose = 0;
     if (quote.net_change != null && price > 0) {
-      // net_change = ltp - prevClose, so prevClose = ltp - net_change
       prevClose = price - quote.net_change;
     } else {
       const ohlcClose = quote.ohlc?.close || 0;
