@@ -4,8 +4,12 @@
  * upstoxStream.js
  * Location: server/services/upstoxStream.js
  *
- * FIX: Patches MarketDataStreamerV3's internal streamer.clearSubscriptions
- *      which doesn't exist in this SDK version, causing a crash on reconnect.
+ * FIXES:
+ *  1. 401 detected in "error" event → "close" handler skips retry (no infinite loop)
+ *  2. isConnecting guard prevents double WebSocket instances
+ *  3. stopStreamer() resets isConnecting flag
+ *  4. Patches MarketDataStreamerV3's internal streamer.clearSubscriptions
+ *     which doesn't exist in this SDK version, causing a crash on reconnect.
  */
 
 let UpstoxClient = null;
@@ -15,10 +19,12 @@ try {
   console.warn("⚠️  upstox-js-sdk not installed. Run: npm install upstox-js-sdk");
 }
 
-let streamer     = null;
-let currentToken = null;
-let ioRef        = null;
-let reconnTimer  = null;
+let streamer      = null;
+let currentToken  = null;
+let ioRef         = null;
+let reconnTimer   = null;
+let isConnecting  = false;   // FIX: guard against double-connect race condition
+let lastErrorWas401 = false; // FIX: track 401 so close handler skips retry
 
 let ltpTickHandler = null;
 let oiTickHandler  = null;
@@ -261,32 +267,23 @@ function parseAndEmit(raw) {
 /**
  * CRITICAL FIX: Patch the internal WebSocket object inside the streamer
  * to add a no-op clearSubscriptions() method, preventing the SDK crash.
- * The SDK calls this.streamer.clearSubscriptions() on reconnect, but the
- * underlying ws object doesn't have this method in this SDK version.
  */
 function patchStreamerInternals(streamerInstance) {
-  // Patch after a tick so the internal ws is initialized
   setImmediate(() => {
     try {
-      // The SDK stores its internal ws as this.streamer inside MarketDataStreamerV3
-      // We need to patch it wherever it lives
       if (streamerInstance._streamer && typeof streamerInstance._streamer.clearSubscriptions === "undefined") {
         streamerInstance._streamer.clearSubscriptions = () => {};
       }
-      // Also patch the streamer property directly (different SDK versions use different names)
       if (streamerInstance.streamer && typeof streamerInstance.streamer.clearSubscriptions === "undefined") {
         streamerInstance.streamer.clearSubscriptions = () => {};
       }
     } catch (_) {}
   });
 
-  // Also override the attemptReconnect-like behavior by wrapping
-  // We intercept the close event at the raw ws level
   const origConnect = streamerInstance.connect?.bind(streamerInstance);
   if (origConnect) {
     streamerInstance.connect = function(...args) {
       const result = origConnect(...args);
-      // After connect, patch internal ws
       setTimeout(() => {
         try {
           if (streamerInstance._streamer && !streamerInstance._streamer.clearSubscriptions) {
@@ -306,9 +303,10 @@ function patchStreamerInternals(streamerInstance) {
 
 function stopStreamer() {
   if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
+  isConnecting    = false;   // FIX: always reset connecting flag on stop
+  lastErrorWas401 = false;
   if (streamer) {
     try {
-      // Safely call clearSubscriptions if available
       if (typeof streamer.clearSubscriptions === "function") streamer.clearSubscriptions();
       streamer.disconnect();
     } catch { /* ok */ }
@@ -358,9 +356,18 @@ function startStreamer(accessToken, io) {
   if (!UpstoxClient) { console.log("⚠️  upstox-js-sdk not available"); return; }
   if (!accessToken)  { console.log("⚠️  Upstox stream: no access token"); return; }
 
-  currentToken = accessToken;
-  ioRef        = io;
-  stopStreamer();
+  // FIX: prevent double WebSocket instances from racing
+  if (isConnecting) {
+    console.log("⚠️  Upstox: already connecting — skipping duplicate startStreamer call");
+    return;
+  }
+
+  currentToken    = accessToken;
+  ioRef           = io;
+  lastErrorWas401 = false;
+
+  stopStreamer();      // clears old streamer + resets isConnecting
+  isConnecting = true; // set AFTER stopStreamer so it isn't immediately cleared
 
   try {
     const defaultClient        = UpstoxClient.ApiClient.instance;
@@ -369,21 +376,20 @@ function startStreamer(accessToken, io) {
 
     const newStreamer = new UpstoxClient.MarketDataStreamerV3();
 
-    // ── CRITICAL FIX: Disable SDK's internal reconnect entirely ──────────
-    // The SDK's attemptReconnect calls clearSubscriptions which doesn't exist.
-    // We handle reconnection ourselves in the 'close' event below.
+    // Disable SDK's internal reconnect — we handle it ourselves
     if (newStreamer.attemptReconnect) {
       newStreamer.attemptReconnect = function() {
-        // no-op — we handle reconnect ourselves
+        // no-op
       };
     }
 
-    // Patch internal streamer object after connect
     patchStreamerInternals(newStreamer);
 
     newStreamer.on("open", () => {
       console.log("✅ Upstox Market WebSocket connected");
-      // Patch again after open in case internal ws was re-created
+      isConnecting    = false; // FIX: clear flag once connection is established
+      lastErrorWas401 = false;
+
       setTimeout(() => {
         try {
           if (newStreamer._streamer && !newStreamer._streamer.clearSubscriptions) {
@@ -394,13 +400,36 @@ function startStreamer(accessToken, io) {
           }
         } catch (_) {}
       }, 100);
+
       resubscribeAll();
       if (ioRef) ioRef.emit("upstox-status", { connected: true });
     });
 
     newStreamer.on("message", parseAndEmit);
 
+    // FIX: capture error code BEFORE close fires so close handler knows to skip retry
+    newStreamer.on("error", (e) => {
+      const msg = e?.message || String(e);
+      console.log("⚠️  Upstox WS error:", msg);
+
+      if (msg.includes("401")) {
+        lastErrorWas401 = true;
+        console.log("🔑 Upstox token expired (401) — stopping reconnect loop. Visit /auth/upstox to refresh.");
+        if (ioRef) ioRef.emit("upstox-status", { connected: false, reason: "token_expired" });
+      }
+    });
+
     newStreamer.on("close", () => {
+      isConnecting = false; // FIX: always reset on close
+
+      if (lastErrorWas401) {
+        // Token is dead — do NOT retry. User must re-authenticate.
+        console.log("⚠️  Upstox WS closed (401 — not retrying)");
+        streamer        = null;
+        lastErrorWas401 = false;
+        return;
+      }
+
       console.log("⚠️  Upstox WS closed — reconnecting in 5s");
       if (ioRef) ioRef.emit("upstox-status", { connected: false });
       streamer    = null;
@@ -409,17 +438,14 @@ function startStreamer(accessToken, io) {
       }, 5000);
     });
 
-    newStreamer.on("error", (e) => {
-      console.log("⚠️  Upstox WS error:", e?.message || e);
-    });
-
     streamer = newStreamer;
     streamer.connect();
     console.log("🔌 Upstox Market WebSocket connecting...");
   } catch (e) {
     console.log("❌ Upstox streamer init failed:", e.message);
-    streamer    = null;
-    reconnTimer = setTimeout(() => {
+    isConnecting = false; // FIX: reset on init failure too
+    streamer     = null;
+    reconnTimer  = setTimeout(() => {
       if (currentToken) startStreamer(currentToken, ioRef);
     }, 10000);
   }
