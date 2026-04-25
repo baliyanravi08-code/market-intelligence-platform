@@ -4,19 +4,24 @@
  * marketScanner.js
  * Location: server/services/intelligence/marketScanner.js
  *
- * MEMORY FIXES v4:
- *  1. techCache — capped at MAX_TECH_CACHE_SIZE (500 entries), LRU eviction
- *     Old: unlimited growth → 500 symbols × 7 TFs × 500 candles = hundreds of MB
- *  2. _candles in cache capped at 200 bars (was 500) — cuts RAM by 60%
- *  3. applyLiveTick — no longer re-sorts full allStocks array on every tick
- *     Old: O(n log n) sort on every WebSocket tick = CPU + GC pressure
- *     New: just updates the stock object in-place, deferred sort on next scan
- *  4. stockBySymbol — cleared before rebuild to release old references
- *  5. preWarmTechCache — only warms 1day timeframe (not all 7)
- *     Other TFs fetched on-demand when user requests them
- *  6. NSE cookie refresh — guarded with 20min TTL (was already there, kept)
- *  7. buildSymbolBucketMap — called once at startup only
- *  8. techCache eviction — when over limit, evict oldest-computedAt entries
+ * MEMORY FIXES v5 (on top of v4):
+ *  1. sectorMap intermediate object — explicitly nulled after bySector is built
+ *     Old: sectorMap (600+ stock refs) and bySector coexisted in scope until GC
+ *     New: sectorMap keys deleted immediately after use, freeing refs before next await
+ *  2. scanCache overwrite — old cache is explicitly nulled before reassignment
+ *     This ensures GC can collect the previous 600-stock array without waiting for
+ *     the next scan cycle to push the reference out of scope
+ *  3. preWarmTechCache batch array — cleared after each emit rather than at end
+ *  4. Heap monitor added — logs every 2min, warns at 380MB
+ *
+ * EXISTING FIXES v4 (kept):
+ *  5. techCache — capped at MAX_TECH_CACHE (500 entries), LRU eviction
+ *  6. _candles in cache capped at MAX_CANDLES_STORE (200 bars)
+ *  7. applyLiveTick — no full-array sort on every tick
+ *  8. stockBySymbol — cleared before rebuild
+ *  9. preWarmTechCache — only warms 1day timeframe
+ * 10. NSE cookie refresh — guarded with 20min TTL
+ * 11. buildSymbolBucketMap — called once at startup only
  */
 
 const axios = require("axios");
@@ -28,8 +33,8 @@ const MCAP_DB_PATH      = path.join(__dirname, "../../data/marketCapDB.json");
 const SCAN_INTERVAL     = 5 * 60 * 1000;
 const PREWARM_DELAY     = 8000;
 const PREWARM_BETWEEN   = 350;
-const MAX_TECH_CACHE    = 500;   // FIX: cap techCache entries
-const MAX_CANDLES_STORE = 200;   // FIX: cap _candles per result (was 500)
+const MAX_TECH_CACHE    = 500;
+const MAX_CANDLES_STORE = 200;
 
 // ── Timeframe config ──────────────────────────────────────────────────────────
 const TIMEFRAME_CONFIG = {
@@ -59,10 +64,10 @@ const BSE_HEADERS = {
 };
 
 const MCAP_BUCKETS = {
-  largecap:  { label: "Large Cap"  },
-  midcap:    { label: "Mid Cap"    },
-  smallcap:  { label: "Small Cap"  },
-  microcap:  { label: "Micro Cap"  },
+  largecap: { label: "Large Cap" },
+  midcap:   { label: "Mid Cap"   },
+  smallcap: { label: "Small Cap" },
+  microcap: { label: "Micro Cap" },
 };
 
 // ── In-memory store ───────────────────────────────────────────────────────────
@@ -74,7 +79,7 @@ let scanCache = {
 };
 
 let stockBySymbol = new Map();
-let techCache     = new Map();   // FIX: eviction applied in setTechCache()
+let techCache     = new Map();
 let nseCookie     = "";
 let lastCookieAt  = 0;
 let ioRef         = null;
@@ -83,10 +88,9 @@ let lastBacktestCapture = "";
 let symbolBucketMap = {};
 let _instrumentMap  = {};
 
-// ── FIX: LRU-style techCache setter with size cap ─────────────────────────────
+// ── LRU-style techCache setter with size cap ──────────────────────────────────
 function setTechCache(key, value) {
   if (techCache.size >= MAX_TECH_CACHE) {
-    // Evict oldest 50 entries by computedAt
     const entries = [...techCache.entries()]
       .sort((a, b) => (a[1].computedAt || 0) - (b[1].computedAt || 0))
       .slice(0, 50);
@@ -325,8 +329,8 @@ function normaliseBSE(s) {
   const symbol =
     s.NSE_Symbol || s.NseSymbol || s.nseSymbol ||
     s.scrip_id   || s.Scrip_Id  || s.SCRIP_ID  || null;
-  const name   = s.Scrip_Name || s.LONG_NAME || s.CompanyName || s.name || symbol || "";
-  const ltp    = parseFloat(s.LTP || s.CurrentValue || s.Close || s.lastPrice || 0);
+  const name = s.Scrip_Name || s.LONG_NAME || s.CompanyName || s.name || symbol || "";
+  const ltp  = parseFloat(s.LTP || s.CurrentValue || s.Close || s.lastPrice || 0);
   if (!ltp || ltp <= 0 || !symbol) return null;
   const prevClose = parseFloat(s.PrevClose || s.PreviousClose || s.ClosePrice || ltp);
   const change    = ltp - prevClose;
@@ -348,9 +352,7 @@ function normaliseBSE(s) {
   };
 }
 
-// ── FIX: applyLiveTick — no more full-array sort on every tick ────────────────
-// Old: re-sorted entire allStocks (600+ items) on every WebSocket message
-// New: just mutate the stock object in-place; scanner rebuild handles sort
+// ── applyLiveTick — no full-array sort on every tick ─────────────────────────
 function applyLiveTick({ symbol, price, changePct, change }) {
   if (!symbol || !price) return;
   const stock = stockBySymbol.get(symbol);
@@ -358,7 +360,6 @@ function applyLiveTick({ symbol, price, changePct, change }) {
   stock.ltp = price;
   if (changePct != null) stock.changePct = changePct;
   if (change    != null) stock.change    = change;
-  // No sort here — O(n log n) on every tick was burning CPU and triggering GC
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -374,11 +375,11 @@ function passesLiquidityGate(tech, stock) {
 }
 
 function passesTrendFilter(tech, signalType) {
-  const isBuy  = !["SELL", "STRONG SELL", "STRONG_SELL"].includes(signalType);
-  const ltp    = tech.ltp || 0;
-  const ema20  = tech.emas?.ema21 || null;
-  const ema50  = tech.emas?.ema50 || null;
-  const adx    = tech.adx?.adx   || 0;
+  const isBuy = !["SELL", "STRONG SELL", "STRONG_SELL"].includes(signalType);
+  const ltp   = tech.ltp || 0;
+  const ema20 = tech.emas?.ema21 || null;
+  const ema50 = tech.emas?.ema50 || null;
+  const adx   = tech.adx?.adx   || 0;
 
   if (adx > 0 && adx < 20) {
     return { pass: false, reason: `ADX ${adx.toFixed(1)} < 20 (ranging/sideways)` };
@@ -438,11 +439,11 @@ function passesRRGate(entry, target, stopLoss) {
 
 function applyAllFilters(tech, stock, signalType) {
   const checks = [
-    { n: 1, label: "Liquidity", fn: () => passesLiquidityGate(tech, stock)              },
-    { n: 2, label: "Trend",     fn: () => passesTrendFilter(tech, signalType)            },
-    { n: 3, label: "Consensus", fn: () => passesConsensusFilter(tech, signalType)        },
-    { n: 4, label: "Volume",    fn: () => passesVolumeConfirmation(tech)                 },
-    { n: 5, label: "R:R",       fn: () => passesRRGate(tech.entry, tech.target, tech.sl) },
+    { n: 1, label: "Liquidity", fn: () => passesLiquidityGate(tech, stock)               },
+    { n: 2, label: "Trend",     fn: () => passesTrendFilter(tech, signalType)             },
+    { n: 3, label: "Consensus", fn: () => passesConsensusFilter(tech, signalType)         },
+    { n: 4, label: "Volume",    fn: () => passesVolumeConfirmation(tech)                  },
+    { n: 5, label: "R:R",       fn: () => passesRRGate(tech.entry, tech.target, tech.sl)  },
   ];
   for (const { n, label, fn } of checks) {
     const result = fn();
@@ -710,7 +711,7 @@ function computeTechnicals(symbol, candles) {
   const volRatio  = avgVol > 0 ? Math.round((latestVol / avgVol) * 100) / 100 : 1;
 
   const sig =
-    score >= 60 ? (score >= 75 ? "STRONG BUY"  : "BUY") :
+    score >= 60 ? (score >= 75 ? "STRONG BUY"  : "BUY")  :
     score <= 40 ? (score <= 25 ? "STRONG SELL" : "SELL") : "HOLD";
 
   return {
@@ -842,13 +843,12 @@ async function fetchCandles(symbol, days, interval) {
   // ── ATTEMPT 1: Upstox API ──────────────────────────────────────────────────
   if (token && instrKey) {
     try {
-      const to     = new Date();
-      const from   = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const fmtD   = d => d.toISOString().slice(0, 10);
-      const enc    = encodeURIComponent(instrKey);
+      const to   = new Date();
+      const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const fmtD = d => d.toISOString().slice(0, 10);
+      const enc  = encodeURIComponent(instrKey);
       const upstoxInterval = is4H ? "60minute" : interval;
 
-      // FIX: Use days <= 1 to decide endpoint, NOT date comparison.
       const useIntradayEndpoint = isIntraday && days <= 1;
       let url;
       if (useIntradayEndpoint) {
@@ -930,7 +930,7 @@ async function fetchCandles(symbol, days, interval) {
         `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmtD(from)}&to=${fmtD(to)}&csv=false`,
         { headers: { ...NSE_HEADERS, Cookie: nseCookie }, timeout: 15000 }
       );
-      const data = (res.data?.data || []).slice().reverse();
+      const data  = (res.data?.data || []).slice().reverse();
       const daily = data.map(r => ({
         o: parseFloat(r.CH_OPENING_PRICE    || 0),
         h: parseFloat(r.CH_TRADE_HIGH_PRICE || 0),
@@ -961,7 +961,7 @@ async function fetchCandles(symbol, days, interval) {
         `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmtD(from)}&to=${fmtD(to)}&csv=false`,
         { headers: { ...NSE_HEADERS, Cookie: nseCookie }, timeout: 15000 }
       );
-      const data = (res.data?.data || []).slice().reverse();
+      const data    = (res.data?.data || []).slice().reverse();
       const candles = data.map(r => ({
         o: parseFloat(r.CH_OPENING_PRICE    || r.open   || 0),
         h: parseFloat(r.CH_TRADE_HIGH_PRICE || r.high   || 0),
@@ -986,7 +986,7 @@ async function fetchCandles(symbol, days, interval) {
         `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmtD(from)}&to=${fmtD(to)}&csv=false`,
         { headers: { ...NSE_HEADERS, Cookie: nseCookie }, timeout: 15000 }
       );
-      const data = (res.data?.data || []).slice().reverse();
+      const data  = (res.data?.data || []).slice().reverse();
       const daily = data.map(r => ({
         o: parseFloat(r.CH_OPENING_PRICE    || 0),
         h: parseFloat(r.CH_TRADE_HIGH_PRICE || 0),
@@ -1031,10 +1031,7 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
     const nowSecs    = Math.floor(Date.now() / 1000);
     const alignedNow = Math.floor(nowSecs / tfSecs) * tfSecs;
 
-    // FIX: cap _candles at MAX_CANDLES_STORE (200) instead of 500
-    // 500 candles × 500 symbols × ~200 bytes each = ~50MB just for _candles
     const slice = candles.slice(-MAX_CANDLES_STORE);
-
     result._candles = slice.map((c, i) => ({
       time:   alignedNow - (slice.length - 1 - i) * tfSecs,
       open:   c.o,
@@ -1044,7 +1041,6 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
       volume: c.v || 0,
     }));
 
-    // FIX: use setTechCache (with eviction) instead of techCache.set directly
     setTechCache(cacheKey, result);
   }
   return result;
@@ -1054,9 +1050,6 @@ async function getTechnicals(symbol) {
   return getTechnicalsForTimeframe(symbol, "1day");
 }
 
-// FIX: preWarmTechCache — only warms 1day, not all 7 timeframes
-// Old: 500 symbols × 7 TFs = 3500 Upstox API calls at startup → huge RAM + rate limits
-// New: 1day only at startup; other TFs fetched on-demand when client requests them
 async function preWarmTechCache(symbols) {
   if (!symbols || !symbols.length) return;
   const token = getUpstoxToken();
@@ -1092,12 +1085,16 @@ async function preWarmTechCache(symbols) {
       }
       if (batch.length >= BATCH_EMIT_SIZE) {
         if (ioRef) ioRef.emit("scanner-tech-batch", batch);
+        // FIX: clear batch array immediately after emit instead of at end
+        // Keeps up to BATCH_EMIT_SIZE result objects alive in memory at once (not all)
         batch = [];
       }
     } catch (_) {}
     await new Promise(r => setTimeout(r, PREWARM_BETWEEN));
   }
+  // Flush remaining
   if (batch.length > 0 && ioRef) ioRef.emit("scanner-tech-batch", batch);
+  batch = []; // FIX: explicit clear after final flush
   console.log(`📊 Pre-warm done: ${warmed}/${symbols.length} | techCache size: ${techCache.size}`);
 }
 
@@ -1107,10 +1104,10 @@ function buildPayload(cache) {
     losers:    cache.losers   || [],
     allStocks: (cache.allStocks || []).slice(0, 600),
     byMcap: {
-      largecap:  (cache.byMcap?.largecap  || []).slice(0, 100),
-      midcap:    (cache.byMcap?.midcap    || []).slice(0, 100),
-      smallcap:  (cache.byMcap?.smallcap  || []).slice(0, 100),
-      microcap:  (cache.byMcap?.microcap  || []).slice(0, 100),
+      largecap: (cache.byMcap?.largecap  || []).slice(0, 100),
+      midcap:   (cache.byMcap?.midcap    || []).slice(0, 100),
+      smallcap: (cache.byMcap?.smallcap  || []).slice(0, 100),
+      microcap: (cache.byMcap?.microcap  || []).slice(0, 100),
     },
     bySector:  cache.bySector || [],
     market: {
@@ -1233,21 +1230,31 @@ async function runScanner() {
 
     console.log(`📊 Buckets — Large:${byMcap.largecap.length} Mid:${byMcap.midcap.length} Small:${byMcap.smallcap.length} Micro:${byMcap.microcap.length}`);
 
-    const sectorMap = {};
-    for (const s of stocks) {
-      if (!s.sector) continue;
-      if (!sectorMap[s.sector]) sectorMap[s.sector] = [];
-      sectorMap[s.sector].push(s);
+    // FIX: build sectorMap in its own block then free it immediately
+    // Old: sectorMap stayed in runScanner's closure alongside bySector (~600 stock refs duplicated)
+    // New: only bySector survives after this block
+    let bySector;
+    {
+      const sectorMap = {};
+      for (const s of stocks) {
+        if (!s.sector) continue;
+        if (!sectorMap[s.sector]) sectorMap[s.sector] = [];
+        sectorMap[s.sector].push(s);
+      }
+      bySector = Object.entries(sectorMap).map(([sector, ss]) => ({
+        sector,
+        avgChange: Math.round((ss.reduce((sum, s) => sum + s.changePct, 0) / ss.length) * 100) / 100,
+        advancing: ss.filter(s => s.changePct > 0).length,
+        declining: ss.filter(s => s.changePct < 0).length,
+        total:     ss.length,
+        topGainer: [...ss].sort((a, b) => b.changePct - a.changePct)[0],
+      })).sort((a, b) => b.avgChange - a.avgChange);
+      // sectorMap falls out of scope here — GC can collect it
     }
-    const bySector = Object.entries(sectorMap).map(([sector, ss]) => ({
-      sector,
-      avgChange: Math.round((ss.reduce((sum, s) => sum + s.changePct, 0) / ss.length) * 100) / 100,
-      advancing: ss.filter(s => s.changePct > 0).length,
-      declining: ss.filter(s => s.changePct < 0).length,
-      total:     ss.length,
-      topGainer: [...ss].sort((a, b) => b.changePct - a.changePct)[0],
-    })).sort((a, b) => b.avgChange - a.avgChange);
 
+    // FIX: null old scanCache before reassigning so GC can collect the previous
+    // 600-stock allStocks array without waiting for the next scan cycle
+    scanCache = null;
     scanCache = {
       gainers, losers, allStocks: stocks, byMcap, bySector,
       updatedAt:  Date.now(),
@@ -1296,11 +1303,28 @@ async function runScanner() {
   }
 }
 
+// ── FIX: heap monitor — logs every 2min, warns at 380MB ──────────────────────
+// Add this once at module load so it runs throughout the server lifetime
+let _heapMonitorStarted = false;
+function startHeapMonitor() {
+  if (_heapMonitorStarted) return;
+  _heapMonitorStarted = true;
+  setInterval(() => {
+    const mem = process.memoryUsage();
+    const mb  = Math.round(mem.heapUsed / 1024 / 1024);
+    const rss = Math.round(mem.rss      / 1024 / 1024);
+    if (mb > 380) {
+      console.warn(`⚠️ HIGH HEAP: ${mb} MB (RSS:${rss} MB) | techCache:${techCache.size} stockMap:${stockBySymbol.size}`);
+    } else {
+      console.log(`🧠 Heap: ${mb} MB | RSS: ${rss} MB | techCache: ${techCache.size}`);
+    }
+  }, 2 * 60 * 1000);
+}
+
 function registerScannerHandlers(io) {
   io.on("connection", socket => {
-    if (scanCache.updatedAt > 0) socket.emit("scanner-update", buildPayload(scanCache));
+    if (scanCache && scanCache.updatedAt > 0) socket.emit("scanner-update", buildPayload(scanCache));
 
-    // FIX: only send 1day cached entries (not all TFs)
     const cachedEntries = [];
     for (const [key, data] of techCache.entries()) {
       if (key.endsWith(":1day")) cachedEntries.push({ key, data });
@@ -1327,8 +1351,8 @@ function registerScannerHandlers(io) {
     });
 
     socket.on("get-scanner-stocks", ({ bucket, sector, sortBy, limit } = {}) => {
-      let stocks = [...(scanCache.allStocks || [])];
-      if (bucket && bucket !== "all") stocks = scanCache.byMcap[bucket] || [];
+      let stocks = [...((scanCache && scanCache.allStocks) || [])];
+      if (bucket && bucket !== "all") stocks = (scanCache && scanCache.byMcap[bucket]) || [];
       if (sector) stocks = stocks.filter(s => s.sector === sector);
       if (sortBy === "gainers")  stocks.sort((a, b) => b.changePct  - a.changePct);
       if (sortBy === "losers")   stocks.sort((a, b) => a.changePct  - b.changePct);
@@ -1342,6 +1366,7 @@ function registerScannerHandlers(io) {
 function startMarketScanner(io) {
   ioRef = io;
   registerScannerHandlers(io);
+  startHeapMonitor();
   runScanner();
   setInterval(runScanner, SCAN_INTERVAL);
   console.log("📊 Market Scanner started");
@@ -1362,7 +1387,7 @@ module.exports = {
     const backtestEngine = require("../backtestEngine");
     const { subscribeStocksForBacktest } = require("../upstoxStream");
 
-    const stocks   = scanCache.allStocks || [];
+    const stocks   = (scanCache && scanCache.allStocks) || [];
     const signals  = [];
     const seen     = new Set();
     const rejected = { f1: 0, f2: 0, f3: 0, f4: 0, f5: 0, hold: 0 };

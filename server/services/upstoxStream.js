@@ -4,12 +4,18 @@
  * upstoxStream.js
  * Location: server/services/upstoxStream.js
  *
- * FIXES:
- *  1. 401 detected in "error" event → "close" handler skips retry (no infinite loop)
- *  2. isConnecting guard prevents double WebSocket instances
- *  3. stopStreamer() resets isConnecting flag
- *  4. Patches MarketDataStreamerV3's internal streamer.clearSubscriptions
- *     which doesn't exist in this SDK version, causing a crash on reconnect.
+ * MEMORY FIXES:
+ *  1. instrKeyToSymbol Map — capped at MAX_MAP_ENTRIES (500), FIFO eviction
+ *     Old: grew unbounded — every subscribeStocksForBacktest call added entries, nothing removed them
+ *  2. prevCloseCache Map — capped at MAX_MAP_ENTRIES (500), FIFO eviction
+ *     Old: every unique instrument key added an entry permanently
+ *  3. evictMapIfNeeded() helper — deletes oldest 20% when cap is reached (insertion-order FIFO)
+ *
+ * EXISTING FIXES (kept from previous version):
+ *  4. 401 detected in "error" event → "close" handler skips retry (no infinite loop)
+ *  5. isConnecting guard prevents double WebSocket instances
+ *  6. stopStreamer() resets isConnecting flag
+ *  7. Patches MarketDataStreamerV3's internal streamer.clearSubscriptions
  */
 
 let UpstoxClient = null;
@@ -19,16 +25,33 @@ try {
   console.warn("⚠️  upstox-js-sdk not installed. Run: npm install upstox-js-sdk");
 }
 
-let streamer      = null;
-let currentToken  = null;
-let ioRef         = null;
-let reconnTimer   = null;
-let isConnecting  = false;   // FIX: guard against double-connect race condition
-let lastErrorWas401 = false; // FIX: track 401 so close handler skips retry
+let streamer        = null;
+let currentToken    = null;
+let ioRef           = null;
+let reconnTimer     = null;
+let isConnecting    = false;
+let lastErrorWas401 = false;
 
 let ltpTickHandler = null;
 let oiTickHandler  = null;
 let backtestEngine = null;
+
+// ── FIX: cap for both Maps ────────────────────────────────────────────────────
+const MAX_MAP_ENTRIES = 500;
+
+/**
+ * Evict oldest ~20% of a Map when it hits the cap.
+ * Maps preserve insertion order — first keys inserted are the oldest.
+ */
+function evictMapIfNeeded(map, maxSize) {
+  if (map.size < maxSize) return;
+  const deleteCount = Math.ceil(maxSize * 0.2);
+  let i = 0;
+  for (const key of map.keys()) {
+    if (i++ >= deleteCount) break;
+    map.delete(key);
+  }
+}
 
 function setLTPTickHandler(fn) {
   if (typeof fn === "function") {
@@ -66,15 +89,19 @@ const GANN_SYMBOL_MAP = {
   "SENSEX":     "SENSEX",
 };
 
-const optionInstruments    = new Set();
-const stockInstruments     = new Set();
-const stockInstrumentKeys  = new Set();
-const instrKeyToSymbol     = new Map();
-const prevCloseCache       = new Map();
+const optionInstruments   = new Set();
+const stockInstruments    = new Set();
+const stockInstrumentKeys = new Set();
+
+// FIX: both Maps now have eviction applied before every set()
+const instrKeyToSymbol = new Map();
+const prevCloseCache   = new Map();
 
 function getSafePrevClose(key, ltpc, currentPrice) {
   const cp = parseFloat(ltpc.cp || 0);
   if (cp > 0) {
+    // FIX: evict before set
+    evictMapIfNeeded(prevCloseCache, MAX_MAP_ENTRIES);
     prevCloseCache.set(key, cp);
     return cp;
   }
@@ -104,9 +131,13 @@ function subscribeStocksForBacktest(symbols) {
   const newKeys = keys.filter(k => !stockInstruments.has(k));
   if (!newKeys.length) return;
   newKeys.forEach(k => stockInstruments.add(k));
+
+  // FIX: evict before each set to keep instrKeyToSymbol bounded
   for (const sym of symbols) {
+    evictMapIfNeeded(instrKeyToSymbol, MAX_MAP_ENTRIES);
     instrKeyToSymbol.set(`NSE_EQ|${sym.toUpperCase()}`, sym.toUpperCase());
   }
+
   if (streamer) {
     try {
       streamer.subscribe(newKeys, "ltpc");
@@ -129,7 +160,9 @@ function subscribeWithInstrumentKeys(instrKeys, symbolMap) {
   newKeys.forEach(k => stockInstrumentKeys.add(k));
 
   if (symbolMap && typeof symbolMap === "object") {
+    // FIX: evict before each set
     for (const [sym, key] of Object.entries(symbolMap)) {
+      evictMapIfNeeded(instrKeyToSymbol, MAX_MAP_ENTRIES);
       instrKeyToSymbol.set(key, sym.toUpperCase());
     }
   }
@@ -153,9 +186,7 @@ function getAccessToken() {
 let _scanner = null;
 function getScanner() {
   if (!_scanner) {
-    try {
-      _scanner = require("./intelligence/marketScanner");
-    } catch (_) {}
+    try { _scanner = require("./intelligence/marketScanner"); } catch (_) {}
   }
   return _scanner;
 }
@@ -225,7 +256,11 @@ function parseAndEmit(raw) {
           const price = parseFloat(ltpc.ltp || 0);
           if (price > 0) {
             const cp = parseFloat(ltpc.cp || 0);
-            if (cp > 0) prevCloseCache.set(key, cp);
+            if (cp > 0) {
+              // FIX: evict before set to keep prevCloseCache bounded
+              evictMapIfNeeded(prevCloseCache, MAX_MAP_ENTRIES);
+              prevCloseCache.set(key, cp);
+            }
             const prevClose = prevCloseCache.get(key) || null;
 
             let changePct = null;
@@ -265,7 +300,7 @@ function parseAndEmit(raw) {
 }
 
 /**
- * CRITICAL FIX: Patch the internal WebSocket object inside the streamer
+ * Patch the internal WebSocket object inside the streamer
  * to add a no-op clearSubscriptions() method, preventing the SDK crash.
  */
 function patchStreamerInternals(streamerInstance) {
@@ -282,7 +317,7 @@ function patchStreamerInternals(streamerInstance) {
 
   const origConnect = streamerInstance.connect?.bind(streamerInstance);
   if (origConnect) {
-    streamerInstance.connect = function(...args) {
+    streamerInstance.connect = function (...args) {
       const result = origConnect(...args);
       setTimeout(() => {
         try {
@@ -303,7 +338,7 @@ function patchStreamerInternals(streamerInstance) {
 
 function stopStreamer() {
   if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
-  isConnecting    = false;   // FIX: always reset connecting flag on stop
+  isConnecting    = false;
   lastErrorWas401 = false;
   if (streamer) {
     try {
@@ -356,7 +391,6 @@ function startStreamer(accessToken, io) {
   if (!UpstoxClient) { console.log("⚠️  upstox-js-sdk not available"); return; }
   if (!accessToken)  { console.log("⚠️  Upstox stream: no access token"); return; }
 
-  // FIX: prevent double WebSocket instances from racing
   if (isConnecting) {
     console.log("⚠️  Upstox: already connecting — skipping duplicate startStreamer call");
     return;
@@ -366,8 +400,8 @@ function startStreamer(accessToken, io) {
   ioRef           = io;
   lastErrorWas401 = false;
 
-  stopStreamer();      // clears old streamer + resets isConnecting
-  isConnecting = true; // set AFTER stopStreamer so it isn't immediately cleared
+  stopStreamer();
+  isConnecting = true;
 
   try {
     const defaultClient        = UpstoxClient.ApiClient.instance;
@@ -376,18 +410,15 @@ function startStreamer(accessToken, io) {
 
     const newStreamer = new UpstoxClient.MarketDataStreamerV3();
 
-    // Disable SDK's internal reconnect — we handle it ourselves
     if (newStreamer.attemptReconnect) {
-      newStreamer.attemptReconnect = function() {
-        // no-op
-      };
+      newStreamer.attemptReconnect = function () { /* no-op — we handle reconnect */ };
     }
 
     patchStreamerInternals(newStreamer);
 
     newStreamer.on("open", () => {
       console.log("✅ Upstox Market WebSocket connected");
-      isConnecting    = false; // FIX: clear flag once connection is established
+      isConnecting    = false;
       lastErrorWas401 = false;
 
       setTimeout(() => {
@@ -407,7 +438,6 @@ function startStreamer(accessToken, io) {
 
     newStreamer.on("message", parseAndEmit);
 
-    // FIX: capture error code BEFORE close fires so close handler knows to skip retry
     newStreamer.on("error", (e) => {
       const msg = e?.message || String(e);
       console.log("⚠️  Upstox WS error:", msg);
@@ -420,10 +450,9 @@ function startStreamer(accessToken, io) {
     });
 
     newStreamer.on("close", () => {
-      isConnecting = false; // FIX: always reset on close
+      isConnecting = false;
 
       if (lastErrorWas401) {
-        // Token is dead — do NOT retry. User must re-authenticate.
         console.log("⚠️  Upstox WS closed (401 — not retrying)");
         streamer        = null;
         lastErrorWas401 = false;
@@ -443,7 +472,7 @@ function startStreamer(accessToken, io) {
     console.log("🔌 Upstox Market WebSocket connecting...");
   } catch (e) {
     console.log("❌ Upstox streamer init failed:", e.message);
-    isConnecting = false; // FIX: reset on init failure too
+    isConnecting = false;
     streamer     = null;
     reconnTimer  = setTimeout(() => {
       if (currentToken) startStreamer(currentToken, ioRef);

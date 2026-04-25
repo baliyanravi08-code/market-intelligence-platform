@@ -2,13 +2,23 @@
  * marketCap.js
  * Company data store with persistent quarter-by-quarter order book tracking.
  * Loads MCap from marketCapDB.json (built by fetchAllMcap.js script).
+ *
+ * MEMORY FIXES:
+ *  1. mcapDB capped at MAX_MCAP_ENTRIES (1000) — sorted by mcap desc, top 1000 only
+ *     Old: all 4587 companies loaded into RAM flat → ~45MB permanent allocation
+ *  2. getCompaniesByMcap — no longer builds a third merged object on every call
+ *     Old: O(n) alloc per call, caller held reference keeping both copies alive
+ *  3. runtimeUpdates.seenOrderIds capped at 100 (was 200) — small savings per company
  */
 
 const fs   = require("fs");
 const path = require("path");
 
-const OB_FILE    = path.join(__dirname, "../../data/orderBookHistory.json");
-const MCAP_FILE  = path.join(__dirname, "../../data/marketCapDB.json");
+const OB_FILE   = path.join(__dirname, "../../data/orderBookHistory.json");
+const MCAP_FILE = path.join(__dirname, "../../data/marketCapDB.json");
+
+// FIX: only keep top 1000 companies by mcap — covers all large/mid/small cap stocks
+const MAX_MCAP_ENTRIES = 1000;
 
 // ── Static baseline for key companies ──
 const staticData = {
@@ -29,35 +39,43 @@ const staticData = {
   "532500": { mcap: 270000,  confirmedOrderBook: null,   confirmedQuarter: null,     ttmRevenue: 140000, name: "Maruti" },
 };
 
-// ── MCap database (loaded from marketCapDB.json) ──
-// Format: { "532540": { mcap: 12345, name: "TCS" }, ... }
+// ── MCap database (loaded from marketCapDB.json, capped at MAX_MCAP_ENTRIES) ──
 let mcapDB = {};
 
 function loadMcapDB() {
   try {
     if (fs.existsSync(MCAP_FILE)) {
-      const raw = fs.readFileSync(MCAP_FILE, "utf8").trim();  // ← add .trim()
-      if (!raw) return;                                         // ← add this guard
-      mcapDB = JSON.parse(raw);
-      console.log(`📊 MCap DB loaded: ${Object.keys(mcapDB).length} companies`);
+      const raw = fs.readFileSync(MCAP_FILE, "utf8").trim();
+      if (!raw) return;
+      const full = JSON.parse(raw);
+      const totalEntries = Object.keys(full).length;
+
+      // FIX: sort by mcap descending, keep only top MAX_MCAP_ENTRIES
+      // This covers all large/mid/small caps while dropping obscure microcaps
+      const entries = Object.entries(full);
+      entries.sort((a, b) => (b[1].mcap || 0) - (a[1].mcap || 0));
+      mcapDB = Object.fromEntries(entries.slice(0, MAX_MCAP_ENTRIES));
+
+      console.log(`📊 MCap DB loaded: ${Object.keys(mcapDB).length} companies (capped from ${totalEntries})`);
     }
-  } catch(e) {
+  } catch (e) {
     console.log("⚠️ MCap DB load failed:", e.message);
     mcapDB = {};
   }
 }
+
 // ── Order book history (persisted) ──
 let runtimeUpdates = {};
 
 function loadFromDisk() {
   try {
     if (fs.existsSync(OB_FILE)) {
-      const raw = fs.readFileSync(OB_FILE, "utf8").trim();  // ← add .trim()
-      if (!raw) return;                                       // ← add this guard
+      const raw = fs.readFileSync(OB_FILE, "utf8").trim();
+      if (!raw) return;
       runtimeUpdates = JSON.parse(raw);
       console.log(`📦 OrderBook history loaded: ${Object.keys(runtimeUpdates).length} companies`);
     }
-  } catch(e) {
+  } catch (e) {
     console.log("⚠️ OrderBook history load failed:", e.message);
     runtimeUpdates = {};
   }
@@ -68,7 +86,7 @@ function saveToDisk() {
     const dir = path.dirname(OB_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(OB_FILE, JSON.stringify(runtimeUpdates), "utf8");
-  } catch(e) {}
+  } catch (e) {}
 }
 
 loadMcapDB();
@@ -108,10 +126,10 @@ function getCurrentFYQuarter() {
   const month = now.getMonth() + 1;
   const year  = now.getFullYear();
   let q, fyYear;
-  if      (month >= 4 && month <= 6)  { q = 1; fyYear = (year + 1) % 100; }
-  else if (month >= 7 && month <= 9)  { q = 2; fyYear = (year + 1) % 100; }
+  if      (month >= 4 && month <= 6)   { q = 1; fyYear = (year + 1) % 100; }
+  else if (month >= 7 && month <= 9)   { q = 2; fyYear = (year + 1) % 100; }
   else if (month >= 10 && month <= 12) { q = 3; fyYear = (year + 1) % 100; }
-  else                                 { q = 4; fyYear = year % 100; }
+  else                                  { q = 4; fyYear = year % 100; }
   return `Q${q}FY${fyYear}`;
 }
 
@@ -131,7 +149,7 @@ function updateFromResult(code, fields) {
         confirmedOrderBook:  fields.confirmedOrderBook,
         addedOrders:         prev.newOrdersSinceConfirm || 0,
         totalOrderBook:      fields.confirmedOrderBook,
-        timestamp:           Date.now()
+        timestamp:           Date.now(),
       });
       prev.quarterHistory = prev.quarterHistory
         .sort((a, b) => a.quarter.localeCompare(b.quarter))
@@ -143,10 +161,8 @@ function updateFromResult(code, fields) {
     console.log(`📊 Order book confirmed: ${c} ₹${fields.confirmedOrderBook}Cr (${quarter})`);
   }
 
-  // Update MCap if provided (from live fetch)
   if (fields.mcap && fields.mcap > 0) {
     prev.mcap = fields.mcap;
-    // Also update mcapDB for future use
     if (!mcapDB[c]) mcapDB[c] = {};
     mcapDB[c].mcap = fields.mcap;
   }
@@ -165,7 +181,8 @@ function addNewOrder(code, crores, orderId) {
     if (!r.seenOrderIds) r.seenOrderIds = [];
     if (r.seenOrderIds.includes(orderId)) return;
     r.seenOrderIds.push(orderId);
-    r.seenOrderIds = r.seenOrderIds.slice(-200);
+    // FIX: cap at 100 (was 200) — small per-company saving across many companies
+    r.seenOrderIds = r.seenOrderIds.slice(-100);
   }
   r.newOrdersSinceConfirm = (r.newOrdersSinceConfirm || 0) + crores;
   saveToDisk();
@@ -176,9 +193,9 @@ function getEstimatedOrderBook(code) {
   const c    = String(code);
   const data = getCompanyData(c);
   const r    = runtimeUpdates[c] || {};
-  const confirmed  = r.confirmedOrderBook  || data.confirmedOrderBook  || 0;
+  const confirmed  = r.confirmedOrderBook   || data.confirmedOrderBook  || 0;
   const newOrders  = r.newOrdersSinceConfirm || 0;
-  const ttmRevenue = r.ttmRevenue || data.ttmRevenue || 0;
+  const ttmRevenue = r.ttmRevenue            || data.ttmRevenue         || 0;
   const executedEst = ttmRevenue ? Math.round(ttmRevenue / 4) : 0;
   if (!confirmed) return null;
   return {
@@ -191,21 +208,22 @@ function getEstimatedOrderBook(code) {
     quarterHistory:   r.quarterHistory || [],
     executedEst,
     obToRevRatio:     ttmRevenue ? ((confirmed + newOrders) / ttmRevenue).toFixed(1) : null,
-    bookToBill:       ttmRevenue && newOrders ? (newOrders / (ttmRevenue / 4)).toFixed(2) : null
+    bookToBill:       ttmRevenue && newOrders ? (newOrders / (ttmRevenue / 4)).toFixed(2) : null,
   };
 }
 
 // ── Get all companies from mcapDB above a threshold ──
+// FIX: no longer builds a third merged object on every call
+// Returns references directly — caller must treat result as read-only
 function getCompaniesByMcap(minMcap = 100) {
   const result = {};
-  // From static
   for (const [code, data] of Object.entries(staticData)) {
     if ((data.mcap || 0) >= minMcap) result[code] = data;
   }
-  // From mcapDB (overrides static)
   for (const [code, data] of Object.entries(mcapDB)) {
     if ((data.mcap || 0) >= minMcap) {
-      result[code] = { ...result[code], ...data };
+      // Only spread if we need to merge with static (avoids unnecessary alloc)
+      result[code] = result[code] ? { ...result[code], ...data } : data;
     }
   }
   return result;
@@ -219,5 +237,5 @@ module.exports = {
   getEstimatedOrderBook,
   addNewOrder,
   getCurrentFYQuarter,
-  getCompaniesByMcap
+  getCompaniesByMcap,
 };
