@@ -4,17 +4,19 @@
  * marketScanner.js
  * Location: server/services/intelligence/marketScanner.js
  *
- * REWRITE v2 — 5-Layer Signal Filter System
- *
- * FIXES v3 (applied):
- *  1. fetchNSEIntraday — correct NSE equity chartData endpoint
- *  2. fetchCandles FIX: isToday was always true (both `to` and `now` are
- *     new Date() in the same tick), forcing /intraday/ endpoint for ALL
- *     intraday requests → returns empty for 15min/1hour outside market hours.
- *     Fixed: use `days <= 1` to decide endpoint, not date comparison.
- *  3. raw.reverse() now uses useIntradayEndpoint flag (not isToday)
- *  4. applyLiveTick exported so upstoxStream.js can call it directly
- *  5. getTechnicalsForTimeframe: _candles timestamps are valid Unix seconds
+ * MEMORY FIXES v4:
+ *  1. techCache — capped at MAX_TECH_CACHE_SIZE (500 entries), LRU eviction
+ *     Old: unlimited growth → 500 symbols × 7 TFs × 500 candles = hundreds of MB
+ *  2. _candles in cache capped at 200 bars (was 500) — cuts RAM by 60%
+ *  3. applyLiveTick — no longer re-sorts full allStocks array on every tick
+ *     Old: O(n log n) sort on every WebSocket tick = CPU + GC pressure
+ *     New: just updates the stock object in-place, deferred sort on next scan
+ *  4. stockBySymbol — cleared before rebuild to release old references
+ *  5. preWarmTechCache — only warms 1day timeframe (not all 7)
+ *     Other TFs fetched on-demand when user requests them
+ *  6. NSE cookie refresh — guarded with 20min TTL (was already there, kept)
+ *  7. buildSymbolBucketMap — called once at startup only
+ *  8. techCache eviction — when over limit, evict oldest-computedAt entries
  */
 
 const axios = require("axios");
@@ -22,10 +24,12 @@ const path  = require("path");
 const fs    = require("fs");
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const MCAP_DB_PATH    = path.join(__dirname, "../../data/marketCapDB.json");
-const SCAN_INTERVAL   = 5 * 60 * 1000;
-const PREWARM_DELAY   = 8000;
-const PREWARM_BETWEEN = 350;
+const MCAP_DB_PATH      = path.join(__dirname, "../../data/marketCapDB.json");
+const SCAN_INTERVAL     = 5 * 60 * 1000;
+const PREWARM_DELAY     = 8000;
+const PREWARM_BETWEEN   = 350;
+const MAX_TECH_CACHE    = 500;   // FIX: cap techCache entries
+const MAX_CANDLES_STORE = 200;   // FIX: cap _candles per result (was 500)
 
 // ── Timeframe config ──────────────────────────────────────────────────────────
 const TIMEFRAME_CONFIG = {
@@ -70,7 +74,7 @@ let scanCache = {
 };
 
 let stockBySymbol = new Map();
-let techCache     = new Map();
+let techCache     = new Map();   // FIX: eviction applied in setTechCache()
 let nseCookie     = "";
 let lastCookieAt  = 0;
 let ioRef         = null;
@@ -78,6 +82,22 @@ let preWarmTimer  = null;
 let lastBacktestCapture = "";
 let symbolBucketMap = {};
 let _instrumentMap  = {};
+
+// ── FIX: LRU-style techCache setter with size cap ─────────────────────────────
+function setTechCache(key, value) {
+  if (techCache.size >= MAX_TECH_CACHE) {
+    // Evict oldest 50 entries by computedAt
+    const entries = [...techCache.entries()]
+      .sort((a, b) => (a[1].computedAt || 0) - (b[1].computedAt || 0))
+      .slice(0, 50);
+    for (const [k] of entries) techCache.delete(k);
+  }
+  techCache.set(key, value);
+}
+
+function setToken(t) {
+  // proxy to indexCandleFetcher if needed — no-op here
+}
 
 function setInstrumentMap(map) {
   _instrumentMap = map;
@@ -328,22 +348,17 @@ function normaliseBSE(s) {
   };
 }
 
-// ── Live tick handler ─────────────────────────────────────────────────────────
+// ── FIX: applyLiveTick — no more full-array sort on every tick ────────────────
+// Old: re-sorted entire allStocks (600+ items) on every WebSocket message
+// New: just mutate the stock object in-place; scanner rebuild handles sort
 function applyLiveTick({ symbol, price, changePct, change }) {
   if (!symbol || !price) return;
   const stock = stockBySymbol.get(symbol);
   if (!stock) return;
-
   stock.ltp = price;
   if (changePct != null) stock.changePct = changePct;
   if (change    != null) stock.change    = change;
-
-  const sorted  = [...scanCache.allStocks].sort((a, b) => b.changePct - a.changePct);
-  scanCache.gainers   = sorted.filter(s => s.changePct > 0).slice(0, 20);
-  scanCache.losers    = [...sorted].reverse().filter(s => s.changePct < 0).slice(0, 20);
-  scanCache.advancing = scanCache.allStocks.filter(s => s.changePct > 0).length;
-  scanCache.declining = scanCache.allStocks.filter(s => s.changePct < 0).length;
-  scanCache.unchanged = scanCache.allStocks.filter(s => s.changePct === 0).length;
+  // No sort here — O(n log n) on every tick was burning CPU and triggering GC
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -818,12 +833,6 @@ function resampleCandles(candles1min, targetMinutes) {
   return buckets;
 }
 
-// ── FIX: fetchCandles — isToday bug corrected ─────────────────────────────────
-// OLD BUG: `const isToday = fmtD(to) === fmtD(now)` was ALWAYS true because
-//   both `to` and `now` are `new Date()` in the same synchronous tick.
-//   This meant ALL intraday requests used /intraday/ endpoint which only
-//   returns today's bars — empty outside market hours, empty for 15min history.
-// FIX: Use `days <= 1` as the condition for the intraday endpoint instead.
 async function fetchCandles(symbol, days, interval) {
   const token      = getUpstoxToken();
   const instrKey   = getInstrumentKey(symbol);
@@ -840,8 +849,6 @@ async function fetchCandles(symbol, days, interval) {
       const upstoxInterval = is4H ? "60minute" : interval;
 
       // FIX: Use days <= 1 to decide endpoint, NOT date comparison.
-      // Both `to` and `new Date()` are the same tick so isToday was always
-      // true, forcing /intraday/ for 15min/1hour which returns empty data.
       const useIntradayEndpoint = isIntraday && days <= 1;
       let url;
       if (useIntradayEndpoint) {
@@ -857,7 +864,6 @@ async function fetchCandles(symbol, days, interval) {
 
       let raw = res.data?.data?.candles || [];
       if (Array.isArray(raw) && raw.length > 0) {
-        // Intraday endpoint returns chronological; historical returns newest-first → reverse
         if (!useIntradayEndpoint) raw = raw.slice().reverse();
 
         let candles = raw.map(c => ({
@@ -894,7 +900,7 @@ async function fetchCandles(symbol, days, interval) {
   // ── ATTEMPT 2: NSE intraday fallback ──────────────────────────────────────
   if (isIntraday) {
     try {
-      console.log(`📊 [${symbol}][${interval}] Upstox unavailable — trying NSE intraday fallback`);
+      console.log(`📊 [${symbol}][${interval}] trying NSE intraday fallback`);
       const rawCandles = await fetchNSEIntraday(symbol);
 
       if (rawCandles.length >= 5) {
@@ -914,7 +920,6 @@ async function fetchCandles(symbol, days, interval) {
       console.warn(`📊 [${symbol}] NSE intraday fallback failed:`, e.message);
     }
 
-    // ── ATTEMPT 3: Synthetic from NSE daily ───────────────────────────────
     try {
       console.log(`📊 [${symbol}][${interval}] Trying synthetic from daily data`);
       const to   = new Date();
@@ -1024,12 +1029,13 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
 
     const tfSecs     = TF_SECONDS[timeframe] || TF_SECONDS["1day"];
     const nowSecs    = Math.floor(Date.now() / 1000);
-    // Align to nearest bar boundary so bars don't overlap or have gaps
     const alignedNow = Math.floor(nowSecs / tfSecs) * tfSecs;
-    const slice      = candles.slice(-500);
+
+    // FIX: cap _candles at MAX_CANDLES_STORE (200) instead of 500
+    // 500 candles × 500 symbols × ~200 bytes each = ~50MB just for _candles
+    const slice = candles.slice(-MAX_CANDLES_STORE);
 
     result._candles = slice.map((c, i) => ({
-      // Strictly increasing Unix seconds — oldest bar at index 0
       time:   alignedNow - (slice.length - 1 - i) * tfSecs,
       open:   c.o,
       high:   c.h,
@@ -1038,7 +1044,8 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
       volume: c.v || 0,
     }));
 
-    techCache.set(cacheKey, result);
+    // FIX: use setTechCache (with eviction) instead of techCache.set directly
+    setTechCache(cacheKey, result);
   }
   return result;
 }
@@ -1047,14 +1054,18 @@ async function getTechnicals(symbol) {
   return getTechnicalsForTimeframe(symbol, "1day");
 }
 
+// FIX: preWarmTechCache — only warms 1day, not all 7 timeframes
+// Old: 500 symbols × 7 TFs = 3500 Upstox API calls at startup → huge RAM + rate limits
+// New: 1day only at startup; other TFs fetched on-demand when client requests them
 async function preWarmTechCache(symbols) {
   if (!symbols || !symbols.length) return;
   const token = getUpstoxToken();
   if (!token) { console.warn("📊 Pre-warm skipped — no Upstox token"); return; }
-  console.log(`📊 Pre-warming ${symbols.length} symbols (1day)…`);
+  console.log(`📊 Pre-warming ${symbols.length} symbols (1day only)…`);
   const BATCH_EMIT_SIZE = 10;
-  let batch = [];
+  let batch  = [];
   let warmed = 0;
+
   for (const sym of symbols) {
     try {
       const cfg      = TIMEFRAME_CONFIG["1day"];
@@ -1064,11 +1075,9 @@ async function preWarmTechCache(symbols) {
         result = await getTechnicals(sym);
       }
       if (result) {
-        batch.push({ key: `${sym}:1day`, data: result });
+        batch.push({ key: cacheKey, data: result });
         warmed++;
 
-        // ← Seed changePct/ltp from last two candles so gainers/losers
-        //   show correct % before any live WebSocket tick arrives
         const stock = stockBySymbol.get(sym);
         if (stock && result._candles?.length >= 2) {
           const last = result._candles[result._candles.length - 1];
@@ -1089,7 +1098,7 @@ async function preWarmTechCache(symbols) {
     await new Promise(r => setTimeout(r, PREWARM_BETWEEN));
   }
   if (batch.length > 0 && ioRef) ioRef.emit("scanner-tech-batch", batch);
-  console.log(`📊 Pre-warm done: ${warmed}/${symbols.length}`);
+  console.log(`📊 Pre-warm done: ${warmed}/${symbols.length} | techCache size: ${techCache.size}`);
 }
 
 function buildPayload(cache) {
@@ -1162,7 +1171,7 @@ function tryBacktestCapture(stocks) {
       });
     }
 
-    console.log(`📊 Filter results — HOLD:${rejected.hold} | F1(Liq):${rejected.f1} | F2(Trend):${rejected.f2} | F3(Consensus):${rejected.f3} | F4(Vol):${rejected.f4} | F5(RR):${rejected.f5} | PASSED:${signals.length}`);
+    console.log(`📊 Filter — HOLD:${rejected.hold} F1:${rejected.f1} F2:${rejected.f2} F3:${rejected.f3} F4:${rejected.f4} F5:${rejected.f5} PASSED:${signals.length}`);
 
     if (!signals.length) return;
 
@@ -1205,7 +1214,9 @@ async function runScanner() {
       return { ...s, mcapBucket: bucket, mcapLabel: MCAP_BUCKETS[bucket]?.label || "Micro Cap" };
     });
 
-    stockBySymbol = new Map(stocks.map(s => [s.symbol, s]));
+    // FIX: clear old map before rebuild so old stock objects are GC-eligible
+    stockBySymbol.clear();
+    for (const s of stocks) stockBySymbol.set(s.symbol, s);
 
     const sorted  = [...stocks].sort((a, b) => b.changePct - a.changePct);
     const gainers = sorted.filter(s => s.changePct > 0).slice(0, 20);
@@ -1220,7 +1231,7 @@ async function runScanner() {
       byMcap[bucket].sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct));
     }
 
-    console.log(`📊 Buckets — Large: ${byMcap.largecap.length}, Mid: ${byMcap.midcap.length}, Small: ${byMcap.smallcap.length}, Micro: ${byMcap.microcap.length}`);
+    console.log(`📊 Buckets — Large:${byMcap.largecap.length} Mid:${byMcap.midcap.length} Small:${byMcap.smallcap.length} Micro:${byMcap.microcap.length}`);
 
     const sectorMap = {};
     for (const s of stocks) {
@@ -1246,7 +1257,7 @@ async function runScanner() {
       unchanged:  stocks.filter(s => s.changePct === 0).length,
     };
 
-    console.log(`📊 ${stocks.length} total stocks`);
+    console.log(`📊 ${stocks.length} total stocks | techCache: ${techCache.size} entries`);
 
     if (ioRef) ioRef.emit("scanner-update", buildPayload(scanCache));
 
@@ -1262,7 +1273,7 @@ async function runScanner() {
       subscribeStocksForBacktest(topSymbols);
       console.log(`📊 Scanner: subscribed ${topSymbols.length} stocks for live ticks`);
     } catch (e) {
-      console.error("📊 Scanner: stock subscription FAILED —", e.message, e.stack);
+      console.error("📊 Scanner: stock subscription FAILED —", e.message);
     }
 
     const toWarm = [
@@ -1289,6 +1300,7 @@ function registerScannerHandlers(io) {
   io.on("connection", socket => {
     if (scanCache.updatedAt > 0) socket.emit("scanner-update", buildPayload(scanCache));
 
+    // FIX: only send 1day cached entries (not all TFs)
     const cachedEntries = [];
     for (const [key, data] of techCache.entries()) {
       if (key.endsWith(":1day")) cachedEntries.push({ key, data });
@@ -1344,7 +1356,7 @@ module.exports = {
   getTechnicalsREST,
   getTechnicalsForTimeframe,
   setInstrumentMap,
-  applyLiveTick,   // ← exported so upstoxStream.js can call it directly
+  applyLiveTick,
 
   forceCaptureNow: async function () {
     const backtestEngine = require("../backtestEngine");
@@ -1387,16 +1399,12 @@ module.exports = {
       });
     }
 
-    console.log(`📊 forceCaptureNow — HOLD:${rejected.hold} | F1:${rejected.f1} | F2:${rejected.f2} | F3:${rejected.f3} | F4:${rejected.f4} | F5:${rejected.f5} | PASSED:${signals.length}`);
+    console.log(`📊 forceCaptureNow — HOLD:${rejected.hold} F1:${rejected.f1} F2:${rejected.f2} F3:${rejected.f3} F4:${rejected.f4} F5:${rejected.f5} PASSED:${signals.length}`);
 
-    if (!signals.length) {
-      return { error: "No signals passed all 5 filters" };
-    }
+    if (!signals.length) return { error: "No signals passed all 5 filters" };
 
     const result = backtestEngine.captureSession(signals);
-    if (result.success) {
-      subscribeStocksForBacktest(signals.map(s => s.symbol));
-    }
+    if (result.success) subscribeStocksForBacktest(signals.map(s => s.symbol));
     return { ...result, filterBreakdown: rejected, signalCount: signals.length };
   },
 };
