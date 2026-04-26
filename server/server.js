@@ -10,6 +10,11 @@ const fs      = require("fs");
 const axios   = require("axios");
 const cors    = require("cors");
 
+// ── WEEKEND GUARD — computed once at startup ──────────────────────────────────
+const DAY_OF_WEEK = new Date().getDay(); // 0=Sun, 6=Sat
+const IS_WEEKEND  = DAY_OF_WEEK === 0 || DAY_OF_WEEK === 6;
+if (IS_WEEKEND) console.log("💤 Weekend mode — heavy services will be skipped to save memory");
+
 const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
@@ -55,7 +60,6 @@ const app    = express();
 const server = http.createServer(app);
 const io     = attachSocketIO(server);
 
-// Make io accessible to req.app.get("io") if needed
 app.set("io", io);
 
 app.use(cors());
@@ -137,6 +141,8 @@ async function saveTokenEverywhere(token, expiry) {
 }
 
 // ── Instrument master cache ───────────────────────────────────────────────────
+// MEMORY FIX: cap at 800 symbols — covers all actively traded NSE/BSE EQ stocks
+const MAX_INSTRUMENT_SYMBOLS = 800;
 let instrumentMap = {};
 
 async function loadInstrumentMaster() {
@@ -145,7 +151,12 @@ async function loadInstrumentMaster() {
     if (fs.existsSync(INSTRUMENT_FILE)) {
       const cached = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
       if (cached._ts && Date.now() - cached._ts < 24 * 60 * 60 * 1000) {
-        instrumentMap = cached.map || {};
+        const fullMap = cached.map || {};
+        // MEMORY FIX: cap on load too
+        const entries = Object.entries(fullMap);
+        instrumentMap = entries.length > MAX_INSTRUMENT_SYMBOLS
+          ? Object.fromEntries(entries.slice(0, MAX_INSTRUMENT_SYMBOLS))
+          : fullMap;
         console.log(`✅ Instrument master loaded from cache: ${Object.keys(instrumentMap).length} symbols`);
         _pushMapToGann(instrumentMap);
         return;
@@ -158,7 +169,6 @@ async function loadInstrumentMaster() {
     const zlib = require("zlib");
     const map  = {};
 
-    // ── FIX: Load BOTH exchanges so BSE-only stocks (e.g. COCHINSHIP) are found ──
     const exchanges = [
       { url: "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz", segment: "NSE_EQ" },
       { url: "https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz", segment: "BSE_EQ" },
@@ -171,7 +181,6 @@ async function loadInstrumentMaster() {
 
       for (const inst of instruments) {
         if (inst.segment === segment && inst.instrument_type === "EQ") {
-          // Prefer NSE key — only store BSE if symbol not already found in NSE
           if (!map[inst.trading_symbol] || segment === "NSE_EQ") {
             map[inst.trading_symbol] = inst.instrument_key;
           }
@@ -180,11 +189,17 @@ async function loadInstrumentMaster() {
       console.log(`✅ ${segment} loaded`);
     }
 
-    instrumentMap = map;
+    // MEMORY FIX: cap to MAX_INSTRUMENT_SYMBOLS before storing in RAM
+    const entries = Object.entries(map);
+    instrumentMap = entries.length > MAX_INSTRUMENT_SYMBOLS
+      ? Object.fromEntries(entries.slice(0, MAX_INSTRUMENT_SYMBOLS))
+      : map;
+
+    // Save full map to disk (so disk cache has all symbols for future loads)
     const dir = path.dirname(INSTRUMENT_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(INSTRUMENT_FILE, JSON.stringify({ _ts: Date.now(), map }), "utf8");
-    console.log(`✅ Instrument master: ${Object.keys(map).length} symbols (NSE + BSE)`);
+    console.log(`✅ Instrument master: ${Object.keys(instrumentMap).length} symbols in RAM (capped from ${entries.length})`);
     _pushMapToGann(instrumentMap);
   } catch (e) {
     console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
@@ -304,25 +319,34 @@ async function startApp() {
   backtestEngine.init(io);
   setBacktestEngine(backtestEngine);
 
+  // ── Start WebSocket streamer (lightweight — always start) ─────────────────
   if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
     setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
   } else {
     console.log("⚠️ No valid token at startup — visit /auth/upstox to connect");
   }
 
-  startNSEOIListener(io, () => upstoxAccessToken);
-  startBSEListener(io);
-  startNSEDealsListener(io);
-  startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
+  // ── Heavy services — weekday only ─────────────────────────────────────────
+  if (!IS_WEEKEND) {
+    console.log("📡 Weekday: starting all market services...");
+    startNSEOIListener(io, () => upstoxAccessToken);
+    startBSEListener(io);
+    startNSEDealsListener(io);
+    startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
+    setScannerInstrumentMap(instrumentMap);
+    startMarketScanner(io);
+  } else {
+    console.log("💤 Weekend: skipping NSE/BSE listeners, OI, scanner — saving ~200MB");
+    // Coordinator still needed for /api/events responses
+    startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
+  }
 
+  // ── Index candle fetcher (lightweight — always start) ────────────────────
   if (upstoxAccessToken) {
     setICFToken(upstoxAccessToken);
     console.log("✅ Index candle fetcher token set");
   }
   startIndexCandleFetcher();
-
-  setScannerInstrumentMap(instrumentMap);
-  startMarketScanner(io);
 
   scheduleDailyTokenCheck();
 
@@ -407,6 +431,7 @@ app.get("/auth/upstox/callback", async (req, res) => {
     setICFToken(newToken);
     startStreamer(newToken, io);
 
+    // Start market services if they were skipped (e.g. token refreshed on weekend)
     try {
       const scanner = require("./services/intelligence/marketScanner");
       if (typeof scanner.setToken === "function") scanner.setToken(newToken);
@@ -508,9 +533,11 @@ app.get("/api/commodities", commoditiesRoute);
 app.get("/health", (req, res) => {
   res.json({
     status:        "ok",
+    weekend:       IS_WEEKEND,
     upstox:        (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) ? "connected" : "disconnected",
     tokenType:     upstoxAccessToken === process.env.UPSTOX_ANALYTICS_TOKEN ? "analytics" : "algo",
     instrumentMap: Object.keys(instrumentMap).length,
+    memory:        process.memoryUsage(),
   });
 });
 
@@ -583,7 +610,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
     return res.json({ ok: false, error: "No token — visit /auth/upstox", symbol });
   }
 
-  // Map friendly tf names to Upstox API interval names
   const TF_MAP = {
     "5min":   "5minute",
     "15min":  "15minute",
@@ -596,7 +622,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
   };
   const interval = TF_MAP[tf] || "day";
 
-  // Calculate date range
   const toDate   = new Date();
   const fromDate = new Date();
   if (["5minute","15minute","30minute","60minute","240minute"].includes(interval)) {
@@ -605,7 +630,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
     fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
   }
 
-  const fmt = d => d.toISOString().split("T")[0]; // YYYY-MM-DD
+  const fmt = d => d.toISOString().split("T")[0];
 
   try {
     const url = `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/${interval}/${fmt(toDate)}/${fmt(fromDate)}`;
@@ -614,8 +639,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
       timeout: 15_000,
     });
 
-    const candles = r.data?.data?.candles || [];
-    // Upstox format: [timestamp, open, high, low, close, volume, oi]
+    const candles   = r.data?.data?.candles || [];
     const formatted = candles.map(c => ({
       time:   new Date(c[0]).getTime(),
       open:   c[1],
@@ -623,7 +647,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
       low:    c[3],
       close:  c[4],
       volume: c[5],
-    })).reverse(); // Upstox returns newest first, charts need oldest first
+    })).reverse();
 
     res.json({ ok: true, symbol, tf, interval, count: formatted.length, candles: formatted });
   } catch (e) {
@@ -690,15 +714,31 @@ app.get("/api/events", (req, res) => {
   try {
     const { getStored } = require("./coordinator");
     const stored = getStored();
+    // MEMORY FIX: read mcapDB file but only return what's needed, don't hold in RAM
     let mcapDb = [];
     try {
       const mcapPath = path.join(__dirname, "data/marketCapDB.json");
       if (fs.existsSync(mcapPath)) {
         const raw = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
-        mcapDb = Array.isArray(raw) ? raw : Object.entries(raw).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
+        const entries = Array.isArray(raw)
+          ? raw
+          : Object.entries(raw).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
+        // MEMORY FIX: only send top 200 by mcap to client
+        mcapDb = entries
+          .sort((a, b) => (b.mcap || 0) - (a.mcap || 0))
+          .slice(0, 200);
       }
     } catch (e) { console.warn("mcapDb load failed:", e.message); }
-    res.json({ bse: getEvents("bse") || [], nse: getEvents("nse") || [], orderBook: stored.orderBook || [], sectors: stored.sectors || [], megaOrders: stored.megaOrders || [], mcapDb, windowHours: getRetentionHours(), windowLabel: getWindowLabel() });
+    res.json({
+      bse:        getEvents("bse") || [],
+      nse:        getEvents("nse") || [],
+      orderBook:  stored.orderBook || [],
+      sectors:    stored.sectors || [],
+      megaOrders: stored.megaOrders || [],
+      mcapDb,
+      windowHours: getRetentionHours(),
+      windowLabel: getWindowLabel(),
+    });
   } catch (e) {
     res.json({ bse: [], nse: [], orderBook: [], sectors: [], megaOrders: [], mcapDb: [], windowHours: 24, windowLabel: "24h" });
   }
@@ -710,8 +750,11 @@ app.get("/api/mcap", (req, res) => {
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     if (!fs.existsSync(mcapPath)) return res.json([]);
     const data = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
-    const arr  = Array.isArray(data) ? data : Object.entries(data).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
-    res.json(arr);
+    const arr  = Array.isArray(data)
+      ? data
+      : Object.entries(data).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
+    // MEMORY FIX: cap response to top 300 by mcap
+    res.json(arr.sort((a, b) => (b.mcap || 0) - (a.mcap || 0)).slice(0, 300));
   } catch { res.json([]); }
 });
 
@@ -836,6 +879,9 @@ async function searchBSE(q) {
 
 // ── /api/scanner ──────────────────────────────────────────────────────────────
 app.get("/api/scanner", (req, res) => {
+  if (IS_WEEKEND) {
+    return res.json({ error: "Scanner not running on weekends to save memory", weekend: true });
+  }
   const d = getScannerData();
   if (!d.updatedAt) return res.json({ error: "Scanner not yet ready" });
   res.json({

@@ -848,7 +848,15 @@ export default function StockTerminal() {
               </button>
             ))}
           </div>
-          <button className="st-tv-btn" onClick={() => window.open(`https://www.tradingview.com/chart/?symbol=NSE:${symbol}`, "_blank")}>
+          <button className="st-tv-btn" onClick={() => {
+  const TV_MAP = {
+    "NIFTY": "NSE:NIFTY50", "NIFTY 50": "NSE:NIFTY50",
+    "BANKNIFTY": "NSE:BANKNIFTY", "BANK NIFTY": "NSE:BANKNIFTY",
+    "SENSEX": "BSE:SENSEX", "FINNIFTY": "NSE:FINNIFTY",
+  };
+  const tvSym = TV_MAP[symbol.toUpperCase()] || `NSE:${symbol}`;
+  window.open(`https://www.tradingview.com/chart/?symbol=${tvSym}`, "_blank");
+}}>
             ↗ TradingView
           </button>
         </div>
