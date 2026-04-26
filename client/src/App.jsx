@@ -313,13 +313,13 @@ function TickerModal({ item, onClose }) {
   if (!item) return null;
 
   const TV_SYMBOLS = {
-    "NIFTY 50":   "NSE:NIFTY",
-    "SENSEX":     "BSE:SENSEX",
-    "BANK NIFTY": "NSE:BANKNIFTY",
-    "BTC":        "BINANCE:BTCUSDT",
-    "GOLD":       "TVC:GOLD",
-    "SILVER":     "TVC:SILVER",
-  };
+  "NIFTY 50":   "NSE:NIFTY50",    // ← FIXED
+  "SENSEX":     "BSE:SENSEX",
+  "BANK NIFTY": "NSE:BANKNIFTY",
+  "BTC":        "BINANCE:BTCUSDT",
+  "GOLD":       "TVC:GOLD",
+  "SILVER":     "TVC:SILVER",
+};
   const tvSymbol = TV_SYMBOLS[item.name] || null;
   const isPI     = item.name === "PI";
 
