@@ -166,6 +166,28 @@ function extractAmount(text) {
   return match ? parseFloat(match[1]) : 0;
 }
 
+// ─── TRADINGVIEW SYMBOL MAPS ──────────────────────────────────────────────────
+// TV_WIDGET_SYMBOLS  — used inside the embedded iframe (widgetembed API)
+// TV_FULLCHART_SYMBOLS — used for "Open Full Chart" links (tradingview.com/chart)
+
+const TV_WIDGET_SYMBOLS = {
+  "NIFTY 50":   "NSE:NIFTY_INDEX",   // widgetembed uses NIFTY_INDEX
+  "SENSEX":     "BSE:SENSEX",
+  "BANK NIFTY": "NSE:BANKNIFTY",
+  "BTC":        "BINANCE:BTCUSDT",
+  "GOLD":       "TVC:GOLD",
+  "SILVER":     "TVC:SILVER",
+};
+
+const TV_FULLCHART_SYMBOLS = {
+  "NIFTY 50":   "NSE:NIFTY50",       // full chart URL uses NIFTY50
+  "SENSEX":     "BSE:SENSEX",
+  "BANK NIFTY": "NSE:BANKNIFTY",
+  "BTC":        "BINANCE:BTCUSDT",
+  "GOLD":       "TVC:GOLD",
+  "SILVER":     "TVC:SILVER",
+};
+
 // ─── COMPOSITE SCORE BADGE ────────────────────────────────────────────────────
 
 function CompositeScoreBadge({ symbol, compositeMap }) {
@@ -309,19 +331,16 @@ function getSession() {
   return { label: "CLOSED", cls: "closed" };
 }
 
+// ─── TICKER MODAL ─────────────────────────────────────────────────────────────
+
 function TickerModal({ item, onClose }) {
   if (!item) return null;
 
-  const TV_SYMBOLS = {
-  "NIFTY 50":   "NSE:NIFTY50",    // ← FIXED
-  "SENSEX":     "BSE:SENSEX",
-  "BANK NIFTY": "NSE:BANKNIFTY",
-  "BTC":        "BINANCE:BTCUSDT",
-  "GOLD":       "TVC:GOLD",
-  "SILVER":     "TVC:SILVER",
-};
-  const tvSymbol = TV_SYMBOLS[item.name] || null;
-  const isPI     = item.name === "PI";
+  // Widget symbol — used inside the embedded iframe
+  const tvWidgetSymbol   = TV_WIDGET_SYMBOLS[item.name]   || null;
+  // Full chart symbol — used for "Open Full Chart" link
+  const tvFullSymbol     = TV_FULLCHART_SYMBOLS[item.name] || null;
+  const isPI = item.name === "PI";
 
   const isUp   = item.up === true  || (item.change24h ?? 0) > 0;
   const isDown = item.up === false || (item.change24h ?? 0) < 0;
@@ -340,6 +359,7 @@ function TickerModal({ item, onClose }) {
         onClick={e => e.stopPropagation()}
         style={{ background: "#030e1e", border: "1px solid #0d3560", borderRadius: 10, width: "94vw", maxWidth: 760, maxHeight: "88vh", display: "flex", flexDirection: "column", boxShadow: "0 0 60px rgba(0,150,255,0.18)", overflow: "hidden" }}
       >
+        {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "14px 16px 12px", borderBottom: "1px solid #0a2540", background: "linear-gradient(90deg, #020d1f, #041828)", flexShrink: 0 }}>
           <div>
             <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, fontWeight: 700, color: "#00cfff" }}>{item.name}</div>
@@ -351,13 +371,14 @@ function TickerModal({ item, onClose }) {
           <button onClick={onClose} style={{ background: "none", border: "none", color: "#2a5070", fontSize: 18, cursor: "pointer", padding: "0 0 0 12px", flexShrink: 0 }}>✕</button>
         </div>
 
+        {/* Chart area */}
         <div style={{ flex: 1, minHeight: 420, flexShrink: 0 }}>
-          {tvSymbol && (
+          {tvWidgetSymbol && (
             <iframe
-              key={tvSymbol}
+              key={tvWidgetSymbol}
               src={
                 "https://s.tradingview.com/widgetembed/?frameElementId=tv_chart" +
-                "&symbol=" + encodeURIComponent(tvSymbol) +
+                "&symbol=" + encodeURIComponent(tvWidgetSymbol) +
                 "&interval=5" +
                 "&hidesidetoolbar=0&hidetoptoolbar=0" +
                 "&symboledit=1&saveimage=0" +
@@ -379,7 +400,7 @@ function TickerModal({ item, onClose }) {
               <a href="https://coinmarketcap.com/currencies/pi-network/" target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: "#00cfff", fontSize: 10 }}>View on CoinMarketCap ↗</a>
             </div>
           )}
-          {!tvSymbol && !isPI && (
+          {!tvWidgetSymbol && !isPI && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 420, color: "#2a6070", fontFamily: "IBM Plex Mono, monospace", fontSize: 12, gap: 8 }}>
               <span style={{ fontSize: 32 }}>📊</span>
               <span>Chart not available for {item.name}</span>
@@ -387,13 +408,14 @@ function TickerModal({ item, onClose }) {
           )}
         </div>
 
+        {/* Footer */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid #0a2540", background: "#020b18", flexShrink: 0 }}>
           <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#1a4060" }}>
-            {tvSymbol ? "TradingView · 5-min chart · NIFTY Index data" : isPI ? "π PI Network · CoinMarketCap" : ""}
+            {tvWidgetSymbol ? "TradingView · 5-min chart · Live data" : isPI ? "π PI Network · CoinMarketCap" : ""}
           </span>
-          {tvSymbol && (
+          {tvFullSymbol && (
             <a
-              href={"https://www.tradingview.com/chart/?symbol=" + encodeURIComponent(tvSymbol)}
+              href={"https://www.tradingview.com/chart/?symbol=" + encodeURIComponent(tvFullSymbol)}
               target="_blank" rel="noreferrer"
               onClick={e => e.stopPropagation()}
               style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#00cfff", textDecoration: "none", opacity: 0.8 }}
@@ -935,7 +957,6 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           {isOptionsIntel && <span className="options-nav-back">←</span>}
         </button>
 
-        {/* ── SCANNER BUTTON — NEW ── */}
         <button
           className={`options-nav-btn${isScanner ? " active" : ""}`}
           onClick={() => setCurrentPage(isScanner ? "dashboard" : "scanner")}
@@ -1340,7 +1361,6 @@ export default function App() {
     />
   );
 
-  // ── Options page ───────────────────────────────────────────────────────────
   if (currentPage === "options") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
@@ -1354,7 +1374,6 @@ export default function App() {
     );
   }
 
-  // ── Scores page ────────────────────────────────────────────────────────────
   if (currentPage === "scores") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
@@ -1368,7 +1387,6 @@ export default function App() {
     );
   }
 
-  // ── Options Intelligence page ──────────────────────────────────────────────
   if (currentPage === "options-intel") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
@@ -1382,7 +1400,6 @@ export default function App() {
     );
   }
 
-  // ── Market Scanner page — NEW ──────────────────────────────────────────────
   if (currentPage === "scanner") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
@@ -1396,7 +1413,6 @@ export default function App() {
     );
   }
 
-  // ── Dashboard ──────────────────────────────────────────────────────────────
   return (
     <div className="terminal">
       {sharedHeader}
