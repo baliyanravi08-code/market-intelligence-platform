@@ -296,7 +296,7 @@ export default function StockChart({ symbol }) {
   />
   {/* Expand button — top-right corner, doesn't block crosshair */}
   <div
-    onClick={() => window.open(`/VblTerminal.html?symbol=${symbol}`, "_blank")}
+    onClick={() => window.open(`/VblTerminal.html?symbol=${encodeURIComponent(symbol)}`, "_blank")}
     style={{
       position: "absolute", top: 8, right: 8,
       background: "rgba(0,207,255,0.12)",
