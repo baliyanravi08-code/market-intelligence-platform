@@ -248,6 +248,27 @@ function _pushMapToGann(map) {
 function getInstrumentMap() { return instrumentMap; }
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
+
+// FIX: Validate the token is actually alive against Upstox API.
+// Upstox invalidates tokens at midnight IST regardless of the stored expiresAt
+// timestamp, so trusting the DB timestamp alone causes a 401 loop on every
+// morning restart until the user visits /auth/upstox.
+async function validateTokenLive(token) {
+  try {
+    const r = await axios.get("https://api.upstox.com/v2/user/profile", {
+      headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+      timeout: 6000,
+    });
+    return r.status === 200;
+  } catch (e) {
+    if (e.response?.status === 401) return false;
+    // Network error (e.g. Render cold-start with no connectivity yet) —
+    // give the benefit of the doubt so we don't block startup on flaky net.
+    console.warn("⚠️ Token live-check network error:", e.message, "— assuming token valid");
+    return true;
+  }
+}
+
 async function loadToken() {
   // Priority 1: MongoDB Algo Trading token
   try {
@@ -255,13 +276,23 @@ async function loadToken() {
     if (Model) {
       const doc = await Model.findOne({ service: "upstox" });
       if (doc && doc.accessToken && new Date() < doc.expiresAt) {
-        upstoxAccessToken = doc.accessToken;
-        upstoxTokenExpiry = doc.expiresAt.getTime();
-        console.log("✅ Algo Trading token loaded from MongoDB");
-        process.env.UPSTOX_ACCESS_TOKEN = upstoxAccessToken;
-        return;
+        console.log("🔍 MongoDB token found — validating against Upstox...");
+        const alive = await validateTokenLive(doc.accessToken);
+        if (alive) {
+          upstoxAccessToken = doc.accessToken;
+          upstoxTokenExpiry = doc.expiresAt.getTime();
+          console.log("✅ Algo Trading token loaded from MongoDB (live-validated)");
+          process.env.UPSTOX_ACCESS_TOKEN = upstoxAccessToken;
+          return;
+        } else {
+          console.log("❌ MongoDB token is DEAD (Upstox rejected it) — visit /auth/upstox to refresh");
+          // Remove the stale token from DB so we don't keep retrying it
+          try { await Model.deleteOne({ service: "upstox" }); } catch (_) {}
+          // Do NOT set upstoxAccessToken — services will skip gracefully
+          return;
+        }
       } else if (doc) {
-        console.log("⚠️ MongoDB token expired — falling back");
+        console.log("⚠️ MongoDB token timestamp expired — falling back");
       }
     }
   } catch (e) {
