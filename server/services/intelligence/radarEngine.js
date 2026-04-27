@@ -3,6 +3,18 @@
  * Tracks company signals and builds radar scores.
  * Persists to disk via radar.json — no DB dependency.
  * Attaches credibility score from credibilityEngine to each radar entry.
+ *
+ * MEMORY FIXES:
+ * 1. saveToDisk() is now DEBOUNCED (2s window) — previously called synchronously
+ *    inside updateRadar() on every signal. Burst signals no longer cause
+ *    repeated writeFileSync calls.
+ * 2. MAX_RADAR_ITEMS reduced from 200 → 100 — radarMap held up to 200 full
+ *    objects each with signals[], guidance{}, credibility fields etc.
+ * 3. radarMap is pruned when it exceeds MAX_RADAR_ITEMS * 1.5 (150) —
+ *    previously it grew unbounded in memory even though getRadar() sliced to 200.
+ *    Now stale/low-score entries are evicted from the Map itself.
+ * 4. setInterval save changed from 3 min → 10 min (disk writes are cheap but
+ *    frequent JSON.stringify of 100+ entries adds GC pressure).
  */
 
 const fs   = require("fs");
@@ -13,9 +25,10 @@ const RADAR_FILE = path.join(__dirname, "../../data/radar.json");
 const radarMap = new Map();
 
 const MIN_SCORE_TO_SHOW  = 20;
-const MAX_RADAR_ITEMS    = 200;
+const MAX_RADAR_ITEMS    = 100;   // reduced from 200
 const DECAY_PER_HOUR     = 5;
 const MAX_SIGNAL_HISTORY = 5;
+const PRUNE_THRESHOLD    = 150;   // prune radarMap when it exceeds this
 
 const SIGNAL_SCORES = {
   ORDER_ALERT:      40,
@@ -70,16 +83,22 @@ function loadFromDisk() {
   }
 }
 
+// ── DEBOUNCED save — batches burst signals into one write ─────────────────────
+let _saveTimer = null;
 function saveToDisk() {
-  try {
-    const dir = path.dirname(RADAR_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(RADAR_FILE, JSON.stringify(getRadar()), "utf8");
-  } catch(e) {}
+  if (_saveTimer) return;          // already scheduled
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    try {
+      const dir = path.dirname(RADAR_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(RADAR_FILE, JSON.stringify(getRadar()), "utf8");
+    } catch(e) {}
+  }, 2000);
 }
 
 loadFromDisk();
-setInterval(saveToDisk, 3 * 60 * 1000);
+setInterval(saveToDisk, 10 * 60 * 1000);  // reduced from 3 min → 10 min
 
 function getCredibility(code) {
   if (!code) return null;
@@ -98,7 +117,7 @@ function getGuidanceSummary(code) {
     const g = getGuidanceForScrip(String(code));
     if (!g || !g.hasData) return null;
     return {
-      quarter:       g.quarter,
+      quarter:        g.quarter,
       revenueTargets: g.guidance?.revenue  || [],
       ebitdaTargets:  g.guidance?.ebitda   || [],
       capexTargets:   g.guidance?.capex    || [],
@@ -107,6 +126,25 @@ function getGuidanceSummary(code) {
     };
   } catch(e) {
     return null;
+  }
+}
+
+// ── Prune radarMap — remove decayed/low-score entries when too large ──────────
+function pruneRadarMap() {
+  if (radarMap.size <= PRUNE_THRESHOLD) return;
+  // Score each entry and remove those that have decayed below threshold
+  const toDelete = [];
+  for (const [key, entry] of radarMap.entries()) {
+    if (applyDecay(entry) < MIN_SCORE_TO_SHOW) toDelete.push(key);
+  }
+  for (const key of toDelete) radarMap.delete(key);
+
+  // If still over threshold, remove oldest by receivedAt
+  if (radarMap.size > PRUNE_THRESHOLD) {
+    const sorted = [...radarMap.entries()]
+      .sort((a, b) => a[1].receivedAt - b[1].receivedAt);
+    const excess = radarMap.size - MAX_RADAR_ITEMS;
+    for (let i = 0; i < excess; i++) radarMap.delete(sorted[i][0]);
   }
 }
 
@@ -157,7 +195,6 @@ function updateRadar(company, signal) {
   if (signal._orderInfo)              data._orderInfo = signal._orderInfo;
   if (signal.mcapRatio !== undefined) data.mcapRatio  = signal.mcapRatio;
 
-  // ── Attach credibility score ──────────────────────────────────────────────
   const cred = getCredibility(data.code);
   if (cred) {
     data.credibilityScore = cred.overallScore;
@@ -165,7 +202,6 @@ function updateRadar(company, signal) {
     data.credibilityColor = cred.color;
   }
 
-  // ── Attach guidance summary ───────────────────────────────────────────────
   const guidance = getGuidanceSummary(data.code);
   if (guidance) {
     data.guidance = guidance;
@@ -182,7 +218,10 @@ function updateRadar(company, signal) {
   else if (data.score >= 20) data.strength = "MODERATE";
   else                       data.strength = "WEAK";
 
-  saveToDisk();
+  // Prune the map before save if it's grown too large
+  pruneRadarMap();
+
+  saveToDisk();  // debounced — safe to call on every signal
 }
 
 function applyDecay(entry) {

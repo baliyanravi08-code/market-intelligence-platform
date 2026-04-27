@@ -3,19 +3,37 @@
  * Fetches live MCap + company data from BSE.
  * Caches aggressively to avoid rate limits.
  * Also updates static marketCap store when live data is fetched.
+ *
+ * MEMORY FIXES:
+ * 1. All 4 caches (mcap, profile, yahoo, holding) now capped at MAX_CACHE_SIZE (300 entries)
+ *    with LRU-style eviction — oldest entries removed when cap is reached.
+ *    Previously: plain objects that grew forever as more BSE codes were queried.
+ * 2. yahooCache is shared for both Yahoo and FMP data — cap applies across both.
  */
 
 const axios = require("axios");
 
 const FMP_KEY = "ch4kAf6MzKzLUkpdPD2pc2BX6XWkF3MQ";
 
+// ── Cache size cap — evict oldest when exceeded ──────────────────────────────
+const MAX_CACHE_SIZE = 300;
+
+function cappedSet(cache, key, value) {
+  cache[key] = value;
+  const keys = Object.keys(cache);
+  if (keys.length > MAX_CACHE_SIZE) {
+    // Evict the 50 oldest entries (by insertion order)
+    for (let i = 0; i < 50; i++) delete cache[keys[i]];
+  }
+}
+
 const mcapCache    = {};
 const profileCache = {};
-const yahooCache   = {};
+const yahooCache   = {};   // shared for Yahoo + FMP keys
 const holdingCache = {};
 
-const LIVE_CACHE_TTL   =  2 * 60 * 1000; // 2 min for live price (was 30s — too aggressive)
-const PROFILE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h for profile
+const LIVE_CACHE_TTL    =  2 * 60 * 1000;       // 2 min for live price
+const PROFILE_CACHE_TTL = 24 * 60 * 60 * 1000;  // 24h for profile
 
 const BSE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -30,7 +48,6 @@ const NSE_HEADERS = {
 };
 
 function parseMcap(d) {
-  // Try all known MCap field names from BSE API
   const raw = d?.MarketCapCr || d?.Mktcap || d?.mktcap || d?.MktCap
             || d?.mktCap     || d?.MKTCAP  || d?.market_cap || null;
   if (!raw) return null;
@@ -38,18 +55,16 @@ function parseMcap(d) {
   return v > 0 ? v : null;
 }
 
-// ── 1. BSE Live Quote — MCap only ──
+// ── 1. BSE Live Quote — MCap only ────────────────────────────────────────────
 async function getLiveMcap(code) {
   if (!code) return null;
   const c = String(code).trim();
   if (!c || c === "0" || c.length < 4) return null;
 
-  // Return cached if fresh
   if (mcapCache[c] && (Date.now() - mcapCache[c].fetchedAt) < LIVE_CACHE_TTL) {
     return mcapCache[c].mcap;
   }
 
-  // Try BSE getScripHeaderData
   try {
     const res = await axios.get(
       `https://api.bseindia.com/BseIndiaAPI/api/getScripHeaderData/w?Scrip_Cd=${c}`,
@@ -57,19 +72,15 @@ async function getLiveMcap(code) {
     );
     const mcap = parseMcap(res.data);
     if (mcap && mcap > 0) {
-      mcapCache[c] = { mcap, fetchedAt: Date.now() };
-
-      // ── Also update static marketCap store so orderBookEngine can use it ──
+      cappedSet(mcapCache, c, { mcap, fetchedAt: Date.now() });
       try {
         const { updateFromResult } = require("./marketCap");
         updateFromResult(c, { mcap });
       } catch(e) {}
-
       return mcap;
     }
   } catch(e) {}
 
-  // Try BSE quote API as fallback
   try {
     const res = await axios.get(
       `https://api.bseindia.com/BseIndiaAPI/api/getQuote/w?scripcode=${c}&type=EQ`,
@@ -78,7 +89,7 @@ async function getLiveMcap(code) {
     const d    = res.data?.Header || res.data || {};
     const mcap = parseMcap(d);
     if (mcap && mcap > 0) {
-      mcapCache[c] = { mcap, fetchedAt: Date.now() };
+      cappedSet(mcapCache, c, { mcap, fetchedAt: Date.now() });
       try {
         const { updateFromResult } = require("./marketCap");
         updateFromResult(c, { mcap });
@@ -90,7 +101,7 @@ async function getLiveMcap(code) {
   return null;
 }
 
-// ── 2. BSE Full Company Profile ──
+// ── 2. BSE Full Company Profile ───────────────────────────────────────────────
 async function getCompanyProfile(code) {
   if (!code) return null;
   const c = String(code).trim();
@@ -116,7 +127,7 @@ async function getCompanyProfile(code) {
     const changePct = price && prev ? parseFloat(((price - prev) / prev * 100).toFixed(2)) : null;
 
     if (mcap) {
-      mcapCache[c] = { mcap, fetchedAt: Date.now() };
+      cappedSet(mcapCache, c, { mcap, fetchedAt: Date.now() });
       try { const { updateFromResult } = require("./marketCap"); updateFromResult(c, { mcap }); } catch(e) {}
     }
 
@@ -141,12 +152,12 @@ async function getCompanyProfile(code) {
       low52:         parseFloat(h?.Low52     || 0) || null,
     };
 
-    profileCache[c] = { profile, fetchedAt: Date.now() };
+    cappedSet(profileCache, c, { profile, fetchedAt: Date.now() });
     return profile;
   } catch(e) { return null; }
 }
 
-// ── 3. Yahoo Finance ──
+// ── 3. Yahoo Finance ──────────────────────────────────────────────────────────
 async function getYahooData(bseCode) {
   const c = String(bseCode).trim();
   if (yahooCache[c] && (Date.now() - yahooCache[c].fetchedAt) < PROFILE_CACHE_TTL) return yahooCache[c].data;
@@ -181,12 +192,12 @@ async function getYahooData(bseCode) {
         ebitda:  q.ebitda?.raw       ? Math.round(q.ebitda.raw       / 10000000) : null,
       }))
     };
-    yahooCache[c] = { data, fetchedAt: Date.now() };
+    cappedSet(yahooCache, c, { data, fetchedAt: Date.now() });
     return data;
   } catch(e) { return null; }
 }
 
-// ── 4. FMP ──
+// ── 4. FMP ────────────────────────────────────────────────────────────────────
 async function getFMPData(nseSymbol) {
   if (!nseSymbol) return null;
   const sym = `${nseSymbol}.NS`;
@@ -221,12 +232,12 @@ async function getFMPData(nseSymbol) {
       })),
       source: "FMP"
     };
-    yahooCache[key] = { data, fetchedAt: Date.now() };
+    cappedSet(yahooCache, key, { data, fetchedAt: Date.now() });
     return data;
   } catch(e) { return null; }
 }
 
-// ── 5. Shareholding ──
+// ── 5. Shareholding ───────────────────────────────────────────────────────────
 async function getShareholding(bseCode, nseSymbol) {
   const c = String(bseCode).trim();
   if (holdingCache[c] && (Date.now() - holdingCache[c].fetchedAt) < PROFILE_CACHE_TTL) return holdingCache[c].data;
@@ -245,7 +256,7 @@ async function getShareholding(bseCode, nseSymbol) {
         if (cat.includes("public") || cat.includes("retail")) pub = pct;
       });
       const data = { promoter, fii, dii, public: pub, source: "BSE" };
-      holdingCache[c] = { data, fetchedAt: Date.now() };
+      cappedSet(holdingCache, c, { data, fetchedAt: Date.now() });
       return data;
     }
   } catch(e) {}
@@ -255,14 +266,14 @@ async function getShareholding(bseCode, nseSymbol) {
       const res  = await axios.get(`https://www.nseindia.com/api/corporate-share-holdings-master?index=shareholding&symbol=${nseSymbol}`, { headers: NSE_HEADERS, timeout: 6000 });
       const d    = res.data;
       const data = { promoter: d?.promoter || null, fii: d?.fii || d?.FPI || null, dii: d?.dii || null, public: d?.public || null, source: "NSE" };
-      holdingCache[c] = { data, fetchedAt: Date.now() };
+      cappedSet(holdingCache, c, { data, fetchedAt: Date.now() });
       return data;
     } catch(e) {}
   }
   return null;
 }
 
-// ── 6. Full Screener ──
+// ── 6. Full Screener ──────────────────────────────────────────────────────────
 async function getFullScreenerData(bseCode, nseSymbol) {
   console.log(`🔍 Screener: ${bseCode} / ${nseSymbol}`);
   const [profile, yahoo, fmp, holding] = await Promise.allSettled([

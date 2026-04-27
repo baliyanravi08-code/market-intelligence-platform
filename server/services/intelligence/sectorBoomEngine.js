@@ -7,15 +7,57 @@
 
   Called after sectorQueue updates.
   Returns a boom event or null.
+
+  MEMORY FIX:
+  - boomFired Set was never pruned — grew forever as sectors triggered booms.
+    Now capped at MAX_BOOM_KEYS (200). When exceeded, the oldest half are
+    removed so the Set stays bounded.
+  - Daily reset: boomFired is cleared at the start of each new IST calendar day
+    so yesterday's booms don't block today's signals.
 */
 
 const BOOM_ORDER_COUNT = 3;      // min companies with orders
 const BOOM_VALUE_CRORE = 500;    // min total sector order value in crore
 
-const boomFired = new Set(); // track which sectors already fired boom alert
+const MAX_BOOM_KEYS = 200;       // cap on boomFired Set size
+
+const boomFired    = new Set();
+const boomFiredLog = [];         // insertion-order log for eviction
+
+let _lastResetDay = null;
+
+function todayIST() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+
+function maybeResetDaily() {
+  const today = todayIST();
+  if (_lastResetDay !== today) {
+    _lastResetDay = today;
+    boomFired.clear();
+    boomFiredLog.length = 0;
+    console.log(`🔄 SectorBoom: daily reset — boomFired cleared for ${today}`);
+  }
+}
+
+function addBoomKey(key) {
+  boomFired.add(key);
+  boomFiredLog.push(key);
+
+  // Evict oldest half when cap exceeded
+  if (boomFired.size > MAX_BOOM_KEYS) {
+    const evictCount = Math.floor(MAX_BOOM_KEYS / 2);
+    for (let i = 0; i < evictCount && boomFiredLog.length > 0; i++) {
+      const old = boomFiredLog.shift();
+      boomFired.delete(old);
+    }
+  }
+}
 
 function sectorBoomEngine(queue) {
   if (!queue || !queue.sector) return null;
+
+  maybeResetDaily();
 
   const { sector, orders, totalValue, companies } = queue;
 
@@ -24,17 +66,15 @@ function sectorBoomEngine(queue) {
 
   if (!countBoom && !valueBoom) return null;
 
-  // Build a unique key so we don't spam the same boom event
   const boomKey = `${sector}:${orders}:${Math.floor(totalValue / 100)}`;
 
   if (boomFired.has(boomKey)) return null;
-  boomFired.add(boomKey);
+  addBoomKey(boomKey);
 
-  // Determine boom type label
   let boomType = "SECTOR_MOMENTUM";
   if (countBoom && valueBoom) boomType = "SECTOR_BOOM";
-  else if (valueBoom) boomType = "HIGH_VALUE_SECTOR";
-  else if (countBoom) boomType = "MULTI_COMPANY_SECTOR";
+  else if (valueBoom)         boomType = "HIGH_VALUE_SECTOR";
+  else if (countBoom)         boomType = "MULTI_COMPANY_SECTOR";
 
   console.log(`🔥 Sector Boom Detected: ${sector} | Orders: ${orders} | Value: Rs.${totalValue} Cr`);
 

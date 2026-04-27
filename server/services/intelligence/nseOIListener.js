@@ -4,38 +4,35 @@
  * nseOIListener.js
  * Place at: server/services/intelligence/nseOIListener.js
  *
- * ══════════════════════════════════════════════════════════════
- * FIXES APPLIED (this session):
+ * MEMORY FIXES (this session):
  *
- * FIX-LOT-1 — accumulateNetFlow() missing lotSize:
- *   Upstox volume = number of CONTRACTS (lots).
- *   Notional value = volume × lotSize × LTP.
- *   Previous code: deltaFlow += (peVolDelta * peLTP) - (ceVolDelta * ceLTP)
- *   → Missing × lotSize → values were 75x too small for NIFTY.
- *   Fix: pass lotSize into accumulateNetFlow, multiply deltaFlow by lotSize.
- *   Divide by 1e7 (not 1e5) to get CRORES (matching optionsIntelligenceEngine).
+ * FIX-MEM-1 — strikeOIMap unbounded growth:
+ *   strikeOIMap held OI for ALL expiries ever fetched, never pruned.
+ *   Fix: pruneStaleExpiries() removes expiry keys that are in the past.
+ *   Called after every refreshExpiries() and inside pollChains().
+ *   Only the 2 nearest expiries per underlying are retained in-memory.
  *
- * FIX-LOT-2 — mergeOI() OI field name:
- *   Upstox /v2/option/chain market_data may return open_interest OR oi.
- *   Fix: read both, prefer whichever is non-zero.
+ * FIX-MEM-2 — sessionFlowMap unbounded growth:
+ *   Same issue — accumulates entries for past expiries forever.
+ *   Fix: pruneStaleExpiries() also clears stale sessionFlowMap keys.
  *
- * FIX-LOT-3 — processChain() netFlow label:
- *   netFlow is now in CRORES (÷ 1e7) not Lakhs (÷ 1e5).
- *   Console log updated to show "Cr" unit.
+ * FIX-MEM-3 — spotHistory capped at 252 (was correct) — no change needed.
  *
- * FIX-LOT-4 — buildNormalisedRows() OI field name:
- *   Same dual-field read (open_interest || oi) for consistency.
+ * FIX-MEM-4 — persistCache() called on every successful poll (every 60s):
+ *   Full strike arrays (200+ rows × 2 underlyings × 2 expiries) were
+ *   serialised and written to disk every minute.
+ *   Fix: persistCache() is now DEBOUNCED to once every 5 minutes.
+ *   The debounce is flushed immediately after a session reset so we don't
+ *   lose data across day boundaries.
  *
- * Previously fixed (preserved):
- *   FIX 1 — buildNormalisedRows() used strikeOIMap[null]
- *   FIX 2 — closes array (spotHistory) passed to ingestChainData
- *   FIX 3 — ingestChainData signature extended to accept closes[]
- *   FIX A — double-emit causing flash of absurd values
- *   FIX B — OI jumping between refreshes (merged strikeOIMap)
- *   FIX C — net flow swinging wildly (delta accumulator)
- *   FIX D — stale cache replay blocked
- *   FIX E — clean normalised rows passed to optionsIntegration
- * ══════════════════════════════════════════════════════════════
+ * FIX-MEM-5 — cache object retained full processed chain (strikes[], alerts[],
+ *   unusualOI[] etc.) for ALL expiries in memory indefinitely.
+ *   Fix: only the 2 nearest expiries are kept in cache[name].chains.
+ *   Older entries are removed after each poll.
+ *
+ * Previously fixed (all preserved):
+ *   FIX-LOT-1..4 — lotSize-aware net flow, readOI() dual field, Cr units
+ *   FIX 1..E     — strikeOIMap[null], closes[], double-emit, stale cache, etc.
  */
 
 const axios = require("axios");
@@ -57,6 +54,7 @@ const MAX_FAILS          = 5;
 const POLL_INTERVAL_MS   = 60_000;
 const EXPIRY_REFRESH_MS  = 4 * 60 * 60 * 1000;
 const CACHE_MAX_AGE_MS   = 4 * 60 * 60 * 1000;
+const EXPIRIES_TO_KEEP   = 2;   // only keep nearest N expiries in memory
 
 const cache = {};
 
@@ -89,11 +87,44 @@ function maybeResetSession() {
     sessionDate = today;
     for (const key of Object.keys(sessionFlowMap)) delete sessionFlowMap[key];
     console.log(`🔄 OI: new session ${today} — net flow accumulators reset`);
+    // Flush cache to disk immediately on session reset
+    flushPersistNow();
   }
 }
 
 function authHeaders(token) {
   return { Authorization: `Bearer ${token}`, Accept: "application/json" };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX-MEM-1/2: Prune stale expiries from strikeOIMap, sessionFlowMap, cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+function pruneStaleExpiries(name, activeExpiries) {
+  // activeExpiries = the N nearest expiries we actually care about
+  const keep = new Set(activeExpiries.slice(0, EXPIRIES_TO_KEEP));
+
+  // Prune strikeOIMap
+  if (strikeOIMap[name]) {
+    for (const expiry of Object.keys(strikeOIMap[name])) {
+      if (!keep.has(expiry)) delete strikeOIMap[name][expiry];
+    }
+  }
+
+  // Prune sessionFlowMap
+  for (const key of Object.keys(sessionFlowMap)) {
+    if (key.startsWith(`${name}__`)) {
+      const expiry = key.slice(name.length + 2);
+      if (!keep.has(expiry)) delete sessionFlowMap[key];
+    }
+  }
+
+  // Prune cache chains
+  if (cache[name]?.chains) {
+    for (const expiry of Object.keys(cache[name].chains)) {
+      if (!keep.has(expiry)) delete cache[name].chains[expiry];
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -136,12 +167,11 @@ async function fetchChain(upstoxKey, expiry, token) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX-LOT-2: Safe OI reader — Upstox may return open_interest OR oi
+// FIX-LOT-2: Safe OI reader
 // ─────────────────────────────────────────────────────────────────────────────
 
 function readOI(marketData) {
   if (!marketData) return 0;
-  // Prefer open_interest (official Upstox v2 field name), fallback to oi
   const v = marketData.open_interest ?? marketData.oi ?? 0;
   return Number(v) || 0;
 }
@@ -163,7 +193,6 @@ function mergeOI(name, expiry, rawStrikes) {
 
   for (const s of rawStrikes) {
     const k    = s.strike_price;
-    // FIX-LOT-2: use readOI() to handle both field names
     const ceOI = readOI(s.call_options?.market_data);
     const peOI = readOI(s.put_options?.market_data);
     if (!map[k]) map[k] = { ceOI: 0, peOI: 0 };
@@ -180,21 +209,14 @@ function mergeOI(name, expiry, rawStrikes) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX-LOT-1 + FIX C: Session net flow accumulator (delta-based, lotSize-aware)
-//
-// Upstox volume = number of CONTRACTS (each contract = 1 lot).
-// Notional rupee value = contracts × lotSize × LTP.
-// Divide by 1e7 to get CRORES (same unit as optionsIntelligenceEngine FIX A).
-//
-// Previous: deltaFlow / 1e5 → Lakhs, missing × lotSize → 75x too small.
-// Fixed:    deltaFlow × lotSize / 1e7 → Crores, correct notional.
+// FIX-LOT-1 + FIX C: Session net flow accumulator
 // ─────────────────────────────────────────────────────────────────────────────
 
 function accumulateNetFlow(name, expiry, rawStrikes, lotSize) {
   const key = `${name}__${expiry}`;
   if (!sessionFlowMap[key]) sessionFlowMap[key] = { netFlow: 0, lastVolMap: {} };
-  const state   = sessionFlowMap[key];
-  const lotSz   = lotSize || 1;   // FIX-LOT-1: use real lot size
+  const state = sessionFlowMap[key];
+  const lotSz = lotSize || 1;
 
   let deltaFlow = 0;
   for (const s of rawStrikes) {
@@ -207,18 +229,15 @@ function accumulateNetFlow(name, expiry, rawStrikes, lotSize) {
     const prevCeVol = state.lastVolMap[`${k}_ce`] || 0;
     const prevPeVol = state.lastVolMap[`${k}_pe`] || 0;
 
-    // Only count NEW volume since last poll
     const ceVolDelta = Math.max(0, ceVol - prevCeVol);
     const peVolDelta = Math.max(0, peVol - prevPeVol);
 
-    // FIX-LOT-1: multiply by lotSize to get actual notional rupees
     deltaFlow += (peVolDelta * peLTP - ceVolDelta * ceLTP) * lotSz;
 
     state.lastVolMap[`${k}_ce`] = ceVol;
     state.lastVolMap[`${k}_pe`] = peVol;
   }
 
-  // FIX-LOT-1: divide by 1e7 → CRORES (was 1e5 → Lakhs, also missing lotSize)
   state.netFlow += deltaFlow / 1e7;
   return Math.round(state.netFlow * 10) / 10;
 }
@@ -327,7 +346,7 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// processChain — builds structured chain for option-chain-update socket event
+// processChain
 // ─────────────────────────────────────────────────────────────────────────────
 
 function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
@@ -336,15 +355,11 @@ function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
   const sorted = [...rawStrikes].sort((a, b) => a.strike_price - b.strike_price);
   const lotSz  = lotSize || 1;
 
-  // FIX B: use merged stable OI totals (FIX-LOT-2: readOI used inside mergeOI)
   const { totalCEOI, totalPEOI } = mergeOI(name, expiry, rawStrikes);
-
-  // FIX-LOT-1: pass lotSize so net flow is in Crores
   const sessionNetFlow = accumulateNetFlow(name, expiry, rawStrikes, lotSz);
 
   const mergedMap = strikeOIMap[name]?.[expiry] || {};
 
-  // Max pain from merged map
   let maxPainStrike = 0, minPain = Infinity;
   const mergedEntries = Object.entries(mergedMap).map(([k, v]) => ({ strike: Number(k), ...v }));
   for (const target of mergedEntries) {
@@ -373,7 +388,6 @@ function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
     const ceGreeks = s.call_options?.option_greeks || {};
     const peGreeks = s.put_options?.option_greeks  || {};
     const mergedStrike = mergedMap[s.strike_price] || {};
-    // FIX-LOT-2: use readOI for consistent field access
     const ceOI         = mergedStrike.ceOI > 0 ? mergedStrike.ceOI : readOI(ceData);
     const peOI         = mergedStrike.peOI > 0 ? mergedStrike.peOI : readOI(peData);
     const cePrevOI     = readPrevOI(ceData);
@@ -431,7 +445,7 @@ function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
   return {
     underlying: name, expiry, spotPrice, pcr, maxPainStrike, support, resistance,
     totalCEOI, totalPEOI,
-    netFlow: sessionNetFlow,   // FIX-LOT-1: now in CRORES
+    netFlow: sessionNetFlow,
     atmStrike, strikes, alerts,
     unusualOI:         unusualNearATM,
     unusualOITailRisk: unusualTailRisk,
@@ -450,7 +464,6 @@ function buildNormalisedRows(name, expiry, rawStrikes) {
     const strike = s.strike_price;
     const merged = mergedMap[strike] || {};
 
-    // FIX-LOT-2: use readOI() for both field names
     const rawCeOI = readOI(s.call_options?.market_data);
     const rawPeOI = readOI(s.put_options?.market_data);
 
@@ -483,6 +496,9 @@ async function refreshExpiries(token) {
       cache[u.name].expiries = expiries;
       console.log(`📅 OI: ${u.name} expiries — ${expiries.slice(0,4).join(", ")}`);
       if (ioRef) ioRef.emit("option-expiries", { underlying: u.name, expiries });
+
+      // FIX-MEM-1/2: prune stale expiry data after refresh
+      pruneStaleExpiries(u.name, expiries);
     } catch (e) {
       console.warn(`⚠️ OI: could not fetch expiries for ${u.name}:`, e.message);
     }
@@ -491,134 +507,25 @@ async function refreshExpiries(token) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Poll chains
+// FIX-MEM-4: Debounced persistCache — max one write per 5 minutes
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function pollChains() {
-  if (disabled) return;
-  const token = tokenGetter?.();
-  if (!token) return;
-
-  maybeResetSession();
-
-  let anySuccess = false;
-
-  for (const u of UNDERLYINGS) {
-    const expiries = cache[u.name]?.expiries || [];
-    if (!expiries.length) {
-      console.warn(`⚠️ OI: no expiries for ${u.name} — skipping`);
-      continue;
-    }
-
-    for (const expiry of expiries.slice(0, 2)) {
-      try {
-        const raw = await fetchChain(u.upstoxKey, expiry, token);
-        if (!raw.length) continue;
-
-        const spotPrice = raw[0]?.underlying_spot_price || cache[u.name]?.spotPrice || 0;
-
-        appendSpotHistory(u.name, spotPrice);
-
-        // ── 1. Build structured chain for option-chain-update ──
-        // FIX-LOT-1: pass lotSize to processChain
-        const processed = processChain(u.name, expiry, raw, spotPrice, u.lotSize);
-        if (!processed) continue;
-
-        if (!cache[u.name]) cache[u.name] = { expiries: [], chains: {}, spotPrice: 0, updatedAt: 0 };
-        cache[u.name].chains[expiry] = processed;
-        cache[u.name].spotPrice      = spotPrice;
-        cache[u.name].updatedAt      = Date.now();
-
-        if (ioRef) {
-          ioRef.emit("option-chain-update", { underlying: u.name, expiry, data: processed });
-        }
-
-        // ── 2. Pass CLEAN normalised rows + closes to optionsIntegration ──
-        try {
-          const normalisedRows = buildNormalisedRows(u.name, expiry, raw);
-          const closes         = getSpotHistory(u.name);
-
-          ingestChainData(
-            u.name,
-            spotPrice,
-            normalisedRows,
-            expiry,
-            u.lotSize || 1,
-            closes,
-          );
-        } catch (err) {
-          console.warn(`⚠️ OI Intel ingest error for ${u.name}:`, err.message);
-        }
-
-        const tailCount = processed.unusualOITailRisk?.length || 0;
-        const nearCount = processed.unusualOI?.length         || 0;
-        const totalOI   = processed.totalCEOI + processed.totalPEOI;
-
-        // FIX-LOT-3: log shows Cr for netFlow
-        console.log(
-          `📊 OI: ${u.name} ${expiry} — PCR=${processed.pcr} Spot=₹${spotPrice} ` +
-          `TotalOI=${totalOI.toLocaleString("en-IN")} contracts ` +
-          `NetFlow=₹${processed.netFlow} Cr | ` +
-          `UnusualOI: ${nearCount} near-ATM, ${tailCount} tail-risk`
-        );
-        anySuccess = true;
-
-        await sleep(1500);
-      } catch (e) {
-        console.warn(
-          `⚠️ OI: chain fetch failed ${u.name} ${expiry}:`,
-          e.response?.data?.errors?.[0]?.message || e.message
-        );
-      }
-    }
-  }
-
-  if (anySuccess) {
-    failCount = 0;
-    persistCache();
-  } else {
-    failCount++;
-    if (failCount >= MAX_FAILS) {
-      disabled = true;
-      console.warn(`⚠️ OI: disabled after ${MAX_FAILS} consecutive failures`);
-    }
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// WebSocket OI tick handler
-// ─────────────────────────────────────────────────────────────────────────────
-
-function handleOITick(instrumentKey, feedData) {
-  const mFF = feedData?.marketFF;
-  if (!mFF || !ioRef) return;
-  ioRef.emit("option-oi-tick", {
-    instrKey: instrumentKey,
-    oi:       mFF.oi        || 0,
-    ltp:      mFF.ltpc?.ltp || 0,
-    ts:       Date.now(),
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Public accessors
-// ─────────────────────────────────────────────────────────────────────────────
-
-function getExpiries(underlying)      { return cache[underlying]?.expiries || []; }
-function getChain(underlying, expiry) { return cache[underlying]?.chains?.[expiry] || null; }
-function getAllCached()                { return cache; }
-
-function addUnderlying(name, instrumentKey, lotSize) {
-  if (UNDERLYINGS.find(u => u.upstoxKey === instrumentKey)) return;
-  UNDERLYINGS.push({ name, upstoxKey: instrumentKey, lotSize: lotSize || 1 });
-  console.log(`➕ OI: added underlying ${name}`);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Cache persistence
-// ─────────────────────────────────────────────────────────────────────────────
+let _persistTimer = null;
 
 function persistCache() {
+  if (_persistTimer) return;
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    _writeCacheToDisk();
+  }, 5 * 60 * 1000);
+}
+
+function flushPersistNow() {
+  if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null; }
+  _writeCacheToDisk();
+}
+
+function _writeCacheToDisk() {
   try {
     const dir = path.dirname(CACHE_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -670,6 +577,129 @@ function loadCache() {
   } catch (e) {
     console.warn("⚠️ OI cache load failed:", e.message);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Poll chains
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function pollChains() {
+  if (disabled) return;
+  const token = tokenGetter?.();
+  if (!token) return;
+
+  maybeResetSession();
+
+  let anySuccess = false;
+
+  for (const u of UNDERLYINGS) {
+    const expiries = cache[u.name]?.expiries || [];
+    if (!expiries.length) {
+      console.warn(`⚠️ OI: no expiries for ${u.name} — skipping`);
+      continue;
+    }
+
+    // FIX-MEM-1: prune stale expiries at start of each poll too
+    pruneStaleExpiries(u.name, expiries);
+
+    for (const expiry of expiries.slice(0, EXPIRIES_TO_KEEP)) {
+      try {
+        const raw = await fetchChain(u.upstoxKey, expiry, token);
+        if (!raw.length) continue;
+
+        const spotPrice = raw[0]?.underlying_spot_price || cache[u.name]?.spotPrice || 0;
+
+        appendSpotHistory(u.name, spotPrice);
+
+        const processed = processChain(u.name, expiry, raw, spotPrice, u.lotSize);
+        if (!processed) continue;
+
+        if (!cache[u.name]) cache[u.name] = { expiries: [], chains: {}, spotPrice: 0, updatedAt: 0 };
+        cache[u.name].chains[expiry] = processed;
+        cache[u.name].spotPrice      = spotPrice;
+        cache[u.name].updatedAt      = Date.now();
+
+        if (ioRef) {
+          ioRef.emit("option-chain-update", { underlying: u.name, expiry, data: processed });
+        }
+
+        try {
+          const normalisedRows = buildNormalisedRows(u.name, expiry, raw);
+          const closes         = getSpotHistory(u.name);
+
+          ingestChainData(
+            u.name,
+            spotPrice,
+            normalisedRows,
+            expiry,
+            u.lotSize || 1,
+            closes,
+          );
+        } catch (err) {
+          console.warn(`⚠️ OI Intel ingest error for ${u.name}:`, err.message);
+        }
+
+        const tailCount = processed.unusualOITailRisk?.length || 0;
+        const nearCount = processed.unusualOI?.length         || 0;
+        const totalOI   = processed.totalCEOI + processed.totalPEOI;
+
+        console.log(
+          `📊 OI: ${u.name} ${expiry} — PCR=${processed.pcr} Spot=₹${spotPrice} ` +
+          `TotalOI=${totalOI.toLocaleString("en-IN")} contracts ` +
+          `NetFlow=₹${processed.netFlow} Cr | ` +
+          `UnusualOI: ${nearCount} near-ATM, ${tailCount} tail-risk`
+        );
+        anySuccess = true;
+
+        await sleep(1500);
+      } catch (e) {
+        console.warn(
+          `⚠️ OI: chain fetch failed ${u.name} ${expiry}:`,
+          e.response?.data?.errors?.[0]?.message || e.message
+        );
+      }
+    }
+  }
+
+  if (anySuccess) {
+    failCount = 0;
+    persistCache();   // FIX-MEM-4: debounced — won't actually write more than once per 5 min
+  } else {
+    failCount++;
+    if (failCount >= MAX_FAILS) {
+      disabled = true;
+      console.warn(`⚠️ OI: disabled after ${MAX_FAILS} consecutive failures`);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WebSocket OI tick handler
+// ─────────────────────────────────────────────────────────────────────────────
+
+function handleOITick(instrumentKey, feedData) {
+  const mFF = feedData?.marketFF;
+  if (!mFF || !ioRef) return;
+  ioRef.emit("option-oi-tick", {
+    instrKey: instrumentKey,
+    oi:       mFF.oi        || 0,
+    ltp:      mFF.ltpc?.ltp || 0,
+    ts:       Date.now(),
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public accessors
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getExpiries(underlying)      { return cache[underlying]?.expiries || []; }
+function getChain(underlying, expiry) { return cache[underlying]?.chains?.[expiry] || null; }
+function getAllCached()                { return cache; }
+
+function addUnderlying(name, instrumentKey, lotSize) {
+  if (UNDERLYINGS.find(u => u.upstoxKey === instrumentKey)) return;
+  UNDERLYINGS.push({ name, upstoxKey: instrumentKey, lotSize: lotSize || 1 });
+  console.log(`➕ OI: added underlying ${name}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
