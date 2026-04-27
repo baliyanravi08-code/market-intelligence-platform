@@ -433,13 +433,58 @@ export default function StockTerminal() {
     // Connect to your server's existing websocket (adjust port/path as needed)
     let ws;
     try {
-      ws = new WebSocket(`ws://localhost:3000`);
+      const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:"; 
+      ws = new WebSocket(`${wsProto}//${window.location.host}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
         setWsStatus("live");
         // Subscribe to the chosen symbol (adjust message format to your server protocol)
-        ws.send(JSON.stringify({ type: "subscribe", symbol: `NSE_EQ|${symbol}` }));
+       useEffect(() => {
+  setWsStatus("connecting");
+  setLiveData(null);
+
+  // Use Socket.io (same as App.jsx) instead of raw WebSocket
+  import("socket.io-client").then(({ io }) => {
+    const sock = io({ transports: ["websocket", "polling"] });
+    wsRef.current = sock;
+
+    sock.on("connect", () => {
+      setWsStatus("live");
+    });
+
+    sock.on("market-tick", (updates) => {
+      if (!Array.isArray(updates)) return;
+      // market-tick sends index data, not individual stocks
+      // Individual stock LTP comes from upstox ticks
+    });
+
+    // Listen for individual stock ticks from your upstoxStream.js
+    sock.on("ltp-tick", (msg) => {
+      if (!msg || !msg.symbol) return;
+      const sym = msg.symbol?.replace("NSE_EQ|","").replace("BSE_EQ|","");
+      if (sym !== symbol) return;
+      setLiveData({
+        ltp:       msg.ltp ?? msg.last_price,
+        open:      msg.open ?? msg.ohlc?.open,
+        high:      msg.high ?? msg.ohlc?.high,
+        low:       msg.low  ?? msg.ohlc?.low,
+        close:     msg.ltp,
+        volume:    msg.volume ?? msg.vol,
+        change:    msg.change,
+        changePct: msg.changePct ?? msg.percentChange,
+      });
+      setWsStatus("live");
+    });
+
+    sock.on("disconnect", () => setWsStatus("error"));
+    sock.on("connect_error", () => setWsStatus("error"));
+  });
+
+  return () => {
+    if (wsRef.current) wsRef.current.disconnect?.();
+  };
+}, [symbol]);
       };
 
       ws.onmessage = (e) => {

@@ -7,6 +7,7 @@ import ScoresPage from "./pages/ScoresPage";
 import OptionsIntelligencePage from "./pages/OptionsIntelligencePage";
 import MarketScannerPage from "./pages/MarketScannerPage";
 import GannBadge from "./components/GannBadge";
+import StockTerminal from "./components/StockTerminal"; // ← ADD THIS IMPORT (adjust path if StockTerminal.jsx is in /pages instead)
 
 const SIGNAL_COLOR = {
   ORDER_ALERT:         { bg: "#00ff9c", fg: "#000" },
@@ -31,6 +32,7 @@ const MOBILE_TABS = [
   { key: "data",         label: "📊 Data"    },
   { key: "intel",        label: "⚡ Intel"   },
   { key: "options-intel",label: "📐 OI Intel"},
+  { key: "terminal",     label: "📈 Chart"   }, // ← ADDED
 ];
 
 function getCurrentQuarter() {
@@ -167,11 +169,8 @@ function extractAmount(text) {
 }
 
 // ─── TRADINGVIEW SYMBOL MAPS ──────────────────────────────────────────────────
-// TV_WIDGET_SYMBOLS  — used inside the embedded iframe (widgetembed API)
-// TV_FULLCHART_SYMBOLS — used for "Open Full Chart" links (tradingview.com/chart)
-
 const TV_WIDGET_SYMBOLS = {
-  "NIFTY 50":   "NSE:NIFTY_INDEX",   // widgetembed uses NIFTY_INDEX
+  "NIFTY 50":   "NSE:NIFTY_INDEX",
   "SENSEX":     "BSE:SENSEX",
   "BANK NIFTY": "NSE:BANKNIFTY",
   "BTC":        "BINANCE:BTCUSDT",
@@ -180,7 +179,7 @@ const TV_WIDGET_SYMBOLS = {
 };
 
 const TV_FULLCHART_SYMBOLS = {
-  "NIFTY 50":   "NSE:NIFTY50",       // full chart URL uses NIFTY50
+  "NIFTY 50":   "NSE:NIFTY50",
   "SENSEX":     "BSE:SENSEX",
   "BANK NIFTY": "NSE:BANKNIFTY",
   "BTC":        "BINANCE:BTCUSDT",
@@ -336,9 +335,7 @@ function getSession() {
 function TickerModal({ item, onClose }) {
   if (!item) return null;
 
-  // Widget symbol — used inside the embedded iframe
   const tvWidgetSymbol   = TV_WIDGET_SYMBOLS[item.name]   || null;
-  // Full chart symbol — used for "Open Full Chart" link
   const tvFullSymbol     = TV_FULLCHART_SYMBOLS[item.name] || null;
   const isPI = item.name === "PI";
 
@@ -359,7 +356,6 @@ function TickerModal({ item, onClose }) {
         onClick={e => e.stopPropagation()}
         style={{ background: "#030e1e", border: "1px solid #0d3560", borderRadius: 10, width: "94vw", maxWidth: 760, maxHeight: "88vh", display: "flex", flexDirection: "column", boxShadow: "0 0 60px rgba(0,150,255,0.18)", overflow: "hidden" }}
       >
-        {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "14px 16px 12px", borderBottom: "1px solid #0a2540", background: "linear-gradient(90deg, #020d1f, #041828)", flexShrink: 0 }}>
           <div>
             <div style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 13, fontWeight: 700, color: "#00cfff" }}>{item.name}</div>
@@ -371,7 +367,6 @@ function TickerModal({ item, onClose }) {
           <button onClick={onClose} style={{ background: "none", border: "none", color: "#2a5070", fontSize: 18, cursor: "pointer", padding: "0 0 0 12px", flexShrink: 0 }}>✕</button>
         </div>
 
-        {/* Chart area */}
         <div style={{ flex: 1, minHeight: 420, flexShrink: 0 }}>
           {tvWidgetSymbol && (
             <iframe
@@ -408,7 +403,6 @@ function TickerModal({ item, onClose }) {
           )}
         </div>
 
-        {/* Footer */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid #0a2540", background: "#020b18", flexShrink: 0 }}>
           <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 9, color: "#1a4060" }}>
             {tvWidgetSymbol ? "TradingView · 5-min chart · Live data" : isPI ? "π PI Network · CoinMarketCap" : ""}
@@ -916,7 +910,8 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
   const isScores       = currentPage === "scores";
   const isOptionsIntel = currentPage === "options-intel";
   const isScanner      = currentPage === "scanner";
-  const isAltPage      = isOptions || isScores || isOptionsIntel || isScanner;
+  const isTerminal     = currentPage === "terminal"; // ← ADDED
+  const isAltPage      = isOptions || isScores || isOptionsIntel || isScanner || isTerminal; // ← ADDED isTerminal
 
   return (
     <div className="header">
@@ -966,6 +961,18 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           <span className="options-nav-icon">📊</span>
           <span className="options-nav-label">{isScanner ? "Dashboard" : "Scanner"}</span>
           {isScanner && <span className="options-nav-back">←</span>}
+        </button>
+
+        {/* ── TERMINAL NAV BUTTON (NEW) ── */}
+        <button
+          className={`options-nav-btn${isTerminal ? " active" : ""}`}
+          onClick={() => setCurrentPage(isTerminal ? "dashboard" : "terminal")}
+          title="Stock Chart Terminal — Multi-timeframe Technical Analysis"
+          style={{ marginLeft: 4 }}
+        >
+          <span className="options-nav-icon">📈</span>
+          <span className="options-nav-label">{isTerminal ? "Dashboard" : "Terminal"}</span>
+          {isTerminal && <span className="options-nav-back">←</span>}
         </button>
 
         {needsConnect && !isAltPage && (
@@ -1126,6 +1133,7 @@ export default function App() {
     sock.on("disconnect", () => { setTickerSource("error"); });
 
     return () => sock.disconnect();
+  // eslint-disable-next-line
   }, []);
 
   useEffect(() => {
@@ -1413,6 +1421,20 @@ export default function App() {
     );
   }
 
+  // ── TERMINAL PAGE (NEW) ────────────────────────────────────────────────────
+  if (currentPage === "terminal") {
+    return (
+      <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
+        {sharedHeader}
+        {sharedTicker}
+        <div style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
+          <StockTerminal />
+        </div>
+        <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
+      </div>
+    );
+  }
+
   return (
     <div className="terminal">
       {sharedHeader}
@@ -1436,11 +1458,12 @@ export default function App() {
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("scanner")}>📊 Scan</button>
         </div>
         <div className="mobile-panel-wrap">
-          {mobilePanelTab === "intel"        && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />}
-          {mobilePanelTab === "radar"        && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} gannMap={gannMap} />}
-          {mobilePanelTab === "feed"         && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
-          {mobilePanelTab === "data"         && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
+          {mobilePanelTab === "intel"         && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />}
+          {mobilePanelTab === "radar"         && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} gannMap={gannMap} />}
+          {mobilePanelTab === "feed"          && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
+          {mobilePanelTab === "data"          && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
           {mobilePanelTab === "options-intel" && <OptionsIntelligencePage socket={socket} />}
+          {mobilePanelTab === "terminal"      && <StockTerminal />}  {/* ← ADDED */}
         </div>
       </div>
 
