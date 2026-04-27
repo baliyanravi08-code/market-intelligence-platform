@@ -19,8 +19,10 @@ const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
 
+// FIX-RC: destructure restartWithNewToken alongside existing exports
 const {
   startStreamer, stopStreamer,
+  restartWithNewToken,
   setOITickHandler, setLTPTickHandler,
   setBacktestEngine,
 } = require("./services/upstoxStream");
@@ -351,8 +353,9 @@ async function startApp() {
   setBacktestEngine(backtestEngine);
 
   // ── Start WebSocket streamer (lightweight — always start) ─────────────────
+  // FIX-RC: use restartWithNewToken so backoff/attempt counters start clean
   if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
-    setTimeout(() => startStreamer(upstoxAccessToken, io), 2000);
+    setTimeout(() => restartWithNewToken(upstoxAccessToken, io), 2000);
   } else {
     console.log("⚠️ No valid token at startup — visit /auth/upstox to connect");
   }
@@ -408,7 +411,10 @@ function scheduleDailyTokenCheck() {
     if (!valid) {
       console.log("⚠️ [TokenCheck] TOKEN EXPIRED — Visit /auth/upstox to refresh!");
     } else {
-      console.log("✅ [TokenCheck] Token valid at market open");
+      // FIX-RC: proactively restart stream at market open with fresh backoff counters.
+      // This recovers the case where max-retry was hit overnight due to network issues.
+      console.log("✅ [TokenCheck] Token valid at market open — restarting stream");
+      restartWithNewToken(upstoxAccessToken, io);
     }
     scheduleDailyTokenCheck();
   }, ms);
@@ -459,7 +465,13 @@ app.get("/auth/upstox/callback", async (req, res) => {
     await saveTokenEverywhere(newToken, newExpiry);
 
     setICFToken(newToken);
-    startStreamer(newToken, io);
+
+    // FIX-RC: use restartWithNewToken instead of startStreamer so that
+    // reconnectAttempts and reconnectDelay are fully reset on every fresh login.
+    // Previously, a 401 loop could exhaust MAX_RECONNECT_ATTEMPTS and then a
+    // new login via /auth/upstox would still call startStreamer() which does NOT
+    // reset those counters — so the streamer would immediately give up again.
+    restartWithNewToken(newToken, io);
 
     try {
       const scanner = require("./services/intelligence/marketScanner");
