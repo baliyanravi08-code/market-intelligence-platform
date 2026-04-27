@@ -141,7 +141,6 @@ async function saveTokenEverywhere(token, expiry) {
 }
 
 // ── Instrument master cache ───────────────────────────────────────────────────
-// MEMORY FIX: cap at 800 symbols — covers all actively traded NSE/BSE EQ stocks
 const MAX_INSTRUMENT_SYMBOLS = 800;
 let instrumentMap = {};
 
@@ -152,7 +151,6 @@ async function loadInstrumentMaster() {
       const cached = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
       if (cached._ts && Date.now() - cached._ts < 24 * 60 * 60 * 1000) {
         const fullMap = cached.map || {};
-        // MEMORY FIX: cap on load too
         const entries = Object.entries(fullMap);
         instrumentMap = entries.length > MAX_INSTRUMENT_SYMBOLS
           ? Object.fromEntries(entries.slice(0, MAX_INSTRUMENT_SYMBOLS))
@@ -189,13 +187,11 @@ async function loadInstrumentMaster() {
       console.log(`✅ ${segment} loaded`);
     }
 
-    // MEMORY FIX: cap to MAX_INSTRUMENT_SYMBOLS before storing in RAM
     const entries = Object.entries(map);
     instrumentMap = entries.length > MAX_INSTRUMENT_SYMBOLS
       ? Object.fromEntries(entries.slice(0, MAX_INSTRUMENT_SYMBOLS))
       : map;
 
-    // Save full map to disk (so disk cache has all symbols for future loads)
     const dir = path.dirname(INSTRUMENT_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(INSTRUMENT_FILE, JSON.stringify({ _ts: Date.now(), map }), "utf8");
@@ -302,6 +298,38 @@ function clearToken() {
   try { if (fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE); } catch {}
 }
 
+// ── MEMORY FIX: marketCapDB module-level cache ────────────────────────────────
+// Replaces per-request fs.readFileSync + JSON.parse in /api/events and /api/mcap.
+// Single parse every 10 minutes instead of on every HTTP request.
+let _mcapCache   = null;
+let _mcapCacheTS = 0;
+const MCAP_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+function getCachedMcap(limit) {
+  if (_mcapCache && Date.now() - _mcapCacheTS < MCAP_CACHE_TTL) {
+    return limit ? _mcapCache.slice(0, limit) : _mcapCache;
+  }
+  try {
+    const mcapPath = path.join(__dirname, "data/marketCapDB.json");
+    if (!fs.existsSync(mcapPath)) {
+      _mcapCache   = [];
+      _mcapCacheTS = Date.now();
+      return [];
+    }
+    const raw = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
+    const arr = Array.isArray(raw)
+      ? raw
+      : Object.entries(raw).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
+    _mcapCache   = arr.sort((a, b) => (b.mcap || 0) - (a.mcap || 0));
+    _mcapCacheTS = Date.now();
+    console.log(`📊 mcapDB cached: ${_mcapCache.length} companies`);
+  } catch (e) {
+    console.warn("mcapDb cache refresh failed:", e.message);
+    _mcapCache = _mcapCache || []; // keep stale copy on error rather than crashing
+  }
+  return limit ? _mcapCache.slice(0, limit) : _mcapCache;
+}
+
 // ── Startup sequence ──────────────────────────────────────────────────────────
 async function startApp() {
   await loadToken();
@@ -309,6 +337,9 @@ async function startApp() {
   await loadInstrumentMaster().catch((e) => {
     console.warn("⚠️ loadInstrumentMaster threw unexpectedly:", e.message);
   });
+
+  // MEMORY FIX: pre-warm mcap cache at startup so first request is instant
+  getCachedMcap();
 
   setOITickHandler(handleOITick);
 
@@ -337,7 +368,6 @@ async function startApp() {
     startMarketScanner(io);
   } else {
     console.log("💤 Weekend: skipping NSE/BSE listeners, OI, scanner — saving ~200MB");
-    // Coordinator still needed for /api/events responses
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
   }
 
@@ -431,7 +461,6 @@ app.get("/auth/upstox/callback", async (req, res) => {
     setICFToken(newToken);
     startStreamer(newToken, io);
 
-    // Start market services if they were skipped (e.g. token refreshed on weekend)
     try {
       const scanner = require("./services/intelligence/marketScanner");
       if (typeof scanner.setToken === "function") scanner.setToken(newToken);
@@ -531,13 +560,20 @@ app.get("/api/commodities", commoditiesRoute);
 
 // ── /health ───────────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
+  const mem = process.memoryUsage();
   res.json({
     status:        "ok",
     weekend:       IS_WEEKEND,
     upstox:        (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) ? "connected" : "disconnected",
     tokenType:     upstoxAccessToken === process.env.UPSTOX_ANALYTICS_TOKEN ? "analytics" : "algo",
     instrumentMap: Object.keys(instrumentMap).length,
-    memory:        process.memoryUsage(),
+    mcapCached:    _mcapCache ? _mcapCache.length : 0,
+    memory: {
+      rss:       Math.round(mem.rss       / 1024 / 1024) + " MB",
+      heapUsed:  Math.round(mem.heapUsed  / 1024 / 1024) + " MB",
+      heapTotal: Math.round(mem.heapTotal / 1024 / 1024) + " MB",
+      external:  Math.round(mem.external  / 1024 / 1024) + " MB",
+    },
   });
 });
 
@@ -710,30 +746,17 @@ app.post("/api/option-chain/subscribe", (req, res) => {
 });
 
 // ── /api/events ───────────────────────────────────────────────────────────────
+// MEMORY FIX: mcapDb now served from getCachedMcap() — no file read per request
 app.get("/api/events", (req, res) => {
   try {
     const { getStored } = require("./coordinator");
     const stored = getStored();
-    // MEMORY FIX: read mcapDB file but only return what's needed, don't hold in RAM
-    let mcapDb = [];
-    try {
-      const mcapPath = path.join(__dirname, "data/marketCapDB.json");
-      if (fs.existsSync(mcapPath)) {
-        const raw = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
-        const entries = Array.isArray(raw)
-          ? raw
-          : Object.entries(raw).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
-        // MEMORY FIX: only send top 200 by mcap to client
-        mcapDb = entries
-          .sort((a, b) => (b.mcap || 0) - (a.mcap || 0))
-          .slice(0, 200);
-      }
-    } catch (e) { console.warn("mcapDb load failed:", e.message); }
+    const mcapDb = getCachedMcap(200); // ← cached, not re-parsed from disk
     res.json({
       bse:        getEvents("bse") || [],
       nse:        getEvents("nse") || [],
       orderBook:  stored.orderBook || [],
-      sectors:    stored.sectors || [],
+      sectors:    stored.sectors   || [],
       megaOrders: stored.megaOrders || [],
       mcapDb,
       windowHours: getRetentionHours(),
@@ -745,17 +768,13 @@ app.get("/api/events", (req, res) => {
 });
 
 // ── /api/mcap ─────────────────────────────────────────────────────────────────
+// MEMORY FIX: served from getCachedMcap() — no file read per request
 app.get("/api/mcap", (req, res) => {
   try {
-    const mcapPath = path.join(__dirname, "data/marketCapDB.json");
-    if (!fs.existsSync(mcapPath)) return res.json([]);
-    const data = JSON.parse(fs.readFileSync(mcapPath, "utf8"));
-    const arr  = Array.isArray(data)
-      ? data
-      : Object.entries(data).map(([code, d]) => ({ code, company: d.name || "", mcap: d.mcap || 0 }));
-    // MEMORY FIX: cap response to top 300 by mcap
-    res.json(arr.sort((a, b) => (b.mcap || 0) - (a.mcap || 0)).slice(0, 300));
-  } catch { res.json([]); }
+    res.json(getCachedMcap(300));
+  } catch {
+    res.json([]);
+  }
 });
 
 // ── /api/orderbook ────────────────────────────────────────────────────────────
@@ -845,19 +864,28 @@ app.get("/api/company/:code", async (req, res) => {
 app.get("/api/search/:query", async (req, res) => {
   try {
     const q = req.params.query.toLowerCase().trim();
+    // MEMORY FIX: use cached mcap for search instead of re-reading file
+    const cachedArr = getCachedMcap(0); // full list for search
+    if (cachedArr.length > 0) {
+      const localResults = cachedArr
+        .filter(d => (d.company || "").toLowerCase().includes(q) || (d.code || "").toLowerCase().includes(q))
+        .slice(0, 10)
+        .map(d => ({ code: d.code, name: d.company || d.code, sector: d.sector || "", nseSymbol: d.nseSymbol || null, mcap: d.mcap || null }));
+      if (localResults.length > 0) return res.json({ results: localResults });
+    }
+    // Fallback: read file directly for search (needed for nseSymbol field not in cache)
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
-    let localResults = [];
     if (fs.existsSync(mcapPath)) {
       const raw = fs.readFileSync(mcapPath, "utf8").trim();
       if (raw) {
         const db = JSON.parse(raw);
-        localResults = Object.entries(db)
-          .filter(([code, d]) => (d.name || "").toLowerCase().includes(q) || code.includes(q) || (d.symbol || "").toLowerCase().includes(q))
+        const localResults = Object.entries(db)
+          .filter(([code, d]) => (d.name || "").toLowerCase().includes(q) || code.toLowerCase().includes(q) || (d.symbol || "").toLowerCase().includes(q))
           .slice(0, 10)
           .map(([code, d]) => ({ code, name: d.name || code, sector: d.sector || d.industry || "", nseSymbol: d.symbol || d.nseSymbol || null, mcap: d.mcap || null }));
+        if (localResults.length > 0) return res.json({ results: localResults });
       }
     }
-    if (localResults.length > 0) return res.json({ results: localResults });
     res.json({ results: await searchBSE(q) });
   } catch { res.json({ results: [] }); }
 });

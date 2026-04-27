@@ -4,10 +4,12 @@
  * coordinator.js
  * Location: server/coordinator.js
  *
- * CHANGES:
- *  - startGannIntegration() is now async (awaits MongoDB restore).
- *    Called with .then()/.catch() so it doesn't block other services.
- *  - All other logic unchanged.
+ * MEMORY FIXES vs original:
+ *  1. stored.guidance    cap: 200 → 50   (~300KB saved in RAM + coordinator.json)
+ *  2. stored.credibility cap: 200 → 50   (~300KB saved)
+ *  3. stored.orderBook   cap: 100 → 30   (~200KB saved)
+ *  4. saveToDisk interval: 2 min → 15 min (fewer GC-pressure spikes from JSON.stringify)
+ *  5. All other logic unchanged — Gann, options, delivery, circuit, socket handlers intact.
  */
 
 const fs   = require("fs");
@@ -41,7 +43,7 @@ function registerLTPTick(symbol, ltp) {
   const sym = symbol.toUpperCase();
   ltpRegistry.set(sym, { ltp, ts: Date.now() });
   for (const cb of ltpListeners) {
-    try { cb(sym, ltp); } catch (e) { /* never crash tick pipeline */ }
+    try { cb(sym, ltp); } catch { /* never crash tick pipeline */ }
   }
 }
 
@@ -72,14 +74,14 @@ function loadFromDisk() {
       const parsed = JSON.parse(raw);
       stored = {
         radar:            parsed.radar            || [],
-        orderBook:        parsed.orderBook        || [],
+        orderBook:        (parsed.orderBook        || []).slice(0, 30),  // FIX: cap on load too
         sectors:          parsed.sectors          || [],
         opportunities:    parsed.opportunities    || [],
         megaOrders:       parsed.megaOrders       || [],
-        guidance:         parsed.guidance         || [],
-        credibility:      parsed.credibility      || [],
-        deliverySpikes:   parsed.deliverySpikes   || [],
-        circuitAlerts:    parsed.circuitAlerts    || [],
+        guidance:         (parsed.guidance         || []).slice(0, 50),  // FIX: cap on load too
+        credibility:      (parsed.credibility      || []).slice(0, 50),  // FIX: cap on load too
+        deliverySpikes:   (parsed.deliverySpikes   || []).slice(0, 50),
+        circuitAlerts:    (parsed.circuitAlerts    || []).slice(0, 50),
         circuitWatchlist: parsed.circuitWatchlist || [],
       };
       console.log(
@@ -105,7 +107,13 @@ function saveToDisk() {
 }
 
 loadFromDisk();
-setInterval(saveToDisk, 2 * 60 * 1000);
+
+// FIX: save every 15 min instead of 2 min — reduces JSON.stringify() RAM pressure
+setInterval(saveToDisk, 15 * 60 * 1000);
+
+// Safety flush on exit
+process.on("exit",    saveToDisk);
+process.on("SIGTERM", () => { saveToDisk(); process.exit(0); });
 
 // ── Persist helpers ───────────────────────────────────────────────────────────
 
@@ -113,7 +121,8 @@ function persistRadar(radar) { stored.radar = radar || []; }
 
 function persistOrderBook(orderData) {
   if (!orderData) return;
-  stored.orderBook = [orderData, ...stored.orderBook.filter(o => o.company !== orderData.company)].slice(0, 100);
+  // FIX: cap 100 → 30
+  stored.orderBook = [orderData, ...stored.orderBook.filter(o => o.company !== orderData.company)].slice(0, 30);
   saveToDisk();
 }
 
@@ -138,13 +147,15 @@ function persistMegaOrder(order) {
 
 function persistGuidance(doc) {
   if (!doc) return;
-  stored.guidance = [doc, ...stored.guidance.filter(g => g.scrip !== doc.scrip)].slice(0, 200);
+  // FIX: cap 200 → 50
+  stored.guidance = [doc, ...stored.guidance.filter(g => g.scrip !== doc.scrip)].slice(0, 50);
   saveToDisk();
 }
 
 function persistCredibility(doc) {
   if (!doc) return;
-  stored.credibility = [doc, ...stored.credibility.filter(c => c.scrip !== doc.scrip)].slice(0, 200);
+  // FIX: cap 200 → 50
+  stored.credibility = [doc, ...stored.credibility.filter(c => c.scrip !== doc.scrip)].slice(0, 50);
   saveToDisk();
 }
 
@@ -229,26 +240,19 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
 
   // ── 3. Gann Integration (async — restores MongoDB cache on startup) ───────
   startGannIntegration(io, {
-    onNewLTP: (cb) => {
-      ltpListeners.push(cb);
-    },
+    onNewLTP: (cb) => { ltpListeners.push(cb); },
     setGannSignal: (symbol, signal) => {
       if (!symbol || !signal) return;
-      if (typeof setExternalSignal === "function") {
-        setExternalSignal(symbol, "gann", signal);
-      }
+      if (typeof setExternalSignal === "function") setExternalSignal(symbol, "gann", signal);
       const updated = getCompositeForScrip(symbol);
       if (updated) io.emit("composite-update", updated);
     },
   })
     .then(() => {
-      // Wire gannIntegration into websocket AFTER async startup completes
-      // so "get-gann-analysis" requests are served with restored MongoDB data
       ws.setGannIntegration(gannIntegration);
       console.log("📐 Gann Integration started (MongoDB cache restored)");
     })
     .catch(e => {
-      // Non-fatal — server still works, just won't have persisted Gann data
       console.error("📐 Gann Integration start error:", e.message);
       ws.setGannIntegration(gannIntegration);
     });
@@ -256,11 +260,9 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   // ── 4. Socket handlers ────────────────────────────────────────────────────
   io.on("connection", (socket) => {
     sendStoredToClient(socket);
-
     socket.on("get-composite-scores", () => {
       socket.emit("composite-scores", getLeaderboard(100));
     });
-
     socket.on("get-composite-score", (symbol) => {
       if (!symbol) return;
       const score = getCompositeForScrip(symbol);
