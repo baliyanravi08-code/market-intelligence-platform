@@ -15,10 +15,9 @@ const css = `
   --ma5:#ff6b6b;--ma9:#ffd93d;--ma21:#6bcb77;--ma50:#4ecdc4;--ma200:#a8e6cf;
   background:var(--bg0);color:var(--text1);
   font-family:'JetBrains Mono',monospace;font-size:12px;
-  height:100vh;display:flex;flex-direction:column;overflow:hidden;
+  height:100%;display:flex;flex-direction:column;overflow:hidden;
 }
 
-/* ── HEADER ── */
 .st-header{
   background:var(--bg1);border-bottom:1px solid var(--border);
   padding:8px 14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;flex-shrink:0;
@@ -71,7 +70,6 @@ const css = `
 .st-live-dot.red{background:var(--red)}
 @keyframes stblink{0%,100%{opacity:1}50%{opacity:0.2}}
 
-/* ── CONTROLS ── */
 .st-controls{
   background:var(--bg1);border-bottom:1px solid var(--border);
   padding:5px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0;
@@ -100,17 +98,14 @@ const css = `
 }
 .st-tv-btn:hover{background:rgba(88,166,255,0.1);border-color:var(--blue)}
 
-/* ── LAYOUT ── */
 .st-main{display:flex;flex:1;overflow:hidden;min-height:0}
 .st-chart-col{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 .st-side{width:196px;background:var(--bg1);border-left:1px solid var(--border);overflow-y:auto;flex-shrink:0}
 
-/* ── CANVASES ── */
 .st-pane{position:relative;background:var(--bg0);border-bottom:1px solid var(--border2);overflow:hidden}
 .st-pane canvas{display:block}
 .st-pane-lbl{position:absolute;top:5px;left:10px;font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;pointer-events:none;z-index:2}
 
-/* ── SIDE PANEL ── */
 .st-sig-sec{padding:10px;border-bottom:1px solid var(--border2)}
 .st-sec-title{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px}
 .st-sig-badge{display:flex;align-items:center;gap:8px;margin-bottom:6px}
@@ -157,7 +152,6 @@ const css = `
 .spinner{width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--blue);border-radius:50%;animation:spin 0.8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* scrollbar */
 .st-side::-webkit-scrollbar{width:4px}
 .st-side::-webkit-scrollbar-track{background:var(--bg1)}
 .st-side::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
@@ -165,7 +159,6 @@ const css = `
 .st-autocomplete::-webkit-scrollbar-thumb{background:var(--border)}
 `;
 
-// ─── POPULAR NSE STOCKS (fallback / dropdown list) ───────────────────────────
 const POPULAR_STOCKS = [
   { sym: "RELIANCE", name: "Reliance Industries" },
   { sym: "TCS", name: "Tata Consultancy Services" },
@@ -347,9 +340,8 @@ function calcSuperTrend(data, p = 10, m = 3) {
   return { st, dir };
 }
 
-// ─── COMPUTE SIGNAL SCORE ────────────────────────────────────────────────────
 function computeSignal(indicators, lastCandle, ltp) {
-  const { rsi, macd, adx, stoch, supertrend, vwap, ma5, ma9, ma21, ma50, ma200 } = indicators;
+  const { rsi, macd, adx, stoch, supertrend, vwap, ma5, ma9, ma21 } = indicators;
   const last = rsi.length - 1;
   let score = 50;
   const r = rsi[last]; if (r !== null) { if (r > 60 && r < 75) score += 10; else if (r > 75) score += 5; else if (r < 40) score -= 10; }
@@ -366,7 +358,6 @@ function computeSignal(indicators, lastCandle, ltp) {
   return { score, label, color };
 }
 
-// ─── CANVAS DRAW UTILS ───────────────────────────────────────────────────────
 function drawGrid(ctx, w, h, rows = 4, cols = 8) {
   ctx.strokeStyle = "rgba(48,54,61,0.5)"; ctx.lineWidth = 0.5;
   for (let i = 1; i < rows; i++) { const y = h * i / rows; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
@@ -391,8 +382,8 @@ export default function StockTerminal() {
   const [acIdx, setAcIdx] = useState(-1);
   const [showAc, setShowAc] = useState(false);
   const [tf, setTf] = useState("1D");
-  const [liveData, setLiveData] = useState(null);   // from Upstox WS
-  const [wsStatus, setWsStatus] = useState("connecting"); // connecting | live | error
+  const [liveData, setLiveData] = useState(null);
+  const [wsStatus, setWsStatus] = useState("connecting");
   const [indicators, setIndicators] = useState(null);
   const [signal, setSignal] = useState(null);
   const [maToggles, setMaToggles] = useState({ ma5: true, ma9: true, ma21: true, ma50: true, ma200: true });
@@ -402,129 +393,75 @@ export default function StockTerminal() {
   const chartColRef = useRef(null);
   const searchRef = useRef(null);
 
-  // Canvas refs
   const candleRef = useRef(null);
   const macdRef = useRef(null);
   const rsiRef = useRef(null);
   const volRef = useRef(null);
   const adxRef = useRef(null);
 
-  // ── TF config for candle generation (seed from symbol hash) ────────────────
   const TF_CONFIG = {
-    "5m":  { n: 80, trend: 0.01, vol: 0.8, bars: 80 },
-    "15m": { n: 80, trend: 0.02, vol: 1.2, bars: 80 },
-    "1H":  { n: 80, trend: 0.03, vol: 2.0, bars: 80 },
-    "4H":  { n: 80, trend: 0.04, vol: 3.5, bars: 80 },
-    "1D":  { n: 120, trend: 0.02, vol: 5.0, bars: 120 },
-    "1W":  { n: 60, trend: 0.08, vol: 9.0, bars: 60 },
-    "1M":  { n: 36, trend: 0.18, vol: 14.0, bars: 36 },
+    "5m":  { n: 80, trend: 0.01, vol: 0.8 },
+    "15m": { n: 80, trend: 0.02, vol: 1.2 },
+    "1H":  { n: 80, trend: 0.03, vol: 2.0 },
+    "4H":  { n: 80, trend: 0.04, vol: 3.5 },
+    "1D":  { n: 120, trend: 0.02, vol: 5.0 },
+    "1W":  { n: 60, trend: 0.08, vol: 9.0 },
+    "1M":  { n: 36, trend: 0.18, vol: 14.0 },
   };
 
   function symHash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff; return h; }
 
-  // ── Connect to your existing Upstox WebSocket ─────────────────────────────
+  // ── Connect to Socket.io (same as App.jsx) ────────────────────────────────
   useEffect(() => {
     setWsStatus("connecting");
     setLiveData(null);
 
-    // Close any existing WS
-    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
-
-    // Connect to your server's existing websocket (adjust port/path as needed)
-    let ws;
-    try {
-      const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:"; 
-      ws = new WebSocket(`${wsProto}//${window.location.host}`);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        setWsStatus("live");
-        // Subscribe to the chosen symbol (adjust message format to your server protocol)
-       useEffect(() => {
-  setWsStatus("connecting");
-  setLiveData(null);
-
-  // Use Socket.io (same as App.jsx) instead of raw WebSocket
-  import("socket.io-client").then(({ io }) => {
-    const sock = io({ transports: ["websocket", "polling"] });
-    wsRef.current = sock;
-
-    sock.on("connect", () => {
-      setWsStatus("live");
-    });
-
-    sock.on("market-tick", (updates) => {
-      if (!Array.isArray(updates)) return;
-      // market-tick sends index data, not individual stocks
-      // Individual stock LTP comes from upstox ticks
-    });
-
-    // Listen for individual stock ticks from your upstoxStream.js
-    sock.on("ltp-tick", (msg) => {
-      if (!msg || !msg.symbol) return;
-      const sym = msg.symbol?.replace("NSE_EQ|","").replace("BSE_EQ|","");
-      if (sym !== symbol) return;
-      setLiveData({
-        ltp:       msg.ltp ?? msg.last_price,
-        open:      msg.open ?? msg.ohlc?.open,
-        high:      msg.high ?? msg.ohlc?.high,
-        low:       msg.low  ?? msg.ohlc?.low,
-        close:     msg.ltp,
-        volume:    msg.volume ?? msg.vol,
-        change:    msg.change,
-        changePct: msg.changePct ?? msg.percentChange,
-      });
-      setWsStatus("live");
-    });
-
-    sock.on("disconnect", () => setWsStatus("error"));
-    sock.on("connect_error", () => setWsStatus("error"));
-  });
-
-  return () => {
-    if (wsRef.current) wsRef.current.disconnect?.();
-  };
-}, [symbol]);
-      };
-
-      ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-          // Adjust field names to match your upstoxStream.js message format
-          if (msg && (msg.symbol === symbol || msg.instrumentToken?.includes(symbol))) {
-            setLiveData({
-              ltp: msg.ltp ?? msg.lastPrice ?? msg.last_price,
-              open: msg.open ?? msg.ohlc?.open,
-              high: msg.high ?? msg.ohlc?.high,
-              low: msg.low ?? msg.ohlc?.low,
-              close: msg.close ?? msg.ltp,
-              volume: msg.volume ?? msg.vol,
-              change: msg.change ?? msg.netChange,
-              changePct: msg.changePct ?? msg.percentChange,
-            });
-          }
-        } catch (_) {}
-      };
-
-      ws.onerror = () => setWsStatus("error");
-      ws.onclose = () => { if (wsStatus !== "error") setWsStatus("error"); };
-    } catch (_) {
-      setWsStatus("error");
+    if (wsRef.current) {
+      wsRef.current.disconnect?.();
+      wsRef.current = null;
     }
 
-    return () => { if (ws) ws.close(); };
-  // eslint-disable-next-line
+    import("socket.io-client").then(({ io }) => {
+      const sock = io({ transports: ["websocket", "polling"] });
+      wsRef.current = sock;
+
+      sock.on("connect", () => {
+        setWsStatus("live");
+      });
+
+      sock.on("ltp-tick", (msg) => {
+        if (!msg || !msg.symbol) return;
+        const sym = msg.symbol.replace("NSE_EQ|", "").replace("BSE_EQ|", "");
+        if (sym !== symbol) return;
+        setLiveData({
+          ltp:       msg.ltp ?? msg.last_price,
+          open:      msg.open ?? msg.ohlc?.open,
+          high:      msg.high ?? msg.ohlc?.high,
+          low:       msg.low  ?? msg.ohlc?.low,
+          close:     msg.ltp,
+          volume:    msg.volume ?? msg.vol,
+          change:    msg.change,
+          changePct: msg.changePct ?? msg.percentChange,
+        });
+        setWsStatus("live");
+      });
+
+      sock.on("disconnect", () => setWsStatus("error"));
+      sock.on("connect_error", () => setWsStatus("error"));
+    }).catch(() => setWsStatus("error"));
+
+    return () => {
+      if (wsRef.current) wsRef.current.disconnect?.();
+    };
   }, [symbol]);
 
-  // ── Generate historical candle data + indicators ───────────────────────────
+  // ── Generate candles + indicators ─────────────────────────────────────────
   useEffect(() => {
-    const cfg = TF_CONFIG[tf];
+    const cfg = TF_CONFIG[tf] || TF_CONFIG["1D"];
     const h = symHash(symbol);
-    // Use liveData.ltp as last close anchor if available
     const basePrice = liveData?.ltp ?? (100 + (h % 1400));
     const candles = genCandles(cfg.n, basePrice * 0.88, cfg.trend, cfg.vol * (basePrice / 500), h + tf.charCodeAt(0) * 97);
 
-    // Patch last candle with live data if available
     if (liveData?.ltp) {
       const last = candles[candles.length - 1];
       last.c = liveData.ltp;
@@ -554,7 +491,7 @@ export default function StockTerminal() {
     setSignal(computeSignal(ind, lastCandle, ltp));
   }, [symbol, tf, liveData?.ltp]);
 
-  // ── Resize + redraw canvases ───────────────────────────────────────────────
+  // ── Draw canvases ─────────────────────────────────────────────────────────
   const drawAll = useCallback(() => {
     if (!indicators || !chartColRef.current) return;
     const col = chartColRef.current;
@@ -581,14 +518,12 @@ export default function StockTerminal() {
     return () => ro.disconnect();
   }, [drawAll]);
 
-  // ── Canvas draw functions ──────────────────────────────────────────────────
   function drawCandlePane(d, w, h) {
     const cv = candleRef.current; if (!cv) return;
     const ctx = cv.getContext("2d");
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = "#060a0f"; ctx.fillRect(0, 0, w, h);
     drawGrid(ctx, w, h, 6, 10);
-
     const n = d.candles.length, pad = 48;
     const cw = Math.max(2, (w - pad * 2) / n);
     const gap = Math.max(0.5, cw * 0.15), bw = Math.max(1, cw - gap * 2);
@@ -598,8 +533,6 @@ export default function StockTerminal() {
     const rng = (maxP - minP) * 0.08; minP -= rng; maxP += rng;
     const xOf = i => pad + i * cw + bw / 2;
     const indices = d.candles.map((_, i) => xOf(i));
-
-    // Bollinger Bands
     if (overlays.bollinger) {
       ctx.fillStyle = "rgba(88,166,255,0.05)"; ctx.beginPath(); let s2 = true;
       for (let i = 0; i < n; i++) { if (!d.bb.upper[i]) continue; const x = xOf(i), y = toY(d.bb.upper[i], minP, maxP, h); s2 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); s2 = false; }
@@ -609,7 +542,6 @@ export default function StockTerminal() {
       drawLine(ctx, d.bb.lower, indices, minP, maxP, h, "rgba(88,166,255,0.45)", 0.8);
       drawLine(ctx, d.bb.mid, indices, minP, maxP, h, "rgba(88,166,255,0.25)", 0.6);
     }
-    // SuperTrend
     if (overlays.supertrend) {
       for (let i = 1; i < n; i++) {
         if (!d.supertrend.st[i]) continue;
@@ -619,18 +551,13 @@ export default function StockTerminal() {
         ctx.lineTo(xOf(i), toY(d.supertrend.st[i], minP, maxP, h)); ctx.stroke();
       }
     }
-    // VWAP
     if (overlays.vwap) drawLine(ctx, d.vwap, indices, minP, maxP, h, "rgba(240,136,62,0.8)", 1.5);
-
-    // MAs
     const maConf = [
       { key: "ma5", data: d.ma5, color: "#ff6b6b" }, { key: "ma9", data: d.ma9, color: "#ffd93d" },
       { key: "ma21", data: d.ma21, color: "#6bcb77" }, { key: "ma50", data: d.ma50, color: "#4ecdc4" },
       { key: "ma200", data: d.ma200, color: "#a8e6cf" },
     ];
     maConf.forEach(m => { if (!maToggles[m.key]) return; drawLine(ctx, m.data, indices, minP, maxP, h, m.color, m.key === "ma200" ? 1.8 : 1.2); });
-
-    // Candles
     d.candles.forEach((c, i) => {
       const x = xOf(i), bull = c.c >= c.o, col = bull ? "#26a641" : "#f85149";
       const bodyT = toY(Math.max(c.o, c.c), minP, maxP, h), bodyB = toY(Math.min(c.o, c.c), minP, maxP, h);
@@ -638,12 +565,8 @@ export default function StockTerminal() {
       ctx.beginPath(); ctx.moveTo(x, toY(c.h, minP, maxP, h)); ctx.lineTo(x, toY(c.l, minP, maxP, h)); ctx.stroke();
       ctx.fillStyle = col; ctx.fillRect(x - bw / 2, bodyT, bw, Math.max(1, bodyB - bodyT));
     });
-
-    // Price axis
     ctx.fillStyle = "#6e7681"; ctx.font = "9px JetBrains Mono";
     for (let i = 0; i <= 5; i++) { const v = minP + (maxP - minP) * i / 5; ctx.fillText("₹" + v.toFixed(1), 2, toY(v, minP, maxP, h) + 3); }
-
-    // Last price dashed line
     const lc = d.candles[n - 1];
     const ly = toY(lc.c, minP, maxP, h);
     ctx.strokeStyle = "rgba(88,166,255,0.5)"; ctx.lineWidth = 0.5; ctx.setLineDash([4, 4]);
@@ -722,7 +645,7 @@ export default function StockTerminal() {
     drawLine(ctx, d.adx.ndi, indices, 0, 80, h, "rgba(248,81,73,0.7)", 1, p2);
   }
 
-  // ── Autocomplete filter ───────────────────────────────────────────────────
+  // ── Autocomplete ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!search.trim()) { setAcList([]); setShowAc(false); return; }
     const q = search.toUpperCase();
@@ -730,9 +653,7 @@ export default function StockTerminal() {
     setAcList(filtered); setShowAc(true); setAcIdx(-1);
   }, [search]);
 
-  function selectSymbol(sym) {
-    setSymbol(sym); setSearch(""); setShowAc(false);
-  }
+  function selectSymbol(sym) { setSymbol(sym); setSearch(""); setShowAc(false); }
 
   function onSearchKey(e) {
     if (!showAc) return;
@@ -742,7 +663,7 @@ export default function StockTerminal() {
     else if (e.key === "Escape") { setShowAc(false); }
   }
 
-  // ── Derived display values ────────────────────────────────────────────────
+  // ── Derived values ────────────────────────────────────────────────────────
   const last = indicators?.candles?.length - 1 ?? 0;
   const lastC = indicators?.candles?.[last];
   const ltp = liveData?.ltp ?? lastC?.c ?? 0;
@@ -763,7 +684,6 @@ export default function StockTerminal() {
   const pdiV = indicators?.adx?.pdi?.[last];
   const ndiV = indicators?.adx?.ndi?.[last];
   const stDir = indicators?.supertrend?.dir?.[last];
-  const stV = indicators?.supertrend?.st?.[last];
   const vwapV = indicators?.vwap?.[last];
   const atrV = indicators?.atr?.[last];
   const bbu = indicators?.bb?.upper?.[last];
@@ -774,22 +694,16 @@ export default function StockTerminal() {
   const obv = indicators?.obv;
   const obvTrend = obv && obv.length > 5 ? (obv[last] > obv[last - 5] ? "↑ Rising" : "↓ Falling") : "--";
   const avgVol = indicators?.candles?.slice(Math.max(0, last - 19), last + 1).reduce((a, c) => a + c.v, 0) / Math.min(20, last + 1);
-
   const ma5V = indicators?.ma5?.[last], ma9V = indicators?.ma9?.[last];
   const ma21V = indicators?.ma21?.[last], ma50V = indicators?.ma50?.[last], ma200V = indicators?.ma200?.[last];
   const bullStack = [ma5V, ma9V, ma21V, ma50V, ma200V].every((v, i, a) => i === 0 || !v || !a[i - 1] || a[i - 1] > v);
-
-  const stochSig = sk !== null && sk !== undefined ? (sk > 80 ? "OVERBOUGHT" : sk < 20 ? "OVERSOLD" : "NEUTRAL") : "--";
   const rsiSig = rsiV > 70 ? "OBOUGHT" : rsiV < 30 ? "OVERSOLD" : "NEUTRAL";
   const cross = histV !== null && prevHistV !== null ? (histV > 0 && prevHistV <= 0 ? "BULL CROSS" : histV < 0 && prevHistV >= 0 ? "BEAR CROSS" : histV > 0 ? "BULLISH" : "BEARISH") : "--";
-
   const atrVal = atrV ? atrV : 0;
   const stopLoss = (ltp - 1.8 * atrVal).toFixed(2);
   const target = (ltp + 3.8 * atrVal).toFixed(2);
   const rr = atrVal > 0 ? `1:${(3.8 / 1.8).toFixed(1)}` : "--";
-
   const fmtVol = v => v > 1e6 ? (v / 1e6).toFixed(2) + "M" : v > 1e3 ? (v / 1e3).toFixed(0) + "K" : v;
-
   const statusDot = wsStatus === "live" ? "" : wsStatus === "connecting" ? "amber" : "red";
   const statusText = wsStatus === "live" ? "LIVE" : wsStatus === "connecting" ? "CONNECTING..." : "DISCONNECTED";
 
@@ -797,12 +711,8 @@ export default function StockTerminal() {
     <>
       <style>{css}</style>
       <div className="st-root">
-
-        {/* ── HEADER ── */}
         <div className="st-header">
           <div className="st-logo">MKT<span>▲</span></div>
-
-          {/* Search */}
           <div className="st-search-wrap" style={{ position: "relative" }}>
             <span className="st-search-icon">⌕</span>
             <input
@@ -826,39 +736,30 @@ export default function StockTerminal() {
               </div>
             )}
           </div>
-
-          {/* Dropdown */}
           <div className="st-dropdown-wrap">
             <select className="st-dropdown" value={symbol} onChange={e => selectSymbol(e.target.value)}>
               {POPULAR_STOCKS.map(s => <option key={s.sym} value={s.sym}>{s.sym} — {s.name}</option>)}
             </select>
             <span className="st-dropdown-arrow">▾</span>
           </div>
-
-          {/* Price */}
           <div className="st-price-block">
             <span className="st-price">₹{ltp.toFixed(2)}</span>
             <span className={isPos ? "st-chg-pos" : "st-chg-neg"}>
               {isPos ? "+" : ""}{diff.toFixed(2)} ({isPos ? "+" : ""}{pct.toFixed(2)}%)
             </span>
           </div>
-
-          {/* Stats */}
           <div className="st-stats">
             <div className="st-stat"><div className="st-stat-l">Open</div><div className="st-stat-v">₹{open.toFixed(2)}</div></div>
             <div className="st-stat"><div className="st-stat-l">High</div><div className="st-stat-v" style={{ color: "var(--green)" }}>₹{high.toFixed(2)}</div></div>
             <div className="st-stat"><div className="st-stat-l">Low</div><div className="st-stat-v" style={{ color: "var(--red)" }}>₹{low.toFixed(2)}</div></div>
             <div className="st-stat"><div className="st-stat-l">Volume</div><div className="st-stat-v">{fmtVol(vol)}</div></div>
           </div>
-
-          {/* WS Status */}
           <div className="st-connecting">
             <span className={`st-live-dot ${statusDot}`}></span>
             {statusText} · {symbol}
           </div>
         </div>
 
-        {/* ── CONTROLS ── */}
         <div className="st-controls">
           <div className="st-tf-group">
             {["5m", "15m", "1H", "4H", "1D", "1W", "1M"].map(t => (
@@ -894,19 +795,12 @@ export default function StockTerminal() {
             ))}
           </div>
           <button className="st-tv-btn" onClick={() => {
-  const TV_MAP = {
-    "NIFTY": "NSE:NIFTY50", "NIFTY 50": "NSE:NIFTY50",
-    "BANKNIFTY": "NSE:BANKNIFTY", "BANK NIFTY": "NSE:BANKNIFTY",
-    "SENSEX": "BSE:SENSEX", "FINNIFTY": "NSE:FINNIFTY",
-  };
-  const tvSym = TV_MAP[symbol.toUpperCase()] || `NSE:${symbol}`;
-  window.open(`https://www.tradingview.com/chart/?symbol=${tvSym}`, "_blank");
-}}>
-            ↗ TradingView
-          </button>
+            const TV_MAP = { "NIFTY": "NSE:NIFTY50", "BANKNIFTY": "NSE:BANKNIFTY", "SENSEX": "BSE:SENSEX" };
+            const tvSym = TV_MAP[symbol.toUpperCase()] || `NSE:${symbol}`;
+            window.open(`https://www.tradingview.com/chart/?symbol=${tvSym}`, "_blank");
+          }}>↗ TradingView</button>
         </div>
 
-        {/* ── MAIN ── */}
         <div className="st-main">
           <div className="st-chart-col" ref={chartColRef}>
             <div className="st-pane" style={{ flex: "0 0 42%" }}>
@@ -931,10 +825,7 @@ export default function StockTerminal() {
             </div>
           </div>
 
-          {/* ── SIDE PANEL ── */}
           <div className="st-side">
-
-            {/* Signal */}
             {signal && (
               <div className="st-sig-sec">
                 <div className="st-sec-title"><span className="st-live-dot"></span> Signal · {tf}</div>
@@ -958,7 +849,6 @@ export default function StockTerminal() {
               </div>
             )}
 
-            {/* Trend */}
             <div className="st-ind-sec">
               <div className="st-sec-title">Trend</div>
               <div className="st-ind-row">
@@ -979,7 +869,6 @@ export default function StockTerminal() {
               </div>
             </div>
 
-            {/* Momentum */}
             <div className="st-ind-sec">
               <div className="st-sec-title">Momentum</div>
               <div className="st-ind-row">
@@ -1004,7 +893,6 @@ export default function StockTerminal() {
               </div>
             </div>
 
-            {/* Volatility */}
             <div className="st-ind-sec">
               <div className="st-sec-title">Volatility</div>
               <div className="st-ind-row"><span className="st-ind-name">BB Upper</span><span className="st-ind-val" style={{ color: "var(--text2)" }}>{bbu ? "₹" + bbu.toFixed(1) : "--"}</span></div>
@@ -1013,7 +901,6 @@ export default function StockTerminal() {
               <div className="st-ind-row"><span className="st-ind-name">BB Width</span><span className="st-ind-val" style={{ color: "var(--blue)" }}>{bbu && bbl && bbm ? ((bbu - bbl) / bbm * 100).toFixed(1) + "%" : "--"}</span></div>
             </div>
 
-            {/* Volume */}
             <div className="st-ind-sec">
               <div className="st-sec-title">Volume</div>
               <div className="st-ind-row"><span className="st-ind-name">Volume</span><span className="st-ind-val" style={{ color: "var(--green)" }}>{fmtVol(vol)}</span></div>
@@ -1030,7 +917,6 @@ export default function StockTerminal() {
               </div>
             </div>
 
-            {/* Moving Averages */}
             <div className="st-ma-sec">
               <div className="st-sec-title">Moving Averages</div>
               {[
@@ -1057,7 +943,6 @@ export default function StockTerminal() {
                 <span className={`st-badge ${bullStack ? "buy" : "neu"}`}>{bullStack ? "BULL STACK" : "MIXED"}</span>
               </div>
             </div>
-
           </div>
         </div>
       </div>
