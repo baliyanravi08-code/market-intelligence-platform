@@ -375,8 +375,13 @@ function drawLine(ctx, data, indices, min, max, h, color, lw = 1, pad = 18) {
 }
 
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
-export default function StockTerminal() {
-  const [symbol, setSymbol] = useState("VBL");
+export default function StockTerminal({ initialSymbol }) {
+  // ── initialSymbol prop: if provided (from scanner Full Chart), use it.
+  // Fallback to sessionStorage, then "VBL".
+  const [symbol, setSymbol] = useState(() => {
+    return initialSymbol || sessionStorage.getItem("terminal_symbol") || "VBL";
+  });
+
   const [search, setSearch] = useState("");
   const [acList, setAcList] = useState([]);
   const [acIdx, setAcIdx] = useState(-1);
@@ -399,6 +404,27 @@ export default function StockTerminal() {
   const volRef = useRef(null);
   const adxRef = useRef(null);
 
+  // ── When initialSymbol prop changes (scanner selects a new stock), update ──
+  useEffect(() => {
+    if (initialSymbol && initialSymbol !== symbol) {
+      setSymbol(initialSymbol);
+      setLiveData(null);
+    }
+  }, [initialSymbol]); // eslint-disable-line
+
+  // ── Listen for open-terminal events (fired by scanner Full Chart buttons) ──
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.detail?.symbol) {
+        setSymbol(e.detail.symbol);
+        setLiveData(null);
+        sessionStorage.setItem("terminal_symbol", e.detail.symbol);
+      }
+    };
+    window.addEventListener("open-terminal", handler);
+    return () => window.removeEventListener("open-terminal", handler);
+  }, []);
+
   const TF_CONFIG = {
     "5m":  { n: 80, trend: 0.01, vol: 0.8 },
     "15m": { n: 80, trend: 0.02, vol: 1.2 },
@@ -411,7 +437,7 @@ export default function StockTerminal() {
 
   function symHash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff; return h; }
 
-  // ── Connect to Socket.io (same as App.jsx) ────────────────────────────────
+  // ── Connect to Socket.io ──────────────────────────────────────────────────
   useEffect(() => {
     setWsStatus("connecting");
     setLiveData(null);
@@ -653,7 +679,7 @@ export default function StockTerminal() {
     setAcList(filtered); setShowAc(true); setAcIdx(-1);
   }, [search]);
 
-  function selectSymbol(sym) { setSymbol(sym); setSearch(""); setShowAc(false); }
+  function selectSymbol(sym) { setSymbol(sym); setSearch(""); setShowAc(false); setLiveData(null); }
 
   function onSearchKey(e) {
     if (!showAc) return;

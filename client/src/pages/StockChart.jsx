@@ -184,6 +184,13 @@ export default function StockChart({ symbol }) {
     });
   };
 
+  // ── Open full terminal for this symbol ────────────────────────────────────
+  const openFullChart = () => {
+    if (!symbol) return;
+    sessionStorage.setItem("terminal_symbol", symbol);
+    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol } }));
+  };
+
   // ── Summary stats ─────────────────────────────────────────────────────────
   const last    = candles[candles.length - 1];
   const first   = candles[0];
@@ -286,32 +293,32 @@ export default function StockChart({ symbol }) {
           </div>
         )}
         <div style={{ position: "relative" }}>
-  <canvas
-    ref={canvasRef}
-    width={820}
-    height={420}
-    style={{ width: "100%", height: "auto", borderRadius: 6, cursor: "crosshair", display: "block" }}
-    onMouseMove={handleMouseMove}
-    onMouseLeave={() => setCrosshair(null)}
-  />
-  {/* Expand button — top-right corner, doesn't block crosshair */}
-  <div
-    onClick={() => window.open(`/VblTerminal.html?symbol=${encodeURIComponent(symbol)}`, "_blank")}
-    style={{
-      position: "absolute", top: 8, right: 8,
-      background: "rgba(0,207,255,0.12)",
-      border: "1px solid rgba(0,207,255,0.35)",
-      borderRadius: 4, padding: "3px 10px",
-      color: "#00cfff", fontSize: 10,
-      fontFamily: "monospace", cursor: "pointer",
-      zIndex: 5, userSelect: "none",
-      transition: "background 0.15s",
-    }}
-    title="Open full chart in new tab"
-  >
-    ↗ Full Chart
-  </div>
-</div>
+          <canvas
+            ref={canvasRef}
+            width={820}
+            height={420}
+            style={{ width: "100%", height: "auto", borderRadius: 6, cursor: "crosshair", display: "block" }}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={() => setCrosshair(null)}
+          />
+          {/* Full Chart button — fires open-terminal event for the current symbol */}
+          <div
+            onClick={openFullChart}
+            style={{
+              position: "absolute", top: 8, right: 8,
+              background: "rgba(0,207,255,0.12)",
+              border: "1px solid rgba(0,207,255,0.35)",
+              borderRadius: 4, padding: "3px 10px",
+              color: "#00cfff", fontSize: 10,
+              fontFamily: "monospace", cursor: "pointer",
+              zIndex: 5, userSelect: "none",
+              transition: "background 0.15s",
+            }}
+            title={`Open full chart for ${symbol}`}
+          >
+            ↗ Full Chart
+          </div>
+        </div>
       </div>
 
       {/* Footer */}

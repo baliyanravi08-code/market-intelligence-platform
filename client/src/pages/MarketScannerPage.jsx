@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
+import StockTerminal from "./StockTerminal";
 
 // ── Inline StockChart ─────────────────────────────────────────────────────────
 const TF_CHART_OPTIONS = [
@@ -140,6 +141,13 @@ function StockChart({ symbol, defaultTf }) {
   const chg    = last && first ? last.close - first.open : 0;
   const chgPct = first?.open > 0 ? (chg / first.open) * 100 : 0;
   const isUp   = chg >= 0;
+
+  // ── Open terminal overlay for this symbol ──
+  const openFullChart = () => {
+    if (!symbol) return;
+    sessionStorage.setItem("terminal_symbol", symbol);
+    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol } }));
+  };
 
   return (
     <div style={{ background: CHART_COLORS.bg, border: "1px solid #1e2a3a", borderRadius: 8, overflow: "hidden" }}>
@@ -453,6 +461,12 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
     </div>
   );
 
+  // ── Fire open-terminal event with the currently-selected symbol ──
+  const handleFullChart = () => {
+    sessionStorage.setItem("terminal_symbol", symbol);
+    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol } }));
+  };
+
   return (
     <div style={{
       position: "fixed", right: 0, top: 0,
@@ -472,13 +486,10 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
           <div style={{ fontSize: 11, color: T.textSec }}>Technical Analysis · Multi-timeframe</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {/* ── FULL CHART BUTTON ── */}
+          {/* ── FULL CHART BUTTON — opens terminal overlay with THIS symbol ── */}
           <button
             type="button"
-            onClick={() => {
-  sessionStorage.setItem("terminal_symbol", symbol);
-  window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol } }));
-}}
+            onClick={handleFullChart}
             style={{
               background: "rgba(96,165,250,0.12)",
               border: "1px solid rgba(96,165,250,0.5)",
@@ -497,7 +508,7 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
             }}
             onMouseEnter={e => e.currentTarget.style.background = "rgba(96,165,250,0.22)"}
             onMouseLeave={e => e.currentTarget.style.background = "rgba(96,165,250,0.12)"}
-            title="Open full TradingView-style chart in new tab"
+            title={`Open full chart for ${symbol}`}
           >
             ↗ Full Chart
           </button>
@@ -1010,7 +1021,6 @@ function BacktestPanel({ onClose, techCacheRef }) {
         </div>
 
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-          {/* Date sidebar */}
           <div style={{ width: 130, borderRight: `1px solid ${T.border}`, overflowY: "auto", background: "#080d14", flexShrink: 0 }}>
             <div style={{ padding: "8px 10px", fontSize: 9, color: T.textDim, fontWeight: 700, letterSpacing: "0.8px" }}>SESSIONS</div>
             {dates.length === 0 && <div style={{ padding: "12px 10px", fontSize: 10, color: T.textDim }}>No data yet</div>}
@@ -1029,7 +1039,6 @@ function BacktestPanel({ onClose, techCacheRef }) {
             })}
           </div>
 
-          {/* Main content */}
           <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
             {btTab === "tracker" && (
               <>
@@ -1200,6 +1209,10 @@ function ScannerBody() {
   const [livePriceMap, setLivePriceMap] = useState({});
   const [techVersion,  setTechVersion]  = useState(0);
 
+  // ── Terminal overlay state ──────────────────────────────────────────────────
+  const [showTerminal,   setShowTerminal]   = useState(false);
+  const [terminalSymbol, setTerminalSymbol] = useState(null);
+
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
   const activeTFRef    = useRef("1day");
@@ -1207,6 +1220,18 @@ function ScannerBody() {
   const autoCapFired   = useRef(false);
 
   useEffect(() => { activeTFRef.current = activeTF; }, [activeTF]);
+
+  // ── Listen for open-terminal events from any Full Chart button ─────────────
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.detail?.symbol) {
+        setTerminalSymbol(e.detail.symbol);
+        setShowTerminal(true);
+      }
+    };
+    window.addEventListener("open-terminal", handler);
+    return () => window.removeEventListener("open-terminal", handler);
+  }, []);
 
   useEffect(() => {
     const tryAutoCapture = () => {
@@ -1532,7 +1557,7 @@ function ScannerBody() {
         )}
       </div>
 
-      {/* TechPanel — chart + Full Chart button inside */}
+      {/* TechPanel — side drawer with mini chart + Full Chart button */}
       {selectedSym && (
         <TechPanel
           symbol={selectedSym}
@@ -1548,6 +1573,53 @@ function ScannerBody() {
             activeTFRef.current = "1day";
           }}
         />
+      )}
+
+      {/* ── Full Terminal Overlay ──────────────────────────────────────────── */}
+      {showTerminal && (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 500,
+          background: "#060a0f",
+          display: "flex",
+          flexDirection: "column",
+        }}>
+          {/* Close bar */}
+          <div style={{
+            padding: "6px 14px",
+            background: "#080d14",
+            borderBottom: "1px solid #30363d",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexShrink: 0,
+          }}>
+            <span style={{ color: "#58a6ff", fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>
+              📈 Full Chart — {terminalSymbol}
+            </span>
+            <button
+              onClick={() => setShowTerminal(false)}
+              style={{
+                background: "#21262d",
+                border: "1px solid #30363d",
+                color: "#8b949e",
+                padding: "4px 14px",
+                borderRadius: 5,
+                cursor: "pointer",
+                fontFamily: "monospace",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              ✕ Close
+            </button>
+          </div>
+          {/* Terminal fills remaining space */}
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <StockTerminal initialSymbol={terminalSymbol} />
+          </div>
+        </div>
       )}
 
       {showBacktest && <BacktestPanel onClose={() => setShowBacktest(false)} techCacheRef={techCacheRef} />}
