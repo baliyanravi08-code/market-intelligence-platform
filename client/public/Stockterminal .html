@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Terminal · Market Intelligence</title>
+<title>Stock Terminal · Market Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Orbitron:wght@400;600;700;900&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -564,13 +564,13 @@
 
 <!-- TOOLBAR -->
 <div class="toolbar">
-  <button class="tf-btn" onclick="setTF('5m')">5m</button>
-  <button class="tf-btn" onclick="setTF('15m')">15m</button>
-  <button class="tf-btn" onclick="setTF('1H')">1H</button>
-  <button class="tf-btn" onclick="setTF('4H')">4H</button>
-  <button class="tf-btn active" id="tf-1D" onclick="setTF('1D')">1D</button>
-  <button class="tf-btn" onclick="setTF('1W')">1W</button>
-  <button class="tf-btn" onclick="setTF('1M')">1M</button>
+  <button class="tf-btn" onclick="setTF('5m',this)">5m</button>
+  <button class="tf-btn" onclick="setTF('15m',this)">15m</button>
+  <button class="tf-btn" onclick="setTF('1H',this)">1H</button>
+  <button class="tf-btn" onclick="setTF('4H',this)">4H</button>
+  <button class="tf-btn active" onclick="setTF('1D',this)">1D</button>
+  <button class="tf-btn" onclick="setTF('1W',this)">1W</button>
+  <button class="tf-btn" onclick="setTF('1M',this)">1M</button>
   <div class="sep"></div>
   <button class="ind-btn ind-ma5  active" onclick="toggleInd(this,'ma5')">MA5</button>
   <button class="ind-btn ind-ma9  active" onclick="toggleInd(this,'ma9')">MA9</button>
@@ -634,7 +634,7 @@
       </div>
       <div class="resize-handle" id="resizeH"></div>
       <div class="sub-panel" id="subPanel2" style="height:80px">
-        <div class="sub-panel-label" id="subLabel2">RSI (14) · STOCHASTIC</div>
+        <div class="sub-panel-label" id="subLabel2">VOLUME · OBV</div>
         <canvas class="sub-canvas" id="subChart2"></canvas>
       </div>
     </div>
@@ -773,12 +773,15 @@
 
 <script>
 // ─── READ SYMBOL FROM URL ─────────────────────────────────────────────────────
+// Reads ?symbol=RELIANCE — works for ANY stock, no hardcoded defaults
 const urlParams    = new URLSearchParams(window.location.search);
-let   CHART_SYMBOL = (urlParams.get('symbol') || 'VBL').toUpperCase().trim();
+// seedLtp: passed from scanner via ?ltp=1234.5 so chart base price is correct
+let   CHART_SYMBOL = (urlParams.get('symbol') || sessionStorage.getItem('terminal_symbol') || 'NIFTY').toUpperCase().trim();
+let   SEED_LTP     = parseFloat(urlParams.get('ltp') || sessionStorage.getItem('terminal_ltp') || '0') || null;
 let   CURRENT_TF   = '1D';
 
 // Update page title immediately
-document.title = `${CHART_SYMBOL} · Terminal · MI`;
+document.title = `${CHART_SYMBOL} · Stock Terminal · MI`;
 document.getElementById('symName').textContent = CHART_SYMBOL;
 document.getElementById('fsSym').textContent   = CHART_SYMBOL;
 document.getElementById('symSearchInput').placeholder = CHART_SYMBOL;
@@ -807,6 +810,13 @@ const POPULAR_STOCKS = [
   {sym:'PRESTIGE',name:'Prestige Estates'},{sym:'OBEROIRLTY',name:'Oberoi Realty'},{sym:'CONCOR',name:'CONCOR'},
   {sym:'ALKEM',name:'Alkem Lab'},{sym:'TATACONSUM',name:'Tata Consumer'},{sym:'BIOCON',name:'Biocon'},
   {sym:'PHOENIXLTD',name:'The Phoenix Mills'},{sym:'BAJAJ-AUTO',name:'Bajaj Auto'},
+  {sym:'OFSS',name:'Oracle Financial Services'},{sym:'MPHASIS',name:'Mphasis'},
+  {sym:'PERSISTENT',name:'Persistent Systems'},{sym:'COFORGE',name:'Coforge'},
+  {sym:'LTIM',name:'LTIMindtree'},{sym:'ZOMATO',name:'Zomato'},{sym:'PAYTM',name:'Paytm'},
+  {sym:'NYKAA',name:'Nykaa'},{sym:'DMART',name:'Avenue Supermarts'},{sym:'PIDILITIND',name:'Pidilite'},
+  {sym:'HAVELLS',name:'Havells India'},{sym:'VOLTAS',name:'Voltas'},{sym:'TRENT',name:'Trent'},
+  {sym:'JUBLFOOD',name:'Jubilant FoodWorks'},{sym:'NIFTY',name:'Nifty 50 Index'},
+  {sym:'BANKNIFTY',name:'Bank Nifty Index'},{sym:'SENSEX',name:'BSE Sensex'},
 ];
 
 // ─── SYMBOL SEARCH AUTOCOMPLETE ──────────────────────────────────────────────
@@ -841,34 +851,52 @@ document.addEventListener('click', e => {
   }
 });
 
-function changeSymbol(sym) {
+function changeSymbol(sym, seedPrice) {
   CHART_SYMBOL = sym.toUpperCase().trim();
+  SEED_LTP = seedPrice || null;
   dropdown.style.display = 'none';
   searchInput.value = '';
   searchInput.placeholder = CHART_SYMBOL;
   document.getElementById('symName').textContent = CHART_SYMBOL;
   document.getElementById('fsSym').textContent   = CHART_SYMBOL;
-  document.title = `${CHART_SYMBOL} · Terminal · MI`;
+  document.title = `${CHART_SYMBOL} · Stock Terminal · MI`;
+  // Persist for back-navigation
+  sessionStorage.setItem('terminal_symbol', CHART_SYMBOL);
+  if (SEED_LTP) sessionStorage.setItem('terminal_ltp', String(SEED_LTP));
   // Update URL without reload
   const url = new URL(window.location.href);
   url.searchParams.set('symbol', CHART_SYMBOL);
+  if (SEED_LTP) url.searchParams.set('ltp', String(SEED_LTP));
   window.history.replaceState({}, '', url.toString());
-  // Reload data
   loadData(CHART_SYMBOL, CURRENT_TF);
 }
 
-// ─── DATA GENERATION (fallback) ──────────────────────────────────────────────
-function genCandles(n=120, base=490, vol=18, drift=-0.0002) {
+// ─── Listen for open-terminal events from scanner / other pages ───────────────
+window.addEventListener('open-terminal', (e) => {
+  if (e.detail?.symbol) {
+    const ltp = e.detail.ltp || null;
+    changeSymbol(e.detail.symbol, ltp);
+  }
+});
+
+// ─── DATA GENERATION (fallback — uses SEED_LTP for correct price range) ───────
+function symHash(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff;
+  return h;
+}
+
+function genCandles(n=120, base=500, vol=18, drift=-0.0002) {
   const c = []; let p = base;
   let date = new Date(); date.setDate(date.getDate() - n);
   for(let i=0;i<n;i++){
     const r = ()=> Math.random()-0.5;
     const chg = p*(drift + r()*0.025);
     const o = p, c2 = p + chg;
-    const h = Math.max(o,c2)+Math.abs(r()*vol*0.5);
-    const l = Math.min(o,c2)-Math.abs(r()*vol*0.5);
-    const v = 1e6 + Math.abs(r())*3e6;
-    c.push({ date: new Date(date), o: +o.toFixed(2), h: +h.toFixed(2), l: +Math.max(l,1).toFixed(2), c: +c2.toFixed(2), v: Math.round(v) });
+    const h2 = Math.max(o,c2)+Math.abs(r()*vol*0.5);
+    const l  = Math.min(o,c2)-Math.abs(r()*vol*0.5);
+    const v  = 1e6 + Math.abs(r())*3e6;
+    c.push({ date: new Date(date), o: +o.toFixed(2), h: +h2.toFixed(2), l: +Math.max(l,1).toFixed(2), c: +c2.toFixed(2), v: Math.round(v) });
     p = c2;
     date.setDate(date.getDate()+1);
     if(date.getDay()===6) date.setDate(date.getDate()+2);
@@ -1032,10 +1060,15 @@ async function loadData(sym, tf) {
     CANDLES = await fetchCandles(sym, tf);
     setDataBadge('live', '⚡ LIVE DATA');
   } catch(e) {
-    // Fallback to generated data
+    // Fallback — use SEED_LTP so price range is correct for this symbol
     const driftMap={'5m':-0.0001,'15m':-0.0002,'1H':-0.0003,'4H':-0.0004,'1D':-0.003,'1W':-0.008,'1M':-0.02};
     const nMap={'5m':200,'15m':120,'1H':100,'4H':80,'1D':120,'1W':60,'1M':40};
-    CANDLES = genCandles(nMap[tf]||120, 500, 18, driftMap[tf]||-0.003);
+    const h2 = symHash(sym);
+    // Priority: SEED_LTP (from scanner) > URL param > hash-based guess
+    const basePrice = SEED_LTP ?? (100 + (h2 % 1400));
+    const volRatio  = basePrice / 500; // scale volatility to price
+    const tfVol     = { '5m':1.5,'15m':2,'1H':4,'4H':7,'1D':15,'1W':28,'1M':45 };
+    CANDLES = genCandles(nMap[tf]||120, basePrice * 0.88, (tfVol[tf]||15) * volRatio, driftMap[tf]||-0.003);
     setDataBadge('mock', 'SIMULATED');
     showError(`Live data unavailable — showing simulated chart`);
   }
@@ -1089,7 +1122,6 @@ function updateHeader() {
   document.getElementById('oLow').textContent  = '₹' + last.l.toFixed(2);
   document.getElementById('oVol').textContent  = fmtVol(last.v);
 
-  // 52W H/L from all candles
   const h52 = Math.max(...CANDLES.map(c=>c.h));
   const l52 = Math.min(...CANDLES.map(c=>c.l));
   document.getElementById('o52H').textContent = '₹' + h52.toFixed(2);
@@ -1114,7 +1146,6 @@ function updateSidePanel() {
   document.getElementById('signalTF').textContent   = CURRENT_TF;
   document.getElementById('rrFill').style.width = sig.score + '%';
 
-  // Dial arc
   const circ = 94.2;
   const offset = circ - (sig.score/100)*circ;
   document.getElementById('dialArc').setAttribute('stroke-dashoffset', offset.toFixed(1));
@@ -1123,7 +1154,6 @@ function updateSidePanel() {
   document.getElementById('dialG1').setAttribute('stop-color', c1);
   document.getElementById('dialG2').setAttribute('stop-color', c2);
 
-  // ATR-based levels
   const atrV = INDS.atr[last];
   if (atrV) {
     document.getElementById('sgEntry').textContent  = '₹' + ltp.toFixed(2);
@@ -1495,10 +1525,10 @@ cw_el.addEventListener('mousemove',e=>{
 cw_el.addEventListener('mouseleave',()=>{ tt.style.display='none'; });
 
 // ─── TIMEFRAME BUTTONS ────────────────────────────────────────────────────────
-function setTF(tf){
+function setTF(tf, btn){
   CURRENT_TF = tf;
   document.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('active'));
-  event.target.classList.add('active');
+  if(btn) btn.classList.add('active');
   document.getElementById('coLabel').textContent='PRICE · '+tf;
   document.getElementById('signalTF').textContent=tf;
   loadData(CHART_SYMBOL, tf);

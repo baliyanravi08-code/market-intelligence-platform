@@ -375,12 +375,13 @@ function drawLine(ctx, data, indices, min, max, h, color, lw = 1, pad = 18) {
 }
 
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
-export default function StockTerminal({ initialSymbol }) {
-  // ── initialSymbol prop: if provided (from scanner Full Chart), use it.
-  // Fallback to sessionStorage, then "VBL".
+export default function StockTerminal({ initialSymbol, initialLtp }) {
   const [symbol, setSymbol] = useState(
-  initialSymbol || sessionStorage.getItem("terminal_symbol") || "VBL"
-);
+    initialSymbol || sessionStorage.getItem("terminal_symbol") || "NIFTY"
+  );
+  const [seedLtp, setSeedLtp] = useState(
+    initialLtp || parseFloat(sessionStorage.getItem("terminal_ltp")) || null
+  );
 
 // Force symbol update when initialSymbol prop arrives
 useEffect(() => {
@@ -493,7 +494,7 @@ useEffect(() => {
   useEffect(() => {
     const cfg = TF_CONFIG[tf] || TF_CONFIG["1D"];
     const h = symHash(symbol);
-    const basePrice = liveData?.ltp ?? (100 + (h % 1400));
+    const basePrice = liveData?.ltp ?? seedLtp ?? (100 + (h % 1400));
     const candles = genCandles(cfg.n, basePrice * 0.88, cfg.trend, cfg.vol * (basePrice / 500), h + tf.charCodeAt(0) * 97);
 
     if (liveData?.ltp) {
@@ -523,7 +524,7 @@ useEffect(() => {
     const lastCandle = candles[candles.length - 1];
     const ltp = liveData?.ltp ?? lastCandle.c;
     setSignal(computeSignal(ind, lastCandle, ltp));
-  }, [symbol, tf, liveData?.ltp]);
+  }, [symbol, tf, liveData?.ltp, seedLtp]);
 
   // ── Draw canvases ─────────────────────────────────────────────────────────
   const drawAll = useCallback(() => {

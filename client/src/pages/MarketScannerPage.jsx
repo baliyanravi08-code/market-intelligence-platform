@@ -463,9 +463,11 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
 
   // ── Fire open-terminal event with the currently-selected symbol ──
   const handleFullChart = () => {
-    sessionStorage.setItem("terminal_symbol", symbol);
-    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol } }));
-  };
+  const ltp = tech?.ltp || tech?.entry || null;
+  sessionStorage.setItem("terminal_symbol", symbol);
+  if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
+  window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol, ltp } }));
+};
 
   return (
     <div style={{
@@ -1211,8 +1213,8 @@ function ScannerBody() {
 
   // ── Terminal overlay state ──────────────────────────────────────────────────
   const [showTerminal,   setShowTerminal]   = useState(false);
-  const [terminalSymbol, setTerminalSymbol] = useState(null);
-
+const [terminalSymbol, setTerminalSymbol] = useState(null);
+const [terminalLtp,    setTerminalLtp]    = useState(null);  // ← ADD
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
   const activeTFRef    = useRef("1day");
@@ -1224,11 +1226,16 @@ function ScannerBody() {
   // ── Listen for open-terminal events from any Full Chart button ─────────────
   useEffect(() => {
     const handler = (e) => {
-      if (e.detail?.symbol) {
-        setTerminalSymbol(e.detail.symbol);
-        setShowTerminal(true);
-      }
-    };
+  if (e.detail?.symbol) {
+    setSymbol(e.detail.symbol);
+    setLiveData(null);
+    sessionStorage.setItem("terminal_symbol", e.detail.symbol);
+    if (e.detail?.ltp) {
+      setSeedLtp(e.detail.ltp);
+      sessionStorage.setItem("terminal_ltp", String(e.detail.ltp));
+    }
+  }
+};
     window.addEventListener("open-terminal", handler);
     return () => window.removeEventListener("open-terminal", handler);
   }, []);
@@ -1617,7 +1624,7 @@ function ScannerBody() {
           </div>
           {/* Terminal fills remaining space */}
           <div style={{ flex: 1, overflow: "hidden" }}>
-            <StockTerminal initialSymbol={terminalSymbol} />
+            <StockTerminal initialSymbol={terminalSymbol} initialLtp={terminalLtp} />
           </div>
         </div>
       )}
