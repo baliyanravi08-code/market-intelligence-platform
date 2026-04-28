@@ -463,11 +463,11 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
 
   // ── Fire open-terminal event with the currently-selected symbol ──
   const handleFullChart = () => {
-  const ltp = tech?.ltp || tech?.entry || null;
-  sessionStorage.setItem("terminal_symbol", symbol);
-  if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
-  window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol, ltp } }));
-};
+    const ltp = tech?.ltp || tech?.entry || null;
+    sessionStorage.setItem("terminal_symbol", symbol);
+    if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
+    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol, ltp } }));
+  };
 
   return (
     <div style={{

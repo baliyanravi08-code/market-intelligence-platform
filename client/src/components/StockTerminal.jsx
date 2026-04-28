@@ -190,6 +190,15 @@ const POPULAR_STOCKS = [
   { sym: "HCLTECH", name: "HCL Technologies" },
   { sym: "ASIANPAINT", name: "Asian Paints" },
   { sym: "BAJAJFINSV", name: "Bajaj Finserv" },
+  { sym: "OFSS", name: "Oracle Financial Services" },
+  { sym: "MPHASIS", name: "Mphasis" },
+  { sym: "PERSISTENT", name: "Persistent Systems" },
+  { sym: "COFORGE", name: "Coforge" },
+  { sym: "ZOMATO", name: "Zomato" },
+  { sym: "DMART", name: "Avenue Supermarts" },
+  { sym: "NIFTY", name: "Nifty 50 Index" },
+  { sym: "BANKNIFTY", name: "Bank Nifty Index" },
+  { sym: "SENSEX", name: "BSE Sensex" },
 ];
 
 // ─── MATH HELPERS ─────────────────────────────────────────────────────────────
@@ -374,46 +383,47 @@ function drawLine(ctx, data, indices, min, max, h, color, lw = 1, pad = 18) {
   ctx.stroke();
 }
 
+// ─── SYMBOL HASH ─────────────────────────────────────────────────────────────
+function symHash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff; return h; }
+
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function StockTerminal({ initialSymbol, initialLtp }) {
+
+  // ── Symbol: prop → sessionStorage → default ──────────────────────────────
   const [symbol, setSymbol] = useState(
     initialSymbol || sessionStorage.getItem("terminal_symbol") || "NIFTY"
   );
-  const [seedLtp, setSeedLtp] = useState(
-    initialLtp || parseFloat(sessionStorage.getItem("terminal_ltp")) || null
-  );
 
-// Force symbol update when initialSymbol prop arrives
-useEffect(() => {
-  if (initialSymbol) {
-    setSymbol(initialSymbol);
-    setLiveData(null);
-  }
-}, [initialSymbol]);
+  // ── seedLtp: the real price passed from scanner, used as chart base price ─
+  // Priority: initialLtp prop → sessionStorage → null (falls back to hash)
+  const [seedLtp, setSeedLtp] = useState(() => {
+    if (initialLtp && initialLtp > 0) return Number(initialLtp);
+    const stored = parseFloat(sessionStorage.getItem("terminal_ltp"));
+    return stored > 0 ? stored : null;
+  });
 
-  const [search, setSearch] = useState("");
-  const [acList, setAcList] = useState([]);
-  const [acIdx, setAcIdx] = useState(-1);
-  const [showAc, setShowAc] = useState(false);
-  const [tf, setTf] = useState("1D");
-  const [liveData, setLiveData] = useState(null);
-  const [wsStatus, setWsStatus] = useState("connecting");
+  const [search, setSearch]       = useState("");
+  const [acList, setAcList]       = useState([]);
+  const [acIdx, setAcIdx]         = useState(-1);
+  const [showAc, setShowAc]       = useState(false);
+  const [tf, setTf]               = useState("1D");
+  const [liveData, setLiveData]   = useState(null);
+  const [wsStatus, setWsStatus]   = useState("connecting");
   const [indicators, setIndicators] = useState(null);
-  const [signal, setSignal] = useState(null);
+  const [signal, setSignal]       = useState(null);
   const [maToggles, setMaToggles] = useState({ ma5: true, ma9: true, ma21: true, ma50: true, ma200: true });
-  const [overlays, setOverlays] = useState({ supertrend: true, vwap: true, bollinger: true });
+  const [overlays, setOverlays]   = useState({ supertrend: true, vwap: true, bollinger: true });
 
-  const wsRef = useRef(null);
+  const wsRef       = useRef(null);
   const chartColRef = useRef(null);
-  const searchRef = useRef(null);
+  const searchRef   = useRef(null);
+  const candleRef   = useRef(null);
+  const macdRef     = useRef(null);
+  const rsiRef      = useRef(null);
+  const volRef      = useRef(null);
+  const adxRef      = useRef(null);
 
-  const candleRef = useRef(null);
-  const macdRef = useRef(null);
-  const rsiRef = useRef(null);
-  const volRef = useRef(null);
-  const adxRef = useRef(null);
-
-  // ── When initialSymbol prop changes (scanner selects a new stock), update ──
+  // ── Sync when initialSymbol prop changes ──────────────────────────────────
   useEffect(() => {
     if (initialSymbol && initialSymbol !== symbol) {
       setSymbol(initialSymbol);
@@ -421,13 +431,30 @@ useEffect(() => {
     }
   }, [initialSymbol]); // eslint-disable-line
 
-  // ── Listen for open-terminal events (fired by scanner Full Chart buttons) ──
+  // ── Sync when initialLtp prop changes ─────────────────────────────────────
+  useEffect(() => {
+    if (initialLtp && Number(initialLtp) > 0) {
+      const n = Number(initialLtp);
+      setSeedLtp(n);
+      sessionStorage.setItem("terminal_ltp", String(n));
+    }
+  }, [initialLtp]);
+
+  // ── Listen for open-terminal events fired by scanner Full Chart buttons ───
+  // FIX: now captures ltp from event and updates seedLtp + sessionStorage
   useEffect(() => {
     const handler = (e) => {
       if (e.detail?.symbol) {
         setSymbol(e.detail.symbol);
         setLiveData(null);
         sessionStorage.setItem("terminal_symbol", e.detail.symbol);
+
+        // ← THE KEY FIX: capture ltp from the event
+        if (e.detail.ltp && Number(e.detail.ltp) > 0) {
+          const n = Number(e.detail.ltp);
+          setSeedLtp(n);
+          sessionStorage.setItem("terminal_ltp", String(n));
+        }
       }
     };
     window.addEventListener("open-terminal", handler);
@@ -435,87 +462,92 @@ useEffect(() => {
   }, []);
 
   const TF_CONFIG = {
-    "5m":  { n: 80, trend: 0.01, vol: 0.8 },
-    "15m": { n: 80, trend: 0.02, vol: 1.2 },
-    "1H":  { n: 80, trend: 0.03, vol: 2.0 },
-    "4H":  { n: 80, trend: 0.04, vol: 3.5 },
-    "1D":  { n: 120, trend: 0.02, vol: 5.0 },
-    "1W":  { n: 60, trend: 0.08, vol: 9.0 },
-    "1M":  { n: 36, trend: 0.18, vol: 14.0 },
+    "5m":  { n: 80,  trend: 0.01, vol: 0.8  },
+    "15m": { n: 80,  trend: 0.02, vol: 1.2  },
+    "1H":  { n: 80,  trend: 0.03, vol: 2.0  },
+    "4H":  { n: 80,  trend: 0.04, vol: 3.5  },
+    "1D":  { n: 120, trend: 0.02, vol: 5.0  },
+    "1W":  { n: 60,  trend: 0.08, vol: 9.0  },
+    "1M":  { n: 36,  trend: 0.18, vol: 14.0 },
   };
 
-  function symHash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff; return h; }
-
-  // ── Connect to Socket.io ──────────────────────────────────────────────────
+  // ── Connect to Socket.io for live prices ──────────────────────────────────
   useEffect(() => {
     setWsStatus("connecting");
     setLiveData(null);
 
-    if (wsRef.current) {
-      wsRef.current.disconnect?.();
-      wsRef.current = null;
-    }
+    if (wsRef.current) { wsRef.current.disconnect?.(); wsRef.current = null; }
 
     import("socket.io-client").then(({ io }) => {
       const sock = io({ transports: ["websocket", "polling"] });
       wsRef.current = sock;
 
-      sock.on("connect", () => {
-        setWsStatus("live");
-      });
+      sock.on("connect", () => setWsStatus("live"));
 
       sock.on("ltp-tick", (msg) => {
         if (!msg || !msg.symbol) return;
         const sym = msg.symbol.replace("NSE_EQ|", "").replace("BSE_EQ|", "");
         if (sym !== symbol) return;
+        const ltpVal = msg.ltp ?? msg.last_price;
         setLiveData({
-          ltp:       msg.ltp ?? msg.last_price,
-          open:      msg.open ?? msg.ohlc?.open,
-          high:      msg.high ?? msg.ohlc?.high,
-          low:       msg.low  ?? msg.ohlc?.low,
-          close:     msg.ltp,
+          ltp:       ltpVal,
+          open:      msg.open  ?? msg.ohlc?.open,
+          high:      msg.high  ?? msg.ohlc?.high,
+          low:       msg.low   ?? msg.ohlc?.low,
+          close:     ltpVal,
           volume:    msg.volume ?? msg.vol,
           change:    msg.change,
           changePct: msg.changePct ?? msg.percentChange,
         });
+        // Once we get a live tick, update seedLtp so chart stays anchored
+        if (ltpVal > 0) {
+          setSeedLtp(ltpVal);
+          sessionStorage.setItem("terminal_ltp", String(ltpVal));
+        }
         setWsStatus("live");
       });
 
-      sock.on("disconnect", () => setWsStatus("error"));
+      sock.on("disconnect",    () => setWsStatus("error"));
       sock.on("connect_error", () => setWsStatus("error"));
     }).catch(() => setWsStatus("error"));
 
-    return () => {
-      if (wsRef.current) wsRef.current.disconnect?.();
-    };
+    return () => { if (wsRef.current) wsRef.current.disconnect?.(); };
   }, [symbol]);
 
   // ── Generate candles + indicators ─────────────────────────────────────────
+  // BASE PRICE PRIORITY: live ltp → seedLtp (from scanner) → hash fallback
   useEffect(() => {
     const cfg = TF_CONFIG[tf] || TF_CONFIG["1D"];
     const h = symHash(symbol);
-    const basePrice = liveData?.ltp ?? seedLtp ?? (100 + (h % 1400));
-    const candles = genCandles(cfg.n, basePrice * 0.88, cfg.trend, cfg.vol * (basePrice / 500), h + tf.charCodeAt(0) * 97);
 
+    // FIX: use seedLtp as fallback before the dumb hash
+    const basePrice = liveData?.ltp ?? seedLtp ?? (100 + (h % 1400));
+
+    // Scale volatility proportionally to the stock price
+    const scaledVol = cfg.vol * (basePrice / 500);
+
+    const candles = genCandles(cfg.n, basePrice * 0.88, cfg.trend, scaledVol, h + tf.charCodeAt(0) * 97);
+
+    // Patch last candle with live data if available
     if (liveData?.ltp) {
       const last = candles[candles.length - 1];
       last.c = liveData.ltp;
-      last.o = liveData.open ?? last.o;
-      last.h = Math.max(liveData.high ?? last.h, liveData.ltp);
-      last.l = Math.min(liveData.low ?? last.l, liveData.ltp);
+      last.o = liveData.open   ?? last.o;
+      last.h = Math.max(liveData.high  ?? last.h, liveData.ltp);
+      last.l = Math.min(liveData.low   ?? last.l, liveData.ltp);
       last.v = liveData.volume ?? last.v;
     }
 
-    const ma5 = calcMA(candles, 5), ma9 = calcMA(candles, 9);
-    const ma21 = calcMA(candles, 21), ma50 = calcMA(candles, 50), ma200 = calcMA(candles, 200);
-    const rsi = calcRSI(candles, 14);
-    const macd = calcMACD(candles);
-    const bb = calcBB(candles, 20, 2);
-    const atr = calcATR(candles, 14);
-    const adx = calcADX(candles, 14);
-    const stoch = calcStoch(candles, 14, 3);
-    const obv = calcOBV(candles);
-    const vwap = calcVWAP(candles);
+    const ma5  = calcMA(candles, 5),   ma9  = calcMA(candles, 9);
+    const ma21 = calcMA(candles, 21),  ma50 = calcMA(candles, 50), ma200 = calcMA(candles, 200);
+    const rsi        = calcRSI(candles, 14);
+    const macd       = calcMACD(candles);
+    const bb         = calcBB(candles, 20, 2);
+    const atr        = calcATR(candles, 14);
+    const adx        = calcADX(candles, 14);
+    const stoch      = calcStoch(candles, 14, 3);
+    const obv        = calcOBV(candles);
+    const vwap       = calcVWAP(candles);
     const supertrend = calcSuperTrend(candles, 10, 3);
 
     const ind = { candles, ma5, ma9, ma21, ma50, ma200, rsi, macd, bb, atr, adx, stoch, obv, vwap, supertrend };
@@ -524,7 +556,7 @@ useEffect(() => {
     const lastCandle = candles[candles.length - 1];
     const ltp = liveData?.ltp ?? lastCandle.c;
     setSignal(computeSignal(ind, lastCandle, ltp));
-  }, [symbol, tf, liveData?.ltp, seedLtp]);
+  }, [symbol, tf, liveData?.ltp, seedLtp]); // seedLtp in deps so chart redraws when it arrives
 
   // ── Draw canvases ─────────────────────────────────────────────────────────
   const drawAll = useCallback(() => {
@@ -536,14 +568,14 @@ useEffect(() => {
     const refs = [candleRef, macdRef, rsiRef, volRef, adxRef];
     refs.forEach((r, i) => {
       if (!r.current) return;
-      r.current.width = W;
+      r.current.width  = W;
       r.current.height = Math.floor(H * PANE_HEIGHTS[i]);
     });
     drawCandlePane(indicators, W, Math.floor(H * PANE_HEIGHTS[0]));
-    drawMACDPane(indicators, W, Math.floor(H * PANE_HEIGHTS[1]));
-    drawRSIPane(indicators, W, Math.floor(H * PANE_HEIGHTS[2]));
-    drawVolPane(indicators, W, Math.floor(H * PANE_HEIGHTS[3]));
-    drawADXPane(indicators, W, Math.floor(H * PANE_HEIGHTS[4]));
+    drawMACDPane(indicators,   W, Math.floor(H * PANE_HEIGHTS[1]));
+    drawRSIPane(indicators,    W, Math.floor(H * PANE_HEIGHTS[2]));
+    drawVolPane(indicators,    W, Math.floor(H * PANE_HEIGHTS[3]));
+    drawADXPane(indicators,    W, Math.floor(H * PANE_HEIGHTS[4]));
   }, [indicators, maToggles, overlays]);
 
   useEffect(() => { drawAll(); }, [drawAll]);
@@ -575,7 +607,7 @@ useEffect(() => {
       ctx.closePath(); ctx.fill();
       drawLine(ctx, d.bb.upper, indices, minP, maxP, h, "rgba(88,166,255,0.45)", 0.8);
       drawLine(ctx, d.bb.lower, indices, minP, maxP, h, "rgba(88,166,255,0.45)", 0.8);
-      drawLine(ctx, d.bb.mid, indices, minP, maxP, h, "rgba(88,166,255,0.25)", 0.6);
+      drawLine(ctx, d.bb.mid,   indices, minP, maxP, h, "rgba(88,166,255,0.25)", 0.6);
     }
     if (overlays.supertrend) {
       for (let i = 1; i < n; i++) {
@@ -588,8 +620,10 @@ useEffect(() => {
     }
     if (overlays.vwap) drawLine(ctx, d.vwap, indices, minP, maxP, h, "rgba(240,136,62,0.8)", 1.5);
     const maConf = [
-      { key: "ma5", data: d.ma5, color: "#ff6b6b" }, { key: "ma9", data: d.ma9, color: "#ffd93d" },
-      { key: "ma21", data: d.ma21, color: "#6bcb77" }, { key: "ma50", data: d.ma50, color: "#4ecdc4" },
+      { key: "ma5",   data: d.ma5,   color: "#ff6b6b" },
+      { key: "ma9",   data: d.ma9,   color: "#ffd93d" },
+      { key: "ma21",  data: d.ma21,  color: "#6bcb77" },
+      { key: "ma50",  data: d.ma50,  color: "#4ecdc4" },
       { key: "ma200", data: d.ma200, color: "#a8e6cf" },
     ];
     maConf.forEach(m => { if (!maToggles[m.key]) return; drawLine(ctx, m.data, indices, minP, maxP, h, m.color, m.key === "ma200" ? 1.8 : 1.2); });
@@ -628,7 +662,7 @@ useEffect(() => {
       ctx.fillStyle = v >= 0 ? "rgba(38,166,65,0.7)" : "rgba(248,81,73,0.7)";
       ctx.fillRect(x - bw2 / 2, Math.min(y1, zero), bw2, Math.abs(y1 - zero));
     });
-    drawLine(ctx, d.macd.macd, indices, minV, maxV, h, "#58a6ff", 1.2, 12);
+    drawLine(ctx, d.macd.macd,   indices, minV, maxV, h, "#58a6ff", 1.2, 12);
     drawLine(ctx, d.macd.signal, indices, minV, maxV, h, "#f0883e", 1.2, 12);
   }
 
@@ -639,15 +673,15 @@ useEffect(() => {
     const n = d.candles.length, pad = 30, p2 = 10, cw = (w - pad * 2) / n;
     const xOf = i => pad + i * cw + cw / 2, indices = d.candles.map((_, i) => xOf(i));
     ctx.fillStyle = "rgba(248,81,73,0.07)"; ctx.fillRect(0, toY(80, 0, 100, h, p2), w, toY(70, 0, 100, h, p2) - toY(80, 0, 100, h, p2));
-    ctx.fillStyle = "rgba(38,166,65,0.07)"; ctx.fillRect(0, toY(30, 0, 100, h, p2), w, toY(20, 0, 100, h, p2) - toY(30, 0, 100, h, p2));
+    ctx.fillStyle = "rgba(38,166,65,0.07)";  ctx.fillRect(0, toY(30, 0, 100, h, p2), w, toY(20, 0, 100, h, p2) - toY(30, 0, 100, h, p2));
     [70, 50, 30].forEach(v => {
       ctx.strokeStyle = "rgba(48,54,61,0.8)"; ctx.lineWidth = 0.5; ctx.setLineDash(v === 50 ? [] : [3, 3]);
       ctx.beginPath(); ctx.moveTo(0, toY(v, 0, 100, h, p2)); ctx.lineTo(w, toY(v, 0, 100, h, p2)); ctx.stroke(); ctx.setLineDash([]);
       ctx.fillStyle = "#6e7681"; ctx.font = "9px JetBrains Mono"; ctx.fillText(v, 2, toY(v, 0, 100, h, p2) + 3);
     });
-    drawLine(ctx, d.rsi, indices, 0, 100, h, "#f0883e", 1.3, p2);
-    drawLine(ctx, d.stoch.k, indices, 0, 100, h, "rgba(188,140,255,0.8)", 1, p2);
-    drawLine(ctx, d.stoch.d, indices, 0, 100, h, "rgba(88,166,255,0.7)", 0.8, p2);
+    drawLine(ctx, d.rsi,     indices, 0, 100, h, "#f0883e",              1.3, p2);
+    drawLine(ctx, d.stoch.k, indices, 0, 100, h, "rgba(188,140,255,0.8)", 1,   p2);
+    drawLine(ctx, d.stoch.d, indices, 0, 100, h, "rgba(88,166,255,0.7)",  0.8, p2);
   }
 
   function drawVolPane(d, w, h) {
@@ -675,9 +709,9 @@ useEffect(() => {
     ctx.strokeStyle = "rgba(240,136,62,0.4)"; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.moveTo(0, toY(25, 0, 80, h, p2)); ctx.lineTo(w, toY(25, 0, 80, h, p2)); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = "#6e7681"; ctx.font = "9px JetBrains Mono"; ctx.fillText("25", 2, toY(25, 0, 80, h, p2) + 3);
-    drawLine(ctx, d.adx.adx, indices, 0, 80, h, "#f0883e", 1.5, p2);
-    drawLine(ctx, d.adx.pdi, indices, 0, 80, h, "rgba(38,166,65,0.7)", 1, p2);
-    drawLine(ctx, d.adx.ndi, indices, 0, 80, h, "rgba(248,81,73,0.7)", 1, p2);
+    drawLine(ctx, d.adx.adx, indices, 0, 80, h, "#f0883e",              1.5, p2);
+    drawLine(ctx, d.adx.pdi, indices, 0, 80, h, "rgba(38,166,65,0.7)",  1,   p2);
+    drawLine(ctx, d.adx.ndi, indices, 0, 80, h, "rgba(248,81,73,0.7)",  1,   p2);
   }
 
   // ── Autocomplete ──────────────────────────────────────────────────────────
@@ -688,66 +722,79 @@ useEffect(() => {
     setAcList(filtered); setShowAc(true); setAcIdx(-1);
   }, [search]);
 
-  function selectSymbol(sym) { setSymbol(sym); setSearch(""); setShowAc(false); setLiveData(null); }
+  function selectSymbol(sym) {
+    // Clear seedLtp when user manually picks a different symbol
+    setSeedLtp(null);
+    sessionStorage.removeItem("terminal_ltp");
+    setSymbol(sym);
+    setSearch("");
+    setShowAc(false);
+    setLiveData(null);
+  }
 
   function onSearchKey(e) {
     if (!showAc) return;
-    if (e.key === "ArrowDown") { e.preventDefault(); setAcIdx(i => Math.min(i + 1, acList.length - 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setAcIdx(i => Math.max(i - 1, 0)); }
+    if (e.key === "ArrowDown")  { e.preventDefault(); setAcIdx(i => Math.min(i + 1, acList.length - 1)); }
+    else if (e.key === "ArrowUp")   { e.preventDefault(); setAcIdx(i => Math.max(i - 1, 0)); }
     else if (e.key === "Enter") { if (acIdx >= 0 && acList[acIdx]) { selectSymbol(acList[acIdx].sym); } else if (search.trim()) { selectSymbol(search.trim().toUpperCase()); } }
     else if (e.key === "Escape") { setShowAc(false); }
   }
 
-  // ── Derived values ────────────────────────────────────────────────────────
-  const last = indicators?.candles?.length - 1 ?? 0;
+  // ── Derived display values ────────────────────────────────────────────────
+  const last  = indicators?.candles?.length - 1 ?? 0;
   const lastC = indicators?.candles?.[last];
-  const ltp = liveData?.ltp ?? lastC?.c ?? 0;
-  const open = liveData?.open ?? lastC?.o ?? 0;
-  const high = liveData?.high ?? lastC?.h ?? 0;
-  const low = liveData?.low ?? lastC?.l ?? 0;
-  const vol = liveData?.volume ?? lastC?.v ?? 0;
-  const diff = ltp - open;
-  const pct = open ? (diff / open * 100) : 0;
+  const ltp   = liveData?.ltp ?? lastC?.c ?? 0;
+  const open  = liveData?.open   ?? lastC?.o ?? 0;
+  const high  = liveData?.high   ?? lastC?.h ?? 0;
+  const low   = liveData?.low    ?? lastC?.l ?? 0;
+  const vol   = liveData?.volume ?? lastC?.v ?? 0;
+  const diff  = ltp - open;
+  const pct   = open ? (diff / open * 100) : 0;
   const isPos = diff >= 0;
 
-  const rsiV = indicators?.rsi?.[last];
-  const macdV = indicators?.macd?.macd?.[last];
-  const sigV = indicators?.macd?.signal?.[last];
-  const histV = indicators?.macd?.hist?.[last];
+  const rsiV      = indicators?.rsi?.[last];
+  const macdV     = indicators?.macd?.macd?.[last];
+  const sigV      = indicators?.macd?.signal?.[last];
+  const histV     = indicators?.macd?.hist?.[last];
   const prevHistV = indicators?.macd?.hist?.[last - 1];
-  const adxV = indicators?.adx?.adx?.[last];
-  const pdiV = indicators?.adx?.pdi?.[last];
-  const ndiV = indicators?.adx?.ndi?.[last];
-  const stDir = indicators?.supertrend?.dir?.[last];
-  const vwapV = indicators?.vwap?.[last];
-  const atrV = indicators?.atr?.[last];
-  const bbu = indicators?.bb?.upper?.[last];
-  const bbm = indicators?.bb?.mid?.[last];
-  const bbl = indicators?.bb?.lower?.[last];
-  const sk = indicators?.stoch?.k?.[last];
-  const sd = indicators?.stoch?.d?.[last];
-  const obv = indicators?.obv;
-  const obvTrend = obv && obv.length > 5 ? (obv[last] > obv[last - 5] ? "↑ Rising" : "↓ Falling") : "--";
-  const avgVol = indicators?.candles?.slice(Math.max(0, last - 19), last + 1).reduce((a, c) => a + c.v, 0) / Math.min(20, last + 1);
-  const ma5V = indicators?.ma5?.[last], ma9V = indicators?.ma9?.[last];
-  const ma21V = indicators?.ma21?.[last], ma50V = indicators?.ma50?.[last], ma200V = indicators?.ma200?.[last];
+  const adxV      = indicators?.adx?.adx?.[last];
+  const pdiV      = indicators?.adx?.pdi?.[last];
+  const ndiV      = indicators?.adx?.ndi?.[last];
+  const stDir     = indicators?.supertrend?.dir?.[last];
+  const vwapV     = indicators?.vwap?.[last];
+  const atrV      = indicators?.atr?.[last];
+  const bbu       = indicators?.bb?.upper?.[last];
+  const bbm       = indicators?.bb?.mid?.[last];
+  const bbl       = indicators?.bb?.lower?.[last];
+  const sk        = indicators?.stoch?.k?.[last];
+  const sd        = indicators?.stoch?.d?.[last];
+  const obv       = indicators?.obv;
+  const obvTrend  = obv && obv.length > 5 ? (obv[last] > obv[last - 5] ? "↑ Rising" : "↓ Falling") : "--";
+  const avgVol    = indicators?.candles?.slice(Math.max(0, last - 19), last + 1).reduce((a, c) => a + c.v, 0) / Math.min(20, last + 1);
+  const ma5V      = indicators?.ma5?.[last],  ma9V  = indicators?.ma9?.[last];
+  const ma21V     = indicators?.ma21?.[last], ma50V = indicators?.ma50?.[last], ma200V = indicators?.ma200?.[last];
   const bullStack = [ma5V, ma9V, ma21V, ma50V, ma200V].every((v, i, a) => i === 0 || !v || !a[i - 1] || a[i - 1] > v);
-  const rsiSig = rsiV > 70 ? "OBOUGHT" : rsiV < 30 ? "OVERSOLD" : "NEUTRAL";
-  const cross = histV !== null && prevHistV !== null ? (histV > 0 && prevHistV <= 0 ? "BULL CROSS" : histV < 0 && prevHistV >= 0 ? "BEAR CROSS" : histV > 0 ? "BULLISH" : "BEARISH") : "--";
-  const atrVal = atrV ? atrV : 0;
+  const rsiSig    = rsiV > 70 ? "OBOUGHT" : rsiV < 30 ? "OVERSOLD" : "NEUTRAL";
+  const cross     = histV !== null && prevHistV !== null
+    ? (histV > 0 && prevHistV <= 0 ? "BULL CROSS" : histV < 0 && prevHistV >= 0 ? "BEAR CROSS" : histV > 0 ? "BULLISH" : "BEARISH")
+    : "--";
+  const atrVal  = atrV ?? 0;
   const stopLoss = (ltp - 1.8 * atrVal).toFixed(2);
-  const target = (ltp + 3.8 * atrVal).toFixed(2);
-  const rr = atrVal > 0 ? `1:${(3.8 / 1.8).toFixed(1)}` : "--";
-  const fmtVol = v => v > 1e6 ? (v / 1e6).toFixed(2) + "M" : v > 1e3 ? (v / 1e3).toFixed(0) + "K" : v;
-  const statusDot = wsStatus === "live" ? "" : wsStatus === "connecting" ? "amber" : "red";
+  const target   = (ltp + 3.8 * atrVal).toFixed(2);
+  const rr       = atrVal > 0 ? `1:${(3.8 / 1.8).toFixed(1)}` : "--";
+  const fmtVol   = v => v > 1e6 ? (v / 1e6).toFixed(2) + "M" : v > 1e3 ? (v / 1e3).toFixed(0) + "K" : v;
+  const statusDot  = wsStatus === "live" ? "" : wsStatus === "connecting" ? "amber" : "red";
   const statusText = wsStatus === "live" ? "LIVE" : wsStatus === "connecting" ? "CONNECTING..." : "DISCONNECTED";
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <>
       <style>{css}</style>
       <div className="st-root">
+        {/* ── Header ── */}
         <div className="st-header">
           <div className="st-logo">MKT<span>▲</span></div>
+
           <div className="st-search-wrap" style={{ position: "relative" }}>
             <span className="st-search-icon">⌕</span>
             <input
@@ -771,30 +818,40 @@ useEffect(() => {
               </div>
             )}
           </div>
+
           <div className="st-dropdown-wrap">
             <select className="st-dropdown" value={symbol} onChange={e => selectSymbol(e.target.value)}>
               {POPULAR_STOCKS.map(s => <option key={s.sym} value={s.sym}>{s.sym} — {s.name}</option>)}
             </select>
             <span className="st-dropdown-arrow">▾</span>
           </div>
+
           <div className="st-price-block">
             <span className="st-price">₹{ltp.toFixed(2)}</span>
             <span className={isPos ? "st-chg-pos" : "st-chg-neg"}>
               {isPos ? "+" : ""}{diff.toFixed(2)} ({isPos ? "+" : ""}{pct.toFixed(2)}%)
             </span>
           </div>
+
           <div className="st-stats">
             <div className="st-stat"><div className="st-stat-l">Open</div><div className="st-stat-v">₹{open.toFixed(2)}</div></div>
             <div className="st-stat"><div className="st-stat-l">High</div><div className="st-stat-v" style={{ color: "var(--green)" }}>₹{high.toFixed(2)}</div></div>
             <div className="st-stat"><div className="st-stat-l">Low</div><div className="st-stat-v" style={{ color: "var(--red)" }}>₹{low.toFixed(2)}</div></div>
             <div className="st-stat"><div className="st-stat-l">Volume</div><div className="st-stat-v">{fmtVol(vol)}</div></div>
           </div>
+
           <div className="st-connecting">
             <span className={`st-live-dot ${statusDot}`}></span>
             {statusText} · {symbol}
+            {seedLtp && !liveData && (
+              <span style={{ color: "var(--text3)", fontSize: 9, marginLeft: 4 }}>
+                (seed ₹{seedLtp.toFixed(0)})
+              </span>
+            )}
           </div>
         </div>
 
+        {/* ── Controls ── */}
         <div className="st-controls">
           <div className="st-tf-group">
             {["5m", "15m", "1H", "4H", "1D", "1W", "1M"].map(t => (
@@ -804,13 +861,14 @@ useEffect(() => {
           <div className="st-sep" />
           <div className="st-tog-group">
             {[
-              { key: "ma5", label: "MA5", color: "var(--ma5)", bg: "rgba(255,107,107,0.1)" },
-              { key: "ma9", label: "MA9", color: "var(--ma9)", bg: "rgba(255,217,61,0.1)" },
-              { key: "ma21", label: "MA21", color: "var(--ma21)", bg: "rgba(107,203,119,0.1)" },
-              { key: "ma50", label: "MA50", color: "var(--ma50)", bg: "rgba(78,205,196,0.1)" },
+              { key: "ma5",   label: "MA5",   color: "var(--ma5)",   bg: "rgba(255,107,107,0.1)" },
+              { key: "ma9",   label: "MA9",   color: "var(--ma9)",   bg: "rgba(255,217,61,0.1)"  },
+              { key: "ma21",  label: "MA21",  color: "var(--ma21)",  bg: "rgba(107,203,119,0.1)" },
+              { key: "ma50",  label: "MA50",  color: "var(--ma50)",  bg: "rgba(78,205,196,0.1)"  },
               { key: "ma200", label: "MA200", color: "var(--ma200)", bg: "rgba(168,230,207,0.1)" },
             ].map(m => (
-              <button key={m.key} className="st-tog" onClick={() => setMaToggles(p => ({ ...p, [m.key]: !p[m.key] }))}
+              <button key={m.key} className="st-tog"
+                onClick={() => setMaToggles(p => ({ ...p, [m.key]: !p[m.key] }))}
                 style={maToggles[m.key] ? { color: m.color, borderColor: m.color, background: m.bg } : {}}>
                 {m.label}
               </button>
@@ -820,10 +878,11 @@ useEffect(() => {
           <div className="st-tog-group">
             {[
               { key: "supertrend", label: "SuperTrend", color: "var(--purple)", bg: "rgba(188,140,255,0.1)" },
-              { key: "vwap", label: "VWAP", color: "var(--amber)", bg: "rgba(240,136,62,0.1)" },
-              { key: "bollinger", label: "BB", color: "var(--blue)", bg: "rgba(88,166,255,0.1)" },
+              { key: "vwap",       label: "VWAP",       color: "var(--amber)",  bg: "rgba(240,136,62,0.1)"  },
+              { key: "bollinger",  label: "BB",          color: "var(--blue)",   bg: "rgba(88,166,255,0.1)"  },
             ].map(o => (
-              <button key={o.key} className="st-tog" onClick={() => setOverlays(p => ({ ...p, [o.key]: !p[o.key] }))}
+              <button key={o.key} className="st-tog"
+                onClick={() => setOverlays(p => ({ ...p, [o.key]: !p[o.key] }))}
                 style={overlays[o.key] ? { color: o.color, borderColor: o.color, background: o.bg } : {}}>
                 {o.label}
               </button>
@@ -836,6 +895,7 @@ useEffect(() => {
           }}>↗ TradingView</button>
         </div>
 
+        {/* ── Main area ── */}
         <div className="st-main">
           <div className="st-chart-col" ref={chartColRef}>
             <div className="st-pane" style={{ flex: "0 0 42%" }}>
@@ -860,6 +920,7 @@ useEffect(() => {
             </div>
           </div>
 
+          {/* ── Side panel ── */}
           <div className="st-side">
             {signal && (
               <div className="st-sig-sec">
@@ -931,7 +992,7 @@ useEffect(() => {
             <div className="st-ind-sec">
               <div className="st-sec-title">Volatility</div>
               <div className="st-ind-row"><span className="st-ind-name">BB Upper</span><span className="st-ind-val" style={{ color: "var(--text2)" }}>{bbu ? "₹" + bbu.toFixed(1) : "--"}</span></div>
-              <div className="st-ind-row"><span className="st-ind-name">BB Mid</span><span className="st-ind-val" style={{ color: "var(--text2)" }}>{bbm ? "₹" + bbm.toFixed(1) : "--"}</span></div>
+              <div className="st-ind-row"><span className="st-ind-name">BB Mid</span>  <span className="st-ind-val" style={{ color: "var(--text2)" }}>{bbm ? "₹" + bbm.toFixed(1) : "--"}</span></div>
               <div className="st-ind-row"><span className="st-ind-name">BB Lower</span><span className="st-ind-val" style={{ color: "var(--text2)" }}>{bbl ? "₹" + bbl.toFixed(1) : "--"}</span></div>
               <div className="st-ind-row"><span className="st-ind-name">BB Width</span><span className="st-ind-val" style={{ color: "var(--blue)" }}>{bbu && bbl && bbm ? ((bbu - bbl) / bbm * 100).toFixed(1) + "%" : "--"}</span></div>
             </div>
@@ -955,8 +1016,10 @@ useEffect(() => {
             <div className="st-ma-sec">
               <div className="st-sec-title">Moving Averages</div>
               {[
-                { key: "ma5", val: ma5V, color: "var(--ma5)" }, { key: "ma9", val: ma9V, color: "var(--ma9)" },
-                { key: "ma21", val: ma21V, color: "var(--ma21)" }, { key: "ma50", val: ma50V, color: "var(--ma50)" },
+                { key: "ma5",   val: ma5V,   color: "var(--ma5)"   },
+                { key: "ma9",   val: ma9V,   color: "var(--ma9)"   },
+                { key: "ma21",  val: ma21V,  color: "var(--ma21)"  },
+                { key: "ma50",  val: ma50V,  color: "var(--ma50)"  },
                 { key: "ma200", val: ma200V, color: "var(--ma200)" },
               ].map(m => (
                 <div key={m.key} className="st-ma-row">
