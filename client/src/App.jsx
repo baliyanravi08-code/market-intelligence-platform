@@ -1013,13 +1013,6 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
 export default function App() {
   const [currentPage, setCurrentPage] = useState("dashboard");
 
-  // ── FIX: Listen for "open-terminal" event from MarketScanner Full Chart button
-  useEffect(() => {
-    const handler = () => setCurrentPage("terminal");
-    window.addEventListener("open-terminal", handler);
-    return () => window.removeEventListener("open-terminal", handler);
-  }, []);
-
   const [marketIndices,  setMarketIndices]  = useState([
     { name: "NIFTY 50",   price: "—", change: "—", pct: "—", up: null },
     { name: "SENSEX",     price: "—", change: "—", pct: "—", up: null },
