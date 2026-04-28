@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
-import StockTerminal from "./StockTerminal";
+import StockTerminal from "../components/StockTerminal";
 
 // ── Inline StockChart ─────────────────────────────────────────────────────────
 const TF_CHART_OPTIONS = [
