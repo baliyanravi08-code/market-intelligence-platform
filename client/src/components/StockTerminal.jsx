@@ -378,9 +378,17 @@ function drawLine(ctx, data, indices, min, max, h, color, lw = 1, pad = 18) {
 export default function StockTerminal({ initialSymbol }) {
   // ── initialSymbol prop: if provided (from scanner Full Chart), use it.
   // Fallback to sessionStorage, then "VBL".
-  const [symbol, setSymbol] = useState(() => {
-    return initialSymbol || sessionStorage.getItem("terminal_symbol") || "VBL";
-  });
+  const [symbol, setSymbol] = useState(
+  initialSymbol || sessionStorage.getItem("terminal_symbol") || "VBL"
+);
+
+// Force symbol update when initialSymbol prop arrives
+useEffect(() => {
+  if (initialSymbol) {
+    setSymbol(initialSymbol);
+    setLiveData(null);
+  }
+}, [initialSymbol]);
 
   const [search, setSearch] = useState("");
   const [acList, setAcList] = useState([]);
