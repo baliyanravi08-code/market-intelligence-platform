@@ -1,3 +1,4 @@
+// Only load .env locally — Render injects env vars automatically
 import { useEffect, useState, useRef } from "react";
 import { io as socketIO } from "socket.io-client";
 import "./App.css";
@@ -7,7 +8,7 @@ import ScoresPage from "./pages/ScoresPage";
 import OptionsIntelligencePage from "./pages/OptionsIntelligencePage";
 import MarketScannerPage from "./pages/MarketScannerPage";
 import GannBadge from "./components/GannBadge";
-import StockTerminal from "./components/StockTerminal"; // ← ADD THIS IMPORT (adjust path if StockTerminal.jsx is in /pages instead)
+import StockTerminal from "./components/StockTerminal";
 
 const SIGNAL_COLOR = {
   ORDER_ALERT:         { bg: "#00ff9c", fg: "#000" },
@@ -32,7 +33,7 @@ const MOBILE_TABS = [
   { key: "data",         label: "📊 Data"    },
   { key: "intel",        label: "⚡ Intel"   },
   { key: "options-intel",label: "📐 OI Intel"},
-  { key: "terminal",     label: "📈 Chart"   }, // ← ADDED
+  { key: "terminal",     label: "📈 Chart"   },
 ];
 
 function getCurrentQuarter() {
@@ -910,8 +911,8 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
   const isScores       = currentPage === "scores";
   const isOptionsIntel = currentPage === "options-intel";
   const isScanner      = currentPage === "scanner";
-  const isTerminal     = currentPage === "terminal"; // ← ADDED
-  const isAltPage      = isOptions || isScores || isOptionsIntel || isScanner || isTerminal; // ← ADDED isTerminal
+  const isTerminal     = currentPage === "terminal";
+  const isAltPage      = isOptions || isScores || isOptionsIntel || isScanner || isTerminal;
 
   return (
     <div className="header">
@@ -963,7 +964,6 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           {isScanner && <span className="options-nav-back">←</span>}
         </button>
 
-        {/* ── TERMINAL NAV BUTTON (NEW) ── */}
         <button
           className={`options-nav-btn${isTerminal ? " active" : ""}`}
           onClick={() => setCurrentPage(isTerminal ? "dashboard" : "terminal")}
@@ -1012,6 +1012,13 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState("dashboard");
+
+  // ── FIX: Listen for "open-terminal" event from MarketScanner Full Chart button
+  useEffect(() => {
+    const handler = () => setCurrentPage("terminal");
+    window.addEventListener("open-terminal", handler);
+    return () => window.removeEventListener("open-terminal", handler);
+  }, []);
 
   const [marketIndices,  setMarketIndices]  = useState([
     { name: "NIFTY 50",   price: "—", change: "—", pct: "—", up: null },
@@ -1421,7 +1428,7 @@ export default function App() {
     );
   }
 
-  // ── TERMINAL PAGE (NEW) ────────────────────────────────────────────────────
+  // ── TERMINAL PAGE ─────────────────────────────────────────────────────────
   if (currentPage === "terminal") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
@@ -1463,7 +1470,7 @@ export default function App() {
           {mobilePanelTab === "feed"          && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
           {mobilePanelTab === "data"          && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
           {mobilePanelTab === "options-intel" && <OptionsIntelligencePage socket={socket} />}
-          {mobilePanelTab === "terminal"      && <StockTerminal />}  {/* ← ADDED */}
+          {mobilePanelTab === "terminal"      && <StockTerminal />}
         </div>
       </div>
 

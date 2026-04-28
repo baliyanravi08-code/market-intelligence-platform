@@ -19,7 +19,6 @@ const startBSEListener      = require("./services/listeners/bseListener");
 const startNSEDealsListener = require("./services/listeners/nseDealsListener");
 const { startCoordinator }  = require("./coordinator");
 
-// FIX-RC: destructure restartWithNewToken alongside existing exports
 const {
   startStreamer, stopStreamer,
   restartWithNewToken,
@@ -143,7 +142,8 @@ async function saveTokenEverywhere(token, expiry) {
 }
 
 // ── Instrument master cache ───────────────────────────────────────────────────
-const MAX_INSTRUMENT_SYMBOLS = 800;
+// FIX: Increased from 800 to 5000 to cover all NSE + BSE EQ stocks
+const MAX_INSTRUMENT_SYMBOLS = 5000;
 let instrumentMap = {};
 
 async function loadInstrumentMaster() {
@@ -181,6 +181,7 @@ async function loadInstrumentMaster() {
 
       for (const inst of instruments) {
         if (inst.segment === segment && inst.instrument_type === "EQ") {
+          // NSE takes priority — only set BSE key if NSE key not already present
           if (!map[inst.trading_symbol] || segment === "NSE_EQ") {
             map[inst.trading_symbol] = inst.instrument_key;
           }
@@ -190,6 +191,7 @@ async function loadInstrumentMaster() {
     }
 
     const entries = Object.entries(map);
+    // FIX: Use increased cap of MAX_INSTRUMENT_SYMBOLS (5000)
     instrumentMap = entries.length > MAX_INSTRUMENT_SYMBOLS
       ? Object.fromEntries(entries.slice(0, MAX_INSTRUMENT_SYMBOLS))
       : map;
@@ -197,7 +199,7 @@ async function loadInstrumentMaster() {
     const dir = path.dirname(INSTRUMENT_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(INSTRUMENT_FILE, JSON.stringify({ _ts: Date.now(), map }), "utf8");
-    console.log(`✅ Instrument master: ${Object.keys(instrumentMap).length} symbols in RAM (capped from ${entries.length})`);
+    console.log(`✅ Instrument master: ${Object.keys(instrumentMap).length} symbols in RAM (from ${entries.length} total)`);
     _pushMapToGann(instrumentMap);
   } catch (e) {
     console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
@@ -247,12 +249,30 @@ function _pushMapToGann(map) {
 
 function getInstrumentMap() { return instrumentMap; }
 
-// ── Token helpers ─────────────────────────────────────────────────────────────
+// ── FIX: Full instrument map lookup (for BSE-only stocks not in RAM cap) ──────
+// Reads the full untruncated map from disk when a symbol isn't in instrumentMap
+function getInstrumentKeyFull(symbol) {
+  // 1. Check RAM map first (fast path)
+  if (instrumentMap[symbol]) return instrumentMap[symbol];
 
-// FIX: Validate the token is actually alive against Upstox API.
-// Upstox invalidates tokens at midnight IST regardless of the stored expiresAt
-// timestamp, so trusting the DB timestamp alone causes a 401 loop on every
-// morning restart until the user visits /auth/upstox.
+  // 2. Fall back to full disk map (covers BSE-only stocks like COHANCE)
+  try {
+    if (fs.existsSync(INSTRUMENT_FILE)) {
+      const cached  = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
+      const fullMap = cached.map || {};
+      if (fullMap[symbol]) {
+        console.log(`📍 Symbol ${symbol} found in full disk map (BSE fallback): ${fullMap[symbol]}`);
+        return fullMap[symbol];
+      }
+    }
+  } catch (e) {
+    console.warn(`⚠️ Full instrument map lookup failed for ${symbol}:`, e.message);
+  }
+
+  return null;
+}
+
+// ── Token helpers ─────────────────────────────────────────────────────────────
 async function validateTokenLive(token) {
   try {
     const r = await axios.get("https://api.upstox.com/v2/user/profile", {
@@ -262,8 +282,6 @@ async function validateTokenLive(token) {
     return r.status === 200;
   } catch (e) {
     if (e.response?.status === 401) return false;
-    // Network error (e.g. Render cold-start with no connectivity yet) —
-    // give the benefit of the doubt so we don't block startup on flaky net.
     console.warn("⚠️ Token live-check network error:", e.message, "— assuming token valid");
     return true;
   }
@@ -286,9 +304,7 @@ async function loadToken() {
           return;
         } else {
           console.log("❌ MongoDB token is DEAD (Upstox rejected it) — visit /auth/upstox to refresh");
-          // Remove the stale token from DB so we don't keep retrying it
           try { await Model.deleteOne({ service: "upstox" }); } catch (_) {}
-          // Do NOT set upstoxAccessToken — services will skip gracefully
           return;
         }
       } else if (doc) {
@@ -332,8 +348,6 @@ function clearToken() {
 }
 
 // ── MEMORY FIX: marketCapDB module-level cache ────────────────────────────────
-// Replaces per-request fs.readFileSync + JSON.parse in /api/events and /api/mcap.
-// Single parse every 10 minutes instead of on every HTTP request.
 let _mcapCache   = null;
 let _mcapCacheTS = 0;
 const MCAP_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
@@ -358,7 +372,7 @@ function getCachedMcap(limit) {
     console.log(`📊 mcapDB cached: ${_mcapCache.length} companies`);
   } catch (e) {
     console.warn("mcapDb cache refresh failed:", e.message);
-    _mcapCache = _mcapCache || []; // keep stale copy on error rather than crashing
+    _mcapCache = _mcapCache || [];
   }
   return limit ? _mcapCache.slice(0, limit) : _mcapCache;
 }
@@ -371,7 +385,6 @@ async function startApp() {
     console.warn("⚠️ loadInstrumentMaster threw unexpectedly:", e.message);
   });
 
-  // MEMORY FIX: pre-warm mcap cache at startup so first request is instant
   getCachedMcap();
 
   setOITickHandler(handleOITick);
@@ -383,15 +396,12 @@ async function startApp() {
   backtestEngine.init(io);
   setBacktestEngine(backtestEngine);
 
-  // ── Start WebSocket streamer (lightweight — always start) ─────────────────
-  // FIX-RC: use restartWithNewToken so backoff/attempt counters start clean
   if (upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0)) {
     setTimeout(() => restartWithNewToken(upstoxAccessToken, io), 2000);
   } else {
     console.log("⚠️ No valid token at startup — visit /auth/upstox to connect");
   }
 
-  // ── Heavy services — weekday only ─────────────────────────────────────────
   if (!IS_WEEKEND) {
     console.log("📡 Weekday: starting all market services...");
     startNSEOIListener(io, () => upstoxAccessToken);
@@ -405,7 +415,6 @@ async function startApp() {
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
   }
 
-  // ── Index candle fetcher (lightweight — always start) ────────────────────
   if (upstoxAccessToken) {
     setICFToken(upstoxAccessToken);
     console.log("✅ Index candle fetcher token set");
@@ -442,8 +451,6 @@ function scheduleDailyTokenCheck() {
     if (!valid) {
       console.log("⚠️ [TokenCheck] TOKEN EXPIRED — Visit /auth/upstox to refresh!");
     } else {
-      // FIX-RC: proactively restart stream at market open with fresh backoff counters.
-      // This recovers the case where max-retry was hit overnight due to network issues.
       console.log("✅ [TokenCheck] Token valid at market open — restarting stream");
       restartWithNewToken(upstoxAccessToken, io);
     }
@@ -462,7 +469,6 @@ const UPSTOX_INSTRUMENTS = {
 };
 const INDEX_NAMES = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
 
-// Step 1: Redirect to Upstox login
 app.get("/auth/upstox", (req, res) => {
   if (!UPSTOX_API_KEY || !UPSTOX_REDIRECT_URI)
     return res.send("ERR: UPSTOX_API_KEY or UPSTOX_REDIRECT_URI not set.");
@@ -473,7 +479,6 @@ app.get("/auth/upstox", (req, res) => {
   res.redirect(authUrl);
 });
 
-// Step 2: Upstox redirects here — exchange code for token
 app.get("/auth/upstox/callback", async (req, res) => {
   const { code } = req.query;
   if (!code) return res.send("ERR: No auth code received.");
@@ -494,14 +499,7 @@ app.get("/auth/upstox/callback", async (req, res) => {
     const newExpiry = Date.now() + (response.data.expires_in || 86400) * 1000;
 
     await saveTokenEverywhere(newToken, newExpiry);
-
     setICFToken(newToken);
-
-    // FIX-RC: use restartWithNewToken instead of startStreamer so that
-    // reconnectAttempts and reconnectDelay are fully reset on every fresh login.
-    // Previously, a 401 loop could exhaust MAX_RECONNECT_ATTEMPTS and then a
-    // new login via /auth/upstox would still call startStreamer() which does NOT
-    // reset those counters — so the streamer would immediately give up again.
     restartWithNewToken(newToken, io);
 
     try {
@@ -528,7 +526,6 @@ app.get("/auth/upstox/callback", async (req, res) => {
   }
 });
 
-// Token status check
 app.get("/auth/upstox/status", (req, res) => {
   const connected = !!(upstoxAccessToken && Date.now() < (upstoxTokenExpiry || 0));
   res.json({
@@ -640,7 +637,7 @@ app.get("/api/debug/candles", async (req, res) => {
           tokenPresent:           !!(upstoxAccessToken),
           tokenType:              upstoxAccessToken === process.env.UPSTOX_ANALYTICS_TOKEN ? "analytics" : "algo",
           instrumentMapSize:      Object.keys(getInstrumentMap()).length,
-          instrumentKeyForSymbol: getInstrumentMap()[symbol] || null,
+          instrumentKeyForSymbol: getInstrumentKeyFull(symbol),
         },
       });
     }
@@ -660,8 +657,9 @@ app.get("/api/debug/candles", async (req, res) => {
 
 // ── /api/test-circuit ─────────────────────────────────────────────────────────
 app.get("/api/test-circuit", async (req, res) => {
+  // FIX: use getInstrumentKeyFull so BSE-only stocks work here too
   const symbol = req.query.symbol || "RELIANCE";
-  const ikey   = instrumentMap[symbol];
+  const ikey   = getInstrumentKeyFull(symbol);
   if (!ikey) return res.json({ error: `Symbol ${symbol} not in instrument map`, mapSize: Object.keys(instrumentMap).length });
   try {
     const r = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
@@ -676,12 +674,15 @@ app.get("/api/test-circuit", async (req, res) => {
 });
 
 // ── /api/candles/:symbol ──────────────────────────────────────────────────────
+// FIX: Uses getInstrumentKeyFull() which checks RAM map first, then falls back
+// to the full disk map — so BSE-only stocks like COHANCE now work correctly.
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const tf     = req.query.tf || "1day";
   const days   = parseInt(req.query.days || "30");
 
-  const instrKey = instrumentMap[symbol];
+  // FIX: getInstrumentKeyFull checks RAM (fast) then full disk map (BSE fallback)
+  const instrKey = getInstrumentKeyFull(symbol);
   if (!instrKey) {
     return res.json({ ok: false, error: `Symbol ${symbol} not found`, symbol });
   }
@@ -789,12 +790,11 @@ app.post("/api/option-chain/subscribe", (req, res) => {
 });
 
 // ── /api/events ───────────────────────────────────────────────────────────────
-// MEMORY FIX: mcapDb now served from getCachedMcap() — no file read per request
 app.get("/api/events", (req, res) => {
   try {
     const { getStored } = require("./coordinator");
     const stored = getStored();
-    const mcapDb = getCachedMcap(200); // ← cached, not re-parsed from disk
+    const mcapDb = getCachedMcap(200);
     res.json({
       bse:        getEvents("bse") || [],
       nse:        getEvents("nse") || [],
@@ -811,7 +811,6 @@ app.get("/api/events", (req, res) => {
 });
 
 // ── /api/mcap ─────────────────────────────────────────────────────────────────
-// MEMORY FIX: served from getCachedMcap() — no file read per request
 app.get("/api/mcap", (req, res) => {
   try {
     res.json(getCachedMcap(300));
@@ -907,8 +906,7 @@ app.get("/api/company/:code", async (req, res) => {
 app.get("/api/search/:query", async (req, res) => {
   try {
     const q = req.params.query.toLowerCase().trim();
-    // MEMORY FIX: use cached mcap for search instead of re-reading file
-    const cachedArr = getCachedMcap(0); // full list for search
+    const cachedArr = getCachedMcap(0);
     if (cachedArr.length > 0) {
       const localResults = cachedArr
         .filter(d => (d.company || "").toLowerCase().includes(q) || (d.code || "").toLowerCase().includes(q))
@@ -916,7 +914,6 @@ app.get("/api/search/:query", async (req, res) => {
         .map(d => ({ code: d.code, name: d.company || d.code, sector: d.sector || "", nseSymbol: d.nseSymbol || null, mcap: d.mcap || null }));
       if (localResults.length > 0) return res.json({ results: localResults });
     }
-    // Fallback: read file directly for search (needed for nseSymbol field not in cache)
     const mcapPath = path.join(__dirname, "data/marketCapDB.json");
     if (fs.existsSync(mcapPath)) {
       const raw = fs.readFileSync(mcapPath, "utf8").trim();
@@ -976,7 +973,8 @@ app.get("/api/scanner/technicals/:symbol", async (req, res) => {
       error: `No data for ${symbol} [${tf}]`,
       debug: {
         tokenPresent:       !!(upstoxAccessToken),
-        instrumentKeyFound: !!(getInstrumentMap()[symbol]),
+        // FIX: use getInstrumentKeyFull so BSE stocks show correct debug info
+        instrumentKeyFound: !!(getInstrumentKeyFull(symbol)),
       }
     });
     res.json(result);

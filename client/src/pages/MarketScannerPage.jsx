@@ -475,7 +475,10 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
           {/* ── FULL CHART BUTTON ── */}
           <button
             type="button"
-            onClick={() => window.open(`/VblTerminal.html?symbol=${encodeURIComponent(symbol)}`, "_blank")}
+            onClick={() => {
+  sessionStorage.setItem("terminal_symbol", symbol);
+  window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol } }));
+}}
             style={{
               background: "rgba(96,165,250,0.12)",
               border: "1px solid rgba(96,165,250,0.5)",
