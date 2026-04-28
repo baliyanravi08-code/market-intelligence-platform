@@ -1016,7 +1016,10 @@ const [terminalSymbol, setTerminalSymbol] = useState(null);
 
 useEffect(() => {
   const handler = (e) => {
-    if (e.detail?.symbol) setTerminalSymbol(e.detail.symbol);
+    if (e.detail?.symbol) {
+      sessionStorage.setItem("terminal_symbol", e.detail.symbol);
+      setTerminalSymbol(e.detail.symbol);
+    }
     setCurrentPage("terminal");
   };
   window.addEventListener("open-terminal", handler);
