@@ -1,18 +1,16 @@
+"use strict";
+
 /**
  * backtestEngine.js
  * Location: server/services/backtestEngine.js
  *
- * Fully automatic backtest engine:
- * - Receives live LTP ticks from upstoxStream
- * - Auto-resolves WIN/LOSS when price hits target or stop loss
- * - Intraday signals at 3:25 PM: resolved using LAST KNOWN LTP vs target/SL
- *   → WIN if lastLTP >= target, LOSS if lastLTP <= stopLoss, else EXPIRED with real P&L
- * - Swing signals carry forward
- * - All data stored in server/data/backtest_signals.json (no DB needed)
- * - Accuracy breakdown by: signal type, RSI, tech score, time, sector, stock
+ * FIX (this session):
+ *   Removed duplicate `backtest-live-tick` emit from onLTPTick().
+ *   upstoxStream.js already emits this event with richer data
+ *   (prevClose, change, changePct). The second emit from backtestEngine
+ *   was firing with only { symbol, price }, causing the frontend to receive
+ *   two conflicting events per tick — the second one stripped of change data.
  */
-
-"use strict";
 
 const fs   = require("fs");
 const path = require("path");
@@ -38,12 +36,10 @@ function saveData(data) {
 }
 
 // ── In-memory active signals (PENDING resolution only) ────────────────────────
-// Map: symbol → [signalRecord, ...]
 const activeSignals = new Map();
 
-// ── FIX: Track last known LTP per symbol ─────────────────────────────────────
-// This is used at 3:25 PM expiry to resolve based on actual last price
-const lastKnownLTP = new Map(); // symbol → price
+// ── Track last known LTP per symbol ──────────────────────────────────────────
+const lastKnownLTP = new Map();
 
 let ioRef = null;
 function setIO(io) { ioRef = io; }
@@ -63,16 +59,10 @@ function isMarketOpen() {
   const day = d.getDay();
   if (day === 0 || day === 6) return false;
   const mins = d.getHours() * 60 + d.getMinutes();
-  return mins >= 555 && mins <= 935; // 9:15 to 15:35
+  return mins >= 555 && mins <= 935;
 }
 
 // ── Capture a session of signals ──────────────────────────────────────────────
-/**
- * Call this from marketScanner.js after signals are generated.
- * Each signal object should have:
- *   symbol, signal (type), price/ltp (entry), target, stopLoss,
- *   rsi, techScore, sector, macd, isSwing (optional)
- */
 function captureSession(signals) {
   if (!signals || !signals.length) return { skipped: true, reason: "empty" };
 
@@ -109,7 +99,6 @@ function captureSession(signals) {
       techScore:   parseFloat(s.techScore || s.strength || s.score || 0),
       macd:        s.macd?.crossover || s.macdSignal || "NEUTRAL",
       isSwing,
-      // resolution fields (filled in when WIN/LOSS)
       status:      "PENDING",
       exitPrice:   null,
       exitTime:    null,
@@ -117,10 +106,9 @@ function captureSession(signals) {
       resolvedBy:  null,
       highReached: entry,
       lowReached:  entry,
-      lastLTP:     entry,  // FIX: track last LTP, starts at entry
+      lastLTP:     entry,
     };
 
-    // Register in live tracking map
     if (!activeSignals.has(record.symbol)) activeSignals.set(record.symbol, []);
     activeSignals.get(record.symbol).push(record);
 
@@ -147,10 +135,14 @@ function captureSession(signals) {
   return { success: true, sessionKey, count: processed.length };
 }
 
-// ── Live LTP tick — called from upstoxStream for every stock price update ─────
+// ── Live LTP tick ─────────────────────────────────────────────────────────────
+// FIX: Removed the duplicate `backtest-live-tick` emit that was at the bottom
+// of this function. upstoxStream.js already emits this event with full data:
+//   { symbol, price, prevClose, change, changePct }
+// The old emit here only had { symbol, price }, so the frontend received two
+// events per tick — the second one with incomplete data, clobbering the first.
 function onLTPTick(symbol, price) {
-  // FIX: Always update lastKnownLTP regardless of active signals
-  // This ensures we have the latest price at 3:25 PM expiry time
+  // Always update lastKnownLTP regardless of active signals
   lastKnownLTP.set(symbol, price);
 
   if (!activeSignals.has(symbol)) return;
@@ -158,10 +150,7 @@ function onLTPTick(symbol, price) {
   const pending = activeSignals.get(symbol).filter(s => s.status === "PENDING");
   if (!pending.length) return;
 
-  const resolvedIds = [];
-
   for (const sig of pending) {
-    // FIX: Update lastLTP on the signal record itself
     sig.lastLTP = price;
 
     if (price > sig.highReached) sig.highReached = price;
@@ -181,14 +170,13 @@ function onLTPTick(symbol, price) {
 
     if (hit) {
       _resolveSignal(sig, hit, price, `AUTO_${hit === "WIN" ? "TARGET" : "SL"}`);
-      resolvedIds.push(sig.signalId);
     }
   }
 
-  if (ioRef && resolvedIds.length === 0) {
-    // Emit live price for progress bars in UI (throttled — only if pending signals exist)
-    ioRef.emit("backtest-live-tick", { symbol, price });
-  }
+  // ─── REMOVED: duplicate backtest-live-tick emit ───────────────────────────
+  // DO NOT add ioRef.emit("backtest-live-tick", ...) here.
+  // upstoxStream.js handles this emit with complete data for all EQ ticks.
+  // ─────────────────────────────────────────────────────────────────────────
 }
 
 // ── Internal resolve ──────────────────────────────────────────────────────────
@@ -213,7 +201,6 @@ function _resolveSignal(sigRecord, result, exitPrice, resolvedBy) {
   if (idx !== -1) {
     data.signals[idx] = { ...data.signals[idx], ...sigRecord };
 
-    // Update session aggregates
     const sessKey = Object.keys(data.sessions).find(k => k.startsWith(sigRecord.date));
     if (sessKey && data.sessions[sessKey]) {
       data.sessions[sessKey].resolved++;
@@ -225,7 +212,6 @@ function _resolveSignal(sigRecord, result, exitPrice, resolvedBy) {
 
   console.log(`🎯 Backtest: ${sigRecord.symbol} → ${result} @ ₹${exitPrice} (${resolvedBy}) P&L: ${sigRecord.pnlPct}%`);
 
-  // FIX: Always emit resolved event so frontend mirrors the update
   if (ioRef) {
     ioRef.emit("backtest-resolved", {
       signalId:   sigRecord.signalId,
@@ -241,7 +227,6 @@ function _resolveSignal(sigRecord, result, exitPrice, resolvedBy) {
 
 // ── Manual WIN/LOSS override ──────────────────────────────────────────────────
 function manualResolve(signalId, result, exitPrice) {
-  // Check active map first
   for (const sigs of activeSignals.values()) {
     const sig = sigs.find(s => s.signalId === signalId);
     if (sig && sig.status === "PENDING") {
@@ -249,7 +234,6 @@ function manualResolve(signalId, result, exitPrice) {
       return { success: true };
     }
   }
-  // Fallback: load from disk and resolve
   const data = loadData();
   const sig  = data.signals.find(s => s.signalId === signalId);
   if (!sig) return { error: "Signal not found" };
@@ -257,14 +241,7 @@ function manualResolve(signalId, result, exitPrice) {
   return { success: true };
 }
 
-// ── FIX: Intraday expiry at 3:25 PM — resolve using LAST KNOWN LTP ────────────
-/**
- * For each PENDING intraday signal at 3:25 PM:
- *   - Use lastLTP (last price received from stream, or sig.lastLTP from in-memory)
- *   - If lastLTP >= target  → WIN  (price was at/above target at close)
- *   - If lastLTP <= stopLoss → LOSS (price was at/below SL at close)
- *   - Otherwise             → EXPIRED with real P&L calculated from lastLTP
- */
+// ── Intraday expiry at 3:25 PM ────────────────────────────────────────────────
 function runIntradayExpiry() {
   const today = todayStr();
   const data  = loadData();
@@ -275,8 +252,6 @@ function runIntradayExpiry() {
   for (const sig of data.signals) {
     if (sig.date !== today || sig.status !== "PENDING" || sig.isSwing) continue;
 
-    // FIX: Get best available last price
-    // Priority: live lastKnownLTP map → in-memory sig.lastLTP → sig.highReached → sig.entry
     const ltp = lastKnownLTP.get(sig.symbol)
              || sig.lastLTP
              || sig.highReached
@@ -303,7 +278,6 @@ function runIntradayExpiry() {
     else                        expiredCount++;
   }
 
-  // Remove expired intraday from active map
   for (const [sym, sigs] of activeSignals.entries()) {
     const remaining = sigs.filter(s => s.isSwing && s.status === "PENDING");
     if (!remaining.length) activeSignals.delete(sym);
@@ -312,7 +286,6 @@ function runIntradayExpiry() {
 
   console.log(`⏰ Backtest: intraday expiry — WIN:${winCount} LOSS:${lossCount} EXPIRED:${expiredCount}`);
 
-  // FIX: Emit a summary event so frontend can refresh its full state
   if (ioRef) {
     ioRef.emit("backtest-expiry-complete", {
       date: today,
@@ -331,7 +304,6 @@ function getAnalytics(days = 30) {
   cutoff.setDate(cutoff.getDate() - days);
   const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth()+1).padStart(2,"0")}-${String(cutoff.getDate()).padStart(2,"0")}`;
 
-  // FIX: Include EXPIRED in resolved set since we now calculate real P&L for them
   const RESOLVED = ["WIN","LOSS","MANUAL_WIN","MANUAL_LOSS","EXPIRED"];
   const signals  = data.signals.filter(s => s.date >= cutoffStr && RESOLVED.includes(s.status));
 
@@ -341,7 +313,6 @@ function getAnalytics(days = 30) {
     const expired = arr.filter(s => s.status === "EXPIRED").length;
     const losses  = arr.length - wins - expired;
     const avgPnl  = arr.reduce((sum, s) => sum + (s.pnlPct || 0), 0) / arr.length;
-    // Accuracy = wins out of (wins + losses), ignoring expired in denominator
     const resolved = wins + losses;
     return {
       wins, losses, expired,
@@ -351,13 +322,11 @@ function getAnalytics(days = 30) {
     };
   };
 
-  // By signal type
   const byType = {};
   for (const s of signals) {
     (byType[s.signalType] = byType[s.signalType] || []).push(s);
   }
 
-  // By RSI range
   const rsiRanges = { "<30": [], "30-50": [], "50-60": [], "60-70": [], ">70": [] };
   for (const s of signals) {
     const r = s.rsi;
@@ -368,7 +337,6 @@ function getAnalytics(days = 30) {
     else             rsiRanges[">70"].push(s);
   }
 
-  // By tech score
   const techRanges = { "<40": [], "40-60": [], "60-75": [], "75-90": [], ">90": [] };
   for (const s of signals) {
     const t = s.techScore;
@@ -379,7 +347,6 @@ function getAnalytics(days = 30) {
     else             techRanges[">90"].push(s);
   }
 
-  // By time slot
   const timeSlots = { "9:15-10:00": [], "10:00-11:30": [], "11:30-13:00": [], "13:00-15:25": [] };
   for (const s of signals) {
     const [h, m] = (s.captureTime || "09:15").split(":").map(Number);
@@ -390,19 +357,16 @@ function getAnalytics(days = 30) {
     else                 timeSlots["13:00-15:25"].push(s);
   }
 
-  // By sector (top 10)
   const bySector = {};
   for (const s of signals) {
     (bySector[s.sector] = bySector[s.sector] || []).push(s);
   }
 
-  // By stock (top 20 by count)
   const byStock = {};
   for (const s of signals) {
     (byStock[s.symbol] = byStock[s.symbol] || []).push(s);
   }
 
-  // Daily trend
   const dailyMap = {};
   for (const s of signals) {
     (dailyMap[s.date] = dailyMap[s.date] || []).push(s);
@@ -455,12 +419,8 @@ function reloadActiveSignals() {
   }
   if (count) console.log(`🔄 Backtest: reloaded ${count} active pending signals from disk`);
 }
-// ── FIX: Robust intraday expiry scheduler ────────────────────────────────────
-/**
- * Schedules expiry at 3:25 PM IST every trading day.
- * Also checks on startup: if it's already past 3:25 PM today and
- * there are still PENDING signals, run expiry immediately.
- */
+
+// ── Intraday expiry scheduler ─────────────────────────────────────────────────
 function scheduleIntradayExpiry() {
   const now = getIST();
   const exp = new Date(now);
@@ -469,8 +429,6 @@ function scheduleIntradayExpiry() {
   let ms = exp - now;
 
   if (ms <= 0) {
-    // FIX: If we're past 3:25 PM today (e.g. server restarted at 4 PM),
-    // check if there are still PENDING signals that need resolution
     const today = todayStr();
     const data  = loadData();
     const hasPending = data.signals.some(
@@ -482,13 +440,12 @@ function scheduleIntradayExpiry() {
       runIntradayExpiry();
     }
 
-    // Schedule for tomorrow 3:25 PM
     ms += 24 * 60 * 60 * 1000;
   }
 
   setTimeout(() => {
     runIntradayExpiry();
-    scheduleIntradayExpiry(); // reschedule for next day
+    scheduleIntradayExpiry();
   }, ms);
 
   const minsUntil = Math.round(ms / 60000);
@@ -497,7 +454,7 @@ function scheduleIntradayExpiry() {
   console.log(`⏰ Backtest: intraday expiry scheduled in ${hh}h ${mm}m`);
 }
 
-// ── Init — call from server.js ────────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────────────────────
 function init(io) {
   ioRef = io;
   reloadActiveSignals();

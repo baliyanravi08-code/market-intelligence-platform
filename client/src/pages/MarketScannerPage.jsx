@@ -142,13 +142,6 @@ function StockChart({ symbol, defaultTf }) {
   const chgPct = first?.open > 0 ? (chg / first.open) * 100 : 0;
   const isUp   = chg >= 0;
 
-  // ── Open terminal overlay for this symbol ──
-  const openFullChart = () => {
-    if (!symbol) return;
-    sessionStorage.setItem("terminal_symbol", symbol);
-    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol } }));
-  };
-
   return (
     <div style={{ background: CHART_COLORS.bg, border: "1px solid #1e2a3a", borderRadius: 8, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", borderBottom: "1px solid #0d1f35" }}>
@@ -433,8 +426,8 @@ function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
   );
 }
 
-// ── TechPanel with Full Chart button ─────────────────────────────────────────
-function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClose }) {
+// ── TechPanel — FIX 3: accepts livePrice prop for accurate seed LTP ───────────
+function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeChange, onClose }) {
   if (!symbol) return null;
 
   const scoreColor = tech
@@ -461,9 +454,9 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
     </div>
   );
 
-  // ── Fire open-terminal event with the currently-selected symbol ──
+  // ── FIX 3: Use livePrice (from livePriceMap) first, fall back to tech.ltp ──
   const handleFullChart = () => {
-    const ltp = tech?.ltp || tech?.entry || null;
+    const ltp = livePrice ?? tech?.ltp ?? tech?.entry ?? null;
     sessionStorage.setItem("terminal_symbol", symbol);
     if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
     window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol, ltp } }));
@@ -488,7 +481,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
           <div style={{ fontSize: 11, color: T.textSec }}>Technical Analysis · Multi-timeframe</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {/* ── FULL CHART BUTTON — opens terminal overlay with THIS symbol ── */}
           <button
             type="button"
             onClick={handleFullChart}
@@ -514,7 +506,6 @@ function TechPanel({ symbol, tech, loading, timeframe, onTimeframeChange, onClos
           >
             ↗ Full Chart
           </button>
-          {/* ── CLOSE BUTTON ── */}
           <button
             type="button"
             onClick={e => { e.preventDefault(); onClose(); }}
@@ -1213,8 +1204,9 @@ function ScannerBody() {
 
   // ── Terminal overlay state ──────────────────────────────────────────────────
   const [showTerminal,   setShowTerminal]   = useState(false);
-const [terminalSymbol, setTerminalSymbol] = useState(null);
-const [terminalLtp,    setTerminalLtp]    = useState(null);  // ← ADD
+  const [terminalSymbol, setTerminalSymbol] = useState(null);
+  const [terminalLtp,    setTerminalLtp]    = useState(null);
+
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
   const activeTFRef    = useRef("1day");
@@ -1223,19 +1215,21 @@ const [terminalLtp,    setTerminalLtp]    = useState(null);  // ← ADD
 
   useEffect(() => { activeTFRef.current = activeTF; }, [activeTF]);
 
-  // ── Listen for open-terminal events from any Full Chart button ─────────────
+  // ── FIX 1: Corrected open-terminal handler ─────────────────────────────────
+  // Was using non-existent setSymbol / setLiveData / setSeedLtp.
+  // showTerminal was never set to true so the overlay never opened.
   useEffect(() => {
     const handler = (e) => {
-  if (e.detail?.symbol) {
-    setSymbol(e.detail.symbol);
-    setLiveData(null);
-    sessionStorage.setItem("terminal_symbol", e.detail.symbol);
-    if (e.detail?.ltp) {
-      setSeedLtp(e.detail.ltp);
-      sessionStorage.setItem("terminal_ltp", String(e.detail.ltp));
-    }
-  }
-};
+      if (e.detail?.symbol) {
+        setTerminalSymbol(e.detail.symbol);
+        setTerminalLtp(e.detail.ltp ?? null);
+        setShowTerminal(true);                          // ← was missing entirely
+        sessionStorage.setItem("terminal_symbol", e.detail.symbol);
+        if (e.detail?.ltp) {
+          sessionStorage.setItem("terminal_ltp", String(e.detail.ltp));
+        }
+      }
+    };
     window.addEventListener("open-terminal", handler);
     return () => window.removeEventListener("open-terminal", handler);
   }, []);
@@ -1564,13 +1558,15 @@ const [terminalLtp,    setTerminalLtp]    = useState(null);  // ← ADD
         )}
       </div>
 
-      {/* TechPanel — side drawer with mini chart + Full Chart button */}
+      {/* FIX 3: Pass livePrice from livePriceMap into TechPanel so Full Chart
+          gets the freshest price, not stale tech.ltp from the cache           */}
       {selectedSym && (
         <TechPanel
           symbol={selectedSym}
           tech={tech}
           loading={techLoading}
           timeframe={activeTF}
+          livePrice={livePriceMap[selectedSym] ?? null}
           onTimeframeChange={handleTimeframeChange}
           onClose={() => {
             selectedSymRef.current = null;
