@@ -964,17 +964,6 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           {isScanner && <span className="options-nav-back">←</span>}
         </button>
 
-        <button
-          className={`options-nav-btn${isTerminal ? " active" : ""}`}
-          onClick={() => setCurrentPage(isTerminal ? "dashboard" : "terminal")}
-          title="Stock Chart Terminal — Multi-timeframe Technical Analysis"
-          style={{ marginLeft: 4 }}
-        >
-          <span className="options-nav-icon">📈</span>
-          <span className="options-nav-label">{isTerminal ? "Dashboard" : "Terminal"}</span>
-          {isTerminal && <span className="options-nav-back">←</span>}
-        </button>
-
         {needsConnect && !isAltPage && (
           <span
             style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }}
