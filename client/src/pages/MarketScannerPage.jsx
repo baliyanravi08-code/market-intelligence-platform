@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
-import StockTerminal from "../components/StockTerminal";
+// ── StockTerminal REMOVED — Full Chart now opens in a new browser tab ─────────
 
 // ── Inline StockChart ─────────────────────────────────────────────────────────
 const TF_CHART_OPTIONS = [
@@ -50,7 +50,14 @@ function StockChart({ symbol, defaultTf }) {
     }
   }, []);
 
-  useEffect(() => { if (symbol) fetchCandles(symbol, tf); }, [symbol, tf, fetchCandles]);
+  // FIX: clear stale ltp when symbol changes
+  useEffect(() => {
+    if (symbol) {
+      sessionStorage.removeItem("terminal_ltp");
+      fetchCandles(symbol, tf);
+    }
+  }, [symbol, tf, fetchCandles]);
+
   useEffect(() => { if (defaultTf && defaultTf !== tf) setTf(defaultTf); }, [defaultTf]); // eslint-disable-line
 
   useEffect(() => {
@@ -129,11 +136,10 @@ function StockChart({ symbol, defaultTf }) {
     const rect   = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const mouseX = (e.clientX - rect.left) * scaleX;
-    const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
     const { PAD, gap, n, data, cx } = canvas._layout;
     const i = Math.round((mouseX - PAD.left) / gap - 0.5);
     if (i < 0 || i >= n) { setCrosshair(null); return; }
-    setCrosshair({ x: cx(i), y: mouseY, candle: data[i], i });
+    setCrosshair({ x: cx(i), candle: data[i], i });
   };
 
   const last   = candles[candles.length - 1];
@@ -426,7 +432,9 @@ function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
   );
 }
 
-// ── TechPanel — FIX 3: accepts livePrice prop for accurate seed LTP ───────────
+// ── TechPanel ─────────────────────────────────────────────────────────────────
+// FIX: Full Chart opens stock-terminal.html in a NEW TAB with ?symbol=X&ltp=Y
+// No more overlay — StockTerminal removed from this page entirely
 function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeChange, onClose }) {
   if (!symbol) return null;
 
@@ -454,12 +462,22 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
     </div>
   );
 
-  // ── FIX 3: Use livePrice (from livePriceMap) first, fall back to tech.ltp ──
+  // ── FIX: Open full chart in a NEW TAB — correct symbol + freshest price ───
   const handleFullChart = () => {
+    // Priority: live socket price → tech.ltp → tech.entry
     const ltp = livePrice ?? tech?.ltp ?? tech?.entry ?? null;
+
+    // Persist to sessionStorage so the new tab can read it immediately
     sessionStorage.setItem("terminal_symbol", symbol);
     if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
-    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol, ltp } }));
+
+    // Build URL with query params as the primary mechanism (more reliable than sessionStorage cross-tab)
+    const url = new URL("/stock-terminal.html", window.location.origin);
+    url.searchParams.set("symbol", symbol);
+    if (ltp) url.searchParams.set("ltp", String(ltp));
+
+    // Open in new tab
+    window.open(url.toString(), "_blank", "noopener");
   };
 
   return (
@@ -474,13 +492,14 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
       padding: "16px 14px",
       boxShadow: "-12px 0 48px rgba(0,0,0,0.7)",
     }}>
-      {/* ── Header with Full Chart button ── */}
+      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: T.textPri, letterSpacing: "0.5px" }}>{symbol}</div>
           <div style={{ fontSize: 11, color: T.textSec }}>Technical Analysis · Multi-timeframe</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {/* Full Chart → opens new tab */}
           <button
             type="button"
             onClick={handleFullChart}
@@ -502,7 +521,7 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
             }}
             onMouseEnter={e => e.currentTarget.style.background = "rgba(96,165,250,0.22)"}
             onMouseLeave={e => e.currentTarget.style.background = "rgba(96,165,250,0.12)"}
-            title={`Open full chart for ${symbol}`}
+            title={`Open full chart for ${symbol} in new tab`}
           >
             ↗ Full Chart
           </button>
@@ -931,9 +950,9 @@ function BacktestPanel({ onClose, techCacheRef }) {
 
   const refresh        = () => setDb(btLoad());
   const handleCapture  = () => { const r = manualCapture(techCacheRef); refresh(); setCaptureMsg(r > 0 ? `✅ Captured ${r} new signals` : "⚠️ All already captured"); setTimeout(() => setCaptureMsg(""), 3000); };
-  const handleOutcome  = (date, id, outcome)   => { updateSignal(date, id, { outcome }); refresh(); };
+  const handleOutcome  = (date, id, outcome)    => { updateSignal(date, id, { outcome }); refresh(); };
   const handleExitPrice = (date, id, exitPrice) => { updateSignal(date, id, { exitPrice: parseFloat(exitPrice) || null }); refresh(); };
-  const handleDelete   = (date, id)            => { deleteSignalFromDB(date, id); refresh(); };
+  const handleDelete   = (date, id)             => { deleteSignalFromDB(date, id); refresh(); };
 
   const downloadCSV = () => {
     const allSignals = Object.entries(db).flatMap(([date, d]) => (d.signals || []).map(s => ({ ...s, date })));
@@ -1202,10 +1221,7 @@ function ScannerBody() {
   const [livePriceMap, setLivePriceMap] = useState({});
   const [techVersion,  setTechVersion]  = useState(0);
 
-  // ── Terminal overlay state ──────────────────────────────────────────────────
-  const [showTerminal,   setShowTerminal]   = useState(false);
-  const [terminalSymbol, setTerminalSymbol] = useState(null);
-  const [terminalLtp,    setTerminalLtp]    = useState(null);
+  // ── NO terminal overlay state — Full Chart opens a new browser tab ─────────
 
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
@@ -1214,25 +1230,6 @@ function ScannerBody() {
   const autoCapFired   = useRef(false);
 
   useEffect(() => { activeTFRef.current = activeTF; }, [activeTF]);
-
-  // ── FIX 1: Corrected open-terminal handler ─────────────────────────────────
-  // Was using non-existent setSymbol / setLiveData / setSeedLtp.
-  // showTerminal was never set to true so the overlay never opened.
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.detail?.symbol) {
-        setTerminalSymbol(e.detail.symbol);
-        setTerminalLtp(e.detail.ltp ?? null);
-        setShowTerminal(true);                          // ← was missing entirely
-        sessionStorage.setItem("terminal_symbol", e.detail.symbol);
-        if (e.detail?.ltp) {
-          sessionStorage.setItem("terminal_ltp", String(e.detail.ltp));
-        }
-      }
-    };
-    window.addEventListener("open-terminal", handler);
-    return () => window.removeEventListener("open-terminal", handler);
-  }, []);
 
   useEffect(() => {
     const tryAutoCapture = () => {
@@ -1558,8 +1555,7 @@ function ScannerBody() {
         )}
       </div>
 
-      {/* FIX 3: Pass livePrice from livePriceMap into TechPanel so Full Chart
-          gets the freshest price, not stale tech.ltp from the cache           */}
+      {/* TechPanel — livePrice passed in for accurate Full Chart seed price */}
       {selectedSym && (
         <TechPanel
           symbol={selectedSym}
@@ -1578,52 +1574,8 @@ function ScannerBody() {
         />
       )}
 
-      {/* ── Full Terminal Overlay ──────────────────────────────────────────── */}
-      {showTerminal && (
-        <div style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 500,
-          background: "#060a0f",
-          display: "flex",
-          flexDirection: "column",
-        }}>
-          {/* Close bar */}
-          <div style={{
-            padding: "6px 14px",
-            background: "#080d14",
-            borderBottom: "1px solid #30363d",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexShrink: 0,
-          }}>
-            <span style={{ color: "#58a6ff", fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>
-              📈 Full Chart — {terminalSymbol}
-            </span>
-            <button
-              onClick={() => setShowTerminal(false)}
-              style={{
-                background: "#21262d",
-                border: "1px solid #30363d",
-                color: "#8b949e",
-                padding: "4px 14px",
-                borderRadius: 5,
-                cursor: "pointer",
-                fontFamily: "monospace",
-                fontSize: 12,
-                fontWeight: 700,
-              }}
-            >
-              ✕ Close
-            </button>
-          </div>
-          {/* Terminal fills remaining space */}
-          <div style={{ flex: 1, overflow: "hidden" }}>
-            <StockTerminal initialSymbol={terminalSymbol} initialLtp={terminalLtp} />
-          </div>
-        </div>
-      )}
+      {/* ── NO terminal overlay here — Full Chart opens /stock-terminal.html
+           in a new tab via window.open() in TechPanel.handleFullChart ──────── */}
 
       {showBacktest && <BacktestPanel onClose={() => setShowBacktest(false)} techCacheRef={techCacheRef} />}
     </div>

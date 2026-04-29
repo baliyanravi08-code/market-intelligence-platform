@@ -22,16 +22,16 @@ const COLORS = {
 };
 
 export default function StockChart({ symbol }) {
-  const canvasRef   = useRef(null);
-  const overlayRef  = useRef(null);
-  const [tf, setTf] = useState("1day");
-  const [candles, setCandles]   = useState([]);
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState(null);
+  const canvasRef    = useRef(null);
+  const overlayRef   = useRef(null);
+  const [tf, setTf]  = useState("1day");
+  const [candles, setCandles]     = useState([]);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState(null);
   const [crosshair, setCrosshair] = useState(null);
   const dataRef = useRef([]);
 
-  // ── Fetch candles from server ──────────────────────────────────────────────
+  // ── Fetch candles from server ─────────────────────────────────────────────
   const fetchCandles = useCallback(async (sym, timeframe) => {
     if (!sym) return;
     setLoading(true);
@@ -63,8 +63,12 @@ export default function StockChart({ symbol }) {
     }
   }, []);
 
+  // ── FIX: clear stale ltp from previous symbol so terminal inherits correct price ──
   useEffect(() => {
-    if (symbol) fetchCandles(symbol, tf);
+    if (symbol) {
+      sessionStorage.removeItem("terminal_ltp");
+      fetchCandles(symbol, tf);
+    }
   }, [symbol, tf, fetchCandles]);
 
   // ── Draw chart ────────────────────────────────────────────────────────────
@@ -85,8 +89,8 @@ export default function StockChart({ symbol }) {
     ctx.fillStyle = COLORS.bg;
     ctx.fillRect(0, 0, W, H);
 
-    const data   = candles;
-    const n      = data.length;
+    const data    = candles;
+    const n       = data.length;
     const candleW = Math.max(1, Math.floor(chartW / n) - 1);
     const gap     = Math.max(1, Math.floor(chartW / n));
 
@@ -163,8 +167,7 @@ export default function StockChart({ symbol }) {
 
   // ── Crosshair ─────────────────────────────────────────────────────────────
   const handleMouseMove = (e) => {
-    const canvas = canvasRef.current;
-    const overlay = overlayRef.current;
+    const canvas  = canvasRef.current;
     if (!canvas || !canvas._layout || candles.length === 0) return;
 
     const rect   = canvas.getBoundingClientRect();
@@ -176,27 +179,33 @@ export default function StockChart({ symbol }) {
     if (i < 0 || i >= n) { setCrosshair(null); return; }
 
     const c = data[i];
-    setCrosshair({
-      x:      cx(i),
-      y:      mouseY,
-      candle: c,
-      i,
-    });
+    setCrosshair({ x: cx(i), y: mouseY, candle: c, i });
   };
 
-  // ── Open full terminal for this symbol ────────────────────────────────────
+  // ── FIX: Open full terminal — pass live ltp so chart renders correct price ─
   const openFullChart = () => {
     if (!symbol) return;
+
+    // Use last known close as the seed price for StockTerminal
+    const last = candles[candles.length - 1];
+    const ltp  = last?.close ?? null;
+
     sessionStorage.setItem("terminal_symbol", symbol);
-    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol } }));
+    if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
+
+    window.dispatchEvent(
+      new CustomEvent("open-terminal", {
+        detail: { symbol, ltp },
+      })
+    );
   };
 
   // ── Summary stats ─────────────────────────────────────────────────────────
-  const last    = candles[candles.length - 1];
-  const first   = candles[0];
-  const chg     = last && first ? last.close - first.open : 0;
-  const chgPct  = first?.open > 0 ? (chg / first.open) * 100 : 0;
-  const isUp    = chg >= 0;
+  const last   = candles[candles.length - 1];
+  const first  = candles[0];
+  const chg    = last && first ? last.close - first.open : 0;
+  const chgPct = first?.open > 0 ? (chg / first.open) * 100 : 0;
+  const isUp   = chg >= 0;
 
   return (
     <div style={{ background: COLORS.bg, border: "1px solid #0d2a45", borderRadius: 8, padding: 12, userSelect: "none" }}>
@@ -226,14 +235,14 @@ export default function StockChart({ symbol }) {
               key={opt.value}
               onClick={() => setTf(opt.value)}
               style={{
-                padding:    "3px 10px",
+                padding:      "3px 10px",
                 borderRadius: 4,
-                border:     `1px solid ${tf === opt.value ? "#00cfff" : "#0d2a45"}`,
-                background: tf === opt.value ? "#00cfff22" : "transparent",
-                color:      tf === opt.value ? "#00cfff" : "#4a8adf",
-                fontFamily: "monospace",
-                fontSize:   12,
-                cursor:     "pointer",
+                border:       `1px solid ${tf === opt.value ? "#00cfff" : "#0d2a45"}`,
+                background:   tf === opt.value ? "#00cfff22" : "transparent",
+                color:        tf === opt.value ? "#00cfff" : "#4a8adf",
+                fontFamily:   "monospace",
+                fontSize:     12,
+                cursor:       "pointer",
               }}
             >
               {opt.label}
@@ -292,6 +301,7 @@ export default function StockChart({ symbol }) {
             )}
           </div>
         )}
+
         <div style={{ position: "relative" }}>
           <canvas
             ref={canvasRef}
@@ -301,15 +311,16 @@ export default function StockChart({ symbol }) {
             onMouseMove={handleMouseMove}
             onMouseLeave={() => setCrosshair(null)}
           />
-          {/* Full Chart button — fires open-terminal event for the current symbol */}
+
+          {/* Full Chart button — fires open-terminal with correct symbol + ltp */}
           <div
             onClick={openFullChart}
             style={{
-              position: "absolute", top: 8, right: 8,
+              position:   "absolute", top: 8, right: 8,
               background: "rgba(0,207,255,0.12)",
-              border: "1px solid rgba(0,207,255,0.35)",
+              border:     "1px solid rgba(0,207,255,0.35)",
               borderRadius: 4, padding: "3px 10px",
-              color: "#00cfff", fontSize: 10,
+              color:      "#00cfff", fontSize: 10,
               fontFamily: "monospace", cursor: "pointer",
               zIndex: 5, userSelect: "none",
               transition: "background 0.15s",
