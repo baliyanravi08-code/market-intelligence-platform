@@ -353,11 +353,12 @@ function normaliseBSE(s) {
 }
 
 // ── applyLiveTick — no full-array sort on every tick ─────────────────────────
-function applyLiveTick({ symbol, price, changePct, change }) {
+function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
   if (!symbol || !price) return;
   const stock = stockBySymbol.get(symbol);
   if (!stock) return;
   stock.ltp = price;
+  if (prevClose != null && prevClose > 0) stock.prevClose = prevClose;
   if (changePct != null) stock.changePct = changePct;
   if (change    != null) stock.change    = change;
 }

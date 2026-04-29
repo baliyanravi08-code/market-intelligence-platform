@@ -68,7 +68,15 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 const clientPath = path.join(__dirname, "../client/dist");
+
+// Serve Stockterminal.html explicitly BEFORE static middleware
+app.get("/Stockterminal.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "../client/public/Stockterminal.html"));
+});
+
 app.use(express.static(clientPath));
+// Also serve client/public as static (catches any other public assets)
+app.use(express.static(path.join(__dirname, "../client/public")));
 
 // ── Upstox config ─────────────────────────────────────────────────────────────
 const UPSTOX_API_KEY      = process.env.UPSTOX_API_KEY;

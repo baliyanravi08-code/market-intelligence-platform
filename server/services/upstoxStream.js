@@ -279,10 +279,9 @@ function parseAndEmit(raw) {
             }
 
             const scanner = getScanner();
-            if (scanner && typeof scanner.applyLiveTick === "function") {
-              scanner.applyLiveTick({ symbol, price, changePct, change });
-            }
-
+if (scanner && typeof scanner.applyLiveTick === "function") {
+  scanner.applyLiveTick({ symbol, price, changePct, change, prevClose });
+}
             if (backtestEngine) backtestEngine.onLTPTick(symbol, price);
           }
         }
