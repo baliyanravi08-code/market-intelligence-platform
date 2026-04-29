@@ -472,7 +472,7 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
     if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
 
     // Build URL with query params as the primary mechanism (more reliable than sessionStorage cross-tab)
-    const url = new URL("/stock-terminal.html", window.location.origin);
+    const url = new URL("/Stockterminal.html", window.location.origin);
     url.searchParams.set("symbol", symbol);
     if (ltp) url.searchParams.set("ltp", String(ltp));
 

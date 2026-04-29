@@ -1013,19 +1013,6 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
 export default function App() {
   const [currentPage, setCurrentPage] = useState("dashboard");
 const [terminalSymbol, setTerminalSymbol] = useState(null);
-
-useEffect(() => {
-  const handler = (e) => {
-    if (e.detail?.symbol) {
-      sessionStorage.setItem("terminal_symbol", e.detail.symbol);
-      setTerminalSymbol(e.detail.symbol);
-    }
-    setCurrentPage("terminal");
-  };
-  window.addEventListener("open-terminal", handler);
-  return () => window.removeEventListener("open-terminal", handler);
-}, []);
-
   const [marketIndices,  setMarketIndices]  = useState([
     { name: "NIFTY 50",   price: "—", change: "—", pct: "—", up: null },
     { name: "SENSEX",     price: "—", change: "—", pct: "—", up: null },
