@@ -4,13 +4,16 @@
  * marketScanner.js
  * Location: server/services/intelligence/marketScanner.js
  *
- * MEMORY FIXES v5 (on top of v4):
+ * FIX v6 — prevClose accuracy:
+ *  - preWarmTechCache no longer overwrites stock.prevClose if NSE already provided one
+ *  - prevClose from NSE normaliseNSE() is now treated as the authoritative source
+ *  - changePct / change are always re-derived from the authoritative prevClose
+ *  - applyLiveTick now also re-derives changePct from stock.prevClose so live
+ *    prices show correct % vs today's prev close (not yesterday's candle close)
+ *
+ * MEMORY FIXES v5 (kept):
  *  1. sectorMap intermediate object — explicitly nulled after bySector is built
- *     Old: sectorMap (600+ stock refs) and bySector coexisted in scope until GC
- *     New: sectorMap keys deleted immediately after use, freeing refs before next await
  *  2. scanCache overwrite — old cache is explicitly nulled before reassignment
- *     This ensures GC can collect the previous 600-stock array without waiting for
- *     the next scan cycle to push the reference out of scope
  *  3. preWarmTechCache batch array — cleared after each emit rather than at end
  *  4. Heap monitor added — logs every 2min, warns at 380MB
  *
@@ -308,6 +311,11 @@ function normaliseNSE(s) {
   const changePct = parseFloat(s.pChange   || 0);
   const volume    = parseInt(s.totalTradedVolume || 0, 10);
   if (ltp <= 0) return null;
+
+  // FIX: NSE provides previousClose — this is the authoritative prev close for today.
+  // Always prefer it over candle-derived values.
+  const prevClose = parseFloat(s.previousClose || 0);
+
   return {
     symbol:     s.symbol,
     name:       s.meta?.companyName || s.symbol,
@@ -316,7 +324,9 @@ function normaliseNSE(s) {
     open:       parseFloat(s.open     || 0),
     high:       parseFloat(s.dayHigh  || 0),
     low:        parseFloat(s.dayLow   || 0),
-    prevClose:  parseFloat(s.previousClose || 0),
+    prevClose,
+    // Flag that prevClose came from exchange — don't overwrite with candle data
+    _prevCloseFromExchange: prevClose > 0,
     totalValue: parseFloat(s.totalTradedValue || 0),
     yearHigh:   parseFloat(s.yearHigh || 0),
     yearLow:    parseFloat(s.yearLow  || 0),
@@ -344,6 +354,8 @@ function normaliseBSE(s) {
     high:       parseFloat(s.High || s.DayHigh   || ltp),
     low:        parseFloat(s.Low  || s.DayLow    || ltp),
     prevClose,
+    // BSE also provides prevClose from exchange data
+    _prevCloseFromExchange: prevClose > 0 && prevClose !== ltp,
     totalValue: parseFloat(s.TotalTurnover || s.Turnover || 0),
     yearHigh:   parseFloat(s["52WeekHigh"] || s.YearHigh || 0),
     yearLow:    parseFloat(s["52WeekLow"]  || s.YearLow  || 0),
@@ -352,15 +364,31 @@ function normaliseBSE(s) {
   };
 }
 
-// ── applyLiveTick — no full-array sort on every tick ─────────────────────────
+// ── applyLiveTick ─────────────────────────────────────────────────────────────
+// FIX v6: Always re-derive changePct from stock.prevClose so live prices show
+// the correct % change vs today's previous close, not a stale candle value.
 function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
   if (!symbol || !price) return;
   const stock = stockBySymbol.get(symbol);
   if (!stock) return;
+
   stock.ltp = price;
-  if (prevClose != null && prevClose > 0) stock.prevClose = prevClose;
-  if (changePct != null) stock.changePct = changePct;
-  if (change    != null) stock.change    = change;
+
+  // Only update prevClose from live tick if we don't already have one from the exchange
+  if (!stock._prevCloseFromExchange && prevClose != null && prevClose > 0) {
+    stock.prevClose = prevClose;
+  }
+
+  // Always re-derive changePct and change from the authoritative prevClose
+  const pc = stock.prevClose;
+  if (pc && pc > 0) {
+    stock.change    = Math.round((price - pc) * 100) / 100;
+    stock.changePct = Math.round(((price - pc) / pc) * 10000) / 100;
+  } else if (changePct != null) {
+    // Fallback: use what the tick provided
+    stock.changePct = changePct;
+    if (change != null) stock.change = change;
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1051,6 +1079,10 @@ async function getTechnicals(symbol) {
   return getTechnicalsForTimeframe(symbol, "1day");
 }
 
+// ── preWarmTechCache ──────────────────────────────────────────────────────────
+// FIX v6: No longer overwrites stock.prevClose if the exchange already provided
+// one (_prevCloseFromExchange flag). changePct/change are always re-derived from
+// the authoritative prevClose so displayed % is always today's correct value.
 async function preWarmTechCache(symbols) {
   if (!symbols || !symbols.length) return;
   const token = getUpstoxToken();
@@ -1076,18 +1108,29 @@ async function preWarmTechCache(symbols) {
         if (stock && result._candles?.length >= 2) {
           const last = result._candles[result._candles.length - 1];
           const prev = result._candles[result._candles.length - 2];
-          if (last && prev && prev.close > 0) {
-            stock.ltp       = last.close;
-            stock.changePct = Math.round(((last.close - prev.close) / prev.close) * 10000) / 100;
-            stock.change    = Math.round((last.close  - prev.close) * 100) / 100;
-            stock.prevClose = prev.close;
+
+          if (last && last.close > 0) {
+            // Always update ltp from the freshest candle close
+            stock.ltp = last.close;
+
+            // FIX: Only set prevClose from candles if the exchange didn't provide one.
+            // NSE/BSE previousClose is today's correct prev close; candle[n-2].close
+            // may be 2 days ago if today's candle is already in the data.
+            if (!stock._prevCloseFromExchange && prev && prev.close > 0) {
+              stock.prevClose = prev.close;
+            }
+
+            // Always re-derive changePct from the authoritative prevClose
+            const pc = stock.prevClose;
+            if (pc && pc > 0) {
+              stock.changePct = Math.round(((last.close - pc) / pc) * 10000) / 100;
+              stock.change    = Math.round((last.close - pc) * 100) / 100;
+            }
           }
         }
       }
       if (batch.length >= BATCH_EMIT_SIZE) {
         if (ioRef) ioRef.emit("scanner-tech-batch", batch);
-        // FIX: clear batch array immediately after emit instead of at end
-        // Keeps up to BATCH_EMIT_SIZE result objects alive in memory at once (not all)
         batch = [];
       }
     } catch (_) {}
@@ -1095,7 +1138,7 @@ async function preWarmTechCache(symbols) {
   }
   // Flush remaining
   if (batch.length > 0 && ioRef) ioRef.emit("scanner-tech-batch", batch);
-  batch = []; // FIX: explicit clear after final flush
+  batch = [];
   console.log(`📊 Pre-warm done: ${warmed}/${symbols.length} | techCache size: ${techCache.size}`);
 }
 
@@ -1231,9 +1274,6 @@ async function runScanner() {
 
     console.log(`📊 Buckets — Large:${byMcap.largecap.length} Mid:${byMcap.midcap.length} Small:${byMcap.smallcap.length} Micro:${byMcap.microcap.length}`);
 
-    // FIX: build sectorMap in its own block then free it immediately
-    // Old: sectorMap stayed in runScanner's closure alongside bySector (~600 stock refs duplicated)
-    // New: only bySector survives after this block
     let bySector;
     {
       const sectorMap = {};
@@ -1250,11 +1290,8 @@ async function runScanner() {
         total:     ss.length,
         topGainer: [...ss].sort((a, b) => b.changePct - a.changePct)[0],
       })).sort((a, b) => b.avgChange - a.avgChange);
-      // sectorMap falls out of scope here — GC can collect it
     }
 
-    // FIX: null old scanCache before reassigning so GC can collect the previous
-    // 600-stock allStocks array without waiting for the next scan cycle
     scanCache = null;
     scanCache = {
       gainers, losers, allStocks: stocks, byMcap, bySector,
@@ -1304,8 +1341,7 @@ async function runScanner() {
   }
 }
 
-// ── FIX: heap monitor — logs every 2min, warns at 380MB ──────────────────────
-// Add this once at module load so it runs throughout the server lifetime
+// ── Heap monitor ──────────────────────────────────────────────────────────────
 let _heapMonitorStarted = false;
 function startHeapMonitor() {
   if (_heapMonitorStarted) return;
