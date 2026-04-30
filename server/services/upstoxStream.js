@@ -1,5 +1,15 @@
 "use strict";
 
+/**
+ * services/upstoxStream.js
+ *
+ * FIXES:
+ *  1. Added candle aggregation — emits candle:tick and candle:closed via Socket.IO
+ *  2. registerLiveCandleSubscription / unregisterLiveCandleSubscription added
+ *  3. All existing market-tick / backtest / options logic unchanged
+ *  4. ioRef is shared — candle events flow through the same Socket.IO instance
+ */
+
 let UpstoxClient = null;
 try { UpstoxClient = require("upstox-js-sdk"); } catch (e) { console.warn("⚠️  upstox-js-sdk not installed."); }
 
@@ -46,6 +56,115 @@ const stockInstrumentKeys = new Set();
 const instrKeyToSymbol    = new Map();
 const prevCloseCache      = new Map();
 
+// ── Candle aggregation ────────────────────────────────────────────────────────
+// Stores live candle state per "SYMBOL_tf" key
+// e.g. "RELIANCE_5min" → { time, open, high, low, close, volume }
+const liveCandleState = new Map();
+
+// Active subscriptions: "SYMBOL_tf" → Set of socket IDs (informational only)
+// We track which symbol+tf combos are "wanted" so we know which NSE_EQ keys to subscribe
+const candleSubscriptions = new Map(); // "SYMBOL_tf" → subscriberCount
+
+// Symbol → NSE_EQ instrument key
+function symbolToInstrKey(symbol) {
+  return `NSE_EQ|${symbol.toUpperCase()}`;
+}
+
+// Parse tf string to milliseconds
+const TF_MS = {
+  "1min":  60_000,
+  "5min":  5 * 60_000,
+  "15min": 15 * 60_000,
+  "1hour": 60 * 60_000,
+  "4hour": 4 * 60 * 60_000,
+};
+
+function tfToMs(tf) { return TF_MS[tf] || 60_000; }
+
+// Get the candle period start time for a given timestamp and tf
+function candlePeriodStart(ts, tf) {
+  const ms = tfToMs(tf);
+  return Math.floor(ts / ms) * ms;
+}
+
+/**
+ * Called by websocket.js when a client subscribes to live candles.
+ * Ensures the symbol is subscribed on the Upstox stream.
+ */
+function registerLiveCandleSubscription(symbol, tf) {
+  const key = `${symbol}_${tf}`;
+  candleSubscriptions.set(key, (candleSubscriptions.get(key) || 0) + 1);
+
+  // Subscribe the instrument if not already tracked
+  const instrKey = symbolToInstrKey(symbol);
+  if (!stockInstrumentKeys.has(instrKey)) {
+    stockInstrumentKeys.add(instrKey);
+    instrKeyToSymbol.set(instrKey, symbol.toUpperCase());
+    if (streamer) {
+      try { streamer.subscribe([instrKey], "full"); } catch (e) { console.warn("⚠️ candle subscribe error:", e.message); }
+    }
+    console.log(`📡 upstoxStream: candle sub registered ${symbol} @ ${tf}`);
+  }
+}
+
+/**
+ * Called by websocket.js when a client unsubscribes or disconnects.
+ */
+function unregisterLiveCandleSubscription(symbol, tf) {
+  const key = `${symbol}_${tf}`;
+  const count = (candleSubscriptions.get(key) || 1) - 1;
+  if (count <= 0) {
+    candleSubscriptions.delete(key);
+    liveCandleState.delete(key);
+  } else {
+    candleSubscriptions.set(key, count);
+  }
+}
+
+/**
+ * Process a live price tick for candle aggregation.
+ * Called from parseAndEmit whenever an NSE_EQ tick arrives.
+ */
+function processCandleTick(symbol, price, volume) {
+  if (!ioRef) return;
+  const now = Date.now();
+
+  for (const [key, count] of candleSubscriptions.entries()) {
+    if (count <= 0) continue;
+    // key = "SYMBOL_tf"
+    const underscore = key.indexOf("_");
+    const keySym = key.slice(0, underscore);
+    const tf     = key.slice(underscore + 1);
+    if (keySym !== symbol.toUpperCase()) continue;
+
+    const periodStart = candlePeriodStart(now, tf);
+    const existing    = liveCandleState.get(key);
+
+    if (!existing || existing.time !== periodStart) {
+      // New candle period — close the old one first
+      if (existing) {
+        ioRef.emit("candle:closed", {
+          symbol: keySym,
+          tf,
+          candle: { time: existing.time, open: existing.open, high: existing.high, low: existing.low, close: existing.close, volume: existing.volume },
+        });
+      }
+      // Open a new candle
+      const newCandle = { time: periodStart, open: price, high: price, low: price, close: price, volume: volume || 0 };
+      liveCandleState.set(key, newCandle);
+      ioRef.emit("candle:tick", { symbol: keySym, tf, candle: newCandle });
+    } else {
+      // Update existing candle
+      existing.high   = Math.max(existing.high, price);
+      existing.low    = Math.min(existing.low, price);
+      existing.close  = price;
+      existing.volume = (existing.volume || 0) + (volume || 0);
+      ioRef.emit("candle:tick", { symbol: keySym, tf, candle: { ...existing } });
+    }
+  }
+}
+
+// ── Instrument helpers ────────────────────────────────────────────────────────
 function getSafePrevClose(key, ltpc, currentPrice) {
   const cp = parseFloat(ltpc.cp || 0);
   if (cp > 0) { evictMapIfNeeded(prevCloseCache, MAX_MAP_ENTRIES); prevCloseCache.set(key, cp); return cp; }
@@ -69,7 +188,6 @@ function subscribeStocksForBacktest(symbols) {
   if (!newKeys.length) return;
   newKeys.forEach(k => stockInstruments.add(k));
   for (const sym of symbols) { evictMapIfNeeded(instrKeyToSymbol, MAX_MAP_ENTRIES); instrKeyToSymbol.set(`NSE_EQ|${sym.toUpperCase()}`, sym.toUpperCase()); }
-  // FIX-PRICE: "ltpc" → "full" for live ticks
   if (streamer) { try { streamer.subscribe(newKeys, "full"); } catch (e) { console.warn("⚠️ stock subscribe error:", e.message); } }
 }
 
@@ -81,7 +199,6 @@ function subscribeWithInstrumentKeys(instrKeys, symbolMap) {
   if (symbolMap && typeof symbolMap === "object") {
     for (const [sym, key] of Object.entries(symbolMap)) { evictMapIfNeeded(instrKeyToSymbol, MAX_MAP_ENTRIES); instrKeyToSymbol.set(key, sym.toUpperCase()); }
   }
-  // FIX-PRICE: "ltpc" → "full"
   if (streamer) { try { streamer.subscribe(newKeys, "full"); } catch (e) { console.warn("⚠️ instrument key subscribe error:", e.message); } }
 }
 
@@ -95,6 +212,7 @@ function getScanner() {
   return _scanner;
 }
 
+// ── Parse & emit (unchanged logic + candle hook) ──────────────────────────────
 function parseAndEmit(raw) {
   try {
     const text = typeof raw === "string" ? raw : raw.toString("utf-8");
@@ -147,10 +265,16 @@ function parseAndEmit(raw) {
             }
             let symbol = instrKeyToSymbol.get(key);
             if (!symbol) symbol = key.replace(/^(NSE_EQ|BSE_EQ)\|/, "");
+
             if (ioRef) ioRef.emit("backtest-live-tick", { symbol, price, prevClose, change, changePct });
+
             const scanner = getScanner();
             if (scanner && typeof scanner.applyLiveTick === "function") scanner.applyLiveTick({ symbol, price, changePct, change, prevClose });
             if (backtestEngine) backtestEngine.onLTPTick(symbol, price);
+
+            // ── NEW: feed into candle aggregator ──────────────────────────
+            const vol = parseFloat(ltpc.tv || ltpc.v || 0);
+            processCandleTick(symbol, price, vol);
           }
         }
         continue;
@@ -161,6 +285,7 @@ function parseAndEmit(raw) {
   } catch (_) {}
 }
 
+// ── Streamer lifecycle (unchanged) ────────────────────────────────────────────
 function patchStreamerInternals(streamerInstance) {
   setImmediate(() => {
     try {
@@ -194,11 +319,10 @@ function stopStreamer() {
 
 function resubscribeAll() {
   if (!streamer) return;
-  // FIX-PRICE: all "ltpc" → "full" for continuous live ticks
   try { streamer.subscribe(INDEX_INSTRUMENTS, "full"); } catch (e) { console.log("⚠️  index subscribe error:", e.message); }
-  if (optionInstruments.size   > 0) { try { streamer.subscribe(Array.from(optionInstruments),   "full_d30"); } catch (e) { console.log("⚠️  option re-subscribe error:",          e.message); } }
-  if (stockInstruments.size    > 0) { try { streamer.subscribe(Array.from(stockInstruments),    "full");     } catch (e) { console.log("⚠️  stock re-subscribe error:",           e.message); } }
-  if (stockInstrumentKeys.size > 0) { try { streamer.subscribe(Array.from(stockInstrumentKeys), "full");     } catch (e) { console.log("⚠️  instrument key re-subscribe error:",  e.message); } }
+  if (optionInstruments.size   > 0) { try { streamer.subscribe(Array.from(optionInstruments),   "full_d30"); } catch (e) { console.log("⚠️  option re-subscribe error:",         e.message); } }
+  if (stockInstruments.size    > 0) { try { streamer.subscribe(Array.from(stockInstruments),    "full");     } catch (e) { console.log("⚠️  stock re-subscribe error:",          e.message); } }
+  if (stockInstrumentKeys.size > 0) { try { streamer.subscribe(Array.from(stockInstrumentKeys), "full");     } catch (e) { console.log("⚠️  instrument key re-subscribe error:", e.message); } }
 }
 
 function scheduleReconnect() {
@@ -228,10 +352,10 @@ function startStreamer(accessToken, io) {
   let thisInstanceGot401 = false;
 
   try {
-    const defaultClient    = UpstoxClient.ApiClient.instance;
-    const oauth2           = defaultClient.authentications["OAUTH2"];
-    oauth2.accessToken     = accessToken;
-    const newStreamer       = new UpstoxClient.MarketDataStreamerV3();
+    const defaultClient = UpstoxClient.ApiClient.instance;
+    const oauth2        = defaultClient.authentications["OAUTH2"];
+    oauth2.accessToken  = accessToken;
+    const newStreamer    = new UpstoxClient.MarketDataStreamerV3();
     if (newStreamer.attemptReconnect) newStreamer.attemptReconnect = function () {};
     patchStreamerInternals(newStreamer);
 
@@ -292,4 +416,7 @@ module.exports = {
   subscribeOptions, setOITickHandler, setLTPTickHandler,
   getAccessToken, setBacktestEngine,
   subscribeStocksForBacktest, subscribeWithInstrumentKeys,
+  // ── NEW ──
+  registerLiveCandleSubscription,
+  unregisterLiveCandleSubscription,
 };

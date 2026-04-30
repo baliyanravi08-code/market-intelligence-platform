@@ -87,7 +87,6 @@
   .sym-change.neg { color: var(--red); }
   .sym-change.pos { color: var(--green); }
 
-  /* symbol search in topbar */
   .sym-search-wrap { position: relative; display: flex; align-items: center; }
   .sym-search {
     background: var(--surface2);
@@ -294,7 +293,6 @@
   }
   #errorBanner.show { display: block; }
 
-  /* live candle flash — subtle glow on last candle update */
   @keyframes candleFlash {
     0%   { box-shadow: 0 0 0 0 rgba(0,229,255,0); }
     50%  { box-shadow: 0 0 12px 2px rgba(0,229,255,0.3); }
@@ -303,9 +301,7 @@
   .chart-wrap.tick-flash { animation: candleFlash 0.4s ease-out; }
 
   /* ── MAIN LAYOUT ── */
-  .main {
-    flex:1; display:flex; overflow:hidden;
-  }
+  .main { flex:1; display:flex; overflow:hidden; }
   .chart-col {
     flex:1; display:flex; flex-direction:column;
     overflow:hidden; position:relative;
@@ -317,10 +313,7 @@
     background: var(--bg);
     cursor: crosshair;
   }
-  canvas#mainChart {
-    display:block; width:100%; height:100%;
-    image-rendering: pixelated;
-  }
+  canvas#mainChart { display:block; width:100%; height:100%; image-rendering: pixelated; }
   .chart-overlay {
     position:absolute; top:10px; left:12px;
     pointer-events:none;
@@ -328,7 +321,6 @@
   }
   .co-label { font-size:10px; color:var(--text3); font-family:'JetBrains Mono',monospace; }
 
-  /* live tick indicator — small badge top-right of chart */
   #liveTickBadge {
     position: absolute;
     top: 8px; right: 12px;
@@ -356,39 +348,29 @@
   .crosshair-info span { color:var(--text2); }
 
   /* ── SUB PANELS ── */
-  .sub-panels {
-    display:flex; flex-direction:column;
-    border-top: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-  .sub-panel {
-    position:relative; overflow:hidden;
-  }
+  .sub-panels { display:flex; flex-direction:column; border-top: 1px solid var(--border); flex-shrink: 0; }
+  .sub-panel { position:relative; overflow:hidden; }
   .sub-panel-label {
     position:absolute; top:4px; left:8px;
     font-size:9px; color:var(--text3);
     font-family:'JetBrains Mono',monospace;
-    letter-spacing:.5px; z-index:2;
-    pointer-events:none;
+    letter-spacing:.5px; z-index:2; pointer-events:none;
   }
   canvas.sub-canvas { display:block; width:100%; }
 
   .resize-handle {
     height:3px; background:var(--border);
-    cursor:ns-resize; transition:background .15s;
-    flex-shrink: 0;
+    cursor:ns-resize; transition:background .15s; flex-shrink: 0;
   }
   .resize-handle:hover { background:var(--accent); }
 
   /* ── RIGHT PANEL ── */
   .right-panel {
-    width: 240px;
-    flex-shrink: 0;
+    width: 240px; flex-shrink: 0;
     background: var(--surface);
     border-left: 1px solid var(--border);
     overflow-y: auto;
-    display: flex;
-    flex-direction: column;
+    display: flex; flex-direction: column;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }
@@ -396,7 +378,6 @@
   .right-panel::-webkit-scrollbar-track { background:transparent; }
   .right-panel::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
 
-  /* Signal Card */
   .signal-card {
     margin:12px;
     background: linear-gradient(135deg, rgba(0,230,118,.05) 0%, rgba(0,230,118,.02) 100%);
@@ -406,28 +387,21 @@
     position:relative; overflow:hidden;
   }
   .signal-card::before {
-    content:'';
-    position:absolute; top:0; left:0; right:0; height:2px;
+    content:''; position:absolute; top:0; left:0; right:0; height:2px;
     background: linear-gradient(90deg, transparent, var(--green2), transparent);
   }
   .signal-card.bear {
     background: linear-gradient(135deg, rgba(255,69,96,.05) 0%, rgba(255,69,96,.02) 100%);
     border-color: rgba(255,69,96,.2);
   }
-  .signal-card.bear::before {
-    background: linear-gradient(90deg, transparent, var(--red), transparent);
-  }
+  .signal-card.bear::before { background: linear-gradient(90deg, transparent, var(--red), transparent); }
   .signal-card.neutral {
     background: linear-gradient(135deg, rgba(247,183,49,.05) 0%, rgba(247,183,49,.02) 100%);
     border-color: rgba(247,183,49,.2);
   }
-  .signal-card.neutral::before {
-    background: linear-gradient(90deg, transparent, var(--accent3), transparent);
-  }
+  .signal-card.neutral::before { background: linear-gradient(90deg, transparent, var(--accent3), transparent); }
   .signal-header { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-  .signal-dial {
-    width:50px; height:50px; position:relative; flex-shrink:0;
-  }
+  .signal-dial { width:50px; height:50px; position:relative; flex-shrink:0; }
   .signal-dial svg { width:100%; height:100%; }
   .dial-score {
     position:absolute; inset:0;
@@ -435,14 +409,11 @@
     font-family:'Orbitron',monospace; font-size:13px; font-weight:700; color:#fff;
   }
   .signal-name  { font-family:'Orbitron',monospace; font-size:14px; font-weight:700; color:var(--green2); letter-spacing:1px; }
-  .signal-name.bear { color: var(--red); }
+  .signal-name.bear    { color: var(--red); }
   .signal-name.neutral { color: var(--accent3); }
-  .signal-sub   { font-size:10px; color:var(--text2); margin-top:1px; }
+  .signal-sub { font-size:10px; color:var(--text2); margin-top:1px; }
 
-  .signal-grid {
-    display:grid; grid-template-columns:1fr 1fr 1fr;
-    gap:6px; margin-top:8px;
-  }
+  .signal-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:8px; }
   .sg-item { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:7px 8px; }
   .sg-label { font-size:9px; color:var(--text3); text-transform:uppercase; letter-spacing:.8px; }
   .sg-val   { font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:600; color:#fff; margin-top:2px; }
@@ -450,52 +421,30 @@
   .sg-val.red   { color:var(--red); }
   .sg-val.gold  { color:var(--accent3); }
 
-  /* Sections */
   .rpanel-section { padding:10px 12px; border-top:1px solid var(--border); }
-  .rpanel-title {
-    font-size:9px; font-weight:600; text-transform:uppercase;
-    letter-spacing:1.5px; color:var(--text3); margin-bottom:8px;
-  }
+  .rpanel-title { font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:1.5px; color:var(--text3); margin-bottom:8px; }
   .rpanel-row {
     display:flex; justify-content:space-between; align-items:center;
     padding:4px 0; border-bottom:1px solid rgba(30,48,72,.5);
   }
   .rpanel-row:last-child { border-bottom:none; }
-  .rpanel-key   { color:var(--text2); font-size:11px; }
-  .rpanel-val   { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text); }
-  .tag {
-    display:inline-block; padding:1px 7px; border-radius:3px;
-    font-size:9px; font-weight:700; letter-spacing:.5px; text-transform:uppercase;
-  }
-  .tag-bear    { background:rgba(255,69,96,.15); color:var(--red); border:1px solid rgba(255,69,96,.3); }
-  .tag-bull    { background:rgba(0,230,118,.12); color:var(--green2); border:1px solid rgba(0,230,118,.25); }
-  .tag-weak    { background:rgba(107,140,168,.12); color:var(--text2); border:1px solid rgba(107,140,168,.2); }
-  .tag-below   { background:rgba(255,69,96,.12); color:var(--red); border:1px solid rgba(255,69,96,.25); }
-  .tag-above   { background:rgba(0,230,118,.12); color:var(--green2); border:1px solid rgba(0,230,118,.25); }
-  .tag-os      { background:rgba(0,229,255,.1); color:var(--accent); border:1px solid rgba(0,229,255,.25); font-size:9px; }
-  .tag-ob      { background:rgba(247,183,49,.1); color:var(--accent3); border:1px solid rgba(247,183,49,.25); font-size:9px; }
-  .tag-bearish { background:rgba(255,69,96,.1); color:var(--red); border:1px solid rgba(255,69,96,.2); }
-  .tag-bullish { background:rgba(0,230,118,.1); color:var(--green2); border:1px solid rgba(0,230,118,.2); }
+  .rpanel-key { color:var(--text2); font-size:11px; }
+  .rpanel-val { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text); }
+  .tag { display:inline-block; padding:1px 7px; border-radius:3px; font-size:9px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; }
+  .tag-bear    { background:rgba(255,69,96,.15);   color:var(--red);    border:1px solid rgba(255,69,96,.3); }
+  .tag-bull    { background:rgba(0,230,118,.12);   color:var(--green2); border:1px solid rgba(0,230,118,.25); }
+  .tag-weak    { background:rgba(107,140,168,.12); color:var(--text2);  border:1px solid rgba(107,140,168,.2); }
+  .tag-below   { background:rgba(255,69,96,.12);   color:var(--red);    border:1px solid rgba(255,69,96,.25); }
+  .tag-above   { background:rgba(0,230,118,.12);   color:var(--green2); border:1px solid rgba(0,230,118,.25); }
+  .tag-os      { background:rgba(0,229,255,.1);    color:var(--accent); border:1px solid rgba(0,229,255,.25); font-size:9px; }
+  .tag-ob      { background:rgba(247,183,49,.1);   color:var(--accent3);border:1px solid rgba(247,183,49,.25); font-size:9px; }
+  .tag-bearish { background:rgba(255,69,96,.1);    color:var(--red);    border:1px solid rgba(255,69,96,.2); }
+  .tag-bullish { background:rgba(0,230,118,.1);    color:var(--green2); border:1px solid rgba(0,230,118,.2); }
 
-  /* Rr bar */
-  .rr-bar {
-    height:4px; border-radius:2px; overflow:hidden;
-    background:var(--surface2); border:1px solid var(--border);
-    margin-top:6px;
-  }
-  .rr-bar-fill {
-    height:100%; border-radius:2px;
-    background: linear-gradient(90deg, var(--red) 0%, var(--accent3) 33%, var(--green2) 100%);
-    transition: width .6s ease;
-  }
+  .rr-bar { height:4px; border-radius:2px; overflow:hidden; background:var(--surface2); border:1px solid var(--border); margin-top:6px; }
+  .rr-bar-fill { height:100%; border-radius:2px; background: linear-gradient(90deg, var(--red) 0%, var(--accent3) 33%, var(--green2) 100%); transition: width .6s ease; }
 
-  /* ── FULLSCREEN OVERLAY ── */
-  #fs-overlay {
-    display:none;
-    position:fixed; inset:0; z-index:9999;
-    background: var(--bg);
-    flex-direction:column;
-  }
+  #fs-overlay { display:none; position:fixed; inset:0; z-index:9999; background: var(--bg); flex-direction:column; }
   #fs-overlay.open { display:flex; }
   #fs-overlay .chart-wrap { flex:1; }
   #fs-close {
@@ -508,36 +457,28 @@
   }
   #fs-close:hover { background:rgba(255,69,96,.2); }
 
-  /* ── TOOLTIP ── */
   #tooltip {
     position:fixed; z-index:1000;
-    background: var(--surface2);
-    border: 1px solid var(--border2);
-    border-radius:6px;
-    padding:8px 12px;
-    font-family:'JetBrains Mono',monospace;
-    font-size:11px; color:var(--text);
+    background: var(--surface2); border: 1px solid var(--border2);
+    border-radius:6px; padding:8px 12px;
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text);
     pointer-events:none; display:none;
-    box-shadow: 0 8px 24px rgba(0,0,0,.5);
-    min-width:140px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5); min-width:140px;
   }
   #tooltip .tt-date { color:var(--text3); font-size:10px; margin-bottom:4px; }
   #tooltip .tt-row  { display:flex; justify-content:space-between; gap:16px; }
   #tooltip .tt-key  { color:var(--text2); }
   #tooltip .tt-val  { font-weight:600; }
 
-  /* panel tabs */
   .panel-tabs { display:flex; gap:0; border-top:1px solid var(--border); flex-shrink:0; }
   .panel-tab {
     padding:4px 12px; font-size:10px; color:var(--text3);
     cursor:pointer; border-right:1px solid var(--border);
-    transition:all .12s; font-family:'JetBrains Mono',monospace;
-    letter-spacing:.5px;
+    transition:all .12s; font-family:'JetBrains Mono',monospace; letter-spacing:.5px;
   }
   .panel-tab:hover { color:var(--text2); background:var(--surface2); }
   .panel-tab.active { color:var(--accent); background:rgba(0,229,255,.04); }
 
-  /* watermark */
   .watermark {
     position:absolute; bottom:52px; right:16px;
     font-family:'Orbitron',monospace; font-size:11px;
@@ -545,19 +486,14 @@
     pointer-events:none; user-select:none;
   }
 
-  /* data source badge */
   .data-badge {
-    font-size: 9px;
-    font-family: 'JetBrains Mono', monospace;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-weight: 700;
-    margin-left: 8px;
+    font-size: 9px; font-family: 'JetBrains Mono', monospace;
+    padding: 2px 6px; border-radius: 3px; font-weight: 700; margin-left: 8px;
   }
-  .data-badge.live   { background: rgba(0,230,118,.12); color: var(--green2); border: 1px solid rgba(0,230,118,.25); }
-  .data-badge.mock   { background: rgba(247,183,49,.1);  color: var(--accent3); border: 1px solid rgba(247,183,49,.25); }
-  .data-badge.error  { background: rgba(255,69,96,.1);   color: var(--red);     border: 1px solid rgba(255,69,96,.25); }
-  .data-badge.stream { background: rgba(0,229,255,.1);   color: var(--accent);  border: 1px solid rgba(0,229,255,.25); }
+  .data-badge.live   { background: rgba(0,230,118,.12);  color: var(--green2); border: 1px solid rgba(0,230,118,.25); }
+  .data-badge.mock   { background: rgba(247,183,49,.1);  color: var(--accent3);border: 1px solid rgba(247,183,49,.25); }
+  .data-badge.error  { background: rgba(255,69,96,.1);   color: var(--red);    border: 1px solid rgba(255,69,96,.25); }
+  .data-badge.stream { background: rgba(0,229,255,.1);   color: var(--accent); border: 1px solid rgba(0,229,255,.25); }
 </style>
 </head>
 <body>
@@ -573,7 +509,6 @@
     <span class="data-badge mock" id="dataBadge">SIMULATED</span>
   </div>
 
-  <!-- Symbol search -->
   <div class="sym-search-wrap" style="margin-left:12px">
     <span class="sym-search-icon">⌕</span>
     <input id="symSearchInput" class="sym-search" placeholder="Search symbol…" autocomplete="off" />
@@ -626,9 +561,7 @@
 
 <!-- MAIN -->
 <div class="main">
-  <!-- CHART COLUMN -->
   <div class="chart-col">
-    <!-- PRICE CHART -->
     <div class="chart-wrap" id="chartWrap">
       <canvas id="mainChart"></canvas>
       <div id="loadingOverlay">
@@ -657,7 +590,6 @@
       <div class="panel-tab" onclick="setPanel('vol',this)">VOLUME · OBV</div>
     </div>
 
-    <!-- SUB PANELS -->
     <div class="sub-panels">
       <div class="sub-panel" id="subPanel1" style="height:90px">
         <div class="sub-panel-label" id="subLabel1">MACD (12,26,9)</div>
@@ -673,7 +605,6 @@
 
   <!-- RIGHT PANEL -->
   <div class="right-panel" id="rightPanel">
-    <!-- Signal Card -->
     <div class="signal-card" id="signalCard">
       <div class="rpanel-title" style="margin-bottom:10px">LIVE SIGNAL · <span id="signalTF">1D</span></div>
       <div class="signal-header">
@@ -715,7 +646,6 @@
       <div class="rr-bar"><div class="rr-bar-fill" id="rrFill" style="width:50%"></div></div>
     </div>
 
-    <!-- Trend Section -->
     <div class="rpanel-section">
       <div class="rpanel-title">TREND</div>
       <div class="rpanel-row"><div class="rpanel-key">SuperTrend</div><div class="rpanel-val" id="indST">—</div></div>
@@ -725,7 +655,6 @@
       <div class="rpanel-row"><div class="rpanel-key">VWAP</div><div class="rpanel-val" id="indVWAP">—</div></div>
     </div>
 
-    <!-- Momentum Section -->
     <div class="rpanel-section">
       <div class="rpanel-title">MOMENTUM</div>
       <div class="rpanel-row"><div class="rpanel-key">RSI (14)</div><div class="rpanel-val" id="indRSI">—</div></div>
@@ -736,7 +665,6 @@
       <div class="rpanel-row"><div class="rpanel-key">Histogram</div><div class="rpanel-val" id="indHist">—</div></div>
     </div>
 
-    <!-- Volatility Section -->
     <div class="rpanel-section">
       <div class="rpanel-title">VOLATILITY</div>
       <div class="rpanel-row"><div class="rpanel-key">ATR (14)</div><div class="rpanel-val" id="indATR" style="color:var(--accent)">—</div></div>
@@ -746,7 +674,6 @@
       <div class="rpanel-row"><div class="rpanel-key">BB Width</div><div class="rpanel-val" id="indBBW">—</div></div>
     </div>
 
-    <!-- Levels Section -->
     <div class="rpanel-section">
       <div class="rpanel-title">KEY LEVELS</div>
       <div class="rpanel-row"><div class="rpanel-key">R3</div><div class="rpanel-val" id="lvlR3" style="color:var(--red)">—</div></div>
@@ -758,7 +685,6 @@
       <div class="rpanel-row"><div class="rpanel-key">S3</div><div class="rpanel-val" id="lvlS3" style="color:var(--green2)">—</div></div>
     </div>
 
-    <!-- MA Section -->
     <div class="rpanel-section">
       <div class="rpanel-title">MOVING AVERAGES</div>
       <div class="rpanel-row"><div class="rpanel-key" style="color:#e91e63">MA5</div><div class="rpanel-val" id="indMA5">—</div></div>
@@ -802,9 +728,7 @@
   <div class="tt-row"><span class="tt-key">Volume</span><span class="tt-val" id="ttV" style="color:var(--text2)"></span></div>
 </div>
 
-<!-- Socket.IO client — loaded from the same server -->
 <script src="/socket.io/socket.io.js"></script>
-
 <script>
 // ─── READ SYMBOL FROM URL ─────────────────────────────────────────────────────
 const urlParams    = new URLSearchParams(window.location.search);
@@ -817,17 +741,13 @@ document.getElementById('symName').textContent = CHART_SYMBOL;
 document.getElementById('fsSym').textContent   = CHART_SYMBOL;
 document.getElementById('symSearchInput').placeholder = CHART_SYMBOL;
 
-// ─── TF → server tf string map ────────────────────────────────────────────────
-// TF_API_MAP: what we send to /api/candles
-// TF_LIVE_MAP: what we send to socket candle:subscribe (matches upstoxStream keys)
 const TF_API_MAP  = { '1m':'1min','5m':'5min','15m':'15min','1H':'1hour','4H':'4hour','1D':'1day','1W':'1week','1M':'1month' };
-const TF_LIVE_MAP = { '1m':'1min','5m':'5min','15m':'15min','1H':'1hour','4H':'4hour' }; // intraday only
+const TF_LIVE_MAP = { '1m':'1min','5m':'5min','15m':'15min','1H':'1hour','4H':'4hour' };
 const TF_DAYS     = { '1m':2,'5m':5,'15m':10,'1H':15,'4H':30,'1D':180,'1W':365,'1M':730 };
 
-// Is the current TF an intraday TF that can receive live tick updates?
 function isIntradayTF(tf) { return tf in TF_LIVE_MAP; }
 
-// ─── SOCKET.IO LIVE CANDLE CONNECTION ─────────────────────────────────────────
+// ─── FIX 1: SOCKET.IO — upstox-status wired, banner logic correct ─────────────
 let socket = null;
 let liveTickBadgeTimer = null;
 
@@ -837,26 +757,47 @@ function initSocket() {
 
     socket.on('connect', () => {
       console.log('🔌 Socket.IO connected:', socket.id);
-      // Re-subscribe after reconnect
-      if (isIntradayTF(CURRENT_TF)) {
-        subscribeToLiveCandles(CHART_SYMBOL, CURRENT_TF);
-      }
+      if (isIntradayTF(CURRENT_TF)) subscribeToLiveCandles(CHART_SYMBOL, CURRENT_TF);
     });
 
     socket.on('disconnect', () => {
       console.log('⚠️ Socket.IO disconnected');
     });
 
-    // ── Live candle tick from server ─────────────────────────────────────────
-    // Server emits this on every price tick for subscribed symbols
-    // payload: { symbol, tf, candle: { time, open, high, low, close, volume } }
+    // ── KEY FIX: upstox-status drives the banner, not loadData failures ──────
+    socket.on('upstox-status', ({ connected, reason } = {}) => {
+      if (connected) {
+        hideError();
+        setDataBadge('stream', '⚡ STREAMING');
+        document.getElementById('liveDot').className = 'live-dot';         // green
+      } else {
+        document.getElementById('liveDot').className = 'live-dot red';     // red
+        if (reason === 'token_expired') {
+          showError('Live data unavailable — token expired', true);
+          setDataBadge('error', '⚠ TOKEN EXPIRED');
+        } else if (reason === 'max_retries') {
+          showError('Upstox disconnected — max retries reached', true);
+          setDataBadge('error', '⚠ OFFLINE');
+        } else {
+          // Transient disconnect — amber dot, wait 15s before showing banner
+          document.getElementById('liveDot').className = 'live-dot amber'; // amber
+          setDataBadge('mock', 'RECONNECTING…');
+          clearTimeout(window._upstoxBannerTimer);
+          window._upstoxBannerTimer = setTimeout(() => {
+            showError('Live data unavailable — showing simulated chart', true);
+            setDataBadge('mock', 'SIMULATED');
+          }, 15_000);
+        }
+      }
+    });
+
+    // ── Live candle tick ──────────────────────────────────────────────────────
     socket.on('candle:tick', ({ symbol, tf, candle }) => {
       if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
       applyLiveCandleTick(candle);
     });
 
-    // ── Candle closed (period ended) ──────────────────────────────────────────
-    // When a period closes, append the completed candle and start a new one
+    // ── Candle period closed ──────────────────────────────────────────────────
     socket.on('candle:closed', ({ symbol, tf, candle }) => {
       if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
       applyClosedCandle(candle);
@@ -870,7 +811,7 @@ function initSocket() {
 function subscribeToLiveCandles(symbol, tf) {
   if (!socket || !socket.connected) return;
   const liveTf = TF_LIVE_MAP[tf];
-  if (!liveTf) return; // not an intraday TF
+  if (!liveTf) return;
   socket.emit('candle:subscribe', { symbol, tf: liveTf });
   console.log(`📡 Subscribed to live candles: ${symbol} @ ${liveTf}`);
 }
@@ -882,7 +823,6 @@ function unsubscribeFromLiveCandles(symbol, tf) {
   socket.emit('candle:unsubscribe', { symbol, tf: liveTf });
 }
 
-// Flash the live tick badge briefly on each tick
 function flashLiveBadge() {
   const badge = document.getElementById('liveTickBadge');
   badge.classList.add('show');
@@ -890,82 +830,7 @@ function flashLiveBadge() {
   liveTickBadgeTimer = setTimeout(() => badge.classList.remove('show'), 1500);
 }
 
-// ─── APPLY LIVE TICK TO LAST CANDLE ──────────────────────────────────────────
-// Called on every candle:tick event.
-// Updates the last candle in CANDLES[] with live H/L/C/V, then re-renders.
-// This is O(1) — no full reload needed.
-let renderPending = false;
-
-function applyLiveCandleTick(liveCandle) {
-  if (!CANDLES.length || !isIntradayTF(CURRENT_TF)) return;
-
-  const last = CANDLES[CANDLES.length - 1];
-  const candleTime = liveCandle.time;
-
-  if (last.date.getTime() === candleTime) {
-    // Same candle period — update H/L/C/V
-    last.h = Math.max(last.h, liveCandle.high);
-    last.l = Math.min(last.l, liveCandle.low);
-    last.c = liveCandle.close;
-    last.v = liveCandle.volume;
-  } else if (candleTime > last.date.getTime()) {
-    // New candle started (shouldn't normally arrive before candle:closed but handle it)
-    CANDLES.push({
-      date: new Date(candleTime),
-      o: liveCandle.open, h: liveCandle.high,
-      l: liveCandle.low,  c: liveCandle.close, v: liveCandle.volume,
-    });
-    // Keep array size sane — trim oldest if over 500 candles
-    if (CANDLES.length > 500) CANDLES.splice(0, CANDLES.length - 500);
-  }
-
-  // Update topbar price
-  document.getElementById('symPrice').textContent = '₹' + liveCandle.close.toFixed(2);
-  document.getElementById('fsPrice').textContent  = '₹' + liveCandle.close.toFixed(2);
-
-  // Throttle renders to ~15fps max so we don't kill the CPU on fast ticks
-  if (!renderPending) {
-    renderPending = true;
-    requestAnimationFrame(() => {
-      renderPending = false;
-      computeInds();
-      updateSidePanel();
-      renderAll();
-      flashLiveBadge();
-    });
-  }
-
-  // Update data badge to show streaming
-  setDataBadge('stream', '⚡ STREAMING');
-}
-
-// Called when a candle period closes — append the final candle
-function applyClosedCandle(closedCandle) {
-  if (!CANDLES.length) return;
-  const last = CANDLES[CANDLES.length - 1];
-  const ct   = closedCandle.time;
-
-  if (last.date.getTime() === ct) {
-    // Finalize the last candle
-    last.h = closedCandle.high;
-    last.l = closedCandle.low;
-    last.c = closedCandle.close;
-    last.v = closedCandle.volume;
-  } else if (ct > last.date.getTime()) {
-    // Append new candle
-    CANDLES.push({
-      date: new Date(ct),
-      o: closedCandle.open, h: closedCandle.high,
-      l: closedCandle.low,  c: closedCandle.close, v: closedCandle.volume,
-    });
-    if (CANDLES.length > 500) CANDLES.splice(0, CANDLES.length - 500);
-  }
-  computeInds();
-  updateSidePanel();
-  renderAll();
-}
-
-// ─── POPULAR STOCKS LIST ──────────────────────────────────────────────────────
+// ─── POPULAR STOCKS ───────────────────────────────────────────────────────────
 const POPULAR_STOCKS = [
   {sym:'RELIANCE',name:'Reliance Industries'},{sym:'TCS',name:'Tata Consultancy'},{sym:'INFY',name:'Infosys'},
   {sym:'HDFCBANK',name:'HDFC Bank'},{sym:'ICICIBANK',name:'ICICI Bank'},{sym:'SBIN',name:'State Bank of India'},
@@ -999,7 +864,7 @@ const POPULAR_STOCKS = [
   {sym:'FLUOROCHEM',name:'Gujarat Fluorochemicals'},{sym:'CEMPRO',name:'Cempro'},
 ];
 
-// ─── SYMBOL SEARCH AUTOCOMPLETE ──────────────────────────────────────────────
+// ─── SYMBOL SEARCH ────────────────────────────────────────────────────────────
 const searchInput = document.getElementById('symSearchInput');
 const dropdown    = document.getElementById('symDropdown');
 
@@ -1018,23 +883,15 @@ searchInput.addEventListener('input', () => {
 });
 
 searchInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    const val = searchInput.value.toUpperCase().trim();
-    if (val) changeSymbol(val);
-  }
+  if (e.key === 'Enter') { const val = searchInput.value.toUpperCase().trim(); if (val) changeSymbol(val); }
   if (e.key === 'Escape') { dropdown.style.display = 'none'; searchInput.value = ''; }
 });
-
 document.addEventListener('click', e => {
-  if (!searchInput.contains(e.target) && !dropdown.contains(e.target)) {
-    dropdown.style.display = 'none';
-  }
+  if (!searchInput.contains(e.target) && !dropdown.contains(e.target)) dropdown.style.display = 'none';
 });
 
 function changeSymbol(sym, seedPrice) {
-  // Unsubscribe old symbol
   if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(CHART_SYMBOL, CURRENT_TF);
-
   CHART_SYMBOL = sym.toUpperCase().trim();
   SEED_LTP = seedPrice || null;
   dropdown.style.display = 'none';
@@ -1053,10 +910,7 @@ function changeSymbol(sym, seedPrice) {
 }
 
 window.addEventListener('open-terminal', (e) => {
-  if (e.detail?.symbol) {
-    const ltp = e.detail.ltp || null;
-    changeSymbol(e.detail.symbol, ltp);
-  }
+  if (e.detail?.symbol) changeSymbol(e.detail.symbol, e.detail.ltp || null);
 });
 
 // ─── DATA GENERATION (fallback) ───────────────────────────────────────────────
@@ -1205,7 +1059,6 @@ function computeSignal(INDS, closes) {
   return{score,label,color};
 }
 
-// ─── PIVOT LEVELS ─────────────────────────────────────────────────────────────
 function pivotLevels(candles) {
   const prev = candles[candles.length - 2] || candles[candles.length - 1];
   const h=prev.h, l=prev.l, c=prev.c;
@@ -1219,8 +1072,7 @@ function pivotLevels(candles) {
 let CANDLES = [];
 let INDS    = null;
 const state = {
-  zoom: 1.0, panX: 0,
-  fsZoom: 1.0,
+  zoom: 1.0, panX: 0, fsZoom: 1.0,
   activePanel: 'macd',
   inds: {ma5:true,ma9:true,ma21:true,ma50:true,ma200:true,st:true,vwap:true,bb:true},
   dragging:false, dragStart:0, panStart:0,
@@ -1229,11 +1081,9 @@ const state = {
 function visibleCount() { return Math.round(80/state.zoom); }
 function startIdx()     { const vc=visibleCount(); return Math.max(0,Math.min(CANDLES.length-vc,Math.round(state.panX))); }
 
-// ─── LOAD DATA ────────────────────────────────────────────────────────────────
+// ─── FIX 2: loadData — no persistent banner on API failure ────────────────────
 async function loadData(sym, tf) {
-  // Unsubscribe previous live feed
   if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(sym, CURRENT_TF);
-
   showLoading(`Loading ${sym} · ${tf}…`);
   hideError();
   try {
@@ -1248,20 +1098,16 @@ async function loadData(sym, tf) {
     const tfVol     = { '1m':0.5,'5m':1.5,'15m':2,'1H':4,'4H':7,'1D':15,'1W':28,'1M':45 };
     CANDLES = genCandles(nMap[tf]||120, basePrice * 0.88, (tfVol[tf]||15) * volRatio, driftMap[tf]||-0.003);
     setDataBadge('mock', 'SIMULATED');
-    showError(`Live data unavailable — showing simulated chart`, true);
+    // Non-persistent — auto-hides after 8s. upstox-status drives the permanent banner.
+    showError(`Historical data unavailable — showing simulated chart`, false);
   }
-
   computeInds();
   state.panX = Math.max(0, CANDLES.length - 80);
   updateHeader();
   updateSidePanel();
   renderAll();
   hideLoading();
-
-  // Subscribe to live candle ticks for intraday TFs
-  if (isIntradayTF(tf)) {
-    subscribeToLiveCandles(sym, tf);
-  }
+  if (isIntradayTF(tf)) subscribeToLiveCandles(sym, tf);
 }
 
 function computeInds() {
@@ -1271,15 +1117,10 @@ function computeInds() {
   const lows   = CANDLES.map(c=>c.l);
   const vols   = CANDLES.map(c=>c.v);
   INDS = {
-    ma5:  sma(closes,5),
-    ma9:  sma(closes,9),
-    ma21: sma(closes,21),
-    ma50: sma(closes,50),
-    ma200:sma(closes,200),
-    bb:   bb(closes,20,2),
-    macd: macd(closes),
-    rsi:  rsi(closes),
-    stoch:stoch(highs,lows,closes),
+    ma5:  sma(closes,5),  ma9:  sma(closes,9),  ma21: sma(closes,21),
+    ma50: sma(closes,50), ma200:sma(closes,200),
+    bb:   bb(closes,20,2), macd: macd(closes),
+    rsi:  rsi(closes),    stoch:stoch(highs,lows,closes),
     st:   supertrend(highs,lows,closes),
     vwap: vwapCalc(highs,lows,closes,vols),
     atr:  atr(highs,lows,closes),
@@ -1294,23 +1135,19 @@ function updateHeader() {
   const diff  = last.c - first.o;
   const pct   = first.o ? (diff/first.o*100) : 0;
   const isPos = diff >= 0;
-
   document.getElementById('symPrice').textContent  = '₹' + last.c.toFixed(2);
   document.getElementById('fsPrice').textContent   = '₹' + last.c.toFixed(2);
   const chgEl = document.getElementById('symChange');
   chgEl.textContent = `${isPos?'▲':'▼'} ${isPos?'+':''}${diff.toFixed(2)} (${isPos?'+':''}${pct.toFixed(2)}%)`;
   chgEl.className = 'sym-change ' + (isPos?'pos':'neg');
-
   document.getElementById('oOpen').textContent = '₹' + last.o.toFixed(2);
   document.getElementById('oHigh').textContent = '₹' + last.h.toFixed(2);
   document.getElementById('oLow').textContent  = '₹' + last.l.toFixed(2);
   document.getElementById('oVol').textContent  = fmtVol(last.v);
-
   const h52 = Math.max(...CANDLES.map(c=>c.h));
   const l52 = Math.min(...CANDLES.map(c=>c.l));
   document.getElementById('o52H').textContent = '₹' + h52.toFixed(2);
   document.getElementById('o52L').textContent = '₹' + l52.toFixed(2);
-
   document.getElementById('liveDot').className = 'live-dot';
 }
 
@@ -1379,8 +1216,7 @@ function updateSidePanel() {
   document.getElementById('indMACD').style.color    = macdLine > 0 ? 'var(--green)' : 'var(--red)';
   document.getElementById('indMACDSig').textContent = macdSig !== null ? (macdSig>0?'+':'') + macdSig.toFixed(2) : '—';
   if (macdHist !== null) {
-    const cross = macdHist>0?'BULLISH':'BEARISH';
-    document.getElementById('indHist').innerHTML = `${(macdHist>0?'+':'')+macdHist.toFixed(2)} <span class="tag ${macdHist>0?'tag-bullish':'tag-bearish'}" style="margin-left:4px">${cross}</span>`;
+    document.getElementById('indHist').innerHTML = `${(macdHist>0?'+':'')+macdHist.toFixed(2)} <span class="tag ${macdHist>0?'tag-bullish':'tag-bearish'}" style="margin-left:4px">${macdHist>0?'BULLISH':'BEARISH'}</span>`;
   }
 
   const bbV = INDS.bb[last];
@@ -1405,33 +1241,81 @@ function updateSidePanel() {
   Object.entries(maMap).forEach(([id, key]) => {
     const v = INDS[key][last];
     const el = document.getElementById(id);
-    if (v) {
-      el.textContent = '₹' + v.toFixed(1) + (ltp > v ? ' ▲' : ' ▼');
-      el.style.color = ltp > v ? 'var(--green)' : 'var(--red)';
-    } else {
-      el.textContent = 'N/A';
-      el.style.color = 'var(--text2)';
-    }
+    if (v) { el.textContent = '₹' + v.toFixed(1) + (ltp > v ? ' ▲' : ' ▼'); el.style.color = ltp > v ? 'var(--green)' : 'var(--red)'; }
+    else   { el.textContent = 'N/A'; el.style.color = 'var(--text2)'; }
   });
 }
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
+// ─── FIX 3: HELPERS — showError no longer always shows Reconnect link ─────────
 function fmtVol(v) { return v>1e6?(v/1e6).toFixed(2)+'M':v>1e3?(v/1e3).toFixed(0)+'K':v; }
 function showLoading(txt) { document.getElementById('loadingOverlay').classList.add('show'); document.getElementById('loadingText').textContent = txt||'Loading…'; }
-function hideLoading()   { document.getElementById('loadingOverlay').classList.remove('show'); }
+function hideLoading()    { document.getElementById('loadingOverlay').classList.remove('show'); }
+
 function showError(msg, persistent) {
   const el = document.getElementById('errorBanner');
   el.innerHTML = msg + (persistent
     ? ' — <a href="/auth/upstox" style="color:var(--accent);text-decoration:underline">Reconnect Upstox</a>'
     : '');
   el.classList.add('show');
-  if (!persistent) setTimeout(() => el.classList.remove('show'), 5000);
+  // Auto-hide after 8s for non-persistent notices
+  if (!persistent) {
+    clearTimeout(window._errBannerTimer);
+    window._errBannerTimer = setTimeout(() => el.classList.remove('show'), 8_000);
+  }
 }
-function hideError()     { document.getElementById('errorBanner').classList.remove('show'); }
+
+function hideError() {
+  clearTimeout(window._errBannerTimer);
+  clearTimeout(window._upstoxBannerTimer);
+  document.getElementById('errorBanner').classList.remove('show');
+}
+
 function setDataBadge(type, text) {
   const el = document.getElementById('dataBadge');
   el.className = 'data-badge ' + type;
   el.textContent = text;
+}
+
+// ─── APPLY LIVE TICK TO LAST CANDLE ──────────────────────────────────────────
+let renderPending = false;
+
+function applyLiveCandleTick(liveCandle) {
+  if (!CANDLES.length || !isIntradayTF(CURRENT_TF)) return;
+  const last = CANDLES[CANDLES.length - 1];
+  const candleTime = liveCandle.time;
+  if (last.date.getTime() === candleTime) {
+    last.h = Math.max(last.h, liveCandle.high);
+    last.l = Math.min(last.l, liveCandle.low);
+    last.c = liveCandle.close;
+    last.v = liveCandle.volume;
+  } else if (candleTime > last.date.getTime()) {
+    CANDLES.push({ date: new Date(candleTime), o: liveCandle.open, h: liveCandle.high, l: liveCandle.low, c: liveCandle.close, v: liveCandle.volume });
+    if (CANDLES.length > 500) CANDLES.splice(0, CANDLES.length - 500);
+  }
+  document.getElementById('symPrice').textContent = '₹' + liveCandle.close.toFixed(2);
+  document.getElementById('fsPrice').textContent  = '₹' + liveCandle.close.toFixed(2);
+  if (!renderPending) {
+    renderPending = true;
+    requestAnimationFrame(() => {
+      renderPending = false;
+      computeInds(); updateSidePanel(); renderAll(); flashLiveBadge();
+    });
+  }
+  setDataBadge('stream', '⚡ STREAMING');
+}
+
+function applyClosedCandle(closedCandle) {
+  if (!CANDLES.length) return;
+  const last = CANDLES[CANDLES.length - 1];
+  const ct   = closedCandle.time;
+  if (last.date.getTime() === ct) {
+    last.h = closedCandle.high; last.l = closedCandle.low;
+    last.c = closedCandle.close; last.v = closedCandle.volume;
+  } else if (ct > last.date.getTime()) {
+    CANDLES.push({ date: new Date(ct), o: closedCandle.open, h: closedCandle.high, l: closedCandle.low, c: closedCandle.close, v: closedCandle.volume });
+    if (CANDLES.length > 500) CANDLES.splice(0, CANDLES.length - 500);
+  }
+  computeInds(); updateSidePanel(); renderAll();
 }
 
 // ─── CANVAS SETUP ────────────────────────────────────────────────────────────
@@ -1465,15 +1349,13 @@ function drawMain(canvas, wrap, zoom, panX) {
   const cw_px = w/vc;
   const py=(v)=>h-(v-mn)/(mx-mn)*h;
 
-  // Grid
   ctx.strokeStyle='#1e3048'; ctx.lineWidth=0.5;
   const gridN=6;
   for(let i=0;i<=gridN;i++){
     const y=h*i/gridN;
     ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
     const val=(mx-(mx-mn)*i/gridN).toFixed(1);
-    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono';
-    ctx.fillText('₹'+val,4,y-3);
+    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.fillText('₹'+val,4,y-3);
   }
   const step=Math.max(1,Math.floor(vc/8));
   for(let i=0;i<vc;i+=step){
@@ -1482,13 +1364,11 @@ function drawMain(canvas, wrap, zoom, panX) {
     if(i<vis.length){
       const d=vis[i].date;
       const label=d instanceof Date && !isNaN(d) ? d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}) : '';
-      ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono';
-      ctx.fillText(label,x-14,h-4);
+      ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.fillText(label,x-14,h-4);
     }
   }
 
   if(INDS){
-    // BB
     if(state.inds.bb){
       const bs=indSlice('bb');
       ctx.beginPath();
@@ -1503,7 +1383,6 @@ function drawMain(canvas, wrap, zoom, panX) {
       ctx.closePath(); ctx.fillStyle='rgba(96,125,139,.04)'; ctx.fill();
     }
 
-    // MAs
     const maColors={ma5:'#e91e63',ma9:'#ff9800',ma21:'#2196f3',ma50:'#4caf50',ma200:'#9c27b0'};
     Object.entries(maColors).forEach(([k,col])=>{
       if(!state.inds[k]) return;
@@ -1513,7 +1392,6 @@ function drawMain(canvas, wrap, zoom, panX) {
       ctx.stroke();
     });
 
-    // VWAP
     if(state.inds.vwap){
       const vw=indSlice('vwap'); let started=false;
       ctx.beginPath(); ctx.strokeStyle='#ffeb3b'; ctx.lineWidth=1.3; ctx.setLineDash([5,3]);
@@ -1521,20 +1399,17 @@ function drawMain(canvas, wrap, zoom, panX) {
       ctx.stroke(); ctx.setLineDash([]);
     }
 
-    // SuperTrend dots
     if(state.inds.st){
       const sts=indSlice('st');
       sts.forEach((s,i)=>{
         if(s.val==null) return;
         const x=(i+0.5)*cw_px, y=py(s.val);
         ctx.beginPath(); ctx.arc(x,y,1.5,0,Math.PI*2);
-        ctx.fillStyle=s.trend==='up'?'#00e676':'#ef5350';
-        ctx.fill();
+        ctx.fillStyle=s.trend==='up'?'#00e676':'#ef5350'; ctx.fill();
       });
     }
   }
 
-  // Candles
   vis.forEach((c,i)=>{
     const x=(i+0.5)*cw_px;
     const bull=c.c>=c.o;
@@ -1544,7 +1419,6 @@ function drawMain(canvas, wrap, zoom, panX) {
     ctx.beginPath(); ctx.moveTo(x,py(c.h)); ctx.lineTo(x,py(c.l)); ctx.stroke();
     const by=py(Math.max(c.o,c.c));
     const bh=Math.max(Math.abs(py(c.o)-py(c.c)),1);
-    // Highlight the last (live) candle with a subtle glow if streaming
     const isLast = i === vis.length - 1;
     ctx.fillStyle=bull?'rgba(38,166,154,.85)':'rgba(239,83,80,.85)';
     if (isLast && isIntradayTF(CURRENT_TF)) {
@@ -1554,17 +1428,14 @@ function drawMain(canvas, wrap, zoom, panX) {
     }
     ctx.fillRect(x-bodyW/2,by,bodyW,bh);
     ctx.shadowBlur = 0;
-    ctx.strokeStyle=col;
-    ctx.strokeRect(x-bodyW/2,by,bodyW,bh);
+    ctx.strokeStyle=col; ctx.strokeRect(x-bodyW/2,by,bodyW,bh);
   });
 
-  // Last price line
   const lp=CANDLES[CANDLES.length-1].c;
   const ly=py(lp);
   if(ly>0&&ly<h){
     ctx.setLineDash([4,4]); ctx.strokeStyle='rgba(0,229,255,.4)'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(0,ly); ctx.lineTo(w,ly); ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(0,ly); ctx.lineTo(w,ly); ctx.stroke(); ctx.setLineDash([]);
     const label='₹'+lp.toFixed(2);
     ctx.font='bold 10px JetBrains Mono';
     const tw=ctx.measureText(label).width;
@@ -1611,8 +1482,7 @@ function drawSub1(canvas, wrap) {
     let s2=false; ctx.beginPath(); ctx.strokeStyle='#ff9800'; ctx.lineWidth=1;
     st2.forEach((sv,i)=>{ if(sv.k==null)return; const x=(i+0.5)*cw_px; s2?ctx.lineTo(x,py(sv.k)):ctx.moveTo(x,py(sv.k)); s2=true; }); ctx.stroke();
     const lastRsi=rs[rs.length-1];
-    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono';
-    ctx.fillText(`RSI(14): ${lastRsi?.toFixed(1)??'—'}`,6,10);
+    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.fillText(`RSI(14): ${lastRsi?.toFixed(1)??'—'}`,6,10);
   } else {
     const vs=CANDLES.slice(si,ei).map(c=>c.v);
     const mv=Math.max(...vs,1);
@@ -1717,11 +1587,9 @@ cw_el.addEventListener('mousemove',e=>{
 });
 cw_el.addEventListener('mouseleave',()=>{ tt.style.display='none'; });
 
-// ─── TIMEFRAME BUTTONS ────────────────────────────────────────────────────────
+// ─── TIMEFRAME ────────────────────────────────────────────────────────────────
 function setTF(tf, btn){
-  // Unsubscribe old tf
   if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(CHART_SYMBOL, CURRENT_TF);
-
   CURRENT_TF = tf;
   document.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('active'));
   if(btn) btn.classList.add('active');
@@ -1730,14 +1598,8 @@ function setTF(tf, btn){
   loadData(CHART_SYMBOL, tf);
 }
 
-// ─── INDICATORS ───────────────────────────────────────────────────────────────
-function toggleInd(btn,key){
-  state.inds[key]=!state.inds[key];
-  btn.classList.toggle('active');
-  renderAll();
-}
+function toggleInd(btn,key){ state.inds[key]=!state.inds[key]; btn.classList.toggle('active'); renderAll(); }
 
-// ─── SUB PANEL TOGGLE ─────────────────────────────────────────────────────────
 function setPanel(panel,btn){
   state.activePanel=panel;
   document.querySelectorAll('.panel-tab').forEach(b=>b.classList.remove('active'));
@@ -1748,11 +1610,7 @@ function setPanel(panel,btn){
 }
 
 // ─── FULLSCREEN ───────────────────────────────────────────────────────────────
-function openFullscreen(){
-  document.getElementById('fs-overlay').classList.add('open');
-  state.fsZoom=state.zoom;
-  setTimeout(renderFS,50);
-}
+function openFullscreen(){ document.getElementById('fs-overlay').classList.add('open'); state.fsZoom=state.zoom; setTimeout(renderFS,50); }
 function closeFullscreen(){ document.getElementById('fs-overlay').classList.remove('open'); }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeFullscreen(); });
 document.getElementById('fsChartWrap').addEventListener('wheel',e=>{
@@ -1783,7 +1641,7 @@ ro.observe(document.getElementById('subPanel2'));
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
-  initSocket();          // Connect Socket.IO first
+  initSocket();
   loadData(CHART_SYMBOL, CURRENT_TF);
 });
 window.addEventListener('resize', renderAll);
