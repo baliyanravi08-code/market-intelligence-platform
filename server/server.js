@@ -673,11 +673,17 @@ app.get("/api/test-circuit", async (req, res) => {
 });
 
 // ── /api/candles/:symbol ──────────────────────────────────────────────────────
-// FIX: Intraday timeframes (5m/15m/1H/4H) now:
-//   1. Fetch today's live candles via /intraday endpoint
-//   2. Fetch historical candles (up to yesterday) via /historical-candle endpoint
-//   3. Merge both arrays so the chart shows a full continuous intraday history
-// EOD timeframes (1D/1W/1M) unchanged — work fine as before.
+// FIXED: Switched to Upstox v3 API which supports all intraday intervals.
+// v2 intraday endpoint only supported 1minute and 30minute — causing 15min/5min/1H/4H
+// to return empty. v3 uses /minutes/{N} path format supporting any interval.
+//
+// v3 URL format:
+//   Historical: GET /v3/historical-candle/{key}/{unit}/{to}/{from}
+//               e.g. /v3/historical-candle/{key}/minutes/15/2026-04-29/2026-04-01
+//   Intraday:   GET /v3/historical-candle/intraday/{key}/{unit}/{N}
+//               e.g. /v3/historical-candle/intraday/{key}/minutes/15
+//   EOD:        GET /v3/historical-candle/{key}/days/{to}/{from}
+//               e.g. /v3/historical-candle/{key}/days/2026-04-30/2026-01-01
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const tf     = req.query.tf || "1day";
@@ -691,79 +697,103 @@ app.get("/api/candles/:symbol", async (req, res) => {
     return res.json({ ok: false, error: "No token — visit /auth/upstox", symbol });
   }
 
-  const TF_MAP = {
-    "5min":   "5minute",
-    "15min":  "15minute",
-    "30min":  "30minute",
-    "1hour":  "60minute",
-    "4hour":  "240minute",
-    "1day":   "day",
-    "1week":  "week",
-    "1month": "month",
+  // v3 API config: intraday uses unit=minutes + count, EOD uses unit=days/weeks/months
+  const TF_MAP_V3 = {
+    "5min":   { unit: "minutes", minutes: 5 },
+    "15min":  { unit: "minutes", minutes: 15 },
+    "30min":  { unit: "minutes", minutes: 30 },
+    "1hour":  { unit: "minutes", minutes: 60 },
+    "4hour":  { unit: "minutes", minutes: 240 },
+    "1day":   { unit: "days",    minutes: null },
+    "1week":  { unit: "weeks",   minutes: null },
+    "1month": { unit: "months",  minutes: null },
   };
-  const interval   = TF_MAP[tf] || "day";
-  const isIntraday = ["5minute", "15minute", "30minute", "60minute", "240minute"].includes(interval);
+
+  const tfCfg      = TF_MAP_V3[tf] || TF_MAP_V3["1day"];
+  const isIntraday = tfCfg.unit === "minutes";
   const fmt        = d => d.toISOString().split("T")[0];
   const headers    = { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" };
+  const encodedKey = encodeURIComponent(instrKey);
+
+  // Build v3 URLs
+  // For intraday: /v3/historical-candle/{key}/minutes/{N}/{to}/{from}
+  // For EOD:      /v3/historical-candle/{key}/{unit}/{to}/{from}
+  // For today:    /v3/historical-candle/intraday/{key}/minutes/{N}
+  const buildHistUrl = (toDate, fromDate) => {
+    const unitSegment = isIntraday
+      ? `${tfCfg.unit}/${tfCfg.minutes}`
+      : tfCfg.unit;
+    return `https://api.upstox.com/v3/historical-candle/${encodedKey}/${unitSegment}/${fmt(toDate)}/${fmt(fromDate)}`;
+  };
+
+  const buildIntradayUrl = () => {
+    return `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/${tfCfg.minutes}`;
+  };
+
+  // v3 candle format: [timestamp, open, high, low, close, volume, oi]
+  // v3 returns newest-first — reverse to get chronological order
+  const parseCandles = (raw) =>
+    (raw || [])
+      .map(c => ({
+        time:   new Date(c[0]).getTime(),
+        open:   c[1],
+        high:   c[2],
+        low:    c[3],
+        close:  c[4],
+        volume: c[5],
+      }))
+      .reverse();
 
   try {
     let allCandles = [];
 
     if (isIntraday) {
-      // ── Step 1: Today's live intraday candles ─────────────────────────────
+      // ── Step 1: Today's live intraday candles (v3 intraday endpoint) ──────
       try {
-        const intradayUrl = `https://api.upstox.com/v2/historical-candle/intraday/${encodeURIComponent(instrKey)}/${interval}`;
-        const r = await axios.get(intradayUrl, { headers, timeout: 15_000 });
-        const todayCandles = (r.data?.data?.candles || []).map(c => ({
-          time: new Date(c[0]).getTime(), open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5],
-        }));
-        // Intraday endpoint returns newest first — reverse for chronological order
-        todayCandles.reverse();
+        const url = buildIntradayUrl();
+        const r   = await axios.get(url, { headers, timeout: 15_000 });
+        const todayCandles = parseCandles(r.data?.data?.candles);
         allCandles = todayCandles;
-        console.log(`✅ Intraday [${symbol}/${interval}]: ${todayCandles.length} candles today`);
+        console.log(`✅ v3 intraday [${symbol}/${tf}]: ${todayCandles.length} candles today`);
       } catch (e) {
-        console.warn(`⚠️ Intraday fetch [${symbol}/${interval}]:`, e.response?.data?.message || e.message);
+        console.warn(`⚠️ v3 intraday [${symbol}/${tf}]:`, e.response?.data?.message || e.message);
       }
 
-      // ── Step 2: Historical intraday candles (yesterday and back) ──────────
-      // toDate = yesterday (Upstox rejects today's date for historical intraday)
+      // ── Step 2: Historical intraday candles (yesterday and back) ─────────
+      // toDate = yesterday — Upstox rejects today's date for historical endpoint
       const toDate   = new Date();
       toDate.setDate(toDate.getDate() - 1);
       const fromDate = new Date();
       fromDate.setDate(fromDate.getDate() - Math.min(days, 30));
 
       try {
-        const histUrl = `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/${interval}/${fmt(toDate)}/${fmt(fromDate)}`;
-        const r = await axios.get(histUrl, { headers, timeout: 15_000 });
-        const histCandles = (r.data?.data?.candles || []).map(c => ({
-          time: new Date(c[0]).getTime(), open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5],
-        })).reverse(); // historical endpoint returns newest first
+        const url = buildHistUrl(toDate, fromDate);
+        const r   = await axios.get(url, { headers, timeout: 15_000 });
+        const histCandles = parseCandles(r.data?.data?.candles);
         // Prepend historical before today's candles
         allCandles = [...histCandles, ...allCandles];
-        console.log(`✅ Historical intraday [${symbol}/${interval}]: ${histCandles.length} candles`);
+        console.log(`✅ v3 historical intraday [${symbol}/${tf}]: ${histCandles.length} candles`);
       } catch (e) {
-        console.warn(`⚠️ Historical intraday [${symbol}/${interval}]:`, e.response?.data?.message || e.message);
+        console.warn(`⚠️ v3 historical intraday [${symbol}/${tf}]:`, e.response?.data?.message || e.message);
       }
 
     } else {
-      // ── EOD candles (1D / 1W / 1M) — unchanged, works fine ───────────────
+      // ── EOD candles (1D / 1W / 1M) ───────────────────────────────────────
       const toDate   = new Date();
       const fromDate = new Date();
       fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
 
-      const url = `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/${interval}/${fmt(toDate)}/${fmt(fromDate)}`;
+      const url = buildHistUrl(toDate, fromDate);
       const r   = await axios.get(url, { headers, timeout: 15_000 });
-      const candles = r.data?.data?.candles || [];
-      allCandles = candles.map(c => ({
-        time: new Date(c[0]).getTime(), open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5],
-      })).reverse();
+      allCandles = parseCandles(r.data?.data?.candles);
+      console.log(`✅ v3 EOD [${symbol}/${tf}]: ${allCandles.length} candles`);
     }
 
     if (!allCandles.length) {
       return res.json({ ok: false, symbol, tf, error: "No candles returned from Upstox" });
     }
 
-    // Deduplicate by timestamp (in case of overlap between intraday + historical)
+    // Deduplicate by timestamp (overlap between today's intraday + historical)
     const seen = new Set();
     allCandles = allCandles.filter(c => {
       if (seen.has(c.time)) return false;
@@ -771,13 +801,21 @@ app.get("/api/candles/:symbol", async (req, res) => {
       return true;
     });
 
-    res.json({ ok: true, symbol, tf, interval, count: allCandles.length, candles: allCandles });
+    res.json({
+      ok:       true,
+      symbol,
+      tf,
+      interval: isIntraday ? `${tfCfg.unit}/${tfCfg.minutes}` : tfCfg.unit,
+      count:    allCandles.length,
+      candles:  allCandles,
+    });
 
   } catch (e) {
     console.error(`Candle fetch failed [${symbol}/${tf}]:`, e.response?.data || e.message);
     res.json({
       ok:     false,
-      symbol, tf,
+      symbol,
+      tf,
       error:  e.response?.data?.message || e.message,
       status: e.response?.status,
     });
