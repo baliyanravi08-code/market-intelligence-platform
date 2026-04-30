@@ -1070,7 +1070,7 @@ async function loadData(sym, tf) {
     const tfVol     = { '5m':1.5,'15m':2,'1H':4,'4H':7,'1D':15,'1W':28,'1M':45 };
     CANDLES = genCandles(nMap[tf]||120, basePrice * 0.88, (tfVol[tf]||15) * volRatio, driftMap[tf]||-0.003);
     setDataBadge('mock', 'SIMULATED');
-    showError(`Live data unavailable — showing simulated chart`);
+showError(`Live data unavailable — showing simulated chart`, true);
   }
   computeInds();
   state.panX = Math.max(0, CANDLES.length - 80);
@@ -1241,7 +1241,14 @@ function updateSidePanel() {
 function fmtVol(v) { return v>1e6?(v/1e6).toFixed(2)+'M':v>1e3?(v/1e3).toFixed(0)+'K':v; }
 function showLoading(txt) { document.getElementById('loadingOverlay').classList.add('show'); document.getElementById('loadingText').textContent = txt||'Loading…'; }
 function hideLoading()   { document.getElementById('loadingOverlay').classList.remove('show'); }
-function showError(msg)  { const el=document.getElementById('errorBanner'); el.textContent=msg; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),5000); }
+function showError(msg, persistent) {
+  const el = document.getElementById('errorBanner');
+  el.innerHTML = msg + (persistent
+    ? ' — <a href="/auth/upstox" style="color:var(--accent);text-decoration:underline">Reconnect Upstox</a>'
+    : '');
+  el.classList.add('show');
+  if (!persistent) setTimeout(() => el.classList.remove('show'), 5000);
+}
 function hideError()     { document.getElementById('errorBanner').classList.remove('show'); }
 function setDataBadge(type, text) {
   const el = document.getElementById('dataBadge');

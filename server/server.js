@@ -150,7 +150,6 @@ async function saveTokenEverywhere(token, expiry) {
 }
 
 // ── Instrument master cache ───────────────────────────────────────────────────
-// FIX: Increased from 800 to 5000 to cover all NSE + BSE EQ stocks
 const MAX_INSTRUMENT_SYMBOLS = 5000;
 let instrumentMap = {};
 
@@ -189,7 +188,6 @@ async function loadInstrumentMaster() {
 
       for (const inst of instruments) {
         if (inst.segment === segment && inst.instrument_type === "EQ") {
-          // NSE takes priority — only set BSE key if NSE key not already present
           if (!map[inst.trading_symbol] || segment === "NSE_EQ") {
             map[inst.trading_symbol] = inst.instrument_key;
           }
@@ -199,7 +197,6 @@ async function loadInstrumentMaster() {
     }
 
     const entries = Object.entries(map);
-    // FIX: Use increased cap of MAX_INSTRUMENT_SYMBOLS (5000)
     instrumentMap = entries.length > MAX_INSTRUMENT_SYMBOLS
       ? Object.fromEntries(entries.slice(0, MAX_INSTRUMENT_SYMBOLS))
       : map;
@@ -257,13 +254,9 @@ function _pushMapToGann(map) {
 
 function getInstrumentMap() { return instrumentMap; }
 
-// ── FIX: Full instrument map lookup (for BSE-only stocks not in RAM cap) ──────
-// Reads the full untruncated map from disk when a symbol isn't in instrumentMap
+// Full instrument map lookup (for BSE-only stocks not in RAM cap)
 function getInstrumentKeyFull(symbol) {
-  // 1. Check RAM map first (fast path)
   if (instrumentMap[symbol]) return instrumentMap[symbol];
-
-  // 2. Fall back to full disk map (covers BSE-only stocks like COHANCE)
   try {
     if (fs.existsSync(INSTRUMENT_FILE)) {
       const cached  = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
@@ -276,7 +269,6 @@ function getInstrumentKeyFull(symbol) {
   } catch (e) {
     console.warn(`⚠️ Full instrument map lookup failed for ${symbol}:`, e.message);
   }
-
   return null;
 }
 
@@ -358,7 +350,7 @@ function clearToken() {
 // ── MEMORY FIX: marketCapDB module-level cache ────────────────────────────────
 let _mcapCache   = null;
 let _mcapCacheTS = 0;
-const MCAP_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const MCAP_CACHE_TTL = 10 * 60 * 1000;
 
 function getCachedMcap(limit) {
   if (_mcapCache && Date.now() - _mcapCacheTS < MCAP_CACHE_TTL) {
@@ -665,7 +657,6 @@ app.get("/api/debug/candles", async (req, res) => {
 
 // ── /api/test-circuit ─────────────────────────────────────────────────────────
 app.get("/api/test-circuit", async (req, res) => {
-  // FIX: use getInstrumentKeyFull so BSE-only stocks work here too
   const symbol = req.query.symbol || "RELIANCE";
   const ikey   = getInstrumentKeyFull(symbol);
   if (!ikey) return res.json({ error: `Symbol ${symbol} not in instrument map`, mapSize: Object.keys(instrumentMap).length });
@@ -682,14 +673,16 @@ app.get("/api/test-circuit", async (req, res) => {
 });
 
 // ── /api/candles/:symbol ──────────────────────────────────────────────────────
-// FIX: Uses getInstrumentKeyFull() which checks RAM map first, then falls back
-// to the full disk map — so BSE-only stocks like COHANCE now work correctly.
+// FIX: Intraday timeframes (5m/15m/1H/4H) now:
+//   1. Fetch today's live candles via /intraday endpoint
+//   2. Fetch historical candles (up to yesterday) via /historical-candle endpoint
+//   3. Merge both arrays so the chart shows a full continuous intraday history
+// EOD timeframes (1D/1W/1M) unchanged — work fine as before.
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const tf     = req.query.tf || "1day";
   const days   = parseInt(req.query.days || "30");
 
-  // FIX: getInstrumentKeyFull checks RAM (fast) then full disk map (BSE fallback)
   const instrKey = getInstrumentKeyFull(symbol);
   if (!instrKey) {
     return res.json({ ok: false, error: `Symbol ${symbol} not found`, symbol });
@@ -708,36 +701,78 @@ app.get("/api/candles/:symbol", async (req, res) => {
     "1week":  "week",
     "1month": "month",
   };
-  const interval = TF_MAP[tf] || "day";
-
-  const toDate   = new Date();
-  const fromDate = new Date();
-  if (["5minute","15minute","30minute","60minute","240minute"].includes(interval)) {
-    fromDate.setDate(fromDate.getDate() - Math.min(days, 30));
-  } else {
-    fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
-  }
-
-  const fmt = d => d.toISOString().split("T")[0];
+  const interval   = TF_MAP[tf] || "day";
+  const isIntraday = ["5minute", "15minute", "30minute", "60minute", "240minute"].includes(interval);
+  const fmt        = d => d.toISOString().split("T")[0];
+  const headers    = { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" };
 
   try {
-    const url = `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/${interval}/${fmt(toDate)}/${fmt(fromDate)}`;
-    const r   = await axios.get(url, {
-      headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
-      timeout: 15_000,
+    let allCandles = [];
+
+    if (isIntraday) {
+      // ── Step 1: Today's live intraday candles ─────────────────────────────
+      try {
+        const intradayUrl = `https://api.upstox.com/v2/historical-candle/intraday/${encodeURIComponent(instrKey)}/${interval}`;
+        const r = await axios.get(intradayUrl, { headers, timeout: 15_000 });
+        const todayCandles = (r.data?.data?.candles || []).map(c => ({
+          time: new Date(c[0]).getTime(), open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5],
+        }));
+        // Intraday endpoint returns newest first — reverse for chronological order
+        todayCandles.reverse();
+        allCandles = todayCandles;
+        console.log(`✅ Intraday [${symbol}/${interval}]: ${todayCandles.length} candles today`);
+      } catch (e) {
+        console.warn(`⚠️ Intraday fetch [${symbol}/${interval}]:`, e.response?.data?.message || e.message);
+      }
+
+      // ── Step 2: Historical intraday candles (yesterday and back) ──────────
+      // toDate = yesterday (Upstox rejects today's date for historical intraday)
+      const toDate   = new Date();
+      toDate.setDate(toDate.getDate() - 1);
+      const fromDate = new Date();
+      fromDate.setDate(fromDate.getDate() - Math.min(days, 30));
+
+      try {
+        const histUrl = `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/${interval}/${fmt(toDate)}/${fmt(fromDate)}`;
+        const r = await axios.get(histUrl, { headers, timeout: 15_000 });
+        const histCandles = (r.data?.data?.candles || []).map(c => ({
+          time: new Date(c[0]).getTime(), open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5],
+        })).reverse(); // historical endpoint returns newest first
+        // Prepend historical before today's candles
+        allCandles = [...histCandles, ...allCandles];
+        console.log(`✅ Historical intraday [${symbol}/${interval}]: ${histCandles.length} candles`);
+      } catch (e) {
+        console.warn(`⚠️ Historical intraday [${symbol}/${interval}]:`, e.response?.data?.message || e.message);
+      }
+
+    } else {
+      // ── EOD candles (1D / 1W / 1M) — unchanged, works fine ───────────────
+      const toDate   = new Date();
+      const fromDate = new Date();
+      fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
+
+      const url = `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/${interval}/${fmt(toDate)}/${fmt(fromDate)}`;
+      const r   = await axios.get(url, { headers, timeout: 15_000 });
+      const candles = r.data?.data?.candles || [];
+      allCandles = candles.map(c => ({
+        time: new Date(c[0]).getTime(), open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5],
+      })).reverse();
+    }
+
+    if (!allCandles.length) {
+      return res.json({ ok: false, symbol, tf, error: "No candles returned from Upstox" });
+    }
+
+    // Deduplicate by timestamp (in case of overlap between intraday + historical)
+    const seen = new Set();
+    allCandles = allCandles.filter(c => {
+      if (seen.has(c.time)) return false;
+      seen.add(c.time);
+      return true;
     });
 
-    const candles   = r.data?.data?.candles || [];
-    const formatted = candles.map(c => ({
-      time:   new Date(c[0]).getTime(),
-      open:   c[1],
-      high:   c[2],
-      low:    c[3],
-      close:  c[4],
-      volume: c[5],
-    })).reverse();
+    res.json({ ok: true, symbol, tf, interval, count: allCandles.length, candles: allCandles });
 
-    res.json({ ok: true, symbol, tf, interval, count: formatted.length, candles: formatted });
   } catch (e) {
     console.error(`Candle fetch failed [${symbol}/${tf}]:`, e.response?.data || e.message);
     res.json({
@@ -981,7 +1016,6 @@ app.get("/api/scanner/technicals/:symbol", async (req, res) => {
       error: `No data for ${symbol} [${tf}]`,
       debug: {
         tokenPresent:       !!(upstoxAccessToken),
-        // FIX: use getInstrumentKeyFull so BSE stocks show correct debug info
         instrumentKeyFound: !!(getInstrumentKeyFull(symbol)),
       }
     });
