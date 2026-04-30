@@ -274,9 +274,6 @@ function getInstrumentKeyFull(symbol) {
 }
 
 // ── FIX: resolveInstrumentKey — async, falls through to live Upstox search ───
-// Used by /api/candles to handle small-caps not in the 5K RAM cap.
-// Resolution order: RAM map → full disk map → live Upstox search API
-// Result is cached in instrumentMap RAM so second call is instant.
 async function resolveInstrumentKey(symbol) {
   // 1. Fast path: already in RAM or disk
   const cached = getInstrumentKeyFull(symbol);
@@ -292,13 +289,12 @@ async function resolveInstrumentKey(symbol) {
       timeout: 8_000,
     });
     const items = r.data?.data || [];
-    // Prefer exact NSE_EQ match, fall back to BSE_EQ exact match
     const match =
       items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("NSE_EQ")) ||
       items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("BSE_EQ"));
 
     if (match?.instrument_key) {
-      instrumentMap[symbol] = match.instrument_key; // cache for next call
+      instrumentMap[symbol] = match.instrument_key;
       console.log(`✅ Resolved ${symbol} via live search → ${match.instrument_key}`);
       return match.instrument_key;
     }
@@ -710,10 +706,9 @@ app.get("/api/test-circuit", async (req, res) => {
 });
 
 // ── /api/candles/:symbol ──────────────────────────────────────────────────────
-// FIX 1: Uses resolveInstrumentKey() (async) instead of getInstrumentKeyFull()
-//         → Handles small-cap stocks not in the 5K RAM cap via live Upstox search
-// FIX 2: Added "1min" to TF_MAP_V3 — was missing, 1m button was silently
-//         defaulting to 1day candles
+// FIX: Upstox v3 uses SINGULAR unit names: "day", "week", "month"
+//      Using "days"/"weeks"/"months" causes HTTP 400 on all EOD timeframes.
+//      Also: EOD historical endpoint rejects today's date as toDate — use yesterday.
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const tf     = req.query.tf || "1day";
@@ -729,25 +724,29 @@ app.get("/api/candles/:symbol", async (req, res) => {
     return res.json({ ok: false, error: `Symbol ${symbol} not found`, symbol });
   }
 
-  // v3 API config — 1min added, intraday uses unit=minutes, EOD uses days/weeks/months
+  // ── v3 API timeframe config ───────────────────────────────────────────────
+  // CRITICAL: Upstox v3 uses SINGULAR unit names for EOD: "day", "week", "month"
+  // "days"/"weeks"/"months" returns HTTP 400. Use explicit eod flag for isIntraday check.
   const TF_MAP_V3 = {
-    "1min":   { unit: "minutes", minutes: 1   },
-    "5min":   { unit: "minutes", minutes: 5   },
-    "15min":  { unit: "minutes", minutes: 15  },
-    "30min":  { unit: "minutes", minutes: 30  },
-    "1hour":  { unit: "minutes", minutes: 60  },
-    "4hour":  { unit: "minutes", minutes: 240 },
-    "1day":   { unit: "days",    minutes: null },
-    "1week":  { unit: "weeks",   minutes: null },
-    "1month": { unit: "months",  minutes: null },
+    "1min":   { unit: "minutes", minutes: 1,    eod: false },
+    "5min":   { unit: "minutes", minutes: 5,    eod: false },
+    "15min":  { unit: "minutes", minutes: 15,   eod: false },
+    "30min":  { unit: "minutes", minutes: 30,   eod: false },
+    "1hour":  { unit: "minutes", minutes: 60,   eod: false },
+    "4hour":  { unit: "minutes", minutes: 240,  eod: false },
+    "1day":   { unit: "day",     minutes: null, eod: true  },
+    "1week":  { unit: "week",    minutes: null, eod: true  },
+    "1month": { unit: "month",   minutes: null, eod: true  },
   };
 
   const tfCfg      = TF_MAP_V3[tf] || TF_MAP_V3["1day"];
-  const isIntraday = tfCfg.unit === "minutes";
+  const isIntraday = !tfCfg.eod;
   const fmt        = d => d.toISOString().split("T")[0];
   const headers    = { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" };
   const encodedKey = encodeURIComponent(instrKey);
 
+  // intraday: /v3/historical-candle/{key}/minutes/{N}/{to}/{from}
+  // EOD:      /v3/historical-candle/{key}/day/{to}/{from}   ← singular unit
   const buildHistUrl = (toDate, fromDate) => {
     const unitSegment = isIntraday
       ? `${tfCfg.unit}/${tfCfg.minutes}`
@@ -755,9 +754,8 @@ app.get("/api/candles/:symbol", async (req, res) => {
     return `https://api.upstox.com/v3/historical-candle/${encodedKey}/${unitSegment}/${fmt(toDate)}/${fmt(fromDate)}`;
   };
 
-  const buildIntradayUrl = () => {
-    return `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/${tfCfg.minutes}`;
-  };
+  const buildIntradayUrl = () =>
+    `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/${tfCfg.minutes}`;
 
   // v3 candle format: [timestamp, open, high, low, close, volume, oi]
   // v3 returns newest-first — reverse to get chronological order
@@ -806,21 +804,67 @@ app.get("/api/candles/:symbol", async (req, res) => {
 
     } else {
       // ── EOD candles (1D / 1W / 1M) ───────────────────────────────────────
+      // FIX: Upstox EOD historical rejects today's date as toDate — use yesterday
       const toDate   = new Date();
+      toDate.setDate(toDate.getDate() - 1);
       const fromDate = new Date();
       fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
 
-      const url = buildHistUrl(toDate, fromDate);
-      const r   = await axios.get(url, { headers, timeout: 15_000 });
-      allCandles = parseCandles(r.data?.data?.candles);
-      console.log(`✅ v3 EOD [${symbol}/${tf}]: ${allCandles.length} candles`);
+      try {
+        const url = buildHistUrl(toDate, fromDate);
+        const r   = await axios.get(url, { headers, timeout: 15_000 });
+        allCandles = parseCandles(r.data?.data?.candles);
+        console.log(`✅ v3 EOD historical [${symbol}/${tf}]: ${allCandles.length} candles`);
+      } catch (e) {
+        console.warn(`⚠️ v3 EOD historical [${symbol}/${tf}]:`, e.response?.data?.message || e.message);
+      }
+
+      // ── For 1D: append live today candle using intraday 1min data ─────────
+      // Gives a live "today" bar showing current session price action
+      if (tf === "1day") {
+        try {
+          const todayUrl = `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/1`;
+          const r2       = await axios.get(todayUrl, { headers, timeout: 10_000 });
+          const ticks    = r2.data?.data?.candles || [];
+          if (ticks.length) {
+            // ticks are newest-first; collapse all into one EOD candle
+            const highs = ticks.map(c => c[2]);
+            const lows  = ticks.map(c => c[3]);
+            const vols  = ticks.map(c => c[5]);
+            const todayCandle = {
+              time:   new Date(new Date().toISOString().split("T")[0] + "T00:00:00.000Z").getTime(),
+              open:   ticks[ticks.length - 1][1],  // oldest tick open
+              high:   Math.max(...highs),
+              low:    Math.min(...lows),
+              close:  ticks[0][4],                  // newest tick close = live price
+              volume: vols.reduce((a, b) => a + b, 0),
+            };
+            const todayStr = new Date().toISOString().split("T")[0];
+            const lastHist = allCandles[allCandles.length - 1];
+            const lastStr  = lastHist ? new Date(lastHist.time).toISOString().split("T")[0] : "";
+            if (todayStr !== lastStr) {
+              allCandles.push(todayCandle);
+              console.log(`✅ v3 today-candle appended [${symbol}]: close=${todayCandle.close}`);
+            } else {
+              // Update last historical bar with live intraday data
+              lastHist.high   = Math.max(lastHist.high, todayCandle.high);
+              lastHist.low    = Math.min(lastHist.low,  todayCandle.low);
+              lastHist.close  = todayCandle.close;
+              lastHist.volume = todayCandle.volume;
+              console.log(`✅ v3 today-candle updated [${symbol}]: close=${todayCandle.close}`);
+            }
+          }
+        } catch (e) {
+          console.warn(`⚠️ v3 today-candle [${symbol}]:`, e.message);
+        }
+      }
     }
 
     if (!allCandles.length) {
       return res.json({ ok: false, symbol, tf, error: "No candles returned from Upstox" });
     }
 
-    // Deduplicate by timestamp (overlap between today's intraday + historical)
+    // Deduplicate by timestamp
     const seen = new Set();
     allCandles = allCandles.filter(c => {
       if (seen.has(c.time)) return false;
@@ -854,19 +898,14 @@ app.get("/api/test-instrument-map", (req, res) => {
   res.json({ total: Object.keys(instrumentMap).length, sample: Object.entries(instrumentMap).slice(0, 10) });
 });
 
-// ── /api/test-search — verifies resolveInstrumentKey() works end-to-end ───────
-// Hit this FIRST after deploying: /api/test-search?symbol=SCHNEIDER
-// Expected good response: { ok: true, symbol, instrument_key, source: "live_search" }
-// If ok:false → Upstox search API not available on this token plan
+// ── /api/test-search ──────────────────────────────────────────────────────────
 app.get("/api/test-search", async (req, res) => {
   const symbol = (req.query.symbol || "SCHNEIDER").toUpperCase();
   try {
-    // Step 1: check RAM + disk (should miss for SCHNEIDER)
     const fromCache = getInstrumentKeyFull(symbol);
     if (fromCache) {
       return res.json({ ok: true, symbol, instrument_key: fromCache, source: "cache", note: "Already in RAM/disk — no search needed" });
     }
-    // Step 2: try live Upstox search
     if (!upstoxAccessToken) {
       return res.json({ ok: false, symbol, error: "No token" });
     }
@@ -879,7 +918,7 @@ app.get("/api/test-search", async (req, res) => {
     const match =
       items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("NSE_EQ")) ||
       items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("BSE_EQ")) ||
-      items.find(i => i.tradingsymbol === symbol); // any exchange
+      items.find(i => i.tradingsymbol === symbol);
 
     if (match) {
       return res.json({
@@ -892,13 +931,12 @@ app.get("/api/test-search", async (req, res) => {
         all_matches:    items.slice(0, 5).map(i => ({ sym: i.tradingsymbol, key: i.instrument_key })),
       });
     }
-    // No exact match — show what Upstox returned so we can diagnose
     return res.json({
-      ok:          false,
+      ok:       false,
       symbol,
-      error:       "No exact match found in Upstox search results",
-      returned:    items.slice(0, 10).map(i => ({ sym: i.tradingsymbol, key: i.instrument_key })),
-      hint:        "Check 'returned' — symbol may be listed under a different name on Upstox",
+      error:    "No exact match found in Upstox search results",
+      returned: items.slice(0, 10).map(i => ({ sym: i.tradingsymbol, key: i.instrument_key })),
+      hint:     "Check 'returned' — symbol may be listed under a different name on Upstox",
     });
   } catch (e) {
     return res.json({
