@@ -254,7 +254,7 @@ function _pushMapToGann(map) {
 
 function getInstrumentMap() { return instrumentMap; }
 
-// Full instrument map lookup (for BSE-only stocks not in RAM cap)
+// ── FIX: getInstrumentKeyFull — now also caches disk hits into RAM ────────────
 function getInstrumentKeyFull(symbol) {
   if (instrumentMap[symbol]) return instrumentMap[symbol];
   try {
@@ -262,12 +262,49 @@ function getInstrumentKeyFull(symbol) {
       const cached  = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
       const fullMap = cached.map || {};
       if (fullMap[symbol]) {
-        console.log(`📍 Symbol ${symbol} found in full disk map (BSE fallback): ${fullMap[symbol]}`);
+        instrumentMap[symbol] = fullMap[symbol]; // cache in RAM for next call
+        console.log(`📍 Symbol ${symbol} found in full disk map: ${fullMap[symbol]}`);
         return fullMap[symbol];
       }
     }
   } catch (e) {
     console.warn(`⚠️ Full instrument map lookup failed for ${symbol}:`, e.message);
+  }
+  return null;
+}
+
+// ── FIX: resolveInstrumentKey — async, falls through to live Upstox search ───
+// Used by /api/candles to handle small-caps not in the 5K RAM cap.
+// Resolution order: RAM map → full disk map → live Upstox search API
+// Result is cached in instrumentMap RAM so second call is instant.
+async function resolveInstrumentKey(symbol) {
+  // 1. Fast path: already in RAM or disk
+  const cached = getInstrumentKeyFull(symbol);
+  if (cached) return cached;
+
+  // 2. Live Upstox instrument search
+  if (!upstoxAccessToken) return null;
+  try {
+    console.log(`🔍 Searching Upstox live for instrument: ${symbol}`);
+    const r = await axios.get("https://api.upstox.com/v2/market-quote/search", {
+      params:  { query: symbol, asset_type: "equity" },
+      headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
+      timeout: 8_000,
+    });
+    const items = r.data?.data || [];
+    // Prefer exact NSE_EQ match, fall back to BSE_EQ exact match
+    const match =
+      items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("NSE_EQ")) ||
+      items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("BSE_EQ"));
+
+    if (match?.instrument_key) {
+      instrumentMap[symbol] = match.instrument_key; // cache for next call
+      console.log(`✅ Resolved ${symbol} via live search → ${match.instrument_key}`);
+      return match.instrument_key;
+    }
+    console.warn(`⚠️ No Upstox instrument match for symbol: ${symbol}`);
+  } catch (e) {
+    console.warn(`⚠️ Upstox live instrument search failed [${symbol}]:`, e.message);
   }
   return null;
 }
@@ -673,36 +710,32 @@ app.get("/api/test-circuit", async (req, res) => {
 });
 
 // ── /api/candles/:symbol ──────────────────────────────────────────────────────
-// FIXED: Switched to Upstox v3 API which supports all intraday intervals.
-// v2 intraday endpoint only supported 1minute and 30minute — causing 15min/5min/1H/4H
-// to return empty. v3 uses /minutes/{N} path format supporting any interval.
-//
-// v3 URL format:
-//   Historical: GET /v3/historical-candle/{key}/{unit}/{to}/{from}
-//               e.g. /v3/historical-candle/{key}/minutes/15/2026-04-29/2026-04-01
-//   Intraday:   GET /v3/historical-candle/intraday/{key}/{unit}/{N}
-//               e.g. /v3/historical-candle/intraday/{key}/minutes/15
-//   EOD:        GET /v3/historical-candle/{key}/days/{to}/{from}
-//               e.g. /v3/historical-candle/{key}/days/2026-04-30/2026-01-01
+// FIX 1: Uses resolveInstrumentKey() (async) instead of getInstrumentKeyFull()
+//         → Handles small-cap stocks not in the 5K RAM cap via live Upstox search
+// FIX 2: Added "1min" to TF_MAP_V3 — was missing, 1m button was silently
+//         defaulting to 1day candles
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const tf     = req.query.tf || "1day";
   const days   = parseInt(req.query.days || "30");
 
-  const instrKey = getInstrumentKeyFull(symbol);
-  if (!instrKey) {
-    return res.json({ ok: false, error: `Symbol ${symbol} not found`, symbol });
-  }
   if (!upstoxAccessToken) {
     return res.json({ ok: false, error: "No token — visit /auth/upstox", symbol });
   }
 
-  // v3 API config: intraday uses unit=minutes + count, EOD uses unit=days/weeks/months
+  // Resolve instrument key: RAM → disk → live Upstox search
+  const instrKey = await resolveInstrumentKey(symbol);
+  if (!instrKey) {
+    return res.json({ ok: false, error: `Symbol ${symbol} not found`, symbol });
+  }
+
+  // v3 API config — 1min added, intraday uses unit=minutes, EOD uses days/weeks/months
   const TF_MAP_V3 = {
-    "5min":   { unit: "minutes", minutes: 5 },
-    "15min":  { unit: "minutes", minutes: 15 },
-    "30min":  { unit: "minutes", minutes: 30 },
-    "1hour":  { unit: "minutes", minutes: 60 },
+    "1min":   { unit: "minutes", minutes: 1   },
+    "5min":   { unit: "minutes", minutes: 5   },
+    "15min":  { unit: "minutes", minutes: 15  },
+    "30min":  { unit: "minutes", minutes: 30  },
+    "1hour":  { unit: "minutes", minutes: 60  },
     "4hour":  { unit: "minutes", minutes: 240 },
     "1day":   { unit: "days",    minutes: null },
     "1week":  { unit: "weeks",   minutes: null },
@@ -715,10 +748,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
   const headers    = { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" };
   const encodedKey = encodeURIComponent(instrKey);
 
-  // Build v3 URLs
-  // For intraday: /v3/historical-candle/{key}/minutes/{N}/{to}/{from}
-  // For EOD:      /v3/historical-candle/{key}/{unit}/{to}/{from}
-  // For today:    /v3/historical-candle/intraday/{key}/minutes/{N}
   const buildHistUrl = (toDate, fromDate) => {
     const unitSegment = isIntraday
       ? `${tfCfg.unit}/${tfCfg.minutes}`
@@ -748,7 +777,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
     let allCandles = [];
 
     if (isIntraday) {
-      // ── Step 1: Today's live intraday candles (v3 intraday endpoint) ──────
+      // ── Step 1: Today's live intraday candles ─────────────────────────────
       try {
         const url = buildIntradayUrl();
         const r   = await axios.get(url, { headers, timeout: 15_000 });
@@ -759,8 +788,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
         console.warn(`⚠️ v3 intraday [${symbol}/${tf}]:`, e.response?.data?.message || e.message);
       }
 
-      // ── Step 2: Historical intraday candles (yesterday and back) ─────────
-      // toDate = yesterday — Upstox rejects today's date for historical endpoint
+      // ── Step 2: Historical intraday candles (yesterday and back) ──────────
       const toDate   = new Date();
       toDate.setDate(toDate.getDate() - 1);
       const fromDate = new Date();
@@ -770,7 +798,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
         const url = buildHistUrl(toDate, fromDate);
         const r   = await axios.get(url, { headers, timeout: 15_000 });
         const histCandles = parseCandles(r.data?.data?.candles);
-        // Prepend historical before today's candles
         allCandles = [...histCandles, ...allCandles];
         console.log(`✅ v3 historical intraday [${symbol}/${tf}]: ${histCandles.length} candles`);
       } catch (e) {
@@ -825,6 +852,64 @@ app.get("/api/candles/:symbol", async (req, res) => {
 // ── /api/test-instrument-map ──────────────────────────────────────────────────
 app.get("/api/test-instrument-map", (req, res) => {
   res.json({ total: Object.keys(instrumentMap).length, sample: Object.entries(instrumentMap).slice(0, 10) });
+});
+
+// ── /api/test-search — verifies resolveInstrumentKey() works end-to-end ───────
+// Hit this FIRST after deploying: /api/test-search?symbol=SCHNEIDER
+// Expected good response: { ok: true, symbol, instrument_key, source: "live_search" }
+// If ok:false → Upstox search API not available on this token plan
+app.get("/api/test-search", async (req, res) => {
+  const symbol = (req.query.symbol || "SCHNEIDER").toUpperCase();
+  try {
+    // Step 1: check RAM + disk (should miss for SCHNEIDER)
+    const fromCache = getInstrumentKeyFull(symbol);
+    if (fromCache) {
+      return res.json({ ok: true, symbol, instrument_key: fromCache, source: "cache", note: "Already in RAM/disk — no search needed" });
+    }
+    // Step 2: try live Upstox search
+    if (!upstoxAccessToken) {
+      return res.json({ ok: false, symbol, error: "No token" });
+    }
+    const r = await axios.get("https://api.upstox.com/v2/market-quote/search", {
+      params:  { query: symbol, asset_type: "equity" },
+      headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
+      timeout: 8_000,
+    });
+    const items = r.data?.data || [];
+    const match =
+      items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("NSE_EQ")) ||
+      items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("BSE_EQ")) ||
+      items.find(i => i.tradingsymbol === symbol); // any exchange
+
+    if (match) {
+      return res.json({
+        ok:             true,
+        symbol,
+        instrument_key: match.instrument_key,
+        tradingsymbol:  match.tradingsymbol,
+        exchange:       match.exchange || match.instrument_key?.split("|")[0],
+        source:         "live_search",
+        all_matches:    items.slice(0, 5).map(i => ({ sym: i.tradingsymbol, key: i.instrument_key })),
+      });
+    }
+    // No exact match — show what Upstox returned so we can diagnose
+    return res.json({
+      ok:          false,
+      symbol,
+      error:       "No exact match found in Upstox search results",
+      returned:    items.slice(0, 10).map(i => ({ sym: i.tradingsymbol, key: i.instrument_key })),
+      hint:        "Check 'returned' — symbol may be listed under a different name on Upstox",
+    });
+  } catch (e) {
+    return res.json({
+      ok:     false,
+      symbol,
+      error:  e.response?.data?.message || e.message,
+      status: e.response?.status,
+      hint:   e.response?.status === 404 ? "Search API not available on this Upstox plan" :
+              e.response?.status === 401 ? "Token rejected" : "Network/API error",
+    });
+  }
 });
 
 // ── /api/option-chain ─────────────────────────────────────────────────────────
