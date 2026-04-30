@@ -16,6 +16,8 @@
  *     "get-gann-analysis" events are handled even when the client connects
  *     before gannIntegration registers its own socket listeners.
  * 10. FIX: "get-gann-analysis" handler normalises symbol before forwarding.
+ * 11. candle:subscribe / candle:unsubscribe handlers for Stockterminal live
+ *     candle streaming via upstoxStream candle aggregator.
  */
 
 const { Server } = require("socket.io");
@@ -29,6 +31,15 @@ let _gannIntegration = null;
 function setGannIntegration(gi) {
   _gannIntegration = gi;
   console.log("📐 websocket.js: gannIntegration wired");
+}
+
+// ── upstoxStream lazy-loader ──────────────────────────────────────────────────
+let _upstoxStream = null;
+function getStream() {
+  if (!_upstoxStream) {
+    try { _upstoxStream = require("../services/upstoxStream"); } catch (_) {}
+  }
+  return _upstoxStream;
 }
 
 // ── Symbol normaliser (mirrors gannIntegration.normaliseSymbol) ───────────────
@@ -171,8 +182,41 @@ function attachSocketIO(server) {
       socket.emit("option-expiries", { underlying, expiries: expiries || [] });
     });
 
+    // ── Live candle subscriptions (Stockterminal) ──────────────────────────
+    // payload: { symbol: "FLUOROCHEM", tf: "5min" }
+    let watchedSymbol = null;
+    let watchedTf     = null;
+
+    socket.on("candle:subscribe", ({ symbol, tf } = {}) => {
+      if (!symbol || !tf) return;
+      const stream = getStream();
+      if (!stream) return;
+      // Unsubscribe previous watch if changed
+      if (watchedSymbol && watchedTf) {
+        stream.unregisterLiveCandleSubscription(watchedSymbol, watchedTf);
+      }
+      watchedSymbol = symbol.toUpperCase().trim();
+      watchedTf     = tf;
+      stream.registerLiveCandleSubscription(watchedSymbol, watchedTf);
+      console.log(`📺 Socket ${socket.id} subscribed to live candles: ${watchedSymbol} @ ${watchedTf}`);
+    });
+
+    socket.on("candle:unsubscribe", ({ symbol, tf } = {}) => {
+      const stream = getStream();
+      if (!stream) return;
+      const sym = (symbol || watchedSymbol || "").toUpperCase().trim();
+      const t   = tf || watchedTf;
+      if (sym && t) stream.unregisterLiveCandleSubscription(sym, t);
+    });
+
+    // ── Disconnect & error ─────────────────────────────────────────────────
     socket.on("disconnect", (reason) => {
       console.log(`👋 Client disconnected: ${socket.id} — ${reason}`);
+      // Clean up candle subscription
+      const stream = getStream();
+      if (stream && watchedSymbol && watchedTf) {
+        stream.unregisterLiveCandleSubscription(watchedSymbol, watchedTf);
+      }
     });
 
     socket.on("error", (err) => {
@@ -180,7 +224,7 @@ function attachSocketIO(server) {
     });
   });
 
-  console.log("🌐 Socket.io server attached (option chain + sector + Gann)");
+  console.log("🌐 Socket.io server attached (option chain + sector + Gann + candles)");
   return io;
 }
 

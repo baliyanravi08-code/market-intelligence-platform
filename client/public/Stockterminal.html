@@ -290,8 +290,17 @@
     font-family: 'JetBrains Mono', monospace;
     z-index: 60;
     white-space: nowrap;
+    pointer-events: auto;
   }
   #errorBanner.show { display: block; }
+
+  /* live candle flash — subtle glow on last candle update */
+  @keyframes candleFlash {
+    0%   { box-shadow: 0 0 0 0 rgba(0,229,255,0); }
+    50%  { box-shadow: 0 0 12px 2px rgba(0,229,255,0.3); }
+    100% { box-shadow: 0 0 0 0 rgba(0,229,255,0); }
+  }
+  .chart-wrap.tick-flash { animation: candleFlash 0.4s ease-out; }
 
   /* ── MAIN LAYOUT ── */
   .main {
@@ -318,6 +327,25 @@
     display:flex; flex-direction:column; gap:2px;
   }
   .co-label { font-size:10px; color:var(--text3); font-family:'JetBrains Mono',monospace; }
+
+  /* live tick indicator — small badge top-right of chart */
+  #liveTickBadge {
+    position: absolute;
+    top: 8px; right: 12px;
+    font-size: 9px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+    background: rgba(0,229,255,0.12);
+    color: var(--accent);
+    border: 1px solid rgba(0,229,255,0.3);
+  }
+  #liveTickBadge.show { opacity: 1; }
 
   .crosshair-info {
     position:absolute; bottom:8px; left:12px;
@@ -529,6 +557,7 @@
   .data-badge.live   { background: rgba(0,230,118,.12); color: var(--green2); border: 1px solid rgba(0,230,118,.25); }
   .data-badge.mock   { background: rgba(247,183,49,.1);  color: var(--accent3); border: 1px solid rgba(247,183,49,.25); }
   .data-badge.error  { background: rgba(255,69,96,.1);   color: var(--red);     border: 1px solid rgba(255,69,96,.25); }
+  .data-badge.stream { background: rgba(0,229,255,.1);   color: var(--accent);  border: 1px solid rgba(0,229,255,.25); }
 </style>
 </head>
 <body>
@@ -564,6 +593,7 @@
 
 <!-- TOOLBAR -->
 <div class="toolbar">
+  <button class="tf-btn" onclick="setTF('1m',this)">1m</button>
   <button class="tf-btn" onclick="setTF('5m',this)">5m</button>
   <button class="tf-btn" onclick="setTF('15m',this)">15m</button>
   <button class="tf-btn" onclick="setTF('1H',this)">1H</button>
@@ -609,6 +639,7 @@
       <div class="chart-overlay">
         <div class="co-label" id="coLabel">PRICE · 1D</div>
       </div>
+      <div id="liveTickBadge">⚡ LIVE</div>
       <div class="watermark">MARKET INTELLIGENCE</div>
       <div class="crosshair-info" id="crosshairInfo">
         <span>Date: <span id="chDate">—</span></span>
@@ -771,20 +802,168 @@
   <div class="tt-row"><span class="tt-key">Volume</span><span class="tt-val" id="ttV" style="color:var(--text2)"></span></div>
 </div>
 
+<!-- Socket.IO client — loaded from the same server -->
+<script src="/socket.io/socket.io.js"></script>
+
 <script>
 // ─── READ SYMBOL FROM URL ─────────────────────────────────────────────────────
-// Reads ?symbol=RELIANCE — works for ANY stock, no hardcoded defaults
 const urlParams    = new URLSearchParams(window.location.search);
-// seedLtp: passed from scanner via ?ltp=1234.5 so chart base price is correct
 let   CHART_SYMBOL = (urlParams.get('symbol') || sessionStorage.getItem('terminal_symbol') || 'NIFTY').toUpperCase().trim();
 let   SEED_LTP     = parseFloat(urlParams.get('ltp') || sessionStorage.getItem('terminal_ltp') || '0') || null;
 let   CURRENT_TF   = '1D';
 
-// Update page title immediately
 document.title = `${CHART_SYMBOL} · Stock Terminal · MI`;
 document.getElementById('symName').textContent = CHART_SYMBOL;
 document.getElementById('fsSym').textContent   = CHART_SYMBOL;
 document.getElementById('symSearchInput').placeholder = CHART_SYMBOL;
+
+// ─── TF → server tf string map ────────────────────────────────────────────────
+// TF_API_MAP: what we send to /api/candles
+// TF_LIVE_MAP: what we send to socket candle:subscribe (matches upstoxStream keys)
+const TF_API_MAP  = { '1m':'1min','5m':'5min','15m':'15min','1H':'1hour','4H':'4hour','1D':'1day','1W':'1week','1M':'1month' };
+const TF_LIVE_MAP = { '1m':'1min','5m':'5min','15m':'15min','1H':'1hour','4H':'4hour' }; // intraday only
+const TF_DAYS     = { '1m':2,'5m':5,'15m':10,'1H':15,'4H':30,'1D':180,'1W':365,'1M':730 };
+
+// Is the current TF an intraday TF that can receive live tick updates?
+function isIntradayTF(tf) { return tf in TF_LIVE_MAP; }
+
+// ─── SOCKET.IO LIVE CANDLE CONNECTION ─────────────────────────────────────────
+let socket = null;
+let liveTickBadgeTimer = null;
+
+function initSocket() {
+  try {
+    socket = io({ transports: ['websocket', 'polling'] });
+
+    socket.on('connect', () => {
+      console.log('🔌 Socket.IO connected:', socket.id);
+      // Re-subscribe after reconnect
+      if (isIntradayTF(CURRENT_TF)) {
+        subscribeToLiveCandles(CHART_SYMBOL, CURRENT_TF);
+      }
+    });
+
+    socket.on('disconnect', () => {
+      console.log('⚠️ Socket.IO disconnected');
+    });
+
+    // ── Live candle tick from server ─────────────────────────────────────────
+    // Server emits this on every price tick for subscribed symbols
+    // payload: { symbol, tf, candle: { time, open, high, low, close, volume } }
+    socket.on('candle:tick', ({ symbol, tf, candle }) => {
+      if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
+      applyLiveCandleTick(candle);
+    });
+
+    // ── Candle closed (period ended) ──────────────────────────────────────────
+    // When a period closes, append the completed candle and start a new one
+    socket.on('candle:closed', ({ symbol, tf, candle }) => {
+      if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
+      applyClosedCandle(candle);
+    });
+
+  } catch (e) {
+    console.warn('Socket.IO not available:', e.message);
+  }
+}
+
+function subscribeToLiveCandles(symbol, tf) {
+  if (!socket || !socket.connected) return;
+  const liveTf = TF_LIVE_MAP[tf];
+  if (!liveTf) return; // not an intraday TF
+  socket.emit('candle:subscribe', { symbol, tf: liveTf });
+  console.log(`📡 Subscribed to live candles: ${symbol} @ ${liveTf}`);
+}
+
+function unsubscribeFromLiveCandles(symbol, tf) {
+  if (!socket || !socket.connected) return;
+  const liveTf = TF_LIVE_MAP[tf];
+  if (!liveTf) return;
+  socket.emit('candle:unsubscribe', { symbol, tf: liveTf });
+}
+
+// Flash the live tick badge briefly on each tick
+function flashLiveBadge() {
+  const badge = document.getElementById('liveTickBadge');
+  badge.classList.add('show');
+  clearTimeout(liveTickBadgeTimer);
+  liveTickBadgeTimer = setTimeout(() => badge.classList.remove('show'), 1500);
+}
+
+// ─── APPLY LIVE TICK TO LAST CANDLE ──────────────────────────────────────────
+// Called on every candle:tick event.
+// Updates the last candle in CANDLES[] with live H/L/C/V, then re-renders.
+// This is O(1) — no full reload needed.
+let renderPending = false;
+
+function applyLiveCandleTick(liveCandle) {
+  if (!CANDLES.length || !isIntradayTF(CURRENT_TF)) return;
+
+  const last = CANDLES[CANDLES.length - 1];
+  const candleTime = liveCandle.time;
+
+  if (last.date.getTime() === candleTime) {
+    // Same candle period — update H/L/C/V
+    last.h = Math.max(last.h, liveCandle.high);
+    last.l = Math.min(last.l, liveCandle.low);
+    last.c = liveCandle.close;
+    last.v = liveCandle.volume;
+  } else if (candleTime > last.date.getTime()) {
+    // New candle started (shouldn't normally arrive before candle:closed but handle it)
+    CANDLES.push({
+      date: new Date(candleTime),
+      o: liveCandle.open, h: liveCandle.high,
+      l: liveCandle.low,  c: liveCandle.close, v: liveCandle.volume,
+    });
+    // Keep array size sane — trim oldest if over 500 candles
+    if (CANDLES.length > 500) CANDLES.splice(0, CANDLES.length - 500);
+  }
+
+  // Update topbar price
+  document.getElementById('symPrice').textContent = '₹' + liveCandle.close.toFixed(2);
+  document.getElementById('fsPrice').textContent  = '₹' + liveCandle.close.toFixed(2);
+
+  // Throttle renders to ~15fps max so we don't kill the CPU on fast ticks
+  if (!renderPending) {
+    renderPending = true;
+    requestAnimationFrame(() => {
+      renderPending = false;
+      computeInds();
+      updateSidePanel();
+      renderAll();
+      flashLiveBadge();
+    });
+  }
+
+  // Update data badge to show streaming
+  setDataBadge('stream', '⚡ STREAMING');
+}
+
+// Called when a candle period closes — append the final candle
+function applyClosedCandle(closedCandle) {
+  if (!CANDLES.length) return;
+  const last = CANDLES[CANDLES.length - 1];
+  const ct   = closedCandle.time;
+
+  if (last.date.getTime() === ct) {
+    // Finalize the last candle
+    last.h = closedCandle.high;
+    last.l = closedCandle.low;
+    last.c = closedCandle.close;
+    last.v = closedCandle.volume;
+  } else if (ct > last.date.getTime()) {
+    // Append new candle
+    CANDLES.push({
+      date: new Date(ct),
+      o: closedCandle.open, h: closedCandle.high,
+      l: closedCandle.low,  c: closedCandle.close, v: closedCandle.volume,
+    });
+    if (CANDLES.length > 500) CANDLES.splice(0, CANDLES.length - 500);
+  }
+  computeInds();
+  updateSidePanel();
+  renderAll();
+}
 
 // ─── POPULAR STOCKS LIST ──────────────────────────────────────────────────────
 const POPULAR_STOCKS = [
@@ -817,6 +996,7 @@ const POPULAR_STOCKS = [
   {sym:'HAVELLS',name:'Havells India'},{sym:'VOLTAS',name:'Voltas'},{sym:'TRENT',name:'Trent'},
   {sym:'JUBLFOOD',name:'Jubilant FoodWorks'},{sym:'NIFTY',name:'Nifty 50 Index'},
   {sym:'BANKNIFTY',name:'Bank Nifty Index'},{sym:'SENSEX',name:'BSE Sensex'},
+  {sym:'FLUOROCHEM',name:'Gujarat Fluorochemicals'},{sym:'CEMPRO',name:'Cempro'},
 ];
 
 // ─── SYMBOL SEARCH AUTOCOMPLETE ──────────────────────────────────────────────
@@ -852,6 +1032,9 @@ document.addEventListener('click', e => {
 });
 
 function changeSymbol(sym, seedPrice) {
+  // Unsubscribe old symbol
+  if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(CHART_SYMBOL, CURRENT_TF);
+
   CHART_SYMBOL = sym.toUpperCase().trim();
   SEED_LTP = seedPrice || null;
   dropdown.style.display = 'none';
@@ -860,10 +1043,8 @@ function changeSymbol(sym, seedPrice) {
   document.getElementById('symName').textContent = CHART_SYMBOL;
   document.getElementById('fsSym').textContent   = CHART_SYMBOL;
   document.title = `${CHART_SYMBOL} · Stock Terminal · MI`;
-  // Persist for back-navigation
   sessionStorage.setItem('terminal_symbol', CHART_SYMBOL);
   if (SEED_LTP) sessionStorage.setItem('terminal_ltp', String(SEED_LTP));
-  // Update URL without reload
   const url = new URL(window.location.href);
   url.searchParams.set('symbol', CHART_SYMBOL);
   if (SEED_LTP) url.searchParams.set('ltp', String(SEED_LTP));
@@ -871,7 +1052,6 @@ function changeSymbol(sym, seedPrice) {
   loadData(CHART_SYMBOL, CURRENT_TF);
 }
 
-// ─── Listen for open-terminal events from scanner / other pages ───────────────
 window.addEventListener('open-terminal', (e) => {
   if (e.detail?.symbol) {
     const ltp = e.detail.ltp || null;
@@ -879,7 +1059,7 @@ window.addEventListener('open-terminal', (e) => {
   }
 });
 
-// ─── DATA GENERATION (fallback — uses SEED_LTP for correct price range) ───────
+// ─── DATA GENERATION (fallback) ───────────────────────────────────────────────
 function symHash(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff;
@@ -906,9 +1086,6 @@ function genCandles(n=120, base=500, vol=18, drift=-0.0002) {
 }
 
 // ─── API FETCH ────────────────────────────────────────────────────────────────
-const TF_API_MAP = { '5m':'5min','15m':'15min','1H':'1hour','4H':'4hour','1D':'1day','1W':'1week','1M':'1month' };
-const TF_DAYS    = { '5m':5,'15m':10,'1H':15,'4H':30,'1D':180,'1W':365,'1M':730 };
-
 async function fetchCandles(sym, tf) {
   const apiTf = TF_API_MAP[tf] || '1day';
   const days  = TF_DAYS[tf] || 180;
@@ -1054,30 +1231,37 @@ function startIdx()     { const vc=visibleCount(); return Math.max(0,Math.min(CA
 
 // ─── LOAD DATA ────────────────────────────────────────────────────────────────
 async function loadData(sym, tf) {
+  // Unsubscribe previous live feed
+  if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(sym, CURRENT_TF);
+
   showLoading(`Loading ${sym} · ${tf}…`);
   hideError();
   try {
     CANDLES = await fetchCandles(sym, tf);
     setDataBadge('live', '⚡ LIVE DATA');
   } catch(e) {
-    // Fallback — use SEED_LTP so price range is correct for this symbol
-    const driftMap={'5m':-0.0001,'15m':-0.0002,'1H':-0.0003,'4H':-0.0004,'1D':-0.003,'1W':-0.008,'1M':-0.02};
-    const nMap={'5m':200,'15m':120,'1H':100,'4H':80,'1D':120,'1W':60,'1M':40};
+    const driftMap={'1m':-0.00005,'5m':-0.0001,'15m':-0.0002,'1H':-0.0003,'4H':-0.0004,'1D':-0.003,'1W':-0.008,'1M':-0.02};
+    const nMap={'1m':200,'5m':200,'15m':120,'1H':100,'4H':80,'1D':120,'1W':60,'1M':40};
     const h2 = symHash(sym);
-    // Priority: SEED_LTP (from scanner) > URL param > hash-based guess
     const basePrice = SEED_LTP ?? (100 + (h2 % 1400));
-    const volRatio  = basePrice / 500; // scale volatility to price
-    const tfVol     = { '5m':1.5,'15m':2,'1H':4,'4H':7,'1D':15,'1W':28,'1M':45 };
+    const volRatio  = basePrice / 500;
+    const tfVol     = { '1m':0.5,'5m':1.5,'15m':2,'1H':4,'4H':7,'1D':15,'1W':28,'1M':45 };
     CANDLES = genCandles(nMap[tf]||120, basePrice * 0.88, (tfVol[tf]||15) * volRatio, driftMap[tf]||-0.003);
     setDataBadge('mock', 'SIMULATED');
-showError(`Live data unavailable — showing simulated chart`, true);
+    showError(`Live data unavailable — showing simulated chart`, true);
   }
+
   computeInds();
   state.panX = Math.max(0, CANDLES.length - 80);
   updateHeader();
   updateSidePanel();
   renderAll();
   hideLoading();
+
+  // Subscribe to live candle ticks for intraday TFs
+  if (isIntradayTF(tf)) {
+    subscribeToLiveCandles(sym, tf);
+  }
 }
 
 function computeInds() {
@@ -1136,7 +1320,6 @@ function updateSidePanel() {
   const ltp  = CANDLES[last].c;
   const sig  = computeSignal(INDS, CANDLES.map(c=>c.c));
 
-  // Signal card
   const card = document.getElementById('signalCard');
   card.className = 'signal-card ' + sig.color;
   document.getElementById('dialScore').textContent = sig.score;
@@ -1163,7 +1346,6 @@ function updateSidePanel() {
     document.getElementById('sgATR').textContent    = '₹' + atrV.toFixed(2);
   }
 
-  // Trend
   const stV = INDS.st[last];
   document.getElementById('indST').innerHTML = stV?.trend === 'up'
     ? '<span class="tag tag-bull">BULL ▲</span>'
@@ -1182,7 +1364,6 @@ function updateSidePanel() {
     document.getElementById('indVWAP').innerHTML = `₹${vwapV.toFixed(1)} <span class="tag ${above?'tag-above':'tag-below'}" style="margin-left:4px">${above?'ABOVE':'BELOW'}</span>`;
   }
 
-  // Momentum
   const rsiV = INDS.rsi[last];
   if (rsiV !== null) {
     const rsiTag = rsiV>70?'<span class="tag tag-ob" style="margin-left:4px">OVERBOUGHT</span>':rsiV<30?'<span class="tag tag-os" style="margin-left:4px">OVERSOLD</span>':'';
@@ -1202,7 +1383,6 @@ function updateSidePanel() {
     document.getElementById('indHist').innerHTML = `${(macdHist>0?'+':'')+macdHist.toFixed(2)} <span class="tag ${macdHist>0?'tag-bullish':'tag-bearish'}" style="margin-left:4px">${cross}</span>`;
   }
 
-  // Volatility
   const bbV = INDS.bb[last];
   if (bbV.upper) {
     document.getElementById('indATR').textContent  = atrV ? '₹' + atrV.toFixed(2) : '—';
@@ -1212,7 +1392,6 @@ function updateSidePanel() {
     document.getElementById('indBBW').textContent  = ((bbV.upper - bbV.lower) / bbV.mid * 100).toFixed(1) + '%';
   }
 
-  // Pivot levels
   const piv = pivotLevels(CANDLES);
   document.getElementById('lvlR3').textContent  = '₹' + piv.R3.toFixed(1);
   document.getElementById('lvlR2').textContent  = '₹' + piv.R2.toFixed(1);
@@ -1222,7 +1401,6 @@ function updateSidePanel() {
   document.getElementById('lvlS2').textContent  = '₹' + piv.S2.toFixed(1);
   document.getElementById('lvlS3').textContent  = '₹' + piv.S3.toFixed(1);
 
-  // MAs
   const maMap = {indMA5:'ma5',indMA9:'ma9',indMA21:'ma21',indMA50:'ma50',indMA200:'ma200'};
   Object.entries(maMap).forEach(([id, key]) => {
     const v = INDS[key][last];
@@ -1343,7 +1521,7 @@ function drawMain(canvas, wrap, zoom, panX) {
       ctx.stroke(); ctx.setLineDash([]);
     }
 
-    // SuperTrend
+    // SuperTrend dots
     if(state.inds.st){
       const sts=indSlice('st');
       sts.forEach((s,i)=>{
@@ -1366,8 +1544,16 @@ function drawMain(canvas, wrap, zoom, panX) {
     ctx.beginPath(); ctx.moveTo(x,py(c.h)); ctx.lineTo(x,py(c.l)); ctx.stroke();
     const by=py(Math.max(c.o,c.c));
     const bh=Math.max(Math.abs(py(c.o)-py(c.c)),1);
+    // Highlight the last (live) candle with a subtle glow if streaming
+    const isLast = i === vis.length - 1;
     ctx.fillStyle=bull?'rgba(38,166,154,.85)':'rgba(239,83,80,.85)';
+    if (isLast && isIntradayTF(CURRENT_TF)) {
+      ctx.fillStyle=bull?'rgba(38,166,154,1)':'rgba(239,83,80,1)';
+      ctx.shadowColor = bull ? '#26a69a' : '#ef5350';
+      ctx.shadowBlur  = 6;
+    }
     ctx.fillRect(x-bodyW/2,by,bodyW,bh);
+    ctx.shadowBlur = 0;
     ctx.strokeStyle=col;
     ctx.strokeRect(x-bodyW/2,by,bodyW,bh);
   });
@@ -1533,6 +1719,9 @@ cw_el.addEventListener('mouseleave',()=>{ tt.style.display='none'; });
 
 // ─── TIMEFRAME BUTTONS ────────────────────────────────────────────────────────
 function setTF(tf, btn){
+  // Unsubscribe old tf
+  if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(CHART_SYMBOL, CURRENT_TF);
+
   CURRENT_TF = tf;
   document.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('active'));
   if(btn) btn.classList.add('active');
@@ -1594,6 +1783,7 @@ ro.observe(document.getElementById('subPanel2'));
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
+  initSocket();          // Connect Socket.IO first
   loadData(CHART_SYMBOL, CURRENT_TF);
 });
 window.addEventListener('resize', renderAll);
