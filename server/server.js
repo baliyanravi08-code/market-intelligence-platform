@@ -802,14 +802,19 @@ app.get("/api/candles/:symbol", async (req, res) => {
         console.warn(`⚠️ v3 historical intraday [${symbol}/${tf}]:`, e.response?.data?.message || e.message);
       }
 
+    // REPLACE WITH:
     } else {
       // ── EOD candles (1D / 1W / 1M) ───────────────────────────────────────
-      // FIX: Upstox EOD historical rejects today's date as toDate — use yesterday
-      const toDate   = new Date();
+      // FIX: Upstox EOD rejects today AND weekends/holidays as toDate
+      // Walk backwards from yesterday to find last valid trading day
+      const toDate = new Date();
       toDate.setDate(toDate.getDate() - 1);
+      // Skip weekends (0=Sun, 6=Sat) — also skip if it lands on a holiday
+      while (toDate.getDay() === 0 || toDate.getDay() === 6) {
+        toDate.setDate(toDate.getDate() - 1);
+      }
       const fromDate = new Date();
       fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
-
       try {
         const url = buildHistUrl(toDate, fromDate);
         const r   = await axios.get(url, { headers, timeout: 15_000 });

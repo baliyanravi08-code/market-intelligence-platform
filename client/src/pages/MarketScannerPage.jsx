@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { io } from "socket.io-client";
-// ── StockTerminal REMOVED — Full Chart now opens in a new browser tab ─────────
 
 // ── Inline StockChart ─────────────────────────────────────────────────────────
 const TF_CHART_OPTIONS = [
@@ -50,7 +49,6 @@ function StockChart({ symbol, defaultTf }) {
     }
   }, []);
 
-  // FIX: clear stale ltp when symbol changes
   useEffect(() => {
     if (symbol) {
       sessionStorage.removeItem("terminal_ltp");
@@ -240,7 +238,7 @@ const clr   = (v) => v > 0 ? "#4ade80" : v < 0 ? "#f87171" : "#9ca3af";
 const arrow = (v) => v > 0 ? "▲" : v < 0 ? "▼" : "—";
 const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
 
-const ACCESS_PIN = "MARKET2024";
+const ACCESS_PIN  = "MARKET2024";
 const SESSION_KEY = "mscanner_auth";
 
 function AccessGate({ onAuth }) {
@@ -381,9 +379,7 @@ function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <span style={{ fontWeight: 800, fontSize: 13, color: "#ffffff" }}>{stock.symbol}</span>
           <ExBadge exchange={stock.exchange} />
-          {isLive && (
-            <span style={{ fontSize: 7, color: "#4ade80", background: "#052e16", border: "1px solid #4ade8033", borderRadius: 2, padding: "0 3px" }}>●LIVE</span>
-          )}
+          {isLive && <span style={{ fontSize: 7, color: "#4ade80", background: "#052e16", border: "1px solid #4ade8033", borderRadius: 2, padding: "0 3px" }}>●LIVE</span>}
         </div>
         <div style={{ fontSize: 10, color: "#6b8aad", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stock.name}</div>
       </td>
@@ -433,8 +429,6 @@ function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
 }
 
 // ── TechPanel ─────────────────────────────────────────────────────────────────
-// FIX: Full Chart opens stock-terminal.html in a NEW TAB with ?symbol=X&ltp=Y
-// No more overlay — StockTerminal removed from this page entirely
 function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeChange, onClose }) {
   if (!symbol) return null;
 
@@ -462,94 +456,60 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
     </div>
   );
 
-  // ── FIX: Open full chart in a NEW TAB — correct symbol + freshest price ───
   const handleFullChart = () => {
-    // Priority: live socket price → tech.ltp → tech.entry
     const ltp = livePrice ?? tech?.ltp ?? tech?.entry ?? null;
-
-    // Persist to sessionStorage so the new tab can read it immediately
     sessionStorage.setItem("terminal_symbol", symbol);
     if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
-
-    // Build URL with query params as the primary mechanism (more reliable than sessionStorage cross-tab)
     const url = new URL("/Stockterminal.html", window.location.origin);
     url.searchParams.set("symbol", symbol);
     if (ltp) url.searchParams.set("ltp", String(ltp));
-
-    // Open in new tab
     window.open(url.toString(), "_blank", "noopener");
   };
+
+  // ── FIX: Entry type badge ─────────────────────────────────────────────────
+  const entryTypeMeta = tech?.entryType
+    ? tech.entryType === "MARKET_OPEN"
+      ? { label: "⚡ LIVE OPEN", color: T.green, bg: "#052e16", border: "#4ade8033" }
+      : tech.entryType === "DAY_OPEN"
+      ? { label: "✓ DAY OPEN",  color: T.blue,  bg: "#0a1a2e", border: "#60a5fa33" }
+      : { label: "⏸ PRE-MARKET", color: T.textDim, bg: "#1a2030", border: "#1e2a3a" }
+    : null;
 
   return (
     <div style={{
       position: "fixed", right: 0, top: 0,
-      width: 420,
-      height: "100vh",
+      width: 420, height: "100vh",
       background: T.bgCard,
       borderLeft: `1px solid ${T.border}`,
-      overflowY: "auto",
-      zIndex: 100,
+      overflowY: "auto", zIndex: 100,
       padding: "16px 14px",
       boxShadow: "-12px 0 48px rgba(0,0,0,0.7)",
     }}>
-      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: T.textPri, letterSpacing: "0.5px" }}>{symbol}</div>
           <div style={{ fontSize: 11, color: T.textSec }}>Technical Analysis · Multi-timeframe</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {/* Full Chart → opens new tab */}
-          <button
-            type="button"
-            onClick={handleFullChart}
-            style={{
-              background: "rgba(96,165,250,0.12)",
-              border: "1px solid rgba(96,165,250,0.5)",
-              color: "#60a5fa",
-              padding: "5px 11px",
-              borderRadius: 5,
-              cursor: "pointer",
-              fontSize: 11,
-              fontWeight: 700,
-              fontFamily: "inherit",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              whiteSpace: "nowrap",
-              transition: "background 0.15s",
-            }}
+          <button type="button" onClick={handleFullChart}
+            style={{ background: "rgba(96,165,250,0.12)", border: "1px solid rgba(96,165,250,0.5)", color: "#60a5fa", padding: "5px 11px", borderRadius: 5, cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}
             onMouseEnter={e => e.currentTarget.style.background = "rgba(96,165,250,0.22)"}
             onMouseLeave={e => e.currentTarget.style.background = "rgba(96,165,250,0.12)"}
-            title={`Open full chart for ${symbol} in new tab`}
-          >
-            ↗ Full Chart
-          </button>
-          <button
-            type="button"
-            onClick={e => { e.preventDefault(); onClose(); }}
+          >↗ Full Chart</button>
+          <button type="button" onClick={e => { e.preventDefault(); onClose(); }}
             style={{ background: T.bgItem, border: `1px solid ${T.border}`, color: T.textSec, width: 28, height: 28, borderRadius: 5, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}
-          >
-            ✕
-          </button>
+          >✕</button>
         </div>
       </div>
 
-      {/* Timeframe selector */}
       <div style={{ display: "flex", gap: 2, marginBottom: 12, background: "#080d14", padding: 3, borderRadius: 7, border: `1px solid ${T.border}` }}>
         {TIMEFRAMES.map(tf => (
-          <button
-            type="button"
-            key={tf.id}
-            onClick={e => { e.preventDefault(); onTimeframeChange(tf.id); }}
+          <button type="button" key={tf.id} onClick={e => { e.preventDefault(); onTimeframeChange(tf.id); }}
             style={{ flex: 1, padding: "5px 0", fontSize: 10, fontWeight: 700, borderRadius: 5, cursor: "pointer", border: "none", background: timeframe === tf.id ? T.indigo : "transparent", color: timeframe === tf.id ? "#fff" : T.textDim, transition: "all 0.15s" }}
-          >
-            {tf.label}
-          </button>
+          >{tf.label}</button>
         ))}
       </div>
 
-      {/* Candlestick Chart */}
       <div style={{ marginBottom: 12 }}>
         <StockChart symbol={symbol} defaultTf={timeframe} />
       </div>
@@ -564,13 +524,11 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
         <div style={{ textAlign: "center", padding: "30px 0", color: T.textSec }}>
           <div style={{ fontSize: 22, marginBottom: 8 }}>📭</div>
           <div style={{ fontSize: 13 }}>No indicator data for {timeframe}</div>
-          <div style={{ fontSize: 11, color: T.textDim, marginTop: 4 }}>Chart above uses available data</div>
         </div>
       )}
 
       {!loading && tech && (
         <>
-          {/* Signal card */}
           <div style={{ background: sigBg, border: `1px solid ${tech.signal?.includes("BUY") ? "#4ade8044" : tech.signal?.includes("SELL") ? "#f8717144" : "#fbbf2444"}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
             <div style={{ fontSize: 10, color: T.textSec, fontWeight: 700, letterSpacing: "0.8px", marginBottom: 10 }}>LIVE SIGNAL · {timeframe.toUpperCase()}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -591,6 +549,8 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
                 </div>
               </div>
             </div>
+
+            {/* ── FIX: Entry / SL / Target grid ── */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
               {[
                 { label: "Entry",     value: tech.entry, color: T.blue  },
@@ -603,6 +563,23 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
                 </div>
               ))}
             </div>
+
+            {/* ── FIX: Entry type + gap badge ── */}
+            {entryTypeMeta && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "5px 10px", borderRadius: 5, background: entryTypeMeta.bg, border: `1px solid ${entryTypeMeta.border}` }}>
+                <span style={{ fontSize: 9, color: entryTypeMeta.color, fontWeight: 700, letterSpacing: "0.5px" }}>
+                  {entryTypeMeta.label}
+                </span>
+                {tech.gapPct != null && Math.abs(tech.gapPct) >= 0.1 && (
+                  <span style={{ fontSize: 9, fontWeight: 700, color: tech.gapPct > 0 ? T.green : T.red }}>
+                    GAP {tech.gapPct > 0 ? "▲" : "▼"} {Math.abs(tech.gapPct).toFixed(2)}%
+                  </span>
+                )}
+                {tech.gapPct != null && Math.abs(tech.gapPct) < 0.1 && (
+                  <span style={{ fontSize: 9, color: T.textDim }}>FLAT OPEN</span>
+                )}
+              </div>
+            )}
           </div>
 
           <Card title="Momentum">
@@ -741,36 +718,33 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
   );
 }
 
+// ── FIX: GainLossCard — uses live price for display ───────────────────────────
 function GainLossCard({ title, stocks, onSelect, accent, onViewAll, livePriceMap }) {
   return (
     <div style={{ background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden", flex: 1 }}>
       <div style={{ padding: "9px 14px", borderBottom: `1px solid ${T.borderSub}`, background: `linear-gradient(90deg, ${accent}12, transparent)`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontWeight: 800, fontSize: 11, color: accent, letterSpacing: "0.8px" }}>{title}</span>
-        <button
-          type="button"
-          onClick={e => { e.preventDefault(); e.stopPropagation(); onViewAll(); }}
+        <button type="button" onClick={e => { e.preventDefault(); e.stopPropagation(); onViewAll(); }}
           style={{ fontSize: 9, color: accent, background: `${accent}18`, border: `1px solid ${accent}44`, borderRadius: 3, padding: "2px 7px", cursor: "pointer", fontWeight: 700 }}
-        >
-          VIEW ALL ↓
-        </button>
+        >VIEW ALL ↓</button>
       </div>
       <div style={{ maxHeight: 300, overflowY: "auto" }}>
         {(stocks || []).slice(0, 15).map(s => {
+          // Use _livePct if already computed by liveRankedGainers/Losers,
+          // otherwise compute from livePriceMap
           const livePrice = livePriceMap?.[s.symbol];
           let prevClose = s.prevClose || 0;
-          if (prevClose <= 0 && s.changePct !== 0 && s.ltp > 0) {
-            prevClose = Math.round((s.ltp / (1 + s.changePct / 100)) * 100) / 100;
-          }
+          if (prevClose <= 0 && s.ltp > 0) prevClose = Math.round((s.ltp / (1 + (s.changePct || 0.001) / 100)) * 100) / 100;
           if (prevClose <= 0) prevClose = s.ltp;
           const ltp    = livePrice ?? s.ltp;
-          const pct    = livePrice != null && prevClose > 0
-            ? Math.round(((livePrice - prevClose) / prevClose) * 10000) / 100
-            : s.changePct;
+          const pct    = s._livePct != null
+            ? s._livePct  // already computed with live price
+            : livePrice != null && prevClose > 0
+              ? Math.round(((livePrice - prevClose) / prevClose) * 10000) / 100
+              : s.changePct;
           const isLive = livePrice != null;
           return (
-            <div
-              key={s.symbol}
-              onClick={() => onSelect(s.symbol)}
+            <div key={s.symbol} onClick={() => onSelect(s.symbol)}
               style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 14px", borderBottom: `1px solid ${T.borderSub}`, cursor: "pointer" }}
               onMouseEnter={e => e.currentTarget.style.background = "#0d1520"}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}
@@ -827,16 +801,13 @@ function BreadthBar({ advancing, declining, unchanged, total }) {
   );
 }
 
-// ── Backtest engine ───────────────────────────────────────────────────────────
+// ── Backtest helpers ──────────────────────────────────────────────────────────
 const BT_KEY = "mscanner_backtest_v2";
 
-function btLoad() {
-  try { return JSON.parse(localStorage.getItem(BT_KEY) || "{}"); } catch { return {}; }
-}
+function btLoad() { try { return JSON.parse(localStorage.getItem(BT_KEY) || "{}"); } catch { return {}; } }
 function btSave(db) {
   try { localStorage.setItem(BT_KEY, JSON.stringify(db)); } catch {
-    const keys    = Object.keys(db).sort();
-    const trimmed = {};
+    const keys = Object.keys(db).sort(); const trimmed = {};
     keys.slice(-30).forEach(k => { trimmed[k] = db[k]; });
     localStorage.setItem(BT_KEY, JSON.stringify(trimmed));
   }
@@ -844,53 +815,41 @@ function btSave(db) {
 function todayKey() { return new Date().toISOString().slice(0, 10); }
 
 function autoCapture(techCacheRef) {
-  const db  = btLoad();
-  const key = todayKey();
+  const db = btLoad(); const key = todayKey();
   if (db[key]) return { count: 0, alreadyDone: true };
-  const signals = [];
-  const now     = Date.now();
+  const signals = []; const now = Date.now();
   for (const [cacheKey, data] of Object.entries(techCacheRef.current)) {
     if (!cacheKey.endsWith(":1day")) continue;
     const sym = cacheKey.replace(":1day", "");
-    signals.push({ id: `${sym}_${now}`, symbol: sym, signal: data.signal, techScore: data.techScore, ltp: data.ltp, entry: data.entry, sl: data.sl, tp: data.tp, rsi: data.rsi, macdCross: data.macd?.crossover, bias: data.bias, volRatio: data.volRatio, outcome: null, exitPrice: null, notes: "" });
+    signals.push({ id: `${sym}_${now}`, symbol: sym, signal: data.signal, techScore: data.techScore, ltp: data.ltp, entry: data.entry, entryType: data.entryType || "PREV_OPEN", gapPct: data.gapPct || 0, sl: data.sl, tp: data.tp, rsi: data.rsi, macdCross: data.macd?.crossover, bias: data.bias, volRatio: data.volRatio, outcome: null, exitPrice: null, notes: "" });
   }
   if (!signals.length) return { count: 0, alreadyDone: false };
-  db[key] = { signals, capturedAt: now, date: key };
-  btSave(db);
+  db[key] = { signals, capturedAt: now, date: key }; btSave(db);
   return { count: signals.length, alreadyDone: false };
 }
 
 function manualCapture(techCacheRef) {
-  const db           = btLoad();
-  const key          = todayKey();
-  const now          = Date.now();
-  const existing     = db[key]?.signals || [];
-  const existingSyms = new Set(existing.map(s => s.symbol));
-  const newSignals   = [];
+  const db = btLoad(); const key = todayKey(); const now = Date.now();
+  const existing = db[key]?.signals || []; const existingSyms = new Set(existing.map(s => s.symbol));
+  const newSignals = [];
   for (const [cacheKey, data] of Object.entries(techCacheRef.current)) {
     if (!cacheKey.endsWith(":1day")) continue;
     const sym = cacheKey.replace(":1day", "");
     if (existingSyms.has(sym)) continue;
-    newSignals.push({ id: `${sym}_${now}`, symbol: sym, signal: data.signal, techScore: data.techScore, ltp: data.ltp, entry: data.entry, sl: data.sl, tp: data.tp, rsi: data.rsi, macdCross: data.macd?.crossover, bias: data.bias, volRatio: data.volRatio, outcome: null, exitPrice: null, notes: "" });
+    newSignals.push({ id: `${sym}_${now}`, symbol: sym, signal: data.signal, techScore: data.techScore, ltp: data.ltp, entry: data.entry, entryType: data.entryType || "PREV_OPEN", gapPct: data.gapPct || 0, sl: data.sl, tp: data.tp, rsi: data.rsi, macdCross: data.macd?.crossover, bias: data.bias, volRatio: data.volRatio, outcome: null, exitPrice: null, notes: "" });
   }
   if (!db[key]) db[key] = { signals: [], capturedAt: now, date: key };
-  db[key].signals = [...existing, ...newSignals];
-  btSave(db);
+  db[key].signals = [...existing, ...newSignals]; btSave(db);
   return newSignals.length;
 }
 
 function updateSignal(date, id, patch) {
-  const db = btLoad();
-  if (!db[date]) return;
-  db[date].signals = db[date].signals.map(s => s.id === id ? { ...s, ...patch } : s);
-  btSave(db);
+  const db = btLoad(); if (!db[date]) return;
+  db[date].signals = db[date].signals.map(s => s.id === id ? { ...s, ...patch } : s); btSave(db);
 }
-
 function deleteSignalFromDB(date, id) {
-  const db = btLoad();
-  if (!db[date]) return;
-  db[date].signals = db[date].signals.filter(s => s.id !== id);
-  btSave(db);
+  const db = btLoad(); if (!db[date]) return;
+  db[date].signals = db[date].signals.filter(s => s.id !== id); btSave(db);
 }
 
 function computeAnalytics(db) {
@@ -899,44 +858,19 @@ function computeAnalytics(db) {
   const wins       = resolved.filter(s => s.outcome === "WIN");
   const overallAcc = resolved.length > 0 ? (wins.length / resolved.length * 100).toFixed(1) : null;
   const bySignal   = {};
-  for (const s of resolved) {
-    if (!bySignal[s.signal]) bySignal[s.signal] = { wins: 0, total: 0 };
-    bySignal[s.signal].total++;
-    if (s.outcome === "WIN") bySignal[s.signal].wins++;
-  }
+  for (const s of resolved) { if (!bySignal[s.signal]) bySignal[s.signal] = { wins: 0, total: 0 }; bySignal[s.signal].total++; if (s.outcome === "WIN") bySignal[s.signal].wins++; }
   const rsiBuckets = { "<30": { wins: 0, total: 0 }, "30-50": { wins: 0, total: 0 }, "50-60": { wins: 0, total: 0 }, "60-70": { wins: 0, total: 0 }, ">70": { wins: 0, total: 0 } };
-  for (const s of resolved) {
-    const r = s.rsi;
-    const b = r < 30 ? "<30" : r < 50 ? "30-50" : r < 60 ? "50-60" : r < 70 ? "60-70" : ">70";
-    rsiBuckets[b].total++;
-    if (s.outcome === "WIN") rsiBuckets[b].wins++;
-  }
+  for (const s of resolved) { const r = s.rsi; const b = r < 30 ? "<30" : r < 50 ? "30-50" : r < 60 ? "50-60" : r < 70 ? "60-70" : ">70"; rsiBuckets[b].total++; if (s.outcome === "WIN") rsiBuckets[b].wins++; }
   const byMacd = { BULLISH: { wins: 0, total: 0 }, BEARISH: { wins: 0, total: 0 } };
-  for (const s of resolved) {
-    const m = s.macdCross || "BEARISH";
-    if (!byMacd[m]) byMacd[m] = { wins: 0, total: 0 };
-    byMacd[m].total++;
-    if (s.outcome === "WIN") byMacd[m].wins++;
-  }
+  for (const s of resolved) { const m = s.macdCross || "BEARISH"; if (!byMacd[m]) byMacd[m] = { wins: 0, total: 0 }; byMacd[m].total++; if (s.outcome === "WIN") byMacd[m].wins++; }
   const byScore = { "<40": { wins: 0, total: 0 }, "40-60": { wins: 0, total: 0 }, "60-75": { wins: 0, total: 0 }, ">75": { wins: 0, total: 0 } };
-  for (const s of resolved) {
-    const sc = s.techScore;
-    const b  = sc < 40 ? "<40" : sc < 60 ? "40-60" : sc < 75 ? "60-75" : ">75";
-    byScore[b].total++;
-    if (s.outcome === "WIN") byScore[b].wins++;
-  }
-  const days       = Object.keys(db).sort().slice(-14);
-  const dailyTrend = days.map(d => {
-    const r = (db[d].signals || []).filter(s => s.outcome === "WIN" || s.outcome === "LOSS");
-    const w = r.filter(s => s.outcome === "WIN").length;
-    return { date: d, accuracy: r.length > 0 ? (w / r.length * 100).toFixed(1) : null, total: r.length, wins: w };
-  });
-  const withPL     = resolved.filter(s => s.exitPrice && s.entry);
-  const pls        = withPL.map(s => ((s.exitPrice - s.entry) / s.entry * 100));
-  const avgPL      = pls.length > 0 ? (pls.reduce((a, b) => a + b, 0) / pls.length).toFixed(2) : null;
-  const bestTrade  = pls.length > 0 ? Math.max(...pls).toFixed(2) : null;
-  const worstTrade = pls.length > 0 ? Math.min(...pls).toFixed(2) : null;
-  return { overallAcc, resolved: resolved.length, wins: wins.length, total: allSignals.length, pending: allSignals.filter(s => !s.outcome).length, bySignal, rsiBuckets, byMacd, byScore, dailyTrend, avgPL, bestTrade, worstTrade };
+  for (const s of resolved) { const sc = s.techScore; const b = sc < 40 ? "<40" : sc < 60 ? "40-60" : sc < 75 ? "60-75" : ">75"; byScore[b].total++; if (s.outcome === "WIN") byScore[b].wins++; }
+  const days = Object.keys(db).sort().slice(-14);
+  const dailyTrend = days.map(d => { const r = (db[d].signals || []).filter(s => s.outcome === "WIN" || s.outcome === "LOSS"); const w = r.filter(s => s.outcome === "WIN").length; return { date: d, accuracy: r.length > 0 ? (w / r.length * 100).toFixed(1) : null, total: r.length, wins: w }; });
+  const withPL = resolved.filter(s => s.exitPrice && s.entry);
+  const pls    = withPL.map(s => ((s.exitPrice - s.entry) / s.entry * 100));
+  const avgPL  = pls.length > 0 ? (pls.reduce((a, b) => a + b, 0) / pls.length).toFixed(2) : null;
+  return { overallAcc, resolved: resolved.length, wins: wins.length, total: allSignals.length, pending: allSignals.filter(s => !s.outcome).length, bySignal, rsiBuckets, byMacd, byScore, dailyTrend, avgPL, bestTrade: pls.length > 0 ? Math.max(...pls).toFixed(2) : null, worstTrade: pls.length > 0 ? Math.min(...pls).toFixed(2) : null };
 }
 
 function BacktestPanel({ onClose, techCacheRef }) {
@@ -948,19 +882,16 @@ function BacktestPanel({ onClose, techCacheRef }) {
   const [captureMsg, setCaptureMsg]       = useState("");
   const [search, setSearch]               = useState("");
 
-  const refresh        = () => setDb(btLoad());
-  const handleCapture  = () => { const r = manualCapture(techCacheRef); refresh(); setCaptureMsg(r > 0 ? `✅ Captured ${r} new signals` : "⚠️ All already captured"); setTimeout(() => setCaptureMsg(""), 3000); };
-  const handleOutcome  = (date, id, outcome)    => { updateSignal(date, id, { outcome }); refresh(); };
-  const handleExitPrice = (date, id, exitPrice) => { updateSignal(date, id, { exitPrice: parseFloat(exitPrice) || null }); refresh(); };
-  const handleDelete   = (date, id)             => { deleteSignalFromDB(date, id); refresh(); };
+  const refresh         = () => setDb(btLoad());
+  const handleCapture   = () => { const r = manualCapture(techCacheRef); refresh(); setCaptureMsg(r > 0 ? `✅ Captured ${r} new signals` : "⚠️ All already captured"); setTimeout(() => setCaptureMsg(""), 3000); };
+  const handleOutcome   = (date, id, outcome)    => { updateSignal(date, id, { outcome }); refresh(); };
+  const handleExitPrice = (date, id, exitPrice)  => { updateSignal(date, id, { exitPrice: parseFloat(exitPrice) || null }); refresh(); };
+  const handleDelete    = (date, id)             => { deleteSignalFromDB(date, id); refresh(); };
 
   const downloadCSV = () => {
     const allSignals = Object.entries(db).flatMap(([date, d]) => (d.signals || []).map(s => ({ ...s, date })));
-    const headers    = ["Date","Symbol","Signal","TechScore","LTP","Entry","SL","Target","RSI","MACD","Outcome","ExitPrice","PL%"];
-    const rows       = allSignals.map(s => {
-      const pl = s.exitPrice && s.entry ? ((s.exitPrice - s.entry) / s.entry * 100).toFixed(2) : "";
-      return [s.date, s.symbol, s.signal, s.techScore, s.ltp, s.entry, s.sl, s.tp, s.rsi?.toFixed(1) || "", s.macdCross || "", s.outcome || "PENDING", s.exitPrice || "", pl].join(",");
-    });
+    const headers    = ["Date","Symbol","Signal","TechScore","LTP","Entry","EntryType","GapPct%","SL","Target","RSI","MACD","Outcome","ExitPrice","PL%"];
+    const rows       = allSignals.map(s => { const pl = s.exitPrice && s.entry ? ((s.exitPrice - s.entry) / s.entry * 100).toFixed(2) : ""; return [s.date, s.symbol, s.signal, s.techScore, s.ltp, s.entry, s.entryType || "PREV_OPEN", s.gapPct || 0, s.sl, s.tp, s.rsi?.toFixed(1) || "", s.macdCross || "", s.outcome || "PENDING", s.exitPrice || "", pl].join(","); });
     const csv  = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url  = URL.createObjectURL(blob);
@@ -1010,14 +941,14 @@ function BacktestPanel({ onClose, techCacheRef }) {
 
         <div style={{ display: "flex", gap: 10, padding: "12px 20px", borderBottom: `1px solid ${T.border}`, background: "#080d14", flexShrink: 0, flexWrap: "wrap" }}>
           {[
-            { label: "Total Signals", value: analytics.total,                             color: T.blue    },
-            { label: "Resolved",      value: analytics.resolved,                          color: T.textSec },
-            { label: "Wins",          value: analytics.wins,                              color: T.green   },
-            { label: "Losses",        value: analytics.resolved - analytics.wins,         color: T.red     },
-            { label: "Pending",       value: analytics.pending,                           color: T.yellow  },
+            { label: "Total Signals", value: analytics.total,   color: T.blue    },
+            { label: "Resolved",      value: analytics.resolved, color: T.textSec },
+            { label: "Wins",          value: analytics.wins,     color: T.green   },
+            { label: "Losses",        value: analytics.resolved - analytics.wins, color: T.red },
+            { label: "Pending",       value: analytics.pending,  color: T.yellow  },
             { label: "Overall Acc",   value: analytics.overallAcc ? analytics.overallAcc + "%" : "—", color: parseFloat(analytics.overallAcc) >= 55 ? T.green : T.red },
             { label: "Avg P&L",       value: analytics.avgPL ? (analytics.avgPL > 0 ? "+" : "") + analytics.avgPL + "%" : "—", color: parseFloat(analytics.avgPL) >= 0 ? T.green : T.red },
-            { label: "Days Tracked",  value: dates.length,                               color: T.indigo  },
+            { label: "Days Tracked",  value: dates.length,       color: T.indigo  },
           ].map(({ label, value, color }) => (
             <div key={label} style={{ background: T.bgItem, border: `1px solid ${T.borderSub}`, borderRadius: 8, padding: "8px 12px", minWidth: 78, textAlign: "center", flex: "0 0 auto" }}>
               <div style={{ fontSize: 15, fontWeight: 800, color }}>{value}</div>
@@ -1077,22 +1008,30 @@ function BacktestPanel({ onClose, techCacheRef }) {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                     <thead>
                       <tr style={{ background: "#060a10", position: "sticky", top: 0, zIndex: 2 }}>
-                        {["Symbol","Signal","Score","LTP","Entry","SL","Target","RSI","MACD","Outcome","Exit ₹","P&L",""].map(h => (
+                        {["Symbol","Signal","Score","Entry","EntryType","Gap%","SL","Target","RSI","MACD","Outcome","Exit ₹","P&L",""].map(h => (
                           <th key={h} style={{ padding: "8px 8px", color: T.textDim, fontSize: 9, fontWeight: 700, textAlign: "left", borderBottom: `1px solid ${T.border}` }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {signals.map(s => {
-                        const pl           = s.exitPrice && s.entry ? ((s.exitPrice - s.entry) / s.entry * 100) : null;
+                        const pl = s.exitPrice && s.entry ? ((s.exitPrice - s.entry) / s.entry * 100) : null;
                         const outcomeColor = s.outcome === "WIN" ? T.green : s.outcome === "LOSS" ? T.red : T.textDim;
+                        const entryColor = s.entryType === "MARKET_OPEN" ? T.green : s.entryType === "DAY_OPEN" ? T.blue : T.textDim;
                         return (
                           <tr key={s.id} style={{ borderBottom: `1px solid ${T.borderSub}` }} onMouseEnter={e => e.currentTarget.style.background = "#0d1520"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                             <td style={{ padding: "6px 8px", color: "#fff", fontWeight: 700 }}>{s.symbol}</td>
                             <td style={{ padding: "6px 8px" }}><SigBadge signal={s.signal} /></td>
                             <td style={{ padding: "6px 8px", fontWeight: 700, color: s.techScore >= 60 ? T.green : s.techScore <= 40 ? T.red : T.yellow }}>{s.techScore}</td>
-                            <td style={{ padding: "6px 8px", color: "#fff" }}>₹{fmt(s.ltp)}</td>
                             <td style={{ padding: "6px 8px", color: T.blue }}>₹{fmt(s.entry)}</td>
+                            <td style={{ padding: "6px 8px" }}>
+                              <span style={{ fontSize: 8, fontWeight: 700, color: entryColor, background: `${entryColor}18`, border: `1px solid ${entryColor}33`, padding: "1px 5px", borderRadius: 3 }}>
+                                {s.entryType === "MARKET_OPEN" ? "⚡LIVE" : s.entryType === "DAY_OPEN" ? "DAY" : "PRE"}
+                              </span>
+                            </td>
+                            <td style={{ padding: "6px 8px", color: s.gapPct > 0.1 ? T.green : s.gapPct < -0.1 ? T.red : T.textDim, fontWeight: 600, fontSize: 10 }}>
+                              {s.gapPct != null && Math.abs(s.gapPct) >= 0.1 ? `${s.gapPct > 0 ? "▲" : "▼"}${Math.abs(s.gapPct).toFixed(1)}%` : "—"}
+                            </td>
                             <td style={{ padding: "6px 8px", color: T.red }}>₹{fmt(s.sl)}</td>
                             <td style={{ padding: "6px 8px", color: T.green }}>₹{fmt(s.tp)}</td>
                             <td style={{ padding: "6px 8px", color: s.rsi > 70 ? T.red : s.rsi < 30 ? T.green : T.yellow }}>{s.rsi?.toFixed(1) || "—"}</td>
@@ -1221,28 +1160,23 @@ function ScannerBody() {
   const [livePriceMap, setLivePriceMap] = useState({});
   const [techVersion,  setTechVersion]  = useState(0);
 
-  // ── NO terminal overlay state — Full Chart opens a new browser tab ─────────
-
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
   const activeTFRef    = useRef("1day");
   const tableRef       = useRef(null);
   const autoCapFired   = useRef(false);
+  const stockMapRef    = useRef(new Map());
 
   useEffect(() => { activeTFRef.current = activeTF; }, [activeTF]);
 
+  // Auto-capture at 9:15–9:30 AM
   useEffect(() => {
     const tryAutoCapture = () => {
       if (autoCapFired.current) return;
-      const now  = new Date();
-      const h    = now.getHours();
-      const m    = now.getMinutes();
+      const now = new Date(); const h = now.getHours(); const m = now.getMinutes();
       if (h === 9 && m >= 15 && m <= 30) {
         const result = autoCapture(techCacheRef);
-        if (result.count > 0) {
-          setAutoCapMsg(`📸 Auto-captured ${result.count} signals at ${now.toLocaleTimeString("en-IN")}`);
-          setTimeout(() => setAutoCapMsg(""), 6000);
-        }
+        if (result.count > 0) { setAutoCapMsg(`📸 Auto-captured ${result.count} signals at ${now.toLocaleTimeString("en-IN")}`); setTimeout(() => setAutoCapMsg(""), 6000); }
         autoCapFired.current = true;
       }
     };
@@ -1263,12 +1197,105 @@ function ScannerBody() {
     return [];
   }, []);
 
+  const rebuildDataFromMap = useCallback((map) => {
+    const stocks  = [...map.values()];
+    const sorted  = [...stocks].sort((a, b) => b.changePct - a.changePct);
+    const gainers = sorted.filter(s => s.changePct > 0).slice(0, 20);
+    const losers  = [...sorted].reverse().filter(s => s.changePct < 0).slice(0, 20);
+    const byMcap  = { largecap: [], midcap: [], smallcap: [], microcap: [] };
+    for (const s of stocks) { const b = s.mcapBucket || "microcap"; if (byMcap[b]) byMcap[b].push(s); }
+
+    const sectorMap = {};
+    for (const s of stocks) { if (!s.sector) continue; if (!sectorMap[s.sector]) sectorMap[s.sector] = []; sectorMap[s.sector].push(s); }
+    const bySector = Object.entries(sectorMap).map(([sector, ss]) => ({
+      sector,
+      avgChange:  Math.round((ss.reduce((sum, s) => sum + s.changePct, 0) / ss.length) * 100) / 100,
+      advancing:  ss.filter(s => s.changePct > 0).length,
+      declining:  ss.filter(s => s.changePct < 0).length,
+      total:      ss.length,
+      topGainer:  [...ss].sort((a, b) => b.changePct - a.changePct)[0],
+    })).sort((a, b) => b.avgChange - a.avgChange);
+
+    setData({
+      gainers, losers, allStocks: stocks, byMcap, bySector,
+      market: {
+        advancing: stocks.filter(s => s.changePct > 0).length,
+        declining: stocks.filter(s => s.changePct < 0).length,
+        unchanged: stocks.filter(s => s.changePct === 0).length,
+        total:     stocks.length,
+      },
+      updatedAt: Date.now(),
+    });
+    setUpdatedAt(new Date());
+  }, []);
+
+  // ── FIX 2: Live-ranked gainers/losers using useMemo ───────────────────────
+  // Re-ranks gainers/losers in real time as live prices arrive
+  // Uses _livePct field so GainLossCard doesn't need to recompute
+  const liveRankedGainers = useMemo(() => {
+    if (!data?.allStocks?.length) return data?.gainers || [];
+    return [...data.allStocks]
+      .map(s => {
+        const lp = livePriceMap[s.symbol];
+        if (!lp) return { ...s, _livePct: s.changePct };
+        let pc = s.prevClose || 0;
+        if (pc <= 0 && s.ltp > 0) pc = s.ltp / (1 + (s.changePct || 0.001) / 100);
+        if (pc <= 0) pc = s.ltp;
+        const pct = pc > 0 ? ((lp - pc) / pc) * 100 : s.changePct;
+        return { ...s, _livePct: pct, ltp: lp };
+      })
+      .filter(s => (s._livePct ?? s.changePct) > 0)
+      .sort((a, b) => (b._livePct ?? b.changePct) - (a._livePct ?? a.changePct))
+      .slice(0, 20);
+  }, [data?.allStocks, livePriceMap]);
+
+  const liveRankedLosers = useMemo(() => {
+    if (!data?.allStocks?.length) return data?.losers || [];
+    return [...data.allStocks]
+      .map(s => {
+        const lp = livePriceMap[s.symbol];
+        if (!lp) return { ...s, _livePct: s.changePct };
+        let pc = s.prevClose || 0;
+        if (pc <= 0 && s.ltp > 0) pc = s.ltp / (1 + (s.changePct || 0.001) / 100);
+        if (pc <= 0) pc = s.ltp;
+        const pct = pc > 0 ? ((lp - pc) / pc) * 100 : s.changePct;
+        return { ...s, _livePct: pct, ltp: lp };
+      })
+      .filter(s => (s._livePct ?? s.changePct) < 0)
+      .sort((a, b) => (a._livePct ?? a.changePct) - (b._livePct ?? b.changePct))
+      .slice(0, 20);
+  }, [data?.allStocks, livePriceMap]);
+
+  // ── Socket setup ──────────────────────────────────────────────────────────
   useEffect(() => {
     const socket = getSocket();
+
+    socket.emit("join:scanner");
+    socket.emit("join:alerts");
+    socket.emit("backtest:start");
+
+    socket.on("scanner:snapshot", (allStocks) => {
+      if (!Array.isArray(allStocks)) return;
+      const map = new Map();
+      allStocks.forEach(s => map.set(s.symbol, s));
+      stockMapRef.current = map;
+      rebuildDataFromMap(map);
+    });
+
+    socket.on("scanner:diff", (changed) => {
+      if (!Array.isArray(changed) || !changed.length) return;
+      changed.forEach(s => stockMapRef.current.set(s.symbol, s));
+      rebuildDataFromMap(stockMapRef.current);
+    });
 
     socket.on("scanner-update", d => {
       setData(d);
       setUpdatedAt(new Date(d.updatedAt));
+      if (d.allStocks) {
+        const map = new Map();
+        d.allStocks.forEach(s => map.set(s.symbol, s));
+        stockMapRef.current = map;
+      }
     });
 
     socket.on("scanner-tech-batch", (batch) => {
@@ -1292,9 +1319,11 @@ function ScannerBody() {
         }
       }
       if (hasNew) setTechVersion(v => v + 1);
-      if (Object.keys(priceUpdates).length > 0) {
-        setLivePriceMap(prev => ({ ...prev, ...priceUpdates }));
-      }
+      if (Object.keys(priceUpdates).length > 0) setLivePriceMap(prev => ({ ...prev, ...priceUpdates }));
+    });
+
+    socket.on("ltp", ({ s, p }) => {
+      if (s && p > 0) setLivePriceMap(prev => ({ ...prev, [s]: p }));
     });
 
     socket.on("backtest-live-tick", ({ symbol: sym, price }) => {
@@ -1302,24 +1331,25 @@ function ScannerBody() {
     });
 
     return () => {
+      socket.emit("leave:scanner");
+      socket.emit("leave:alerts");
+      socket.off("scanner:snapshot");
+      socket.off("scanner:diff");
       socket.off("scanner-update");
       socket.off("scanner-tech-batch");
+      socket.off("ltp");
       socket.off("backtest-live-tick");
     };
-  }, []);
+  }, [rebuildDataFromMap]);
 
   const handleSelect = useCallback(async (symbol, timeframe) => {
     const tf  = timeframe || activeTFRef.current || "1day";
     const key = `${symbol}:${tf}`;
     selectedSymRef.current = symbol;
     setSelectedSym(symbol);
-    if (techCacheRef.current[key]) {
-      setTech(techCacheRef.current[key]);
-      setTechLoading(false);
-      return;
-    }
-    setTech(null);
-    setTechLoading(true);
+    getSocket().emit("watch:chart", symbol);
+    if (techCacheRef.current[key]) { setTech(techCacheRef.current[key]); setTechLoading(false); return; }
+    setTech(null); setTechLoading(true);
     try {
       const res  = await fetch(`/api/scanner/technicals/${symbol}?timeframe=${tf}`);
       const json = await res.json();
@@ -1335,14 +1365,12 @@ function ScannerBody() {
   }, []);
 
   const handleTimeframeChange = useCallback((tf) => {
-    setActiveTF(tf);
-    activeTFRef.current = tf;
+    setActiveTF(tf); activeTFRef.current = tf;
     if (selectedSymRef.current) handleSelect(selectedSymRef.current, tf);
   }, [handleSelect]);
 
   const handleViewAll = useCallback((tabId) => {
-    setTab(tabId);
-    setSortBy(tabId === "losers" ? "losers" : "gainers");
+    setTab(tabId); setSortBy(tabId === "losers" ? "losers" : "gainers");
     setTimeout(() => tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
   }, []);
 
@@ -1353,8 +1381,7 @@ function ScannerBody() {
 
   const sorted = [...filtered].sort((a, b) => {
     const getPct = (s) => {
-      const lp = livePriceMap[s.symbol];
-      if (!lp) return s.changePct;
+      const lp = livePriceMap[s.symbol]; if (!lp) return s.changePct;
       let pc = s.prevClose || 0;
       if (pc <= 0 && s.changePct !== 0 && s.ltp > 0) pc = s.ltp / (1 + s.changePct / 100);
       if (pc <= 0) pc = s.ltp;
@@ -1415,9 +1442,7 @@ function ScannerBody() {
           <div style={{ background: "#052e16", border: "1px solid #4ade8044", borderRadius: 6, padding: "4px 12px", fontSize: 11, color: T.green, fontWeight: 600 }}>{autoCapMsg}</div>
         )}
 
-        <button
-          type="button"
-          onClick={() => setShowBacktest(true)}
+        <button type="button" onClick={() => setShowBacktest(true)}
           style={{ background: "#1a1040", border: `1px solid ${T.indigo}44`, color: T.indigo, padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}
         >
           🔬 Backtest Lab
@@ -1433,27 +1458,18 @@ function ScannerBody() {
       {/* Main content */}
       <div style={{ padding: "16px 20px 40px", paddingRight: selectedSym ? "434px" : "20px", transition: "padding-right 0.2s" }}>
 
+        {/* ── FIX 3: liveRankedGainers / liveRankedLosers wired here ── */}
         {data && (
           <div style={{ display: "flex", gap: 12, marginBottom: 18 }}>
-            <GainLossCard title="TOP GAINERS" stocks={data.gainers} onSelect={sym => handleSelect(sym)} accent={T.green} onViewAll={() => handleViewAll("gainers")} livePriceMap={livePriceMap} />
-            <GainLossCard title="TOP LOSERS"  stocks={data.losers}  onSelect={sym => handleSelect(sym)} accent={T.red}   onViewAll={() => handleViewAll("losers")}  livePriceMap={livePriceMap} />
+            <GainLossCard title="TOP GAINERS" stocks={liveRankedGainers} onSelect={sym => handleSelect(sym)} accent={T.green} onViewAll={() => handleViewAll("gainers")} livePriceMap={livePriceMap} />
+            <GainLossCard title="TOP LOSERS"  stocks={liveRankedLosers}  onSelect={sym => handleSelect(sym)} accent={T.red}   onViewAll={() => handleViewAll("losers")}  livePriceMap={livePriceMap} />
           </div>
         )}
 
         <div ref={tableRef} style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
           {TABS.map(t => (
-            <button
-              type="button"
-              key={t.id}
-              onClick={e => { e.preventDefault(); setTab(t.id); setDisplayLimit(500); }}
-              style={{
-                padding: "5px 13px", borderRadius: 5, fontSize: 11, fontWeight: 700,
-                cursor: "pointer", border: "1px solid",
-                borderColor: tab === t.id ? t.accent : T.border,
-                background:  tab === t.id ? `${t.accent}18` : T.bgPanel,
-                color:       tab === t.id ? t.accent : T.textDim,
-                transition: "all 0.15s",
-              }}
+            <button type="button" key={t.id} onClick={e => { e.preventDefault(); setTab(t.id); setDisplayLimit(500); }}
+              style={{ padding: "5px 13px", borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "1px solid", borderColor: tab === t.id ? t.accent : T.border, background: tab === t.id ? `${t.accent}18` : T.bgPanel, color: tab === t.id ? t.accent : T.textDim, transition: "all 0.15s" }}
             >
               {t.label}
               {data && t.id !== "sector" && (
@@ -1479,22 +1495,14 @@ function ScannerBody() {
         ) : (
           <>
             <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <input
-                placeholder="Search symbol or name…"
-                value={searchQ}
-                onChange={e => setSearchQ(e.target.value)}
+              <input placeholder="Search symbol or name…" value={searchQ} onChange={e => setSearchQ(e.target.value)}
                 style={{ background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 6, color: "#ffffff", padding: "6px 12px", fontSize: 12, width: 220, outline: "none", fontFamily: "inherit" }}
               />
               <div style={{ display: "flex", gap: 4 }}>
                 {[{ id: "gainers", label: "% ↑" }, { id: "losers", label: "% ↓" }, { id: "volume", label: "Vol" }, { id: "value", label: "Value" }].map(s => (
-                  <button
-                    type="button"
-                    key={s.id}
-                    onClick={e => { e.preventDefault(); setSortBy(s.id); }}
+                  <button type="button" key={s.id} onClick={e => { e.preventDefault(); setSortBy(s.id); }}
                     style={{ padding: "5px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", border: "1px solid", fontWeight: 700, borderColor: sortBy === s.id ? T.indigo : T.border, background: sortBy === s.id ? `${T.indigo}22` : T.bgPanel, color: sortBy === s.id ? T.indigo : T.textDim }}
-                  >
-                    {s.label}
-                  </button>
+                  >{s.label}</button>
                 ))}
               </div>
               <span style={{ marginLeft: "auto", fontSize: 11, color: T.textDim }}>
@@ -1505,7 +1513,7 @@ function ScannerBody() {
             {!data ? (
               <div style={{ textAlign: "center", padding: "60px 0", color: T.textDim }}>
                 <div style={{ fontSize: 30, marginBottom: 8 }}>📡</div>
-                <div style={{ fontSize: 14, color: T.textSec }}>Fetching NSE 500 + BSE live data…</div>
+                <div style={{ fontSize: 14, color: T.textSec }}>Connecting to scanner room…</div>
               </div>
             ) : sorted.length === 0 ? (
               <div style={{ textAlign: "center", padding: "60px 0", color: T.textDim }}>
@@ -1524,16 +1532,7 @@ function ScannerBody() {
                   </thead>
                   <tbody>
                     {sorted.slice(0, displayLimit).map((s, i) => (
-                      <StockRow
-                        key={s.symbol}
-                        stock={s}
-                        rank={i + 1}
-                        onSelect={sym => handleSelect(sym)}
-                        selected={selectedSym === s.symbol}
-                        tech={techCacheRef.current[`${s.symbol}:${activeTF}`] || null}
-                        livePrice={livePriceMap[s.symbol] ?? null}
-                        _v={techVersion}
-                      />
+                      <StockRow key={s.symbol} stock={s} rank={i + 1} onSelect={sym => handleSelect(sym)} selected={selectedSym === s.symbol} tech={techCacheRef.current[`${s.symbol}:${activeTF}`] || null} livePrice={livePriceMap[s.symbol] ?? null} _v={techVersion} />
                     ))}
                   </tbody>
                 </table>
@@ -1555,7 +1554,6 @@ function ScannerBody() {
         )}
       </div>
 
-      {/* TechPanel — livePrice passed in for accurate Full Chart seed price */}
       {selectedSym && (
         <TechPanel
           symbol={selectedSym}
@@ -1570,12 +1568,10 @@ function ScannerBody() {
             setTech(null);
             setActiveTF("1day");
             activeTFRef.current = "1day";
+            getSocket().emit("watch:chart", null);
           }}
         />
       )}
-
-      {/* ── NO terminal overlay here — Full Chart opens /stock-terminal.html
-           in a new tab via window.open() in TechPanel.handleFullChart ──────── */}
 
       {showBacktest && <BacktestPanel onClose={() => setShowBacktest(false)} techCacheRef={techCacheRef} />}
     </div>

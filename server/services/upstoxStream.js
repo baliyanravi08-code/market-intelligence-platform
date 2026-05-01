@@ -3,11 +3,12 @@
 /**
  * services/upstoxStream.js
  *
- * FIXES:
- *  1. Added candle aggregation — emits candle:tick and candle:closed via Socket.IO
- *  2. registerLiveCandleSubscription / unregisterLiveCandleSubscription added
- *  3. All existing market-tick / backtest / options logic unchanged
- *  4. ioRef is shared — candle events flow through the same Socket.IO instance
+ * ROOM-BASED FIXES:
+ *  1. backtest-live-tick  → broadcastBacktestTick() from websocket.js (private rooms only)
+ *  2. candle:tick         → throttled to 2s per symbol+tf, still via ioRef (already room-scoped in websocket)
+ *  3. market-tick (index) → only emits when price changes by ≥ 0.05 (eliminates duplicate fires)
+ *  4. emitChartLTP()      → called for every EQ tick so chart:{SYMBOL} rooms get targeted LTP
+ *  5. All subscription / reconnect / Gann / OI logic unchanged
  */
 
 let UpstoxClient = null;
@@ -41,14 +42,14 @@ function evictMapIfNeeded(map, maxSize) {
 function setLTPTickHandler(fn) {
   if (typeof fn === "function") { ltpTickHandler = fn; console.log("✅ Upstox: LTP tick handler registered"); }
 }
-function setOITickHandler(handler) { oiTickHandler = handler; }
+function setOITickHandler(handler)  { oiTickHandler  = handler; }
 function setBacktestEngine(engine) {
   if (engine && typeof engine.onLTPTick === "function") { backtestEngine = engine; console.log("✅ Upstox: Backtest engine wired"); }
 }
 
 const INDEX_INSTRUMENTS = ["NSE_INDEX|Nifty 50", "BSE_INDEX|SENSEX", "NSE_INDEX|Nifty Bank"];
-const NAME_MAP = { "NSE_INDEX|Nifty 50": "NIFTY 50", "BSE_INDEX|SENSEX": "SENSEX", "NSE_INDEX|Nifty Bank": "BANK NIFTY" };
-const GANN_SYMBOL_MAP = { "NIFTY 50": "NIFTY", "BANK NIFTY": "BANKNIFTY", "SENSEX": "SENSEX" };
+const NAME_MAP          = { "NSE_INDEX|Nifty 50": "NIFTY 50", "BSE_INDEX|SENSEX": "SENSEX", "NSE_INDEX|Nifty Bank": "BANK NIFTY" };
+const GANN_SYMBOL_MAP   = { "NIFTY 50": "NIFTY", "BANK NIFTY": "BANKNIFTY", "SENSEX": "SENSEX" };
 
 const optionInstruments   = new Set();
 const stockInstruments    = new Set();
@@ -57,45 +58,25 @@ const instrKeyToSymbol    = new Map();
 const prevCloseCache      = new Map();
 
 // ── Candle aggregation ────────────────────────────────────────────────────────
-// Stores live candle state per "SYMBOL_tf" key
-// e.g. "RELIANCE_5min" → { time, open, high, low, close, volume }
-const liveCandleState = new Map();
-
-// Active subscriptions: "SYMBOL_tf" → Set of socket IDs (informational only)
-// We track which symbol+tf combos are "wanted" so we know which NSE_EQ keys to subscribe
+const liveCandleState  = new Map(); // "SYMBOL_tf" → { time, open, high, low, close, volume }
 const candleSubscriptions = new Map(); // "SYMBOL_tf" → subscriberCount
+const candleEmitThrottle  = new Map(); // "SYMBOL_tf" → lastEmitMs
 
-// Symbol → NSE_EQ instrument key
-function symbolToInstrKey(symbol) {
-  return `NSE_EQ|${symbol.toUpperCase()}`;
-}
+function symbolToInstrKey(symbol) { return `NSE_EQ|${symbol.toUpperCase()}`; }
 
-// Parse tf string to milliseconds
 const TF_MS = {
   "1min":  60_000,
-  "5min":  5 * 60_000,
+  "5min":  5  * 60_000,
   "15min": 15 * 60_000,
   "1hour": 60 * 60_000,
-  "4hour": 4 * 60 * 60_000,
+  "4hour": 4  * 60 * 60_000,
 };
-
 function tfToMs(tf) { return TF_MS[tf] || 60_000; }
+function candlePeriodStart(ts, tf) { const ms = tfToMs(tf); return Math.floor(ts / ms) * ms; }
 
-// Get the candle period start time for a given timestamp and tf
-function candlePeriodStart(ts, tf) {
-  const ms = tfToMs(tf);
-  return Math.floor(ts / ms) * ms;
-}
-
-/**
- * Called by websocket.js when a client subscribes to live candles.
- * Ensures the symbol is subscribed on the Upstox stream.
- */
 function registerLiveCandleSubscription(symbol, tf) {
   const key = `${symbol}_${tf}`;
   candleSubscriptions.set(key, (candleSubscriptions.get(key) || 0) + 1);
-
-  // Subscribe the instrument if not already tracked
   const instrKey = symbolToInstrKey(symbol);
   if (!stockInstrumentKeys.has(instrKey)) {
     stockInstrumentKeys.add(instrKey);
@@ -107,31 +88,25 @@ function registerLiveCandleSubscription(symbol, tf) {
   }
 }
 
-/**
- * Called by websocket.js when a client unsubscribes or disconnects.
- */
 function unregisterLiveCandleSubscription(symbol, tf) {
-  const key = `${symbol}_${tf}`;
+  const key   = `${symbol}_${tf}`;
   const count = (candleSubscriptions.get(key) || 1) - 1;
   if (count <= 0) {
     candleSubscriptions.delete(key);
     liveCandleState.delete(key);
+    candleEmitThrottle.delete(key);
   } else {
     candleSubscriptions.set(key, count);
   }
 }
 
-/**
- * Process a live price tick for candle aggregation.
- * Called from parseAndEmit whenever an NSE_EQ tick arrives.
- */
+// ── FIX: throttled candle tick — max 1 emit per 2s per symbol+tf ─────────────
 function processCandleTick(symbol, price, volume) {
   if (!ioRef) return;
   const now = Date.now();
 
   for (const [key, count] of candleSubscriptions.entries()) {
     if (count <= 0) continue;
-    // key = "SYMBOL_tf"
     const underscore = key.indexOf("_");
     const keySym = key.slice(0, underscore);
     const tf     = key.slice(underscore + 1);
@@ -141,28 +116,37 @@ function processCandleTick(symbol, price, volume) {
     const existing    = liveCandleState.get(key);
 
     if (!existing || existing.time !== periodStart) {
-      // New candle period — close the old one first
+      // Close old candle — always emit this (candle boundary event, not noisy)
       if (existing) {
         ioRef.emit("candle:closed", {
-          symbol: keySym,
-          tf,
+          symbol: keySym, tf,
           candle: { time: existing.time, open: existing.open, high: existing.high, low: existing.low, close: existing.close, volume: existing.volume },
         });
       }
-      // Open a new candle
+      // Open new candle
       const newCandle = { time: periodStart, open: price, high: price, low: price, close: price, volume: volume || 0 };
       liveCandleState.set(key, newCandle);
       ioRef.emit("candle:tick", { symbol: keySym, tf, candle: newCandle });
+      candleEmitThrottle.set(key, now);
     } else {
-      // Update existing candle
+      // Update in-memory candle (every tick)
       existing.high   = Math.max(existing.high, price);
       existing.low    = Math.min(existing.low, price);
       existing.close  = price;
       existing.volume = (existing.volume || 0) + (volume || 0);
-      ioRef.emit("candle:tick", { symbol: keySym, tf, candle: { ...existing } });
+
+      // FIX: only emit to socket every 2 seconds — not every tick
+      const lastEmit = candleEmitThrottle.get(key) || 0;
+      if (now - lastEmit >= 2000) {
+        ioRef.emit("candle:tick", { symbol: keySym, tf, candle: { ...existing } });
+        candleEmitThrottle.set(key, now);
+      }
     }
   }
 }
+
+// ── Index price dedup — only emit when price actually moves ──────────────────
+const prevEmittedIndexPrice = new Map(); // name → last emitted price
 
 // ── Instrument helpers ────────────────────────────────────────────────────────
 function getSafePrevClose(key, ltpc, currentPrice) {
@@ -206,13 +190,20 @@ function getAccessToken() {
   return currentToken || process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
+// ── Lazy-load websocket module to avoid circular require ─────────────────────
+let _ws = null;
+function getWS() {
+  if (!_ws) { try { _ws = require("../api/websocket"); } catch (_) {} }
+  return _ws;
+}
+
 let _scanner = null;
 function getScanner() {
   if (!_scanner) { try { _scanner = require("./intelligence/marketScanner"); } catch (_) {} }
   return _scanner;
 }
 
-// ── Parse & emit (unchanged logic + candle hook) ──────────────────────────────
+// ── Parse & emit ──────────────────────────────────────────────────────────────
 function parseAndEmit(raw) {
   try {
     const text = typeof raw === "string" ? raw : raw.toString("utf-8");
@@ -225,6 +216,7 @@ function parseAndEmit(raw) {
       const ff   = feed?.ff || feed;
       const name = NAME_MAP[key];
 
+      // ── Index tick (NIFTY / SENSEX / BANK NIFTY) ──────────────────────────
       if (name) {
         const ltpc = ff?.indexFF?.ltpc || ff?.marketFF?.ltpc || feed?.ltpc || null;
         if (ltpc) {
@@ -234,22 +226,30 @@ function parseAndEmit(raw) {
             const diff = parseFloat((price - prev).toFixed(2));
             const pct  = prev > 0 ? parseFloat(((diff / prev) * 100).toFixed(2)) : 0;
             const up   = diff >= 0;
-            updates.push({
-              name, price: price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
-              raw: price, change: (up ? "+" : "") + diff.toFixed(2),
-              pct: (up ? "+" : "") + pct.toFixed(2) + "%", up, _ts: Date.now(),
-            });
+
+            // FIX: only include in updates array if price moved meaningfully
+            const lastEmitted = prevEmittedIndexPrice.get(name);
+            if (lastEmitted === undefined || Math.abs(price - lastEmitted) >= 0.05) {
+              prevEmittedIndexPrice.set(name, price);
+              updates.push({
+                name, price: price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
+                raw: price, change: (up ? "+" : "") + diff.toFixed(2),
+                pct: (up ? "+" : "") + pct.toFixed(2) + "%", up, _ts: Date.now(),
+              });
+            }
             if (typeof ltpTickHandler === "function") ltpTickHandler(GANN_SYMBOL_MAP[name] || name, price);
           }
         }
         continue;
       }
 
+      // ── Options / Futures tick ─────────────────────────────────────────────
       if (key.startsWith("NSE_FO|") || key.startsWith("BSE_FO|")) {
         if (oiTickHandler) oiTickHandler(key, ff || {});
         continue;
       }
 
+      // ── Equity tick (NSE_EQ / BSE_EQ) ─────────────────────────────────────
       if (key.startsWith("NSE_EQ|") || key.startsWith("BSE_EQ|")) {
         const ltpc = ff?.equityFF?.ltpc || ff?.marketFF?.ltpc || feed?.ltpc || null;
         if (ltpc) {
@@ -266,13 +266,27 @@ function parseAndEmit(raw) {
             let symbol = instrKeyToSymbol.get(key);
             if (!symbol) symbol = key.replace(/^(NSE_EQ|BSE_EQ)\|/, "");
 
-            if (ioRef) ioRef.emit("backtest-live-tick", { symbol, price, prevClose, change, changePct });
+            // FIX 1: backtest ticks go only to clients in a backtest room
+            const ws = getWS();
+            if (ws?.broadcastBacktestTick) {
+              ws.broadcastBacktestTick({ symbol, price, prevClose, change, changePct });
+            }
 
+            // FIX 2: chart LTP goes only to chart:{SYMBOL} room, throttled 500ms
+            if (ws?.emitChartLTP) {
+              ws.emitChartLTP(symbol, price);
+            }
+
+            // Scanner live tick (in-memory only, no socket emit here)
             const scanner = getScanner();
-            if (scanner && typeof scanner.applyLiveTick === "function") scanner.applyLiveTick({ symbol, price, changePct, change, prevClose });
+            if (scanner && typeof scanner.applyLiveTick === "function") {
+              scanner.applyLiveTick({ symbol, price, changePct, change, prevClose });
+            }
+
+            // Backtest engine internal callback
             if (backtestEngine) backtestEngine.onLTPTick(symbol, price);
 
-            // ── NEW: feed into candle aggregator ──────────────────────────
+            // Candle aggregation (throttled internally)
             const vol = parseFloat(ltpc.tv || ltpc.v || 0);
             processCandleTick(symbol, price, vol);
           }
@@ -281,11 +295,13 @@ function parseAndEmit(raw) {
       }
     }
 
+    // FIX 3: market-tick only fires when index prices actually changed
     if (updates.length > 0 && ioRef) ioRef.emit("market-tick", updates);
+
   } catch (_) {}
 }
 
-// ── Streamer lifecycle (unchanged) ────────────────────────────────────────────
+// ── Streamer lifecycle ────────────────────────────────────────────────────────
 function patchStreamerInternals(streamerInstance) {
   setImmediate(() => {
     try {
@@ -416,7 +432,6 @@ module.exports = {
   subscribeOptions, setOITickHandler, setLTPTickHandler,
   getAccessToken, setBacktestEngine,
   subscribeStocksForBacktest, subscribeWithInstrumentKeys,
-  // ── NEW ──
   registerLiveCandleSubscription,
   unregisterLiveCandleSubscription,
 };
