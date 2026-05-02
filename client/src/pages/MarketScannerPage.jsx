@@ -227,6 +227,36 @@ function getSocket() {
   return _socket;
 }
 
+// ── FIX: Expand compressed diff keys from websocket.js back to full stock objects ──
+// websocket.js sends: { s, l, c, ch, v, sc, sg, rs, mc, bb, ms, mb, ml, nm, ex, sk, pc, en, sl, tp, et, gp }
+// We expand back to full field names so the rest of the component works unchanged.
+function expandDiffStock(d) {
+  return {
+    symbol:         d.s,
+    ltp:            d.l,
+    changePct:      d.c,
+    change:         d.ch,
+    volume:         d.v,
+    techScore:      d.sc,
+    signal:         d.sg,
+    rsi:            d.rs,
+    macd:           d.mc,
+    bollingerBands: d.bb,
+    maSummary:      d.ms,
+    mcapBucket:     d.mb,
+    mcapLabel:      d.ml,
+    name:           d.nm,
+    exchange:       d.ex,
+    sector:         d.sk,
+    prevClose:      d.pc,
+    entry:          d.en,
+    sl:             d.sl,
+    tp:             d.tp,
+    entryType:      d.et,
+    gapPct:         d.gp,
+  };
+}
+
 const fmt   = (n, d = 2) => n == null ? "—" : Number(n).toFixed(d);
 const fmtK  = (n) => {
   if (!n) return "—";
@@ -466,7 +496,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
     window.open(url.toString(), "_blank", "noopener");
   };
 
-  // ── FIX: Entry type badge ─────────────────────────────────────────────────
   const entryTypeMeta = tech?.entryType
     ? tech.entryType === "MARKET_OPEN"
       ? { label: "⚡ LIVE OPEN", color: T.green, bg: "#052e16", border: "#4ade8033" }
@@ -550,7 +579,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
               </div>
             </div>
 
-            {/* ── FIX: Entry / SL / Target grid ── */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
               {[
                 { label: "Entry",     value: tech.entry, color: T.blue  },
@@ -564,7 +592,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
               ))}
             </div>
 
-            {/* ── FIX: Entry type + gap badge ── */}
             {entryTypeMeta && (
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "5px 10px", borderRadius: 5, background: entryTypeMeta.bg, border: `1px solid ${entryTypeMeta.border}` }}>
                 <span style={{ fontSize: 9, color: entryTypeMeta.color, fontWeight: 700, letterSpacing: "0.5px" }}>
@@ -718,7 +745,7 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
   );
 }
 
-// ── FIX: GainLossCard — uses live price for display ───────────────────────────
+// ── GainLossCard ──────────────────────────────────────────────────────────────
 function GainLossCard({ title, stocks, onSelect, accent, onViewAll, livePriceMap }) {
   return (
     <div style={{ background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden", flex: 1 }}>
@@ -730,15 +757,13 @@ function GainLossCard({ title, stocks, onSelect, accent, onViewAll, livePriceMap
       </div>
       <div style={{ maxHeight: 300, overflowY: "auto" }}>
         {(stocks || []).slice(0, 15).map(s => {
-          // Use _livePct if already computed by liveRankedGainers/Losers,
-          // otherwise compute from livePriceMap
           const livePrice = livePriceMap?.[s.symbol];
           let prevClose = s.prevClose || 0;
           if (prevClose <= 0 && s.ltp > 0) prevClose = Math.round((s.ltp / (1 + (s.changePct || 0.001) / 100)) * 100) / 100;
           if (prevClose <= 0) prevClose = s.ltp;
           const ltp    = livePrice ?? s.ltp;
           const pct    = s._livePct != null
-            ? s._livePct  // already computed with live price
+            ? s._livePct
             : livePrice != null && prevClose > 0
               ? Math.round(((livePrice - prevClose) / prevClose) * 10000) / 100
               : s.changePct;
@@ -1229,9 +1254,7 @@ function ScannerBody() {
     setUpdatedAt(new Date());
   }, []);
 
-  // ── FIX 2: Live-ranked gainers/losers using useMemo ───────────────────────
-  // Re-ranks gainers/losers in real time as live prices arrive
-  // Uses _livePct field so GainLossCard doesn't need to recompute
+  // ── Live-ranked gainers/losers with real-time re-sort ─────────────────────
   const liveRankedGainers = useMemo(() => {
     if (!data?.allStocks?.length) return data?.gainers || [];
     return [...data.allStocks]
@@ -1277,14 +1300,20 @@ function ScannerBody() {
     socket.on("scanner:snapshot", (allStocks) => {
       if (!Array.isArray(allStocks)) return;
       const map = new Map();
+      // Snapshot is full objects (not compressed)
       allStocks.forEach(s => map.set(s.symbol, s));
       stockMapRef.current = map;
       rebuildDataFromMap(map);
     });
 
-    socket.on("scanner:diff", (changed) => {
-      if (!Array.isArray(changed) || !changed.length) return;
-      changed.forEach(s => stockMapRef.current.set(s.symbol, s));
+    // FIX: scanner:diff now arrives compressed — expand before using
+    socket.on("scanner:diff", (diffs) => {
+      if (!Array.isArray(diffs) || !diffs.length) return;
+      diffs.forEach(d => {
+        // Detect compressed format (has 's' key) vs legacy full format (has 'symbol' key)
+        const stock = d.s !== undefined ? expandDiffStock(d) : d;
+        if (stock.symbol) stockMapRef.current.set(stock.symbol, stock);
+      });
       rebuildDataFromMap(stockMapRef.current);
     });
 
@@ -1458,7 +1487,6 @@ function ScannerBody() {
       {/* Main content */}
       <div style={{ padding: "16px 20px 40px", paddingRight: selectedSym ? "434px" : "20px", transition: "padding-right 0.2s" }}>
 
-        {/* ── FIX 3: liveRankedGainers / liveRankedLosers wired here ── */}
         {data && (
           <div style={{ display: "flex", gap: 12, marginBottom: 18 }}>
             <GainLossCard title="TOP GAINERS" stocks={liveRankedGainers} onSelect={sym => handleSelect(sym)} accent={T.green} onViewAll={() => handleViewAll("gainers")} livePriceMap={livePriceMap} />

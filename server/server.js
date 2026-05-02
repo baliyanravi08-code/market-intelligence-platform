@@ -254,7 +254,7 @@ function _pushMapToGann(map) {
 
 function getInstrumentMap() { return instrumentMap; }
 
-// ── FIX: getInstrumentKeyFull — now also caches disk hits into RAM ────────────
+// ── getInstrumentKeyFull — also caches disk hits into RAM ────────────────────
 function getInstrumentKeyFull(symbol) {
   if (instrumentMap[symbol]) return instrumentMap[symbol];
   try {
@@ -273,36 +273,101 @@ function getInstrumentKeyFull(symbol) {
   return null;
 }
 
-// ── FIX: resolveInstrumentKey — async, falls through to live Upstox search ───
+// ── resolveInstrumentKey — 5-step resolution with full logging ───────────────
+// FIX: This is the main fix for CEMPRO and other mid/small-cap stocks
+// that aren't in the RAM slice but exist on Upstox.
 async function resolveInstrumentKey(symbol) {
-  // 1. Fast path: already in RAM or disk
-  const cached = getInstrumentKeyFull(symbol);
-  if (cached) return cached;
+  const sym = symbol.toUpperCase().trim();
 
-  // 2. Live Upstox instrument search
-  if (!upstoxAccessToken) return null;
-  try {
-    console.log(`🔍 Searching Upstox live for instrument: ${symbol}`);
-    const r = await axios.get("https://api.upstox.com/v2/market-quote/search", {
-      params:  { query: symbol, asset_type: "equity" },
-      headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
-      timeout: 8_000,
-    });
-    const items = r.data?.data || [];
-    const match =
-      items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("NSE_EQ")) ||
-      items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("BSE_EQ"));
-
-    if (match?.instrument_key) {
-      instrumentMap[symbol] = match.instrument_key;
-      console.log(`✅ Resolved ${symbol} via live search → ${match.instrument_key}`);
-      return match.instrument_key;
-    }
-    console.warn(`⚠️ No Upstox instrument match for symbol: ${symbol}`);
-  } catch (e) {
-    console.warn(`⚠️ Upstox live instrument search failed [${symbol}]:`, e.message);
+  // Step 1: RAM cache (fastest)
+  if (instrumentMap[sym]) {
+    console.log(`📍 [resolve] ${sym} → RAM: ${instrumentMap[sym]}`);
+    return instrumentMap[sym];
   }
+
+  // Step 2: Full disk map (catches stocks not in the 5000-cap RAM slice)
+  const diskKey = getInstrumentKeyFull(sym);
+  if (diskKey) {
+    console.log(`📍 [resolve] ${sym} → disk: ${diskKey}`);
+    return diskKey;
+  }
+
+  // Step 3: Direct NSE_EQ pattern — validate via Upstox quote API
+  // Many stocks follow NSE_EQ|SYMBOL directly. Test it before using.
+  if (upstoxAccessToken) {
+    const nseCandidate = `NSE_EQ|${sym}`;
+    try {
+      const r = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
+        params:  { instrument_key: nseCandidate },
+        headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
+        timeout: 5_000,
+      });
+      const d = r.data?.data || {};
+      if (d[nseCandidate] || d[nseCandidate.replace("|", ":")]) {
+        instrumentMap[sym] = nseCandidate; // cache it
+        console.log(`📍 [resolve] ${sym} → NSE_EQ direct validated: ${nseCandidate}`);
+        return nseCandidate;
+      }
+    } catch (e) {
+      console.warn(`⚠️ [resolve] ${sym} NSE_EQ direct test failed:`, e.response?.status || e.message);
+    }
+
+    // Step 4: BSE_EQ fallback
+    const bseCandidate = `BSE_EQ|${sym}`;
+    try {
+      const r = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
+        params:  { instrument_key: bseCandidate },
+        headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
+        timeout: 5_000,
+      });
+      const d = r.data?.data || {};
+      if (d[bseCandidate] || d[bseCandidate.replace("|", ":")]) {
+        instrumentMap[sym] = bseCandidate;
+        console.log(`📍 [resolve] ${sym} → BSE_EQ direct validated: ${bseCandidate}`);
+        return bseCandidate;
+      }
+    } catch (e) {
+      console.warn(`⚠️ [resolve] ${sym} BSE_EQ direct test failed:`, e.response?.status || e.message);
+    }
+
+    // Step 5: Live Upstox search (last resort — slower but catches anything)
+    try {
+      console.log(`🔍 [resolve] ${sym} → trying live Upstox search...`);
+      const r = await axios.get("https://api.upstox.com/v2/market-quote/search", {
+        params:  { query: sym, asset_type: "equity" },
+        headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
+        timeout: 8_000,
+      });
+      const items = r.data?.data || [];
+      const match =
+        items.find(i => i.tradingsymbol === sym && i.instrument_key?.startsWith("NSE_EQ")) ||
+        items.find(i => i.tradingsymbol === sym && i.instrument_key?.startsWith("BSE_EQ")) ||
+        items.find(i => i.tradingsymbol === sym);
+
+      if (match?.instrument_key) {
+        instrumentMap[sym] = match.instrument_key;
+        console.log(`✅ [resolve] ${sym} → live search: ${match.instrument_key}`);
+        return match.instrument_key;
+      }
+      console.warn(`⚠️ [resolve] ${sym} not found in Upstox search. Returned:`, items.slice(0, 3).map(i => i.tradingsymbol));
+    } catch (e) {
+      console.warn(`⚠️ [resolve] ${sym} live search failed:`, e.response?.status || e.message);
+    }
+  }
+
+  console.error(`❌ [resolve] ${sym} — NOT FOUND in RAM(${Object.keys(instrumentMap).length}), disk, direct NSE/BSE test, or live search. Visit /api/test-search?symbol=${sym} to debug.`);
   return null;
+}
+
+// ── Last valid trading day helper ─────────────────────────────────────────────
+// FIX: Upstox EOD rejects today AND weekends as toDate
+function getLastTradingDay() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1); // never use today
+  while (d.getDay() === 0 || d.getDay() === 6) {
+    d.setDate(d.getDate() - 1); // skip Sat(6) and Sun(0)
+  }
+  return d;
 }
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
@@ -706,9 +771,10 @@ app.get("/api/test-circuit", async (req, res) => {
 });
 
 // ── /api/candles/:symbol ──────────────────────────────────────────────────────
-// FIX: Upstox v3 uses SINGULAR unit names: "day", "week", "month"
-//      Using "days"/"weeks"/"months" causes HTTP 400 on all EOD timeframes.
-//      Also: EOD historical endpoint rejects today's date as toDate — use yesterday.
+// FIX 1: Robust 5-step instrument resolution — catches CEMPRO and all mid/small-caps
+// FIX 2: EOD toDate always skips weekends via getLastTradingDay()
+// FIX 3: NSE fail → auto-retry with BSE instrument key
+// FIX 4: Full error logging with HTTP status codes so you can see exact Upstox errors in Render logs
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const tf     = req.query.tf || "1day";
@@ -718,15 +784,21 @@ app.get("/api/candles/:symbol", async (req, res) => {
     return res.json({ ok: false, error: "No token — visit /auth/upstox", symbol });
   }
 
-  // Resolve instrument key: RAM → disk → live Upstox search
+  // ── Resolve instrument key (5-step) ───────────────────────────────────────
   const instrKey = await resolveInstrumentKey(symbol);
   if (!instrKey) {
-    return res.json({ ok: false, error: `Symbol ${symbol} not found`, symbol });
+    return res.json({
+      ok:    false,
+      error: `Symbol ${symbol} not found. Try /api/test-search?symbol=${symbol} to debug.`,
+      symbol,
+      debug: {
+        ramSize: Object.keys(instrumentMap).length,
+        hint:    "Symbol may be listed differently on Upstox (e.g. CEMPRO vs CEMBIOSYS)",
+      },
+    });
   }
 
   // ── v3 API timeframe config ───────────────────────────────────────────────
-  // CRITICAL: Upstox v3 uses SINGULAR unit names for EOD: "day", "week", "month"
-  // "days"/"weeks"/"months" returns HTTP 400. Use explicit eod flag for isIntraday check.
   const TF_MAP_V3 = {
     "1min":   { unit: "minutes", minutes: 1,    eod: false },
     "5min":   { unit: "minutes", minutes: 5,    eod: false },
@@ -745,20 +817,18 @@ app.get("/api/candles/:symbol", async (req, res) => {
   const headers    = { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" };
   const encodedKey = encodeURIComponent(instrKey);
 
-  // intraday: /v3/historical-candle/{key}/minutes/{N}/{to}/{from}
-  // EOD:      /v3/historical-candle/{key}/day/{to}/{from}   ← singular unit
-  const buildHistUrl = (toDate, fromDate) => {
+  const buildHistUrl = (instrKeyEncoded, toDate, fromDate) => {
     const unitSegment = isIntraday
       ? `${tfCfg.unit}/${tfCfg.minutes}`
       : tfCfg.unit;
-    return `https://api.upstox.com/v3/historical-candle/${encodedKey}/${unitSegment}/${fmt(toDate)}/${fmt(fromDate)}`;
+    return `https://api.upstox.com/v3/historical-candle/${instrKeyEncoded}/${unitSegment}/${fmt(toDate)}/${fmt(fromDate)}`;
   };
 
-  const buildIntradayUrl = () =>
-    `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/${tfCfg.minutes}`;
+  const buildIntradayUrl = (instrKeyEncoded) =>
+    `https://api.upstox.com/v3/historical-candle/intraday/${instrKeyEncoded}/minutes/${tfCfg.minutes}`;
 
   // v3 candle format: [timestamp, open, high, low, close, volume, oi]
-  // v3 returns newest-first — reverse to get chronological order
+  // v3 returns newest-first — reverse for chronological order
   const parseCandles = (raw) =>
     (raw || [])
       .map(c => ({
@@ -771,19 +841,28 @@ app.get("/api/candles/:symbol", async (req, res) => {
       }))
       .reverse();
 
+  // ── Helper: try fetching candles with a given instrument key ─────────────
+  async function fetchEODCandles(iKey, toDate, fromDate) {
+    const enc = encodeURIComponent(iKey);
+    const url = buildHistUrl(enc, toDate, fromDate);
+    console.log(`🔍 [candles] EOD → ${url}`);
+    const r = await axios.get(url, { headers, timeout: 15_000 });
+    return parseCandles(r.data?.data?.candles);
+  }
+
   try {
     let allCandles = [];
 
     if (isIntraday) {
       // ── Step 1: Today's live intraday candles ─────────────────────────────
       try {
-        const url = buildIntradayUrl();
+        const url = buildIntradayUrl(encodedKey);
         const r   = await axios.get(url, { headers, timeout: 15_000 });
         const todayCandles = parseCandles(r.data?.data?.candles);
         allCandles = todayCandles;
         console.log(`✅ v3 intraday [${symbol}/${tf}]: ${todayCandles.length} candles today`);
       } catch (e) {
-        console.warn(`⚠️ v3 intraday [${symbol}/${tf}]:`, e.response?.data?.message || e.message);
+        console.warn(`⚠️ v3 intraday [${symbol}/${tf}]: HTTP ${e.response?.status} —`, e.response?.data?.message || e.message);
       }
 
       // ── Step 2: Historical intraday candles (yesterday and back) ──────────
@@ -793,56 +872,62 @@ app.get("/api/candles/:symbol", async (req, res) => {
       fromDate.setDate(fromDate.getDate() - Math.min(days, 30));
 
       try {
-        const url = buildHistUrl(toDate, fromDate);
+        const url = buildHistUrl(encodedKey, toDate, fromDate);
         const r   = await axios.get(url, { headers, timeout: 15_000 });
         const histCandles = parseCandles(r.data?.data?.candles);
         allCandles = [...histCandles, ...allCandles];
         console.log(`✅ v3 historical intraday [${symbol}/${tf}]: ${histCandles.length} candles`);
       } catch (e) {
-        console.warn(`⚠️ v3 historical intraday [${symbol}/${tf}]:`, e.response?.data?.message || e.message);
+        console.warn(`⚠️ v3 historical intraday [${symbol}/${tf}]: HTTP ${e.response?.status} —`, e.response?.data?.message || e.message);
       }
 
-    // REPLACE WITH:
     } else {
       // ── EOD candles (1D / 1W / 1M) ───────────────────────────────────────
-      // FIX: Upstox EOD rejects today AND weekends/holidays as toDate
-      // Walk backwards from yesterday to find last valid trading day
-      const toDate = new Date();
-      toDate.setDate(toDate.getDate() - 1);
-      // Skip weekends (0=Sun, 6=Sat) — also skip if it lands on a holiday
-      while (toDate.getDay() === 0 || toDate.getDay() === 6) {
-        toDate.setDate(toDate.getDate() - 1);
-      }
+      // FIX: walk back to last valid trading day (skip weekends + don't use today)
+      const toDate   = getLastTradingDay();
       const fromDate = new Date();
       fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
+
+      console.log(`📅 [candles] EOD toDate=${fmt(toDate)} (${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][toDate.getDay()]})`);
+
       try {
-        const url = buildHistUrl(toDate, fromDate);
-        const r   = await axios.get(url, { headers, timeout: 15_000 });
-        allCandles = parseCandles(r.data?.data?.candles);
-        console.log(`✅ v3 EOD historical [${symbol}/${tf}]: ${allCandles.length} candles`);
+        allCandles = await fetchEODCandles(instrKey, toDate, fromDate);
+        console.log(`✅ v3 EOD [${symbol}/${tf}]: ${allCandles.length} candles`);
       } catch (e) {
-        console.warn(`⚠️ v3 EOD historical [${symbol}/${tf}]:`, e.response?.data?.message || e.message);
+        const status = e.response?.status;
+        const msg    = e.response?.data?.message || e.message;
+        console.error(`❌ v3 EOD [${symbol}/${tf}]: HTTP ${status} — ${msg}`);
+
+        // FIX: If NSE_EQ failed, auto-retry with BSE_EQ instrument key
+        if (instrKey.startsWith("NSE_EQ|") && status === 400) {
+          const bseFallback = `BSE_EQ|${symbol}`;
+          console.log(`🔄 [candles] NSE failed (400) → retrying with BSE fallback: ${bseFallback}`);
+          try {
+            allCandles = await fetchEODCandles(bseFallback, toDate, fromDate);
+            console.log(`✅ v3 EOD BSE fallback [${symbol}/${tf}]: ${allCandles.length} candles`);
+            // Cache the BSE key so future requests skip the NSE attempt
+            if (allCandles.length > 0) instrumentMap[symbol] = bseFallback;
+          } catch (e2) {
+            console.error(`❌ v3 EOD BSE fallback also failed [${symbol}]: HTTP ${e2.response?.status} — ${e2.response?.data?.message || e2.message}`);
+          }
+        }
       }
 
-      // ── For 1D: append live today candle using intraday 1min data ─────────
-      // Gives a live "today" bar showing current session price action
+      // ── For 1D: append live today candle using intraday 1min data ────────
+      // This gives a live "today" bar even during/after trading hours
       if (tf === "1day") {
         try {
           const todayUrl = `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/1`;
           const r2       = await axios.get(todayUrl, { headers, timeout: 10_000 });
           const ticks    = r2.data?.data?.candles || [];
           if (ticks.length) {
-            // ticks are newest-first; collapse all into one EOD candle
-            const highs = ticks.map(c => c[2]);
-            const lows  = ticks.map(c => c[3]);
-            const vols  = ticks.map(c => c[5]);
             const todayCandle = {
               time:   new Date(new Date().toISOString().split("T")[0] + "T00:00:00.000Z").getTime(),
-              open:   ticks[ticks.length - 1][1],  // oldest tick open
-              high:   Math.max(...highs),
-              low:    Math.min(...lows),
-              close:  ticks[0][4],                  // newest tick close = live price
-              volume: vols.reduce((a, b) => a + b, 0),
+              open:   ticks[ticks.length - 1][1],  // oldest tick = day open
+              high:   Math.max(...ticks.map(c => c[2])),
+              low:    Math.min(...ticks.map(c => c[3])),
+              close:  ticks[0][4],                  // newest tick = live price
+              volume: ticks.reduce((a, c) => a + c[5], 0),
             };
             const todayStr = new Date().toISOString().split("T")[0];
             const lastHist = allCandles[allCandles.length - 1];
@@ -851,7 +936,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
               allCandles.push(todayCandle);
               console.log(`✅ v3 today-candle appended [${symbol}]: close=${todayCandle.close}`);
             } else {
-              // Update last historical bar with live intraday data
+              // Update last historical bar with live data
               lastHist.high   = Math.max(lastHist.high, todayCandle.high);
               lastHist.low    = Math.min(lastHist.low,  todayCandle.low);
               lastHist.close  = todayCandle.close;
@@ -860,13 +945,24 @@ app.get("/api/candles/:symbol", async (req, res) => {
             }
           }
         } catch (e) {
-          console.warn(`⚠️ v3 today-candle [${symbol}]:`, e.message);
+          // Non-fatal — market may be closed, weekend etc.
+          console.warn(`⚠️ v3 today-candle [${symbol}]: ${e.response?.status || e.message}`);
         }
       }
     }
 
     if (!allCandles.length) {
-      return res.json({ ok: false, symbol, tf, error: "No candles returned from Upstox" });
+      return res.json({
+        ok:    false,
+        symbol,
+        tf,
+        error: "No candles returned from Upstox",
+        debug: {
+          instrKey,
+          toDate: fmt(getLastTradingDay()),
+          hint:   "Check Render logs for exact HTTP error code. If 400: symbol may be delisted or BSE-only.",
+        },
+      });
     }
 
     // Deduplicate by timestamp
@@ -881,13 +977,14 @@ app.get("/api/candles/:symbol", async (req, res) => {
       ok:       true,
       symbol,
       tf,
+      instrKey,
       interval: isIntraday ? `${tfCfg.unit}/${tfCfg.minutes}` : tfCfg.unit,
       count:    allCandles.length,
       candles:  allCandles,
     });
 
   } catch (e) {
-    console.error(`Candle fetch failed [${symbol}/${tf}]:`, e.response?.data || e.message);
+    console.error(`❌ Candle fetch failed [${symbol}/${tf}]:`, e.response?.data || e.message);
     res.json({
       ok:     false,
       symbol,
