@@ -5,19 +5,14 @@ const axios = require("axios");
 const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 const { updateRadar, getRadar } = require("../intelligence/radarEngine");
 const { orderBookEngine } = require("../intelligence/orderBookEngine");
-const opportunityEngine = require("../intelligence/opportunityEngine");
-const sectorQueue       = require("../intelligence/sectorQueue");
-const sectorRadar       = require("../intelligence/sectorRadar");
-const sectorBoomEngine  = require("../intelligence/sectorBoomEngine");
+const sectorEngine        = require("../intelligence/sectorEngine");
 const { saveResult, getRetentionHours, getWindowLabel } = require("../../database");
 const {
   persistRadar,
   persistOrderBook,
   persistSector,
-  persistOpportunity,
   persistMegaOrder,
   persistGuidance,
-  persistCredibility,
   sendStoredToClient
 } = require("../../coordinator");
 
@@ -27,12 +22,6 @@ const {
   isPresentationFiling,
   handleLivePresentationFiling
 } = require("../intelligence/presentationParser");
-
-const {
-  saveActualResult,
-  extractActualsFromResultText,
-  recomputeCredibility
-} = require("../intelligence/credibilityEngine");
 
 let ioRef     = null;
 let bseCookie = "";
@@ -213,27 +202,6 @@ async function enrichResultWithPDF(signal) {
 
     const resultQuarter = parseResultQuarterFromTitle(signal.title);
 
-    if (rawPdfText) {
-      const actuals = extractActualsFromResultText(rawPdfText);
-      if (actuals) {
-        await saveActualResult(
-          String(signal.code),
-          signal.company,
-          resultQuarter,
-          { ...actuals, pdfUrl: signal.pdfUrl, filingDate: signal.time }
-        );
-
-        recomputeCredibility(String(signal.code), signal.company)
-          .then(credDoc => {
-            if (credDoc) {
-              persistCredibility(credDoc);
-              if (ioRef) ioRef.emit("credibility_update", credDoc);
-            }
-          })
-          .catch(() => {});
-      }
-    }
-
     if (!confirmedOB || confirmedOB <= 0) {
       console.log(`📄 Result PDF: no OB found for ${signal.company}`);
       return signal;
@@ -300,7 +268,6 @@ async function warmup() {
   }
 
   // Cookie-less sentinel — scan() works without real cookies
-  // Set it so backfill doesn't skip unnecessarily
   bseCookie    = "cookieless";
   lastWarmupAt = Date.now();
   console.log("⚠️ BSE running cookie-less (announcements still work via API)");
@@ -374,7 +341,7 @@ async function processItem(item) {
     }
   }
 
-  // Result filing — OB extraction + actuals for credibility
+  // Result filing — OB extraction
   if ((signal.type === "RESULT" || signal.type === "BANK_RESULT") && signal.pdfUrl) {
     enrichResultWithPDF(signal).catch(() => {});
   }
@@ -459,21 +426,15 @@ async function processItem(item) {
       }
     }
 
-    const opportunity = opportunityEngine(enrichedSignal);
-    if (opportunity) {
-      persistOpportunity(opportunity);
-      if (ioRef) ioRef.emit("opportunity_alert", opportunity);
-    }
-
-    const queue       = sectorQueue(enrichedSignal);
-    const sectorAlert = sectorRadar(queue);
-    if (sectorAlert) {
-      persistSector(sectorAlert);
-      if (ioRef) ioRef.emit("sector_alerts", [sectorAlert]);
-      const boom = sectorBoomEngine(queue);
-      if (boom) {
-        persistSector(boom);
-        if (ioRef) ioRef.emit("sector_boom", boom);
+    // ── Sector engine (replaces sectorQueue + sectorRadar + sectorBoomEngine) ──
+    const sectorResult = sectorEngine.ingestFilingSignal(enrichedSignal);
+    if (sectorResult) {
+      persistSector(sectorResult);
+      if (ioRef) {
+        ioRef.emit("sector_alerts", [sectorResult]);
+        if (sectorResult.isBoom) {
+          ioRef.emit("sector_boom", sectorResult);
+        }
       }
     }
   }
@@ -523,7 +484,6 @@ async function backfill() {
   try {
     if (!bseCookie) await warmup();
 
-    // ── No longer skips when cookie-less — API works without cookies too ──
     const now      = new Date();
     const fromDate = new Date(now);
     fromDate.setDate(fromDate.getDate() - 4);
