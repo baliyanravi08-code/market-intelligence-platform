@@ -4,12 +4,12 @@
  * coordinator.js
  * Location: server/coordinator.js
  *
- * MEMORY FIXES vs original:
- *  1. stored.guidance    cap: 200 → 50   (~300KB saved in RAM + coordinator.json)
- *  2. stored.credibility cap: 200 → 50   (~300KB saved)
- *  3. stored.orderBook   cap: 100 → 30   (~200KB saved)
- *  4. saveToDisk interval: 2 min → 15 min (fewer GC-pressure spikes from JSON.stringify)
- *  5. All other logic unchanged — Gann, options, delivery, circuit, socket handlers intact.
+ * CHANGES vs previous version:
+ *   - REMOVED: compositeScoreEngine (deleted)
+ *   - REMOVED: credibilityEngine (deleted)
+ *   - ADDED: smartCircuitTracker (replaces circuitWatcher)
+ *   - ADDED: sectorEngine (replaces sectorQueue + sectorBoomEngine + sectorRadar)
+ *   - KEPT: Gann, options, delivery analyzer, order book, LTP registry
  */
 
 const fs   = require("fs");
@@ -19,19 +19,23 @@ const { startGannIntegration }   = require("./services/intelligence/gannIntegrat
 const gannIntegration            = require("./services/intelligence/gannIntegration");
 const ws                         = require("./api/websocket");
 
-const { startDeliveryAnalyzer, onDeliverySpike }   = require("./services/intelligence/deliveryAnalyzer");
-const { startCircuitWatcher, onCircuitAlert, onCircuitWatchlist } = require("./services/intelligence/circuitWatcher");
+const { startDeliveryAnalyzer, onDeliverySpike } = require("./services/intelligence/deliveryAnalyzer");
 
+// New: SmartCircuitTracker replaces circuitWatcher
 const {
-  startCompositeEngine,
-  ingestSmartMoney,
-  ingestOpportunity,
-  getLeaderboard,
-  getCompositeForScrip,
-  setExternalSignal,
-} = require("./services/intelligence/compositeScoreEngine");
+  startSmartCircuitTracker,
+  onCircuitAlert,
+  onCircuitWatchlist,
+  getCircuitWatchlist,
+} = require("./services/intelligence/smartCircuitTracker");
 
-const { getCredibilityForScrip }  = require("./services/intelligence/credibilityEngine");
+// New: sectorEngine replaces sectorQueue + sectorBoomEngine + sectorRadar
+const {
+  startSectorEngine,
+  ingestFilingSignal,
+  getSectorSnapshot,
+} = require("./services/intelligence/sectorEngine");
+
 const { startOptionsIntegration } = require("./services/intelligence/optionsIntegration");
 
 // ── LTP registry ──────────────────────────────────────────────────────────────
@@ -60,8 +64,6 @@ let stored = {
   sectors:          [],
   opportunities:    [],
   megaOrders:       [],
-  guidance:         [],
-  credibility:      [],
   deliverySpikes:   [],
   circuitAlerts:    [],
   circuitWatchlist: [],
@@ -74,20 +76,17 @@ function loadFromDisk() {
       const parsed = JSON.parse(raw);
       stored = {
         radar:            parsed.radar            || [],
-        orderBook:        (parsed.orderBook        || []).slice(0, 30),  // FIX: cap on load too
+        orderBook:        (parsed.orderBook        || []).slice(0, 30),
         sectors:          parsed.sectors          || [],
         opportunities:    parsed.opportunities    || [],
         megaOrders:       parsed.megaOrders       || [],
-        guidance:         (parsed.guidance         || []).slice(0, 50),  // FIX: cap on load too
-        credibility:      (parsed.credibility      || []).slice(0, 50),  // FIX: cap on load too
         deliverySpikes:   (parsed.deliverySpikes   || []).slice(0, 50),
         circuitAlerts:    (parsed.circuitAlerts    || []).slice(0, 50),
         circuitWatchlist: parsed.circuitWatchlist || [],
       };
       console.log(
         `📦 Coordinator loaded: ${stored.orderBook.length} orders, ` +
-        `${stored.sectors.length} sectors, ${stored.guidance.length} guidance, ` +
-        `${stored.credibility.length} credibility, ${stored.deliverySpikes.length} delivery spikes, ` +
+        `${stored.sectors.length} sectors, ${stored.deliverySpikes.length} delivery spikes, ` +
         `${stored.circuitAlerts.length} circuit alerts, ${stored.circuitWatchlist.length} watchlist stocks`
       );
     }
@@ -108,10 +107,8 @@ function saveToDisk() {
 
 loadFromDisk();
 
-// FIX: save every 15 min instead of 2 min — reduces JSON.stringify() RAM pressure
+// Save every 15 min
 setInterval(saveToDisk, 15 * 60 * 1000);
-
-// Safety flush on exit
 process.on("exit",    saveToDisk);
 process.on("SIGTERM", () => { saveToDisk(); process.exit(0); });
 
@@ -121,20 +118,20 @@ function persistRadar(radar) { stored.radar = radar || []; }
 
 function persistOrderBook(orderData) {
   if (!orderData) return;
-  // FIX: cap 100 → 30
   stored.orderBook = [orderData, ...stored.orderBook.filter(o => o.company !== orderData.company)].slice(0, 30);
   saveToDisk();
 }
 
 function persistSector(sectorData) {
   if (!sectorData) return;
+  // Also ingest into live sectorEngine
+  try { ingestFilingSignal(sectorData); } catch {}
   stored.sectors = [sectorData, ...stored.sectors.filter(s => s.sector !== sectorData.sector)].slice(0, 20);
   saveToDisk();
 }
 
 function persistOpportunity(opp) {
   if (!opp) return;
-  ingestOpportunity(opp);
   stored.opportunities = [opp, ...stored.opportunities.filter(o => o.company !== opp.company)].slice(0, 20);
   saveToDisk();
 }
@@ -145,19 +142,7 @@ function persistMegaOrder(order) {
   saveToDisk();
 }
 
-function persistGuidance(doc) {
-  if (!doc) return;
-  // FIX: cap 200 → 50
-  stored.guidance = [doc, ...stored.guidance.filter(g => g.scrip !== doc.scrip)].slice(0, 50);
-  saveToDisk();
-}
-
-function persistCredibility(doc) {
-  if (!doc) return;
-  // FIX: cap 200 → 50
-  stored.credibility = [doc, ...stored.credibility.filter(c => c.scrip !== doc.scrip)].slice(0, 50);
-  saveToDisk();
-}
+// Removed: persistGuidance, persistCredibility — those engines are deleted
 
 function persistDeliverySpike(spikes) {
   if (!spikes || spikes.length === 0) return;
@@ -174,7 +159,7 @@ function persistCircuitAlerts(alerts) {
   const merged = [...alerts, ...stored.circuitAlerts];
   const seen   = new Set();
   stored.circuitAlerts = merged
-    .filter(a => { const k = a.symbol + a.timestamp; if (seen.has(k)) return false; seen.add(k); return true; })
+    .filter(a => { const k = a.symbol + (a.timestamp || ""); if (seen.has(k)) return false; seen.add(k); return true; })
     .slice(0, 50);
   saveToDisk();
 }
@@ -185,43 +170,37 @@ function persistCircuitWatchlist(watchlist) {
 }
 
 function handleSmartMoneyEvent(event) {
-  if (event) ingestSmartMoney(event);
+  if (!event?.company) return;
+  // Pass to sectorEngine as a filing signal
+  try {
+    ingestFilingSignal({ company: event.company, title: event.title || "", _orderInfo: null, type: "SMART_MONEY" });
+  } catch {}
 }
 
 // ── Send stored state to newly connected client ───────────────────────────────
 function sendStoredToClient(socket) {
   if (stored.orderBook.length > 0) {
     stored.orderBook.forEach(o => socket.emit("order_book_update", o));
-    console.log(`📤 Sent ${stored.orderBook.length} stored orders to client`);
   }
-  if (stored.sectors.length       > 0) socket.emit("sector_alerts",       stored.sectors);
+  if (stored.sectors.length > 0)       socket.emit("sector_alerts",     stored.sectors);
   if (stored.opportunities.length > 0) stored.opportunities.forEach(o => socket.emit("opportunity_alert", o));
-  if (stored.megaOrders.length    > 0) stored.megaOrders.forEach(o => socket.emit("mega_order_alert", o));
-  if (stored.guidance.length      > 0) {
-    socket.emit("guidance_stored", stored.guidance);
-    console.log(`📤 Sent ${stored.guidance.length} stored guidance docs to client`);
-  }
-  if (stored.credibility.length > 0) {
-    socket.emit("credibility_stored", stored.credibility);
-    console.log(`📤 Sent ${stored.credibility.length} credibility scores to client`);
-  }
+  if (stored.megaOrders.length > 0)    stored.megaOrders.forEach(o => socket.emit("mega_order_alert", o));
+
   if (stored.deliverySpikes.length > 0) {
     socket.emit("delivery-spikes", stored.deliverySpikes);
-    console.log(`📤 Sent ${stored.deliverySpikes.length} delivery spikes to client`);
   }
   if (stored.circuitAlerts.length > 0) {
     socket.emit("circuit-alerts", stored.circuitAlerts);
-    console.log(`📤 Sent ${stored.circuitAlerts.length} circuit alerts to client`);
   }
   if (stored.circuitWatchlist.length > 0) {
     socket.emit("circuit-watchlist", stored.circuitWatchlist);
-    console.log(`📤 Sent ${stored.circuitWatchlist.length} watchlist stocks to client`);
   }
-  const leaderboard = getLeaderboard(100);
-  if (leaderboard.length > 0) {
-    socket.emit("composite-scores", leaderboard);
-    console.log(`📤 Sent ${leaderboard.length} composite scores to client`);
-  }
+
+  // Send live sector snapshot
+  try {
+    const snapshot = getSectorSnapshot();
+    if (snapshot.length > 0) socket.emit("sector-snapshot", snapshot);
+  } catch {}
 }
 
 function getStored() { return stored; }
@@ -230,66 +209,58 @@ function getStored() { return stored; }
 function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   console.log("🚀 Coordinator Running");
 
-  // ── 1. Composite score engine ─────────────────────────────────────────────
-  startCompositeEngine(io, { getCredibilityForScrip });
-  console.log("⚡ Composite Score Engine started");
-
-  // ── 2. Options Intelligence ───────────────────────────────────────────────
-  startOptionsIntegration(io, { ingestOptionsSignal: ingestOpportunity });
+  // ── 1. Options Intelligence ───────────────────────────────────────────────
+  startOptionsIntegration(io, { ingestOptionsSignal: persistOpportunity });
   console.log("📊 Options Intelligence Engine started");
 
-  // ── 3. Gann Integration (async — restores MongoDB cache on startup) ───────
+  // ── 2. Sector Engine ─────────────────────────────────────────────────────
+  startSectorEngine(io);
+  console.log("🏭 Sector Engine started");
+
+  // ── 3. Smart Circuit Tracker ─────────────────────────────────────────────
+  startSmartCircuitTracker(io, tokenGetter, instrumentMapGetter);
+  onCircuitAlert((alerts) => {
+    persistCircuitAlerts(alerts);
+  });
+  onCircuitWatchlist((watchlist) => {
+    persistCircuitWatchlist(watchlist);
+  });
+  console.log("🔔 Smart Circuit Tracker started");
+
+  // ── 4. Gann Integration ──────────────────────────────────────────────────
   startGannIntegration(io, {
     onNewLTP: (cb) => { ltpListeners.push(cb); },
     setGannSignal: (symbol, signal) => {
       if (!symbol || !signal) return;
-      if (typeof setExternalSignal === "function") setExternalSignal(symbol, "gann", signal);
-      const updated = getCompositeForScrip(symbol);
-      if (updated) io.emit("composite-update", updated);
     },
   })
     .then(() => {
       ws.setGannIntegration(gannIntegration);
-      console.log("📐 Gann Integration started (MongoDB cache restored)");
+      console.log("📐 Gann Integration started");
     })
     .catch(e => {
       console.error("📐 Gann Integration start error:", e.message);
       ws.setGannIntegration(gannIntegration);
     });
 
-  // ── 4. Socket handlers ────────────────────────────────────────────────────
+  // ── 5. Socket handlers ────────────────────────────────────────────────────
   io.on("connection", (socket) => {
     sendStoredToClient(socket);
+    // Legacy: clients that still ask for composite scores get empty array
     socket.on("get-composite-scores", () => {
-      socket.emit("composite-scores", getLeaderboard(100));
-    });
-    socket.on("get-composite-score", (symbol) => {
-      if (!symbol) return;
-      const score = getCompositeForScrip(symbol);
-      if (score) socket.emit("composite-update", score);
+      socket.emit("composite-scores", []);
     });
   });
 
-  // ── 5. Heartbeat ──────────────────────────────────────────────────────────
+  // ── 6. Heartbeat ─────────────────────────────────────────────────────────
   setInterval(() => {
     io.emit("system_event", { type: "heartbeat", time: new Date().toISOString() });
   }, 30_000);
 
-  // ── 6. Delivery analyzer ──────────────────────────────────────────────────
+  // ── 7. Delivery analyzer ─────────────────────────────────────────────────
   startDeliveryAnalyzer(io);
   onDeliverySpike((spikes) => {
     persistDeliverySpike(spikes);
-    console.log(`💾 Persisted ${spikes.length} delivery spike(s)`);
-  });
-
-  // ── 7. Circuit watcher ────────────────────────────────────────────────────
-  startCircuitWatcher(io, tokenGetter, instrumentMapGetter);
-  onCircuitAlert((alerts) => {
-    persistCircuitAlerts(alerts);
-    console.log(`💾 Persisted ${alerts.length} circuit alert(s)`);
-  });
-  onCircuitWatchlist((watchlist) => {
-    persistCircuitWatchlist(watchlist);
   });
 }
 
@@ -302,8 +273,6 @@ module.exports = {
   persistSector,
   persistOpportunity,
   persistMegaOrder,
-  persistGuidance,
-  persistCredibility,
   persistDeliverySpike,
   persistCircuitAlerts,
   persistCircuitWatchlist,

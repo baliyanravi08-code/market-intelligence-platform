@@ -2,9 +2,8 @@
 import { useEffect, useState, useRef } from "react";
 import { io as socketIO } from "socket.io-client";
 import "./App.css";
-import CircuitAlerts from "./components/CircuitAlerts";
 import OptionChain from "./pages/OptionChain";
-import ScoresPage from "./pages/ScoresPage";
+import SmartCircuitPage from "./pages/SmartCircuitPage";
 import OptionsIntelligencePage from "./pages/OptionsIntelligencePage";
 import MarketScannerPage from "./pages/MarketScannerPage";
 import GannBadge from "./components/GannBadge";
@@ -187,35 +186,6 @@ const TV_FULLCHART_SYMBOLS = {
   "GOLD":       "TVC:GOLD",
   "SILVER":     "TVC:SILVER",
 };
-
-// ─── COMPOSITE SCORE BADGE ────────────────────────────────────────────────────
-
-function CompositeScoreBadge({ symbol, compositeMap }) {
-  if (!symbol || !compositeMap) return null;
-  const score = compositeMap[symbol] || compositeMap[symbol?.toUpperCase()];
-  if (!score) return null;
-
-  const colors = { A: "#00ff88", B: "#4fc3f7", C: "#ffd54f", D: "#ff8a65", F: "#ef5350" };
-  const color  = colors[score.grade] || "#546e7a";
-
-  return (
-    <span
-      title={`Composite: ${score.finalScore} · ${score.bias} · ${score.top3Reasons?.[0]?.label || ""}`}
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 3,
-        padding: "1px 6px", borderRadius: 3,
-        background: `${color}18`,
-        border: `1px solid ${color}40`,
-        fontSize: 10, fontWeight: 700, color,
-        fontFamily: "'IBM Plex Mono', monospace",
-        cursor: "default", flexShrink: 0,
-      }}
-    >
-      ⚡{score.finalScore}
-      <span style={{ fontSize: 9, opacity: 0.7 }}>{score.grade}</span>
-    </span>
-  );
-}
 
 // ─── COMPONENTS ───────────────────────────────────────────────────────────────
 
@@ -696,10 +666,6 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
         ))}
       </div>
       <div className="section">
-        <div className="section-divider">🔔 Circuit Alerts</div>
-        <CircuitAlerts socket={socket} />
-      </div>
-      <div className="section">
         <div className="section-divider">⚡ Pulse</div>
         <div className="mini-card" style={{ color: "#4a8adf" }}>Orders Tracked: {orderBook.length}</div>
         <div className="mini-card" style={{ color: "#4a8adf" }}>Active Signals: {computedRadar.length}</div>
@@ -719,7 +685,7 @@ function IntelPanel({ computedRadar, orderBook, bseEvents, nseEvents, tickerSour
   );
 }
 
-function RadarPanel({ filteredRadar, radarQuery, setRadarQuery, compositeMap, gannMap }) {
+function RadarPanel({ filteredRadar, radarQuery, setRadarQuery, gannMap }) {
   return (
     <div className="panel radar-panel">
       <div className="panel-header">
@@ -737,7 +703,6 @@ function RadarPanel({ filteredRadar, radarQuery, setRadarQuery, compositeMap, ga
           <div className="rc-top">
             <span className="co-name" style={{ color: r.conflict ? "#ff7070" : undefined }}>{r.company}</span>
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-              <CompositeScoreBadge symbol={r.code || r.company} compositeMap={compositeMap} />
               <GannBadge symbol={r.code || r.company} gannMap={gannMap} compact={true} />
               {r.conflict && <ConflictBadge risk={r.conflict} />}
               {!r.conflict && r.caution && <CautionBadge risk={r.caution} />}
@@ -842,18 +807,68 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
           </div>
         ))}
       </div>
+
+      {/* ── UPGRADED SECTORS PANEL ── */}
       <div className="section">
-        <div className="section-divider">🏭 Sectors <span className="count">{sector.length}</span></div>
+        <div className="section-divider">
+          🏭 Sectors
+          <span className="count">{sector.length}</span>
+          {sector.filter(s => s.isBoom).length > 0 && (
+            <span style={{ fontSize: 8, fontWeight: 700, marginLeft: 6, padding: "1px 5px", borderRadius: 3, background: "#002210", color: "#00ff9c", border: "1px solid #00ff9c33" }}>
+              🔥 {sector.filter(s => s.isBoom).length} BOOM
+            </span>
+          )}
+        </div>
         {sector.length === 0 ? <div className="empty">No sector activity yet</div>
-          : sector.map((s, i) => (
-          <div className="sec-card" key={i}>
-            <div className="sec-row">
-              <span className="sec-name">{s.sector}</span>
-              <span className="sec-val">{s.totalValue ? `₹${s.totalValue}Cr` : s.count ? `${s.count} filing${s.count > 1 ? "s" : ""}` : "—"}</span>
-            </div>
-          </div>
-        ))}
+          : sector
+              .sort((a, b) => (b.orders || 0) - (a.orders || 0))
+              .slice(0, 8)
+              .map((s, i) => {
+                const sentColor = s.scanner?.sentiment === "BULLISH" ? "#00ff9c"
+                                : s.scanner?.sentiment === "BEARISH" ? "#ff5c5c"
+                                : "#4a9abb";
+                const maxVal = Math.max(...sector.map(x => x.orders || 0), 1);
+                const barPct = Math.round(((s.orders || 0) / maxVal) * 100);
+                return (
+                  <div key={i} style={{
+                    borderLeft: s.isBoom ? "3px solid #00ff9c" : "3px solid #0c3060",
+                    background: s.isBoom ? "#030e0a" : undefined,
+                    marginBottom: 6, padding: "7px 8px", borderRadius: 4,
+                  }}>
+                    <div className="sec-row" style={{ marginBottom: 4 }}>
+                      <span className="sec-name" style={{ color: s.isBoom ? "#00ff9c" : "#d8eeff" }}>
+                        {s.sector}{s.isBoom && <span style={{ marginLeft: 5, fontSize: 8 }}>🔥</span>}
+                      </span>
+                      <span className="sec-val">
+                        {s.totalValue > 0
+                          ? `₹${s.totalValue >= 1000 ? (s.totalValue/1000).toFixed(1)+"K" : Math.round(s.totalValue)}Cr`
+                          : s.orders > 0 ? `${s.orders} order${s.orders > 1 ? "s" : ""}`
+                          : "—"}
+                      </span>
+                    </div>
+                    {s.orders > 0 && (
+                      <div style={{ height: 2, background: "#0a1828", borderRadius: 1, marginBottom: 5, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${barPct}%`, background: s.isBoom ? "#00ff9c" : "#ffd54f", transition: "width 0.4s" }} />
+                      </div>
+                    )}
+                    {s.scanner && (
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 8, fontFamily: "IBM Plex Mono, monospace", color: sentColor, fontWeight: 700 }}>{s.scanner.sentiment}</span>
+                        <span style={{ fontSize: 8, fontFamily: "IBM Plex Mono, monospace", color: "#00ff9c" }}>▲{s.scanner.advancing}</span>
+                        <span style={{ fontSize: 8, fontFamily: "IBM Plex Mono, monospace", color: "#ff5c5c" }}>▼{s.scanner.declining}</span>
+                        {s.scanner.avgChange !== undefined && (
+                          <span style={{ fontSize: 8, fontFamily: "IBM Plex Mono, monospace", color: s.scanner.avgChange >= 0 ? "#00ff9c" : "#ff5c5c", marginLeft: "auto" }}>
+                            {s.scanner.avgChange >= 0 ? "+" : ""}{s.scanner.avgChange}%
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+        }
       </div>
+
       <div className="section">
         <div className="section-divider">
           📦 Order Book Tracker
@@ -908,11 +923,11 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
 
 function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsConnect, onSelectCompany }) {
   const isOptions      = currentPage === "options";
-  const isScores       = currentPage === "scores";
+  const isCircuit      = currentPage === "scores";
   const isOptionsIntel = currentPage === "options-intel";
   const isScanner      = currentPage === "scanner";
   const isTerminal     = currentPage === "terminal";
-  const isAltPage      = isOptions || isScores || isOptionsIntel || isScanner || isTerminal;
+  const isAltPage      = isOptions || isCircuit || isOptionsIntel || isScanner || isTerminal;
 
   return (
     <div className="header">
@@ -932,14 +947,14 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
         </button>
 
         <button
-          className={`options-nav-btn${isScores ? " active" : ""}`}
-          onClick={() => setCurrentPage(isScores ? "dashboard" : "scores")}
-          title="Composite Score Leaderboard"
+          className={`options-nav-btn${isCircuit ? " active" : ""}`}
+          onClick={() => setCurrentPage(isCircuit ? "dashboard" : "scores")}
+          title="Smart Circuit Tracker"
           style={{ marginLeft: 4 }}
         >
-          <span className="options-nav-icon">🏆</span>
-          <span className="options-nav-label">{isScores ? "Dashboard" : "Scores"}</span>
-          {isScores && <span className="options-nav-back">←</span>}
+          <span className="options-nav-icon">🔔</span>
+          <span className="options-nav-label">{isCircuit ? "Dashboard" : "Circuit"}</span>
+          {isCircuit && <span className="options-nav-back">←</span>}
         </button>
 
         <button
@@ -1000,8 +1015,8 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState("dashboard");
-const [terminalSymbol, setTerminalSymbol] = useState(null);
+  const [currentPage,    setCurrentPage]    = useState("dashboard");
+  const [terminalSymbol, setTerminalSymbol] = useState(null);
   const [marketIndices,  setMarketIndices]  = useState([
     { name: "NIFTY 50",   price: "—", change: "—", pct: "—", up: null },
     { name: "SENSEX",     price: "—", change: "—", pct: "—", up: null },
@@ -1025,10 +1040,6 @@ const [terminalSymbol, setTerminalSymbol] = useState(null);
   const [selectedCompany,  setSelectedCompany]  = useState(null);
   const [selectedTicker,   setSelectedTicker]   = useState(null);
   const [socket,           setSocket]           = useState(null);
-
-  const [compositeScores, setCompositeScores] = useState([]);
-  const compositeMap = {};
-  compositeScores.forEach(s => { compositeMap[s.symbol] = s; });
 
   const [gannSignals, setGannSignals] = useState([]);
   const gannMap = {};
@@ -1058,7 +1069,6 @@ const [terminalSymbol, setTerminalSymbol] = useState(null);
 
     sock.on("connect", () => {
       console.log("Socket.io connected");
-      sock.emit("get-composite-scores");
     });
 
     sock.on("market-tick", (updates) => {
@@ -1069,23 +1079,19 @@ const [terminalSymbol, setTerminalSymbol] = useState(null);
       setTickerStale(false);
     });
 
-    sock.on("composite-scores", (scores) => {
-      if (Array.isArray(scores)) setCompositeScores(scores);
-    });
-
-    sock.on("composite-update", (update) => {
-      if (!update?.symbol) return;
-      setCompositeScores(prev => {
-        const next = prev.filter(s => s.symbol !== update.symbol);
-        return [update, ...next];
-      });
-    });
-
     sock.on("gann-signal", (signal) => {
       if (!signal?.symbol) return;
       setGannSignals(prev => {
         const next = prev.filter(g => g.symbol !== signal.symbol);
         return [signal, ...next];
+      });
+    });
+
+    sock.on("sector-update", (boom) => {
+      if (!boom?.sector) return;
+      setSector(prev => {
+        const next = prev.filter(s => s.sector !== boom.sector);
+        return [boom, ...next];
       });
     });
 
@@ -1377,7 +1383,7 @@ const [terminalSymbol, setTerminalSymbol] = useState(null);
         {sharedHeader}
         {sharedTicker}
         <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-          <ScoresPage socket={socket} compositeScores={compositeScores} gannMap={gannMap} />
+          <SmartCircuitPage socket={socket} />
         </div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
@@ -1410,7 +1416,6 @@ const [terminalSymbol, setTerminalSymbol] = useState(null);
     );
   }
 
-  // ── TERMINAL PAGE ─────────────────────────────────────────────────────────
   if (currentPage === "terminal") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
@@ -1431,7 +1436,7 @@ const [terminalSymbol, setTerminalSymbol] = useState(null);
 
       <div className="layout desktop-layout">
         <IntelPanel  computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />
-        <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} gannMap={gannMap} />
+        <RadarPanel  filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} gannMap={gannMap} />
         <FeedPanel   filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />
         <RightPanel  computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />
       </div>
@@ -1442,13 +1447,13 @@ const [terminalSymbol, setTerminalSymbol] = useState(null);
             <button key={t.key} className={`mobile-tab-btn ${mobilePanelTab === t.key ? "active" : ""}`} onClick={() => setMobilePanelTab(t.key)}>{t.label}</button>
           ))}
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("options")}>⚡ OI</button>
-          <button className="mobile-tab-btn" onClick={() => setCurrentPage("scores")}>🏆 SCR</button>
+          <button className="mobile-tab-btn" onClick={() => setCurrentPage("scores")}>🔔 Circuit</button>
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("options-intel")}>📐 OI Intel</button>
           <button className="mobile-tab-btn" onClick={() => setCurrentPage("scanner")}>📊 Scan</button>
         </div>
         <div className="mobile-panel-wrap">
           {mobilePanelTab === "intel"         && <IntelPanel computedRadar={computedRadar} orderBook={orderBook} bseEvents={bseEvents} nseEvents={nseEvents} tickerSource={tickerSource} intelStats={intelStats} socket={socket} />}
-          {mobilePanelTab === "radar"         && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} compositeMap={compositeMap} gannMap={gannMap} />}
+          {mobilePanelTab === "radar"         && <RadarPanel filteredRadar={filteredRadar} radarQuery={radarQuery} setRadarQuery={setRadarQuery} gannMap={gannMap} />}
           {mobilePanelTab === "feed"          && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
           {mobilePanelTab === "data"          && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
           {mobilePanelTab === "options-intel" && <OptionsIntelligencePage socket={socket} />}
