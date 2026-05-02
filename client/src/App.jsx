@@ -1,4 +1,3 @@
-// Only load .env locally — Render injects env vars automatically
 import { useEffect, useState, useRef } from "react";
 import { io as socketIO } from "socket.io-client";
 import "./App.css";
@@ -34,6 +33,11 @@ const MOBILE_TABS = [
   { key: "options-intel",label: "📐 OI Intel"},
   { key: "terminal",     label: "📈 Chart"   },
 ];
+
+// ── Valid page keys — used for localStorage restore ────────────────────────
+const VALID_PAGES = new Set([
+  "dashboard", "options", "scores", "options-intel", "scanner", "terminal"
+]);
 
 function getCurrentQuarter() {
   const now   = new Date();
@@ -1015,7 +1019,22 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [currentPage,    setCurrentPage]    = useState("dashboard");
+  // ── FIX: Restore page from localStorage on refresh ────────────────────────
+  const [currentPage, setCurrentPageRaw] = useState(() => {
+    try {
+      const saved = localStorage.getItem("mi-current-page");
+      return saved && VALID_PAGES.has(saved) ? saved : "dashboard";
+    } catch {
+      return "dashboard";
+    }
+  });
+
+  // Wrap setter — also persists to localStorage so refresh restores the page
+  const setCurrentPage = (page) => {
+    setCurrentPageRaw(page);
+    try { localStorage.setItem("mi-current-page", page); } catch {}
+  };
+
   const [terminalSymbol, setTerminalSymbol] = useState(null);
   const [marketIndices,  setMarketIndices]  = useState([
     { name: "NIFTY 50",   price: "—", change: "—", pct: "—", up: null },

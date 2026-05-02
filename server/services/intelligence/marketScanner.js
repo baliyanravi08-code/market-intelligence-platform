@@ -5,12 +5,14 @@
  * Location: server/services/intelligence/marketScanner.js
  *
  * FIXES IN THIS VERSION:
- *  1. Market-open aware entry price (9:15–9:25 IST window)
- *     - Uses live LTP as entry during opening window (captures gap-up/gap-down)
- *     - Uses today's candle open after 9:25 (confirmed open)
- *     - Adds entryType ("MARKET_OPEN" | "PREV_OPEN") and gapPct to signal output
- *  2. Room-based socket targeting (updateScannerTick, emitTechBatch)
- *  3. All prevClose accuracy fixes, memory fixes, signal filters unchanged
+ *  1. Market-open aware entry price
+ *     - 9:20–9:35 IST (inOpenWindow): uses first 5-min candle CLOSE (not live LTP)
+ *     - 9:08–9:15 IST (inPreOpen): pre-open discovery window — no trade entry yet
+ *     - 9:35+ (inMarket): uses today's confirmed day open from candle data
+ *     - Outside market hours: falls back to yesterday's close as placeholder
+ *  2. isMarketHours updated to 9:20–3:25 IST (no new entries in last 5 min)
+ *  3. Room-based socket targeting (updateScannerTick, emitTechBatch)
+ *  4. All prevClose accuracy fixes, memory fixes, signal filters unchanged
  */
 
 const axios = require("axios");
@@ -391,21 +393,32 @@ function getISTTime() {
 }
 
 /**
- * Market open window: 9:15 AM – 9:25 AM IST (555–565 mins)
- * During this window we use live LTP as the true entry price
- * because the stock may have gapped up or down from yesterday's close.
+ * Market open window: 9:20–9:35 IST (560–575 mins)
+ * The first 5-min candle has closed by 9:20 — use its CLOSE as entry price,
+ * not live LTP, so we capture the true post-gap-up/down confirmed level.
  */
 function isMarketOpenWindow() {
   const { totalMins } = getISTTime();
-  return totalMins >= 555 && totalMins <= 565; // 9:15 – 9:25 IST
+  return totalMins >= 560 && totalMins <= 575; // 9:20 – 9:35 IST
 }
 
 /**
- * Market hours: 9:15 AM – 3:30 PM IST (555–930 mins)
+ * Pre-open window: 9:08–9:15 IST (548–555 mins)
+ * Gap-up/gap-down is visible but auction not confirmed — no trade entry.
+ */
+function isPreOpenWindow() {
+  const { totalMins } = getISTTime();
+  return totalMins >= 548 && totalMins <= 555; // 9:08 – 9:15 IST
+}
+
+/**
+ * Market hours: 9:20–3:25 IST (560–925 mins)
+ * Starts at 9:20 (after first candle closes) and ends 5 min before close
+ * to avoid taking entries right before 3:30 PM.
  */
 function isMarketHours() {
   const { totalMins } = getISTTime();
-  return totalMins >= 555 && totalMins <= 930;
+  return totalMins >= 560 && totalMins <= 925; // 9:20 – 3:25 IST
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -693,14 +706,26 @@ function computeTechnicals(symbol, candles) {
   if (st?.trend === "BEARISH") score -= 5;
   score = Math.max(0, Math.min(100, Math.round(score)));
 
-  const atrVal     = atr || ltp * 0.015;
-  const isBull     = score >= 50;
+  const atrVal      = atr || ltp * 0.015;
+  const isBull      = score >= 50;
   const todayCandle = candles[candles.length - 1];
 
   // ── FIX: Market-open aware entry price ───────────────────────────────────
-  // During 9:15–9:25 IST window: use live LTP as true entry (captures gap)
-  // After 9:25 or outside market: use today's confirmed candle open
-  // This ensures entry is never based on yesterday's close
+  //
+  //  inPreOpen  (9:08–9:15): pre-open auction visible but not confirmed
+  //             → don't trade yet, use prev open as placeholder
+  //
+  //  inOpenWindow (9:20–9:35): first 5-min candle has CLOSED
+  //             → use that candle's CLOSE as entry (not live LTP)
+  //             → this is the real post-gap confirmed price
+  //
+  //  inMarket   (9:35–3:25): regular session
+  //             → use today's confirmed day open from candle data
+  //
+  //  else       (pre-market / after market):
+  //             → fall back to candle open or ltp as placeholder
+  //
+  const inPreOpen    = isPreOpenWindow();
   const inOpenWindow = isMarketOpenWindow();
   const inMarket     = isMarketHours();
 
@@ -708,15 +733,19 @@ function computeTechnicals(symbol, candles) {
   let entryType;
 
   if (inOpenWindow) {
-    // Use live LTP — this IS the actual first print after gap-up/gap-down
-    confirmedOpen = ltp;
+    // 9:20–9:35: first 5-min candle has closed — use its close as confirmed entry
+    confirmedOpen = todayCandle?.c > 0 ? todayCandle.c : ltp;
     entryType     = "MARKET_OPEN";
+  } else if (inPreOpen) {
+    // 9:08–9:15: pre-open — gap visible but auction not settled, hold off
+    confirmedOpen = todayCandle?.o || ltp;
+    entryType     = "PREV_OPEN";
   } else if (inMarket && todayCandle?.o > 0) {
-    // Market is running, use confirmed open from today's candle
+    // 9:35+: market running — use confirmed day open
     confirmedOpen = todayCandle.o;
     entryType     = "DAY_OPEN";
   } else {
-    // Pre-market or post-market: use yesterday's close as placeholder
+    // Outside market hours: use candle open or last known price
     confirmedOpen = todayCandle?.o || ltp;
     entryType     = "PREV_OPEN";
   }
