@@ -1259,7 +1259,8 @@ function ScannerBody() {
       try {
         const res = await fetch("/api/scanner");
         const d   = await res.json();
-        if (d.error || d.weekend) return; // server says no data available
+        if (d.error) return; // server says no data available
+        // weekends: still load the cached last-session data
         const map  = new Map();
         const seen = new Set();
         const all  = [
@@ -1509,6 +1510,19 @@ function ScannerBody() {
         </div>
       </div>
 
+      {/* Weekend banner */}
+      {(new Date().getDay() === 0 || new Date().getDay() === 6) && (
+        <div style={{ background: "#1a120a", borderBottom: "1px solid #f59e0b44", padding: "8px 20px", display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 14 }}>⏸</span>
+          <span style={{ fontSize: 12, color: "#f59e0b", fontWeight: 700 }}>
+            Weekend — Showing last session data (Friday close)
+          </span>
+          <span style={{ fontSize: 11, color: "#78716c", marginLeft: 4 }}>
+            · Change % is vs Thursday's close · Live prices resume Monday 9:15 AM IST
+          </span>
+        </div>
+      )}
+
       {/* Main content */}
       <div style={{ padding: "16px 20px 40px", paddingRight: selectedSym ? "434px" : "20px", transition: "padding-right 0.2s" }}>
 
@@ -1568,7 +1582,7 @@ function ScannerBody() {
                 <div style={{ fontSize: 30, marginBottom: 8 }}>📡</div>
                 <div style={{ fontSize: 14, color: T.textSec }}>
                   {new Date().getDay() === 0 || new Date().getDay() === 6
-                    ? "⏸ Market closed (weekend) — last session data loading…"
+                    ? "⏸ Weekend — last session data loading…"
                     : "Connecting to scanner room…"}
                 </div>
               </div>

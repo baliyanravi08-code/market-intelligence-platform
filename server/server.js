@@ -1281,10 +1281,10 @@ async function searchBSE(q) {
 
 // ── /api/scanner ──────────────────────────────────────────────────────────────
 app.get("/api/scanner", (req, res) => {
-  if (IS_WEEKEND) {
-    return res.json({ error: "Scanner not running on weekends to save memory", weekend: true });
-  }
   const d = getScannerData();
+  if (IS_WEEKEND && (!d || !d.updatedAt)) {
+    return res.json({ error: "No cached data available yet", weekend: true });
+  }
   if (!d.updatedAt) return res.json({ error: "Scanner not yet ready" });
   res.json({
     gainers:  d.gainers  || [],
