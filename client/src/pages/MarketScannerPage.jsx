@@ -227,9 +227,6 @@ function getSocket() {
   return _socket;
 }
 
-// ── FIX: Expand compressed diff keys from websocket.js back to full stock objects ──
-// websocket.js sends: { s, l, c, ch, v, sc, sg, rs, mc, bb, ms, mb, ml, nm, ex, sk, pc, en, sl, tp, et, gp }
-// We expand back to full field names so the rest of the component works unchanged.
 function expandDiffStock(d) {
   return {
     symbol:         d.s,
@@ -1254,6 +1251,37 @@ function ScannerBody() {
     setUpdatedAt(new Date());
   }, []);
 
+  // ── REST fallback — fires after 4s if socket hasn't delivered a snapshot ──
+  // Handles weekends and slow connections where scanner:snapshot never arrives
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (stockMapRef.current.size > 0) return; // socket already delivered data
+      try {
+        const res = await fetch("/api/scanner");
+        const d   = await res.json();
+        if (d.error || d.weekend) return; // server says no data available
+        const map  = new Map();
+        const seen = new Set();
+        const all  = [
+          ...(d.gainers  || []),
+          ...(d.losers   || []),
+          ...Object.values(d.byMcap || {}).flat(),
+        ];
+        all.forEach(s => {
+          if (s?.symbol && !seen.has(s.symbol)) {
+            seen.add(s.symbol);
+            map.set(s.symbol, s);
+          }
+        });
+        if (map.size > 0) {
+          stockMapRef.current = map;
+          rebuildDataFromMap(map);
+        }
+      } catch {}
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [rebuildDataFromMap]);
+
   // ── Live-ranked gainers/losers with real-time re-sort ─────────────────────
   const liveRankedGainers = useMemo(() => {
     if (!data?.allStocks?.length) return data?.gainers || [];
@@ -1300,17 +1328,14 @@ function ScannerBody() {
     socket.on("scanner:snapshot", (allStocks) => {
       if (!Array.isArray(allStocks)) return;
       const map = new Map();
-      // Snapshot is full objects (not compressed)
       allStocks.forEach(s => map.set(s.symbol, s));
       stockMapRef.current = map;
       rebuildDataFromMap(map);
     });
 
-    // FIX: scanner:diff now arrives compressed — expand before using
     socket.on("scanner:diff", (diffs) => {
       if (!Array.isArray(diffs) || !diffs.length) return;
       diffs.forEach(d => {
-        // Detect compressed format (has 's' key) vs legacy full format (has 'symbol' key)
         const stock = d.s !== undefined ? expandDiffStock(d) : d;
         if (stock.symbol) stockMapRef.current.set(stock.symbol, stock);
       });
@@ -1541,7 +1566,11 @@ function ScannerBody() {
             {!data ? (
               <div style={{ textAlign: "center", padding: "60px 0", color: T.textDim }}>
                 <div style={{ fontSize: 30, marginBottom: 8 }}>📡</div>
-                <div style={{ fontSize: 14, color: T.textSec }}>Connecting to scanner room…</div>
+                <div style={{ fontSize: 14, color: T.textSec }}>
+                  {new Date().getDay() === 0 || new Date().getDay() === 6
+                    ? "⏸ Market closed (weekend) — last session data loading…"
+                    : "Connecting to scanner room…"}
+                </div>
               </div>
             ) : sorted.length === 0 ? (
               <div style={{ textAlign: "center", padding: "60px 0", color: T.textDim }}>

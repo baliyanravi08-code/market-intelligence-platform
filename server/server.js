@@ -509,8 +509,36 @@ async function startApp() {
     setScannerInstrumentMap(instrumentMap);
     startMarketScanner(io);
   } else {
-    console.log("💤 Weekend: skipping NSE/BSE listeners, OI, scanner — saving ~200MB");
+    console.log("💤 Weekend: skipping NSE/BSE listeners and OI — saving ~150MB");
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
+    setScannerInstrumentMap(instrumentMap);
+    startMarketScanner(io);
+
+    // ── Weekend: load OI cache and serve to clients on connection ──
+    try {
+      const { getAllCached, getExpiries } = require("./services/intelligence/nseOIListener");
+      // Manually load the cache file without starting the full listener
+      const fs2       = require("fs");
+      const path2     = require("path");
+      const cacheFile = path2.join(__dirname, "data/optionChainCache.json");
+      let weekendCache = {};
+      if (fs2.existsSync(cacheFile)) {
+        weekendCache = JSON.parse(fs2.readFileSync(cacheFile, "utf8"));
+        console.log(`📦 Weekend OI cache loaded: ${Object.keys(weekendCache).join(", ")}`);
+      }
+      io.on("connection", (socket) => {
+        for (const [name, data] of Object.entries(weekendCache)) {
+          if (data.expiries?.length) {
+            socket.emit("option-expiries", { underlying: name, expiries: data.expiries });
+          }
+          for (const [expiry, chain] of Object.entries(data.chains || {})) {
+            socket.emit("option-chain-update", { underlying: name, expiry, data: chain });
+          }
+        }
+      });
+    } catch (e) {
+      console.warn("⚠️ Weekend OI cache load failed:", e.message);
+    }
   }
 
   if (upstoxAccessToken) {
