@@ -1258,8 +1258,25 @@ function ScannerBody() {
       if (stockMapRef.current.size > 0) return; // socket already delivered data
       try {
         const res = await fetch("/api/scanner");
-        const d   = await res.json();
-        if (d.error) return; // server says no data available
+const d   = await res.json();
+if (d.error && !d.weekend) return; // block only real errors, not weekend state
+// If weekend but no data yet, retry after 8s
+if (d.error && d.weekend) {
+  setTimeout(async () => {
+    try {
+      const r2 = await fetch("/api/scanner");
+      const d2 = await r2.json();
+      if (d2.gainers?.length || d2.losers?.length) {
+        const map = new Map();
+        const seen = new Set();
+        [...(d2.gainers||[]), ...(d2.losers||[]), ...Object.values(d2.byMcap||{}).flat()]
+          .forEach(s => { if (s?.symbol && !seen.has(s.symbol)) { seen.add(s.symbol); map.set(s.symbol, s); } });
+        if (map.size > 0) { stockMapRef.current = map; rebuildDataFromMap(map); }
+      }
+    } catch {}
+  }, 8000);
+  return;
+}
         // weekends: still load the cached last-session data
         const map  = new Map();
         const seen = new Set();
