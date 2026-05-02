@@ -153,7 +153,7 @@ async function saveTokenEverywhere(token, expiry) {
 const MAX_INSTRUMENT_SYMBOLS = 5000;
 let instrumentMap = {};
 
-async function loadInstrumentMaster() {
+async function loadInstrumentMaster(retryCount = 0) {
   // Check disk cache first (valid for 24h)
   try {
     if (fs.existsSync(INSTRUMENT_FILE)) {
@@ -182,7 +182,9 @@ async function loadInstrumentMaster() {
     ];
 
     for (const { url, segment } of exchanges) {
-      const res          = await axios.get(url, { timeout: 30_000, responseType: "arraybuffer" });
+      console.log(`📥 Downloading ${url}...`);
+      const res          = await axios.get(url, { timeout: 90_000, responseType: "arraybuffer" });
+      console.log(`📥 Downloaded ${segment}: ${res.data.byteLength} bytes`);
       const decompressed = zlib.gunzipSync(Buffer.from(res.data));
       const instruments  = JSON.parse(decompressed.toString("utf8"));
 
@@ -208,6 +210,12 @@ async function loadInstrumentMaster() {
     _pushMapToGann(instrumentMap);
   } catch (e) {
     console.warn("⚠️ Could not fetch Upstox instrument master:", e.message);
+
+    // Retry up to 3 times with delay before falling back
+    if (retryCount < 3) {
+      console.log(`🔄 Retrying instrument master download in 30s (attempt ${retryCount + 1}/3)...`);
+      setTimeout(() => loadInstrumentMaster(retryCount + 1).catch(() => {}), 30_000);
+    }
     instrumentMap = {
       "RELIANCE":   "NSE_EQ|INE002A01018", "TCS":        "NSE_EQ|INE467B01029",
       "HDFCBANK":   "NSE_EQ|INE040A01034", "INFY":       "NSE_EQ|INE009A01021",
@@ -238,6 +246,58 @@ async function loadInstrumentMaster() {
       "IRCTC":      "NSE_EQ|INE335Y01012", "IRFC":       "NSE_EQ|INE053F01010",
       "TRENT":      "NSE_EQ|INE849A01020", "NHPC":       "NSE_EQ|INE848E01016",
       "POLYCAB":    "NSE_EQ|INE455K01017",
+      // Nifty 50 + Nifty Next 50
+      "VEDL":       "NSE_EQ|INE205A01025", "SUZLON":     "NSE_EQ|INE040H01021",
+      "RVNL":       "NSE_EQ|INE415G01027", "IRCON":      "NSE_EQ|INE821I01022",
+      "NBCC":       "NSE_EQ|INE095N01031", "HUDCO":      "NSE_EQ|INE031A01017",
+      "SJVN":       "NSE_EQ|INE002L01015", "CESC":       "NSE_EQ|INE486A01013",
+      "SAIL":       "NSE_EQ|INE114A01011", "NMDC":       "NSE_EQ|INE584A01023",
+      "GAIL":       "NSE_EQ|INE129A01019", "IOC":        "NSE_EQ|INE242A01010",
+      "HPCL":       "NSE_EQ|INE142A01065", "BANKBARODA": "NSE_EQ|INE028A01039",
+      "CANBK":      "NSE_EQ|INE476A01022", "PNB":        "NSE_EQ|INE160A01022",
+      "UNIONBANK":  "NSE_EQ|INE692A01016", "IDFCFIRSTB": "NSE_EQ|INE134E01011",
+      "FEDERALBNK": "NSE_EQ|INE171A01029", "RBLBANK":    "NSE_EQ|INE976G01028",
+      "IDBI":       "NSE_EQ|INE008A01015", "MAHABANK":   "NSE_EQ|INE457A01014",
+      "TATAPOWER":  "NSE_EQ|INE245A01021", "TORNTPOWER": "NSE_EQ|INE813H01021",
+      "ADANIGREEN": "NSE_EQ|INE364U01010", "ADANITRANS": "NSE_EQ|INE931S01010",
+      "INOXWIND":   "NSE_EQ|INE066P01011", "WAAREEENER": "NSE_EQ|INE080B01021",
+      "CUMMINSIND": "NSE_EQ|INE298A01020", "THERMAX":    "NSE_EQ|INE152A01029",
+      "ABB":        "NSE_EQ|INE117A01022", "SIEMENS":    "NSE_EQ|INE003A01024",
+      "BHEL":       "NSE_EQ|INE257A01026", "BDL":        "NSE_EQ|INE171Z01018",
+      "COCHINSHIP": "NSE_EQ|INE704P01017", "GRSE":       "NSE_EQ|INE382Z01011",
+      "MIDHANI":    "NSE_EQ|INE249Z01012", "DATAPATTNS": "NSE_EQ|INE0IX01010",
+      "MAZDOCK":    "NSE_EQ|INE249Z01012", "BEML":       "NSE_EQ|INE258A01016",
+      "TITAGARH":   "NSE_EQ|INE615H01020", "TEXMACO":    "NSE_EQ|INE621A01010",
+      "JUPITERWAG": "NSE_EQ|INE0C3A01013", "KECL":       "NSE_EQ|INE389H01022",
+      "KALPATPOWR": "NSE_EQ|INE758T01015", "PATELENG":   "NSE_EQ|INE078B01023",
+      "TECHNOE":    "NSE_EQ|INE105C01023", "WABAG":      "NSE_EQ|INE868B01028",
+      "RITES":      "NSE_EQ|INE320J01015", "HFCL":       "NSE_EQ|INE548A01028",
+      "RAILVIKAS":  "NSE_EQ|INE415G01027", "STERLITE":   "NSE_EQ|INE268A01031",
+      "HINDCOPPER": "NSE_EQ|INE531E01026", "MOIL":       "NSE_EQ|INE490G01020",
+      "NATIONALUM": "NSE_EQ|INE139A01034", "APLAPOLLO":  "NSE_EQ|INE702C01019",
+      "JINDALSTEL": "NSE_EQ|INE749A01030", "JSWENERGY":  "NSE_EQ|INE121E01018",
+      "TATAELXSI":  "NSE_EQ|INE670A01012", "MPHASIS":    "NSE_EQ|INE356A01018",
+      "PERSISTENT": "NSE_EQ|INE262H01021", "LTTS":       "NSE_EQ|INE010V01017",
+      "COFORGE":    "NSE_EQ|INE591G01017", "SONACOMS":   "NSE_EQ|INE073K01018",
+      "MOTHERSON":  "NSE_EQ|INE775A01035", "BHARATFORG": "NSE_EQ|INE465A01025",
+      "EXIDEIND":   "NSE_EQ|INE302A01020", "AMARARAJA":  "NSE_EQ|INE885A01032",
+      "ASHOKLEY":   "NSE_EQ|INE208A01029", "TVSMOTOR":   "NSE_EQ|INE494B01023",
+      "ESCORTS":    "NSE_EQ|INE042A01014", "M&MFIN":     "NSE_EQ|INE774D01024",
+      "CHOLAFIN":   "NSE_EQ|INE121A01024", "MUTHOOTFIN": "NSE_EQ|INE414G01012",
+      "MANAPPURAM": "NSE_EQ|INE522D01027", "ABCAPITAL":  "NSE_EQ|INE674K01013",
+      "LICHSGFIN":  "NSE_EQ|INE115A01026", "CANFINHOME": "NSE_EQ|INE477A01020",
+      "OBEROIRLTY": "NSE_EQ|INE093I01010", "DLF":        "NSE_EQ|INE271C01023",
+      "PRESTIGE":   "NSE_EQ|INE811K01011", "GODREJPROP": "NSE_EQ|INE484J01027",
+      "PHOENIXLTD": "NSE_EQ|INE792G01026", "BRIGADE":    "NSE_EQ|INE791G01019",
+      "NAUKRI":     "NSE_EQ|INE663F01024", "DMART":      "NSE_EQ|INE192R01011",
+      "TRENT":      "NSE_EQ|INE849A01020", "PAGEIND":    "NSE_EQ|INE761H01022",
+      "VOLTAS":     "NSE_EQ|INE226A01021", "WHIRLPOOL":  "NSE_EQ|INE716A01013",
+      "HAVELLS":    "NSE_EQ|INE176B01034", "CROMPTON":   "NSE_EQ|INE299U01018",
+      "DIXON":      "NSE_EQ|INE935N01020", "AMBER":      "NSE_EQ|INE371P01015",
+      "AFFLE":      "NSE_EQ|INE00WC01010", "ZOMATO":     "NSE_EQ|INE758T01015",
+      "NYKAA":      "NSE_EQ|INE388Y01029", "POLICYBZR":  "NSE_EQ|INE417T01026",
+      "PAYTM":      "NSE_EQ|INE982J01020", "DELHIVERY":  "NSE_EQ|INE152O01027",
+      "CEMPRO":     "BSE_EQ|543066",
     };
     console.log(`⚠️ Using fallback instrument map: ${Object.keys(instrumentMap).length} symbols`);
     _pushMapToGann(instrumentMap);
@@ -911,9 +971,9 @@ app.get("/api/candles/:symbol", async (req, res) => {
 
     } else {
       // ── EOD candles (1D / 1W / 1M) ───────────────────────────────────────
-      // FIX: walk back to last valid trading day (skip weekends + don't use today)
+      // FIX: toDate = last trading day; fromDate = toDate - days (not today - days)
       const toDate   = getLastTradingDay();
-      const fromDate = new Date();
+      const fromDate = new Date(toDate);
       fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
 
       console.log(`📅 [candles] EOD toDate=${fmt(toDate)} (${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][toDate.getDay()]})`);
