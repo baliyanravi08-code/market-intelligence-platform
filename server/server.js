@@ -334,7 +334,10 @@ function getInstrumentKeyFull(symbol) {
 function isISINKey(instrKey, symbol) {
   if (!instrKey) return false;
   const suffix = instrKey.split("|")[1] || "";
-  return /^[A-Z]{2}[A-Z0-9]{10}$/.test(suffix) && suffix !== symbol;
+  // Accept ISIN-format keys (e.g. INE123A01234) OR pure BSE numeric codes (e.g. 543066)
+  const isIsin    = /^[A-Z]{2}[A-Z0-9]{10}$/.test(suffix) && suffix !== symbol;
+  const isBseNum  = /^\d{6}$/.test(suffix); // BSE scrip codes are 6 digits
+  return isIsin || isBseNum;
 }
 
 // ── resolveInstrumentKey ──────────────────────────────────────────────────────
@@ -443,21 +446,24 @@ function _getDiskKeyOnly(symbol) {
 async function resolveInstrumentKeyForEOD(symbol) {
   const sym = symbol.toUpperCase().trim();
 
+  // Return any valid key from RAM — ISIN, BSE numeric, or symbol-only
   const ramKey = instrumentMap[sym];
-  if (ramKey && isISINKey(ramKey, sym)) {
-    console.log(`📍 [EOD resolve] ${sym} → RAM ISIN: ${ramKey}`);
+  if (ramKey) {
+    console.log(`📍 [EOD resolve] ${sym} → RAM: ${ramKey}`);
     return ramKey;
   }
 
+  // Check full disk map
   const diskKey = getInstrumentKeyFull(sym);
-  if (diskKey && isISINKey(diskKey, sym)) {
-    console.log(`📍 [EOD resolve] ${sym} → disk ISIN: ${diskKey}`);
+  if (diskKey) {
+    console.log(`📍 [EOD resolve] ${sym} → disk: ${diskKey}`);
     return diskKey;
   }
 
+  // Live search — prefer ISIN keys but accept any match
   if (upstoxAccessToken) {
     try {
-      console.log(`🔍 [EOD resolve] ${sym} → live search for ISIN key...`);
+      console.log(`🔍 [EOD resolve] ${sym} → live search...`);
       const r = await axios.get("https://api.upstox.com/v2/market-quote/search", {
         params:  { query: sym, asset_type: "equity" },
         headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
@@ -467,10 +473,12 @@ async function resolveInstrumentKeyForEOD(symbol) {
       const match =
         items.find(i => i.tradingsymbol === sym && isISINKey(i.instrument_key, sym) && i.instrument_key?.startsWith("NSE_EQ")) ||
         items.find(i => i.tradingsymbol === sym && isISINKey(i.instrument_key, sym) && i.instrument_key?.startsWith("BSE_EQ")) ||
+        items.find(i => i.tradingsymbol === sym && i.instrument_key?.startsWith("NSE_EQ")) ||
+        items.find(i => i.tradingsymbol === sym && i.instrument_key?.startsWith("BSE_EQ")) ||
         items.find(i => i.tradingsymbol === sym && i.instrument_key);
       if (match?.instrument_key) {
         instrumentMap[sym] = match.instrument_key;
-        console.log(`✅ [EOD resolve] ${sym} → live search ISIN: ${match.instrument_key}`);
+        console.log(`✅ [EOD resolve] ${sym} → live search: ${match.instrument_key}`);
         return match.instrument_key;
       }
     } catch (e) {
@@ -478,14 +486,9 @@ async function resolveInstrumentKeyForEOD(symbol) {
     }
   }
 
-  if (ramKey) {
-    console.log(`⚠️ [EOD resolve] ${sym} → falling back to non-ISIN key: ${ramKey}`);
-    return ramKey;
-  }
-
+  // Final fallback — try generic resolve
   return await resolveInstrumentKey(sym);
 }
-
 // ── Last valid trading day helper ─────────────────────────────────────────────
 function getLastTradingDay() {
   const d = new Date();
