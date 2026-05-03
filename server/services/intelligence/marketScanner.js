@@ -5,14 +5,11 @@
  * Location: server/services/intelligence/marketScanner.js
  *
  * FIXES IN THIS VERSION:
- *  1. Market-open aware entry price
- *     - 9:20–9:35 IST (inOpenWindow): uses first 5-min candle CLOSE (not live LTP)
- *     - 9:08–9:15 IST (inPreOpen): pre-open discovery window — no trade entry yet
- *     - 9:35+ (inMarket): uses today's confirmed day open from candle data
- *     - Outside market hours: falls back to yesterday's close as placeholder
- *  2. isMarketHours updated to 9:20–3:25 IST (no new entries in last 5 min)
- *  3. Room-based socket targeting (updateScannerTick, emitTechBatch)
- *  4. All prevClose accuracy fixes, memory fixes, signal filters unchanged
+ *  1. fetchCandles() now calls internal /api/candles/:symbol (v3 + BSE + retries)
+ *     instead of calling Upstox v2 directly — fixes BSE stocks like SAMMAANCAP
+ *  2. TIMEFRAME_CONFIG interval names fixed to match what server.js tf param expects
+ *  3. NSE/BSE fallback chains preserved for intraday when internal endpoint fails
+ *  4. All signal filters, market-open aware entry, pre-warm logic unchanged
  */
 
 const axios = require("axios");
@@ -28,14 +25,15 @@ const MAX_TECH_CACHE    = 500;
 const MAX_CANDLES_STORE = 200;
 
 // ── Timeframe config ──────────────────────────────────────────────────────────
+// interval values must match server.js TF_MAP_V3 keys (tf param)
 const TIMEFRAME_CONFIG = {
-  "5min":   { interval: "5minute",  days: 10,   candles: 200, ttl: 2  * 60 * 1000 },
-  "15min":  { interval: "15minute", days: 30,   candles: 200, ttl: 5  * 60 * 1000 },
-  "1hour":  { interval: "60minute", days: 60,   candles: 200, ttl: 10 * 60 * 1000 },
-  "4hour":  { interval: "60minute", days: 120,  candles: 200, ttl: 15 * 60 * 1000 },
-  "1day":   { interval: "day",      days: 365,  candles: 250, ttl: 15 * 60 * 1000 },
-  "1week":  { interval: "week",     days: 730,  candles: 104, ttl: 30 * 60 * 1000 },
-  "1month": { interval: "month",    days: 1825, candles: 60,  ttl: 60 * 60 * 1000 },
+  "5min":   { interval: "5min",   days: 10,   candles: 200, ttl: 2  * 60 * 1000 },
+  "15min":  { interval: "15min",  days: 30,   candles: 200, ttl: 5  * 60 * 1000 },
+  "1hour":  { interval: "1hour",  days: 60,   candles: 200, ttl: 10 * 60 * 1000 },
+  "4hour":  { interval: "4hour",  days: 120,  candles: 200, ttl: 15 * 60 * 1000 },
+  "1day":   { interval: "1day",   days: 365,  candles: 250, ttl: 15 * 60 * 1000 },
+  "1week":  { interval: "1week",  days: 730,  candles: 104, ttl: 30 * 60 * 1000 },
+  "1month": { interval: "1month", days: 1825, candles: 60,  ttl: 60 * 60 * 1000 },
 };
 
 // ── NSE / BSE endpoints ───────────────────────────────────────────────────────
@@ -203,6 +201,7 @@ function getUpstoxToken() {
   return process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
+// ── getInstrumentKey — checks live map first, then fallback ──────────────────
 function getInstrumentKey(symbol) {
   if (_instrumentMap[symbol]) return _instrumentMap[symbol];
   if (_instrumentMap[symbol?.toUpperCase()]) return _instrumentMap[symbol.toUpperCase()];
@@ -343,7 +342,7 @@ function normaliseBSE(s) {
   };
 }
 
-// ── applyLiveTick — derives changePct from authoritative prevClose ────────────
+// ── applyLiveTick ─────────────────────────────────────────────────────────────
 function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
   if (!symbol || !price) return;
   const stock = stockBySymbol.get(symbol);
@@ -381,10 +380,6 @@ function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
 }
 
 // ── Market session helpers ────────────────────────────────────────────────────
-
-/**
- * Returns current IST time as { hours, minutes, totalMins }
- */
 function getISTTime() {
   const nowIST  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const hours   = nowIST.getHours();
@@ -392,39 +387,22 @@ function getISTTime() {
   return { hours, minutes, totalMins: hours * 60 + minutes };
 }
 
-/**
- * Market open window: 9:20–9:35 IST (560–575 mins)
- * The first 5-min candle has closed by 9:20 — use its CLOSE as entry price,
- * not live LTP, so we capture the true post-gap-up/down confirmed level.
- */
 function isMarketOpenWindow() {
   const { totalMins } = getISTTime();
-  return totalMins >= 560 && totalMins <= 575; // 9:20 – 9:35 IST
+  return totalMins >= 560 && totalMins <= 575; // 9:20–9:35 IST
 }
 
-/**
- * Pre-open window: 9:08–9:15 IST (548–555 mins)
- * Gap-up/gap-down is visible but auction not confirmed — no trade entry.
- */
 function isPreOpenWindow() {
   const { totalMins } = getISTTime();
-  return totalMins >= 548 && totalMins <= 555; // 9:08 – 9:15 IST
+  return totalMins >= 548 && totalMins <= 555; // 9:08–9:15 IST
 }
 
-/**
- * Market hours: 9:20–3:25 IST (560–925 mins)
- * Starts at 9:20 (after first candle closes) and ends 5 min before close
- * to avoid taking entries right before 3:30 PM.
- */
 function isMarketHours() {
   const { totalMins } = getISTTime();
-  return totalMins >= 560 && totalMins <= 925; // 9:20 – 3:25 IST
+  return totalMins >= 560 && totalMins <= 925; // 9:20–3:25 IST
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ── SIGNAL FILTER SYSTEM ──────────────────────────────────────────────────────
-// ══════════════════════════════════════════════════════════════════════════════
-
+// ── Signal filters ────────────────────────────────────────────────────────────
 function passesLiquidityGate(tech, stock) {
   const price  = tech.ltp || stock?.ltp || 0;
   const volume = stock?.volume || 0;
@@ -668,7 +646,7 @@ function calcMASummary(closes, ltp) {
   return { buy, sell, neutral, total: buy + sell + neutral, summary, emas: mas };
 }
 
-// ── FIX: Market-open aware computeTechnicals ──────────────────────────────────
+// ── computeTechnicals ─────────────────────────────────────────────────────────
 function computeTechnicals(symbol, candles) {
   if (!candles || candles.length < 20) return null;
   const closes = candles.map(c => c.c);
@@ -710,21 +688,6 @@ function computeTechnicals(symbol, candles) {
   const isBull      = score >= 50;
   const todayCandle = candles[candles.length - 1];
 
-  // ── FIX: Market-open aware entry price ───────────────────────────────────
-  //
-  //  inPreOpen  (9:08–9:15): pre-open auction visible but not confirmed
-  //             → don't trade yet, use prev open as placeholder
-  //
-  //  inOpenWindow (9:20–9:35): first 5-min candle has CLOSED
-  //             → use that candle's CLOSE as entry (not live LTP)
-  //             → this is the real post-gap confirmed price
-  //
-  //  inMarket   (9:35–3:25): regular session
-  //             → use today's confirmed day open from candle data
-  //
-  //  else       (pre-market / after market):
-  //             → fall back to candle open or ltp as placeholder
-  //
   const inPreOpen    = isPreOpenWindow();
   const inOpenWindow = isMarketOpenWindow();
   const inMarket     = isMarketHours();
@@ -733,19 +696,15 @@ function computeTechnicals(symbol, candles) {
   let entryType;
 
   if (inOpenWindow) {
-    // 9:20–9:35: first 5-min candle has closed — use its close as confirmed entry
     confirmedOpen = todayCandle?.c > 0 ? todayCandle.c : ltp;
     entryType     = "MARKET_OPEN";
   } else if (inPreOpen) {
-    // 9:08–9:15: pre-open — gap visible but auction not settled, hold off
     confirmedOpen = todayCandle?.o || ltp;
     entryType     = "PREV_OPEN";
   } else if (inMarket && todayCandle?.o > 0) {
-    // 9:35+: market running — use confirmed day open
     confirmedOpen = todayCandle.o;
     entryType     = "DAY_OPEN";
   } else {
-    // Outside market hours: use candle open or last known price
     confirmedOpen = todayCandle?.o || ltp;
     entryType     = "PREV_OPEN";
   }
@@ -758,7 +717,6 @@ function computeTechnicals(symbol, candles) {
     ? Math.round((entry + 3.0 * atrVal) * 100) / 100
     : Math.round((entry - 3.0 * atrVal) * 100) / 100;
 
-  // Gap calculation: how much did stock gap from prev close to today's open
   const prevCloseForGap = candles.length >= 2 ? candles[candles.length - 2].c : null;
   const gapPct = prevCloseForGap && prevCloseForGap > 0 && todayCandle?.o > 0
     ? Math.round(((todayCandle.o - prevCloseForGap) / prevCloseForGap) * 10000) / 100
@@ -774,9 +732,7 @@ function computeTechnicals(symbol, candles) {
     symbol, ltp,
     signal: sig, strength: score,
     entry, sl, tp: tp2, target: tp2, stopLoss: sl, price: entry, techScore: score,
-    // Entry metadata — tells UI whether this is a live open or historical open
-    entryType,   // "MARKET_OPEN" | "DAY_OPEN" | "PREV_OPEN"
-    gapPct,      // +ve = gap up, -ve = gap down, 0 = flat open
+    entryType, gapPct,
     emas: maSumm.emas || { ema5: calcEMA(closes, 5), ema9: calcEMA(closes, 9), ema21: calcEMA(closes, 21), ema50: calcEMA(closes, 50), ema200: calcEMA(closes, 200) },
     rsi, stochastic: stoch ? { k: stoch.k, d: stoch.d } : null, williamsR: willR,
     macd, bollingerBands: bb, atr: atr ? Math.round(atr * 100) / 100 : null,
@@ -841,57 +797,60 @@ function resampleCandles(candles1min, targetMinutes) {
   return buckets;
 }
 
+// ── fetchCandles — now calls internal /api/candles/:symbol ───────────────────
+// This piggybacks on server.js which already handles:
+//   • Upstox v3 API with correct intervals
+//   • BSE numeric codes (e.g. BSE_EQ|543066)
+//   • ISIN resolution + 4 retry attempts
+//   • Weekend / intraday mode switching
 async function fetchCandles(symbol, days, interval) {
-  const token      = getUpstoxToken();
-  const instrKey   = getInstrumentKey(symbol);
-  const is4H       = interval === "240minute";
-  const isIntraday = ["5minute","15minute","60minute","240minute"].includes(interval);
+  const PORT    = process.env.PORT || 10000;
+  const baseUrl = `http://localhost:${PORT}`;
 
-  if (token && instrKey) {
-    try {
-      const to   = new Date();
-      const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const fmtD = d => d.toISOString().slice(0, 10);
-      const enc  = encodeURIComponent(instrKey);
-      const upstoxInterval     = is4H ? "60minute" : interval;
-      const useIntradayEndpoint = isIntraday && days <= 1;
-      const url  = useIntradayEndpoint
-        ? `https://api.upstox.com/v2/historical-candle/intraday/${enc}/${upstoxInterval}`
-        : `https://api.upstox.com/v2/historical-candle/${enc}/${upstoxInterval}/${fmtD(to)}/${fmtD(from)}`;
-      const res  = await axios.get(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, timeout: 12000 });
-      let raw    = res.data?.data?.candles || [];
-      if (Array.isArray(raw) && raw.length > 0) {
-        if (!useIntradayEndpoint) raw = raw.slice().reverse();
-        let candles = raw.map(c => ({ o: parseFloat(c[1]), h: parseFloat(c[2]), l: parseFloat(c[3]), c: parseFloat(c[4]), v: parseFloat(c[5] || 0) })).filter(c => c.c > 0);
-        if (is4H && candles.length >= 4) {
-          const agg = [];
-          for (let i = 0; i + 3 < candles.length; i += 4) {
-            const grp = candles.slice(i, i + 4);
-            agg.push({ o: grp[0].o, h: Math.max(...grp.map(x => x.h)), l: Math.min(...grp.map(x => x.l)), c: grp[grp.length - 1].c, v: grp.reduce((s, x) => s + x.v, 0) });
-          }
-          candles = agg;
-        }
-        if (candles.length >= 5) return candles;
-      }
-    } catch (e) { console.warn(`📊 [${symbol}][${interval}] Upstox failed: ${e.message}`); }
+  // Map our internal interval names → server.js tf param
+  const INTERVAL_TO_TF = {
+    "5min":    "5min",
+    "15min":   "15min",
+    "1hour":   "1hour",
+    "4hour":   "4hour",
+    "1day":    "1day",
+    "1week":   "1week",
+    "1month":  "1month",
+    // legacy names just in case anything still uses them
+    "5minute":  "5min",
+    "15minute": "15min",
+    "60minute": "1hour",
+    "day":      "1day",
+    "week":     "1week",
+    "month":    "1month",
+  };
+  const tf = INTERVAL_TO_TF[interval] || "1day";
+
+  // ── ATTEMPT 1: internal server endpoint (handles everything) ──────────────
+  try {
+    const res = await axios.get(
+      `${baseUrl}/api/candles/${encodeURIComponent(symbol)}?tf=${tf}&days=${Math.min(days, 365)}`,
+      { timeout: 20000 }
+    );
+    const data = res.data;
+    if (data?.ok && Array.isArray(data.candles) && data.candles.length >= 5) {
+      console.log(`📊 [${symbol}][${tf}] internal: ${data.candles.length} candles (key=${data.instrKey})`);
+      // Convert server format → scanner format {o,h,l,c,v}
+      return data.candles.map(c => ({
+        o: c.open,
+        h: c.high,
+        l: c.low,
+        c: c.close,
+        v: c.volume || 0,
+      }));
+    }
+    console.warn(`📊 [${symbol}][${tf}] internal returned no candles: ${data?.error || "unknown"}`);
+  } catch (e) {
+    console.warn(`📊 [${symbol}][${tf}] internal fetch failed: ${e.message}`);
   }
 
-  if (isIntraday) {
-    try {
-      const rawCandles = await fetchNSEIntraday(symbol);
-      if (rawCandles.length >= 5) {
-        const candles =
-          interval === "5minute"   ? resampleCandles(rawCandles, 5)   :
-          interval === "15minute"  ? resampleCandles(rawCandles, 15)  :
-          interval === "60minute"  ? resampleCandles(rawCandles, 60)  :
-          interval === "240minute" ? resampleCandles(rawCandles, 240) : rawCandles;
-        if (candles && candles.length >= 5) return candles;
-      }
-    } catch (_) {}
-    return [];
-  }
-
-  if (interval === "day" || interval === "week" || interval === "month") {
+  // ── ATTEMPT 2: NSE EOD historical (for daily/weekly/monthly) ─────────────
+  if (["1day","1week","1month"].includes(tf)) {
     await refreshNSECookie();
     try {
       const to   = new Date();
@@ -901,21 +860,47 @@ async function fetchCandles(symbol, days, interval) {
         `https://www.nseindia.com/api/historical/cm/equity?symbol=${encodeURIComponent(symbol)}&series=["EQ"]&from=${fmtD(from)}&to=${fmtD(to)}&csv=false`,
         { headers: { ...NSE_HEADERS, Cookie: nseCookie }, timeout: 15000 }
       );
-      const data    = (res.data?.data || []).slice().reverse();
-      const candles = data.map(r => ({
+      const candles = (res.data?.data || []).slice().reverse().map(r => ({
         o: parseFloat(r.CH_OPENING_PRICE    || 0),
         h: parseFloat(r.CH_TRADE_HIGH_PRICE || 0),
         l: parseFloat(r.CH_TRADE_LOW_PRICE  || 0),
         c: parseFloat(r.CH_CLOSING_PRICE    || 0),
         v: parseFloat(r.CH_TOT_TRADED_QTY   || 0),
       })).filter(c => c.c > 0);
-      if (candles.length >= 5) return candles;
-    } catch (e) { console.warn(`📊 [${symbol}] NSE daily/weekly fallback failed:`, e.message); }
+      if (candles.length >= 5) {
+        console.log(`📊 [${symbol}][${tf}] NSE historical fallback: ${candles.length} candles`);
+        return candles;
+      }
+    } catch (e) {
+      console.warn(`📊 [${symbol}][${tf}] NSE historical fallback failed: ${e.message}`);
+    }
   }
+
+  // ── ATTEMPT 3: NSE intraday (for intraday timeframes) ────────────────────
+  if (["5min","15min","1hour","4hour"].includes(tf)) {
+    try {
+      const rawCandles = await fetchNSEIntraday(symbol);
+      if (rawCandles.length >= 5) {
+        const targetMins = tf === "5min" ? 5 : tf === "15min" ? 15 : tf === "1hour" ? 60 : 240;
+        const candles = targetMins === 1 ? rawCandles : resampleCandles(rawCandles, targetMins);
+        if (candles?.length >= 5) {
+          console.log(`📊 [${symbol}][${tf}] NSE intraday fallback: ${candles.length} candles`);
+          return candles;
+        }
+      }
+    } catch (e) {
+      console.warn(`📊 [${symbol}][${tf}] NSE intraday fallback failed: ${e.message}`);
+    }
+  }
+
+  console.warn(`📊 [${symbol}][${tf}] all sources exhausted — returning []`);
   return [];
 }
 
-const TF_SECONDS = { "5min": 5*60, "15min": 15*60, "1hour": 60*60, "4hour": 4*60*60, "1day": 24*60*60, "1week": 7*24*60*60, "1month": 30*24*60*60 };
+const TF_SECONDS = {
+  "5min": 5*60, "15min": 15*60, "1hour": 60*60, "4hour": 4*60*60,
+  "1day": 24*60*60, "1week": 7*24*60*60, "1month": 30*24*60*60,
+};
 
 async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
   const cfg      = TIMEFRAME_CONFIG[timeframe] || TIMEFRAME_CONFIG["1day"];
@@ -931,7 +916,14 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
     const nowSecs    = Math.floor(Date.now() / 1000);
     const alignedNow = Math.floor(nowSecs / tfSecs) * tfSecs;
     const slice      = candles.slice(-MAX_CANDLES_STORE);
-    result._candles  = slice.map((c, i) => ({ time: alignedNow - (slice.length - 1 - i) * tfSecs, open: c.o, high: c.h, low: c.l, close: c.c, volume: c.v || 0 }));
+    result._candles  = slice.map((c, i) => ({
+      time:   alignedNow - (slice.length - 1 - i) * tfSecs,
+      open:   c.o,
+      high:   c.h,
+      low:    c.l,
+      close:  c.c,
+      volume: c.v || 0,
+    }));
     setTechCache(cacheKey, result);
   }
   return result;
@@ -993,7 +985,6 @@ async function preWarmTechCache(symbols) {
     const ws = getWS();
     if (ws?.emitTechBatch) ws.emitTechBatch(batch);
     else if (ioRef)        ioRef.to("scanner").emit("scanner-tech-batch", batch);
-    batch = [];
   }
   console.log(`📊 Pre-warm done: ${warmed}/${symbols.length} | techCache size: ${techCache.size}`);
 }
@@ -1037,7 +1028,13 @@ function tryBacktestCapture(stocks) {
       if (tech.signal === "HOLD") { rejected.hold++; continue; }
       const fr = applyAllFilters(tech, stock, tech.signal);
       if (!fr.pass) { rejected[`f${fr.failedFilter}`]++; continue; }
-      signals.push({ symbol: stock.symbol, sector: stock.sector || "Unknown", signal: tech.signal, price: tech.ltp || stock.ltp, entry: tech.entry, entryType: tech.entryType || "PREV_OPEN", gapPct: tech.gapPct || 0, target: tech.tp, stopLoss: tech.sl, rsi: tech.rsi, techScore: tech.techScore || tech.strength, macd: tech.macd, volRatio: tech.volRatio, adx: tech.adx?.adx, isSwing: false });
+      signals.push({
+        symbol: stock.symbol, sector: stock.sector || "Unknown", signal: tech.signal,
+        price: tech.ltp || stock.ltp, entry: tech.entry, entryType: tech.entryType || "PREV_OPEN",
+        gapPct: tech.gapPct || 0, target: tech.tp, stopLoss: tech.sl,
+        rsi: tech.rsi, techScore: tech.techScore || tech.strength,
+        macd: tech.macd, volRatio: tech.volRatio, adx: tech.adx?.adx, isSwing: false,
+      });
     }
     console.log(`📊 Filter — HOLD:${rejected.hold} F1:${rejected.f1} F2:${rejected.f2} F3:${rejected.f3} F4:${rejected.f4} F5:${rejected.f5} PASSED:${signals.length}`);
     if (!signals.length) return;
@@ -1213,6 +1210,7 @@ module.exports = {
   getTechnicalsForTimeframe,
   setInstrumentMap,
   applyLiveTick,
+  setToken,
 
   forceCaptureNow: async function () {
     const backtestEngine = require("../backtestEngine");
@@ -1230,7 +1228,13 @@ module.exports = {
       if (tech.signal === "HOLD") { rejected.hold++; continue; }
       const fr = applyAllFilters(tech, stock, tech.signal);
       if (!fr.pass) { rejected[`f${fr.failedFilter}`]++; continue; }
-      signals.push({ symbol: sym, sector: stock.sector || "Unknown", signal: tech.signal, price: tech.ltp || stock.ltp, entry: tech.entry, entryType: tech.entryType || "PREV_OPEN", gapPct: tech.gapPct || 0, target: tech.tp, stopLoss: tech.sl, rsi: tech.rsi, techScore: tech.techScore || tech.strength, macd: tech.macd, volRatio: tech.volRatio, adx: tech.adx?.adx, isSwing: false });
+      signals.push({
+        symbol: sym, sector: stock.sector || "Unknown", signal: tech.signal,
+        price: tech.ltp || stock.ltp, entry: tech.entry, entryType: tech.entryType || "PREV_OPEN",
+        gapPct: tech.gapPct || 0, target: tech.tp, stopLoss: tech.sl,
+        rsi: tech.rsi, techScore: tech.techScore || tech.strength,
+        macd: tech.macd, volRatio: tech.volRatio, adx: tech.adx?.adx, isSwing: false,
+      });
     }
     console.log(`📊 forceCaptureNow — HOLD:${rejected.hold} F1:${rejected.f1} F2:${rejected.f2} F3:${rejected.f3} F4:${rejected.f4} F5:${rejected.f5} PASSED:${signals.length}`);
     if (!signals.length) return { error: "No signals passed all 5 filters" };
