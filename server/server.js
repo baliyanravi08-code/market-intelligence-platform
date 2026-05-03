@@ -260,7 +260,8 @@ async function loadInstrumentMaster(retryCount = 0) {
       "IDBI":       "NSE_EQ|INE008A01015", "MAHABANK":   "NSE_EQ|INE457A01014",
       "TATAPOWER":  "NSE_EQ|INE245A01021", "TORNTPOWER": "NSE_EQ|INE813H01021",
       "ADANIGREEN": "NSE_EQ|INE364U01010", "ADANITRANS": "NSE_EQ|INE931S01010",
-      "INOXWIND":   "NSE_EQ|INE066P01011", "WAAREEENER": "NSE_EQ|INE080B01021",
+      "INOXWIND":   "NSE_EQ|INE066P01011",
+      // WAAREEENER removed from hardcoded map — wrong ISIN, let live resolution handle it
       "CUMMINSIND": "NSE_EQ|INE298A01020", "THERMAX":    "NSE_EQ|INE152A01029",
       "ABB":        "NSE_EQ|INE117A01022", "SIEMENS":    "NSE_EQ|INE003A01024",
       "BHEL":       "NSE_EQ|INE257A01026", "BDL":        "NSE_EQ|INE171Z01018",
@@ -290,11 +291,10 @@ async function loadInstrumentMaster(retryCount = 0) {
       "PRESTIGE":   "NSE_EQ|INE811K01011", "GODREJPROP": "NSE_EQ|INE484J01027",
       "PHOENIXLTD": "NSE_EQ|INE792G01026", "BRIGADE":    "NSE_EQ|INE791G01019",
       "NAUKRI":     "NSE_EQ|INE663F01024", "DMART":      "NSE_EQ|INE192R01011",
-      "TRENT":      "NSE_EQ|INE849A01020", "PAGEIND":    "NSE_EQ|INE761H01022",
-      "VOLTAS":     "NSE_EQ|INE226A01021", "WHIRLPOOL":  "NSE_EQ|INE716A01013",
-      "HAVELLS":    "NSE_EQ|INE176B01034", "CROMPTON":   "NSE_EQ|INE299U01018",
-      "DIXON":      "NSE_EQ|INE935N01020", "AMBER":      "NSE_EQ|INE371P01015",
-      "AFFLE":      "NSE_EQ|INE00WC01010", "ZOMATO":     "NSE_EQ|INE758T01015",
+      "PAGEIND":    "NSE_EQ|INE761H01022", "VOLTAS":     "NSE_EQ|INE226A01021",
+      "WHIRLPOOL":  "NSE_EQ|INE716A01013", "HAVELLS":    "NSE_EQ|INE176B01034",
+      "CROMPTON":   "NSE_EQ|INE299U01018", "DIXON":      "NSE_EQ|INE935N01020",
+      "AMBER":      "NSE_EQ|INE371P01015", "AFFLE":      "NSE_EQ|INE00WC01010",
       "NYKAA":      "NSE_EQ|INE388Y01029", "POLICYBZR":  "NSE_EQ|INE417T01026",
       "PAYTM":      "NSE_EQ|INE982J01020", "DELHIVERY":  "NSE_EQ|INE152O01027",
       "CEMPRO":     "BSE_EQ|543066",
@@ -334,8 +334,6 @@ function getInstrumentKeyFull(symbol) {
 }
 
 // ── resolveInstrumentKey — 5-step resolution with full logging ───────────────
-// FIX: This is the main fix for CEMPRO and other mid/small-cap stocks
-// that aren't in the RAM slice but exist on Upstox.
 async function resolveInstrumentKey(symbol) {
   const sym = symbol.toUpperCase().trim();
 
@@ -353,7 +351,8 @@ async function resolveInstrumentKey(symbol) {
   }
 
   // Step 3: Direct NSE_EQ pattern — validate via Upstox quote API
-  // Many stocks follow NSE_EQ|SYMBOL directly. Test it before using.
+  // NOTE: We validate with symbol-format key, but then check disk map for ISIN key.
+  // Symbol-only keys work for quotes and intraday but may fail for EOD candles.
   if (upstoxAccessToken) {
     const nseCandidate = `NSE_EQ|${sym}`;
     try {
@@ -364,9 +363,13 @@ async function resolveInstrumentKey(symbol) {
       });
       const d = r.data?.data || {};
       if (d[nseCandidate] || d[nseCandidate.replace("|", ":")]) {
-        instrumentMap[sym] = nseCandidate; // cache it
-        console.log(`📍 [resolve] ${sym} → NSE_EQ direct validated: ${nseCandidate}`);
-        return nseCandidate;
+        // Try to get a proper ISIN-based key from the quote response first
+        const quoteData = d[nseCandidate] || d[nseCandidate.replace("|", ":")] || {};
+        const isinKey = quoteData.instrument_token || null;
+        const finalKey = isinKey ? isinKey : nseCandidate;
+        instrumentMap[sym] = finalKey;
+        console.log(`📍 [resolve] ${sym} → NSE_EQ direct validated: ${finalKey}`);
+        return finalKey;
       }
     } catch (e) {
       console.warn(`⚠️ [resolve] ${sym} NSE_EQ direct test failed:`, e.response?.status || e.message);
@@ -420,7 +423,6 @@ async function resolveInstrumentKey(symbol) {
 }
 
 // ── Last valid trading day helper ─────────────────────────────────────────────
-// FIX: Upstox EOD rejects today AND weekends as toDate
 function getLastTradingDay() {
   const d = new Date();
   d.setDate(d.getDate() - 1); // never use today
@@ -577,7 +579,6 @@ async function startApp() {
     // ── Weekend: load OI cache and serve to clients on connection ──
     try {
       const { getAllCached, getExpiries } = require("./services/intelligence/nseOIListener");
-      // Manually load the cache file without starting the full listener
       const fs2       = require("fs");
       const path2     = require("path");
       const cacheFile = path2.join(__dirname, "data/optionChainCache.json");
@@ -859,10 +860,10 @@ app.get("/api/test-circuit", async (req, res) => {
 });
 
 // ── /api/candles/:symbol ──────────────────────────────────────────────────────
-// FIX 1: Robust 5-step instrument resolution — catches CEMPRO and all mid/small-caps
+// FIX 1: Robust 5-step instrument resolution
 // FIX 2: EOD toDate always skips weekends via getLastTradingDay()
-// FIX 3: NSE fail → auto-retry with BSE instrument key
-// FIX 4: Full error logging with HTTP status codes so you can see exact Upstox errors in Render logs
+// FIX 3: NSE empty/fail → auto-retry BSE → auto-retry live search key
+// FIX 4: Full error logging with HTTP status codes
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const tf     = req.query.tf || "1day";
@@ -929,7 +930,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
       }))
       .reverse();
 
-  // ── Helper: try fetching candles with a given instrument key ─────────────
+  // ── Helper: fetch EOD candles with a given instrument key ─────────────────
   async function fetchEODCandles(iKey, toDate, fromDate) {
     const enc = encodeURIComponent(iKey);
     const url = buildHistUrl(enc, toDate, fromDate);
@@ -971,13 +972,13 @@ app.get("/api/candles/:symbol", async (req, res) => {
 
     } else {
       // ── EOD candles (1D / 1W / 1M) ───────────────────────────────────────
-      // FIX: toDate = last trading day; fromDate = toDate - days (not today - days)
       const toDate   = getLastTradingDay();
       const fromDate = new Date(toDate);
       fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
 
       console.log(`📅 [candles] EOD toDate=${fmt(toDate)} (${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][toDate.getDay()]})`);
 
+      // ── PRIMARY: try the resolved instrument key (NSE or BSE) ─────────────
       try {
         allCandles = await fetchEODCandles(instrKey, toDate, fromDate);
         console.log(`✅ v3 EOD [${symbol}/${tf}]: ${allCandles.length} candles`);
@@ -985,19 +986,94 @@ app.get("/api/candles/:symbol", async (req, res) => {
         const status = e.response?.status;
         const msg    = e.response?.data?.message || e.message;
         console.error(`❌ v3 EOD [${symbol}/${tf}]: HTTP ${status} — ${msg}`);
+        allCandles = []; // ensure we fall through to retry logic
+      }
 
-        // FIX: If NSE_EQ failed, auto-retry with BSE_EQ instrument key
-        if (instrKey.startsWith("NSE_EQ|") && status === 400) {
-          const bseFallback = `BSE_EQ|${symbol}`;
-          console.log(`🔄 [candles] NSE failed (400) → retrying with BSE fallback: ${bseFallback}`);
+      // ── RETRY CHAIN: NSE gave 0 candles (or errored) → try symbol-only key →
+      //                 try BSE → try live search key ──────────────────────────
+      // Root cause: intraday endpoint is LENIENT (accepts any key format),
+      // but EOD endpoint is STRICT and requires an exact ISIN-based key.
+      // When the hardcoded map has a wrong/stale ISIN the EOD returns 0 candles
+      // even though intraday works fine (e.g. VEDL, WAAREEENER).
+      // Fix: cascade through multiple key formats until one returns candles.
+
+      // Retry 0: Try trading-symbol-only key (NSE_EQ|VEDL without ISIN)
+      // Upstox v3 EOD actually accepts this format for most stocks — same reason intraday works
+      if (allCandles.length === 0) {
+        const symOnlyKey = instrKey.startsWith("NSE_EQ|") ? `NSE_EQ|${symbol}` : `BSE_EQ|${symbol}`;
+        // Only retry if the resolved key was ISIN-based (contains more than just the symbol)
+        const resolvedSuffix = instrKey.split("|")[1] || "";
+        if (resolvedSuffix !== symbol && resolvedSuffix.length > 0) {
+          console.log(`🔄 [candles] Trying symbol-only key: ${symOnlyKey}`);
           try {
-            allCandles = await fetchEODCandles(bseFallback, toDate, fromDate);
-            console.log(`✅ v3 EOD BSE fallback [${symbol}/${tf}]: ${allCandles.length} candles`);
-            // Cache the BSE key so future requests skip the NSE attempt
-            if (allCandles.length > 0) instrumentMap[symbol] = bseFallback;
-          } catch (e2) {
-            console.error(`❌ v3 EOD BSE fallback also failed [${symbol}]: HTTP ${e2.response?.status} — ${e2.response?.data?.message || e2.message}`);
+            const symCandles = await fetchEODCandles(symOnlyKey, toDate, fromDate);
+            if (symCandles.length > 0) {
+              allCandles = symCandles;
+              instrumentMap[symbol] = symOnlyKey; // cache working key
+              console.log(`✅ v3 EOD symbol-only key [${symbol}/${tf}]: ${symCandles.length} candles`);
+            }
+          } catch (e0) {
+            console.warn(`⚠️ v3 EOD symbol-only key failed [${symbol}]: HTTP ${e0.response?.status} — ${e0.response?.data?.message || e0.message}`);
           }
+        }
+      }
+
+      if (allCandles.length === 0 && instrKey.startsWith("NSE_EQ|")) {
+        // Retry 1: BSE_EQ with same symbol
+        const bseFallback = `BSE_EQ|${symbol}`;
+        console.log(`🔄 [candles] NSE returned 0 candles → retrying BSE: ${bseFallback}`);
+        try {
+          const bseCandles = await fetchEODCandles(bseFallback, toDate, fromDate);
+          if (bseCandles.length > 0) {
+            allCandles = bseCandles;
+            instrumentMap[symbol] = bseFallback; // cache BSE key for future requests
+            console.log(`✅ v3 EOD BSE fallback [${symbol}/${tf}]: ${bseCandles.length} candles`);
+          } else {
+            console.warn(`⚠️ v3 EOD BSE fallback also returned 0 candles for ${symbol}`);
+          }
+        } catch (e2) {
+          console.error(`❌ v3 EOD BSE fallback failed [${symbol}]: HTTP ${e2.response?.status} — ${e2.response?.data?.message || e2.message}`);
+        }
+      }
+
+      // Retry 2: If both NSE and BSE gave 0, use live Upstox search to find the real key
+      // This handles newly listed stocks (e.g. WAAREEENER listed Oct 2024) whose ISIN
+      // in the hardcoded fallback map is stale or points to a different company.
+      if (allCandles.length === 0 && upstoxAccessToken) {
+        console.log(`🔍 [candles] Both NSE+BSE empty → trying live search for correct key: ${symbol}`);
+        try {
+          const r = await axios.get("https://api.upstox.com/v2/market-quote/search", {
+            params:  { query: symbol, asset_type: "equity" },
+            headers: { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" },
+            timeout: 8_000,
+          });
+          const items = r.data?.data || [];
+          const match =
+            items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("NSE_EQ")) ||
+            items.find(i => i.tradingsymbol === symbol && i.instrument_key?.startsWith("BSE_EQ")) ||
+            items.find(i => i.tradingsymbol === symbol);
+
+          if (match?.instrument_key && match.instrument_key !== instrKey) {
+            console.log(`✅ [candles] live search found new key for ${symbol}: ${match.instrument_key}`);
+            instrumentMap[symbol] = match.instrument_key; // update RAM cache with correct key
+            try {
+              const searchCandles = await fetchEODCandles(match.instrument_key, toDate, fromDate);
+              if (searchCandles.length > 0) {
+                allCandles = searchCandles;
+                console.log(`✅ v3 EOD via live-search key [${symbol}/${tf}]: ${searchCandles.length} candles`);
+              } else {
+                console.warn(`⚠️ v3 EOD live-search key also returned 0 candles for ${symbol}`);
+              }
+            } catch (e3) {
+              console.error(`❌ v3 EOD live-search key failed [${symbol}]: HTTP ${e3.response?.status} — ${e3.response?.data?.message || e3.message}`);
+            }
+          } else if (match?.instrument_key) {
+            console.warn(`⚠️ [candles] live search returned same key we already tried: ${match.instrument_key}`);
+          } else {
+            console.warn(`⚠️ [candles] live search found no match for ${symbol}. Returned:`, items.slice(0, 3).map(i => i.tradingsymbol));
+          }
+        } catch (eSearch) {
+          console.warn(`⚠️ [candles] live search failed for ${symbol}:`, eSearch.message);
         }
       }
 
@@ -1048,7 +1124,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
         debug: {
           instrKey,
           toDate: fmt(getLastTradingDay()),
-          hint:   "Check Render logs for exact HTTP error code. If 400: symbol may be delisted or BSE-only.",
+          hint:   "Check Render logs for exact HTTP error. If 0 candles on all attempts: stock may be newly listed, delisted, or BSE-only. Try /api/test-search?symbol=" + symbol,
         },
       });
     }
