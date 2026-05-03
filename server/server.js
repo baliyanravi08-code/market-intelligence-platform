@@ -150,7 +150,7 @@ async function saveTokenEverywhere(token, expiry) {
 }
 
 // ── Instrument master cache ───────────────────────────────────────────────────
-const MAX_INSTRUMENT_SYMBOLS = 5000;
+const MAX_INSTRUMENT_SYMBOLS = 50000; // raised from 5000 — was silently slicing off symbols
 let instrumentMap = {};
 
 async function loadInstrumentMaster(retryCount = 0) {
@@ -172,21 +172,20 @@ async function loadInstrumentMaster(retryCount = 0) {
   } catch (e) { /* rebuild below */ }
 
   try {
-    console.log("📥 Fetching Upstox instrument master (NSE + BSE)...");
-    const zlib = require("zlib");
-    const map  = {};
+    console.log("📥 Fetching Upstox instrument master (NSE + BSE) — plain JSON, no gzip...");
+    const map = {};
 
+    // ── FIX: use plain .json instead of .json.gz to avoid Render timeout on gunzip
     const exchanges = [
-      { url: "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz", segment: "NSE_EQ" },
-      { url: "https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz", segment: "BSE_EQ" },
+      { url: "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json", segment: "NSE_EQ" },
+      { url: "https://assets.upstox.com/market-quote/instruments/exchange/BSE.json", segment: "BSE_EQ" },
     ];
 
     for (const { url, segment } of exchanges) {
-      console.log(`📥 Downloading ${url}...`);
-      const res          = await axios.get(url, { timeout: 90_000, responseType: "arraybuffer" });
-      console.log(`📥 Downloaded ${segment}: ${res.data.byteLength} bytes`);
-      const decompressed = zlib.gunzipSync(Buffer.from(res.data));
-      const instruments  = JSON.parse(decompressed.toString("utf8"));
+      console.log(`📥 Downloading ${segment} from ${url}...`);
+      const res         = await axios.get(url, { timeout: 25_000, responseType: "json" });
+      const instruments = res.data; // already parsed JSON — no gunzip needed
+      console.log(`📥 ${segment}: ${instruments.length} instruments received`);
 
       for (const inst of instruments) {
         if (inst.segment === segment && inst.instrument_type === "EQ") {
@@ -195,7 +194,7 @@ async function loadInstrumentMaster(retryCount = 0) {
           }
         }
       }
-      console.log(`✅ ${segment} loaded`);
+      console.log(`✅ ${segment} loaded: ${Object.keys(map).length} symbols so far`);
     }
 
     const entries = Object.entries(map);
@@ -320,7 +319,7 @@ function getInstrumentKeyFull(symbol) {
       const cached  = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
       const fullMap = cached.map || {};
       if (fullMap[symbol]) {
-        instrumentMap[symbol] = fullMap[symbol]; // cache in RAM for next call
+        instrumentMap[symbol] = fullMap[symbol];
         console.log(`📍 Symbol ${symbol} found in full disk map: ${fullMap[symbol]}`);
         return fullMap[symbol];
       }
@@ -331,33 +330,26 @@ function getInstrumentKeyFull(symbol) {
   return null;
 }
 
-// ── isISINKey — returns true if the key has a real ISIN (not just symbol) ────
-// ISIN keys look like: NSE_EQ|INE002A01018  (suffix starts with INE or similar)
-// Symbol-only keys:    NSE_EQ|RELIANCE       (suffix == trading symbol)
+// ── isISINKey ─────────────────────────────────────────────────────────────────
 function isISINKey(instrKey, symbol) {
   if (!instrKey) return false;
   const suffix = instrKey.split("|")[1] || "";
-  // ISIN pattern: starts with 2 letters + 10 alphanumeric chars (e.g. INE002A01018)
   return /^[A-Z]{2}[A-Z0-9]{10}$/.test(suffix) && suffix !== symbol;
 }
 
-// ── resolveInstrumentKey — 5-step resolution with full logging ───────────────
-// Returns the best available key. For EOD candles, always prefer ISIN-based keys.
+// ── resolveInstrumentKey ──────────────────────────────────────────────────────
 async function resolveInstrumentKey(symbol) {
   const sym = symbol.toUpperCase().trim();
 
-  // Step 1: RAM cache (fastest) — prefer if it's an ISIN key
   if (instrumentMap[sym]) {
     const cached = instrumentMap[sym];
-    // If it's already an ISIN key, use it immediately
     if (isISINKey(cached, sym)) {
       console.log(`📍 [resolve] ${sym} → RAM (ISIN): ${cached}`);
       return cached;
     }
-    // If it's a symbol-only key from RAM, still check disk for ISIN upgrade
     const diskKey = _getDiskKeyOnly(sym);
     if (diskKey && isISINKey(diskKey, sym)) {
-      instrumentMap[sym] = diskKey; // upgrade RAM cache
+      instrumentMap[sym] = diskKey;
       console.log(`📍 [resolve] ${sym} → disk upgrade (ISIN): ${diskKey}`);
       return diskKey;
     }
@@ -365,21 +357,17 @@ async function resolveInstrumentKey(symbol) {
     return cached;
   }
 
-  // Step 2: Full disk map (catches stocks not in the 5000-cap RAM slice)
   const diskKey = getInstrumentKeyFull(sym);
   if (diskKey) {
     console.log(`📍 [resolve] ${sym} → disk: ${diskKey}`);
     return diskKey;
   }
 
-  // Steps 3-5 require a token
   if (!upstoxAccessToken) {
     console.error(`❌ [resolve] ${sym} — no token for API resolution`);
     return null;
   }
 
-  // Step 3: Direct NSE_EQ pattern — validate via Upstox quote API
-  // NOTE: Quote API accepts symbol-only keys. We store them but mark as non-ISIN.
   const nseCandidate = `NSE_EQ|${sym}`;
   try {
     const r = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
@@ -389,16 +377,14 @@ async function resolveInstrumentKey(symbol) {
     });
     const d = r.data?.data || {};
     if (d[nseCandidate] || d[nseCandidate.replace("|", ":")]) {
-      // Store symbol-only key as fallback, but don't prefer it for EOD
       instrumentMap[sym] = nseCandidate;
-      console.log(`📍 [resolve] ${sym} → NSE_EQ direct (symbol-only, intraday OK): ${nseCandidate}`);
+      console.log(`📍 [resolve] ${sym} → NSE_EQ direct (symbol-only): ${nseCandidate}`);
       return nseCandidate;
     }
   } catch (e) {
     console.warn(`⚠️ [resolve] ${sym} NSE_EQ direct test failed:`, e.response?.status || e.message);
   }
 
-  // Step 4: BSE_EQ fallback
   const bseCandidate = `BSE_EQ|${sym}`;
   try {
     const r = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
@@ -416,7 +402,6 @@ async function resolveInstrumentKey(symbol) {
     console.warn(`⚠️ [resolve] ${sym} BSE_EQ direct test failed:`, e.response?.status || e.message);
   }
 
-  // Step 5: Live Upstox search (last resort — slower but catches anything)
   try {
     console.log(`🔍 [resolve] ${sym} → trying live Upstox search...`);
     const r = await axios.get("https://api.upstox.com/v2/market-quote/search", {
@@ -429,54 +414,47 @@ async function resolveInstrumentKey(symbol) {
       items.find(i => i.tradingsymbol === sym && i.instrument_key?.startsWith("NSE_EQ")) ||
       items.find(i => i.tradingsymbol === sym && i.instrument_key?.startsWith("BSE_EQ")) ||
       items.find(i => i.tradingsymbol === sym);
-
     if (match?.instrument_key) {
       instrumentMap[sym] = match.instrument_key;
       console.log(`✅ [resolve] ${sym} → live search: ${match.instrument_key}`);
       return match.instrument_key;
     }
-    console.warn(`⚠️ [resolve] ${sym} not found in Upstox search. Returned:`, items.slice(0, 3).map(i => i.tradingsymbol));
+    console.warn(`⚠️ [resolve] ${sym} not found in Upstox search.`);
   } catch (e) {
     console.warn(`⚠️ [resolve] ${sym} live search failed:`, e.response?.status || e.message);
   }
 
-  console.error(`❌ [resolve] ${sym} — NOT FOUND in RAM(${Object.keys(instrumentMap).length}), disk, direct NSE/BSE test, or live search. Visit /api/test-search?symbol=${sym} to debug.`);
+  console.error(`❌ [resolve] ${sym} — NOT FOUND anywhere.`);
   return null;
 }
 
-// Helper: read from disk only, no RAM update (used for key upgrades)
+// ── _getDiskKeyOnly ───────────────────────────────────────────────────────────
 function _getDiskKeyOnly(symbol) {
   try {
     if (fs.existsSync(INSTRUMENT_FILE)) {
-      const cached  = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
+      const cached = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
       return (cached.map || {})[symbol] || null;
     }
   } catch (e) { /* ok */ }
   return null;
 }
 
-// ── resolveInstrumentKeyForEOD — ISIN-preferred resolution for EOD candles ──
-// The Upstox v3 EOD historical candle API REQUIRES ISIN-based keys.
-// Symbol-only keys (NSE_EQ|VEDL) work for quotes and intraday but return
-// 0 candles on the EOD endpoint. This function always tries ISIN keys first.
+// ── resolveInstrumentKeyForEOD ────────────────────────────────────────────────
 async function resolveInstrumentKeyForEOD(symbol) {
   const sym = symbol.toUpperCase().trim();
 
-  // Step 1: RAM cache — only accept ISIN keys
   const ramKey = instrumentMap[sym];
   if (ramKey && isISINKey(ramKey, sym)) {
     console.log(`📍 [EOD resolve] ${sym} → RAM ISIN: ${ramKey}`);
     return ramKey;
   }
 
-  // Step 2: Full disk map — always has ISIN keys from instrument master
   const diskKey = getInstrumentKeyFull(sym);
   if (diskKey && isISINKey(diskKey, sym)) {
     console.log(`📍 [EOD resolve] ${sym} → disk ISIN: ${diskKey}`);
     return diskKey;
   }
 
-  // Step 3: Live Upstox search — returns ISIN keys from fresh instrument master
   if (upstoxAccessToken) {
     try {
       console.log(`🔍 [EOD resolve] ${sym} → live search for ISIN key...`);
@@ -486,14 +464,12 @@ async function resolveInstrumentKeyForEOD(symbol) {
         timeout: 8_000,
       });
       const items = r.data?.data || [];
-      // Prefer NSE ISIN key, then BSE ISIN key
       const match =
         items.find(i => i.tradingsymbol === sym && isISINKey(i.instrument_key, sym) && i.instrument_key?.startsWith("NSE_EQ")) ||
         items.find(i => i.tradingsymbol === sym && isISINKey(i.instrument_key, sym) && i.instrument_key?.startsWith("BSE_EQ")) ||
         items.find(i => i.tradingsymbol === sym && i.instrument_key);
-
       if (match?.instrument_key) {
-        instrumentMap[sym] = match.instrument_key; // cache for future
+        instrumentMap[sym] = match.instrument_key;
         console.log(`✅ [EOD resolve] ${sym} → live search ISIN: ${match.instrument_key}`);
         return match.instrument_key;
       }
@@ -502,23 +478,20 @@ async function resolveInstrumentKeyForEOD(symbol) {
     }
   }
 
-  // Step 4: Fall back to whatever resolveInstrumentKey found (may be symbol-only)
-  // The EOD retry chain will handle the 0-candles case if this key doesn't work
   if (ramKey) {
     console.log(`⚠️ [EOD resolve] ${sym} → falling back to non-ISIN key: ${ramKey}`);
     return ramKey;
   }
 
-  // Step 5: Try symbol-only as absolute last resort
   return await resolveInstrumentKey(sym);
 }
 
 // ── Last valid trading day helper ─────────────────────────────────────────────
 function getLastTradingDay() {
   const d = new Date();
-  d.setDate(d.getDate() - 1); // never use today
+  d.setDate(d.getDate() - 1);
   while (d.getDay() === 0 || d.getDay() === 6) {
-    d.setDate(d.getDate() - 1); // skip Sat(6) and Sun(0)
+    d.setDate(d.getDate() - 1);
   }
   return d;
 }
@@ -539,7 +512,6 @@ async function validateTokenLive(token) {
 }
 
 async function loadToken() {
-  // Priority 1: MongoDB Algo Trading token
   try {
     const Model = getTokenModel();
     if (Model) {
@@ -554,7 +526,7 @@ async function loadToken() {
           process.env.UPSTOX_ACCESS_TOKEN = upstoxAccessToken;
           return;
         } else {
-          console.log("❌ MongoDB token is DEAD (Upstox rejected it) — visit /auth/upstox to refresh");
+          console.log("❌ MongoDB token is DEAD — visit /auth/upstox to refresh");
           try { await Model.deleteOne({ service: "upstox" }); } catch (_) {}
           return;
         }
@@ -566,15 +538,13 @@ async function loadToken() {
     console.warn("⚠️ MongoDB token load failed:", e.message);
   }
 
-  // Priority 2: Analytics Token from env
   if (process.env.UPSTOX_ANALYTICS_TOKEN) {
     upstoxAccessToken = process.env.UPSTOX_ANALYTICS_TOKEN;
     upstoxTokenExpiry = Date.now() + 365 * 24 * 60 * 60 * 1000;
-    console.log("✅ Analytics Token loaded from env (charts will work, live feed needs Algo token)");
+    console.log("✅ Analytics Token loaded from env");
     return;
   }
 
-  // Priority 3: Disk token file
   try {
     if (fs.existsSync(TOKEN_FILE)) {
       const saved = JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8"));
@@ -667,7 +637,6 @@ async function startApp() {
     setScannerInstrumentMap(instrumentMap);
     startMarketScanner(io);
 
-    // ── Weekend: load OI cache and serve to clients on connection ──
     try {
       const { getAllCached, getExpiries } = require("./services/intelligence/nseOIListener");
       const fs2       = require("fs");
@@ -792,7 +761,7 @@ app.get("/auth/upstox/callback", async (req, res) => {
       "<p style='color:#4a8adf'>Token expires: " +
         new Date(newExpiry).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) +
       " IST</p>" +
-      "<p style='color:#00ff9c'>✅ Charts (5min/15min/1hr/4hr) now active</p>" +
+      "<p style='color:#00ff9c'>✅ Charts (1min/5min/15min/1hr/4hr/1D/1W/1M) now active</p>" +
       "<p style='color:#00ff9c'>✅ Live prices & % change now active</p>" +
       "<p style='color:#00ff9c'>✅ Token saved to MongoDB — survives restarts</p><br>" +
       "<a href='/' style='color:#00cfff;text-decoration:none;border:1px solid #00cfff33;padding:8px 16px;border-radius:4px'>Back to Dashboard</a>" +
@@ -951,17 +920,17 @@ app.get("/api/test-circuit", async (req, res) => {
 });
 
 // ── /api/candles/:symbol ──────────────────────────────────────────────────────
-// FIX SUMMARY (this version):
-// ROOT CAUSE: Upstox v3 EOD endpoint requires ISIN-based instrument keys
-//             (e.g. NSE_EQ|INE205A01025). Symbol-only keys (NSE_EQ|VEDL) work
-//             for quotes and intraday but return 0 candles on EOD.
+// FIXED: Correct Upstox v3 URL format confirmed from official docs:
+//   Historical:  /v3/historical-candle/{key}/{unit}/{interval}/{to_date}/{from_date}
+//   Intraday:    /v3/historical-candle/intraday/{key}/{unit}/{interval}
 //
-// FIX 1: resolveInstrumentKeyForEOD — always tries to get ISIN key from disk
-//        map or live search BEFORE falling back to symbol-only keys.
-// FIX 2: Retry chain — removed broken `resolvedSuffix !== symbol` guard that
-//        was skipping retries when key was already symbol-only.
-// FIX 3: Retry chain now exhausts: ISIN key → symbol-only NSE → symbol-only BSE
-//        → live search → give up. Each step logs clearly for debugging.
+// Units and intervals:
+//   minutes/1   minutes/5   minutes/15  minutes/30
+//   hours/1     hours/4
+//   days/1      weeks/1     months/1
+//
+// OLD BROKEN values: "day", "week", "month" (missing plural + interval segment)
+// OLD BROKEN: 1hour used minutes/60, 4hour used minutes/240 (should be hours/1, hours/4)
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const tf     = req.query.tf || "1day";
@@ -971,55 +940,48 @@ app.get("/api/candles/:symbol", async (req, res) => {
     return res.json({ ok: false, error: "No token — visit /auth/upstox", symbol });
   }
 
-  // ── Resolve instrument key ────────────────────────────────────────────────
-  const tfIsEOD = ["1day", "1week", "1month"].includes(tf);
-
-  // For EOD timeframes, use the ISIN-preferred resolver.
-  // For intraday, use the standard resolver (symbol-only keys are fine).
-  const instrKey = tfIsEOD
-    ? await resolveInstrumentKeyForEOD(symbol)
-    : await resolveInstrumentKey(symbol);
-
-  if (!instrKey) {
-    return res.json({
-      ok:    false,
-      error: `Symbol ${symbol} not found. Try /api/test-search?symbol=${symbol} to debug.`,
-      symbol,
-      debug: {
-        ramSize: Object.keys(instrumentMap).length,
-        hint:    "Symbol may be listed differently on Upstox (e.g. CEMPRO vs CEMBIOSYS)",
-      },
-    });
-  }
-
   // ── v3 API timeframe config ───────────────────────────────────────────────
+  // unit + interval matches official Upstox v3 docs exactly
   const TF_MAP_V3 = {
-    "1min":   { unit: "minutes", minutes: 1,    eod: false },
-    "5min":   { unit: "minutes", minutes: 5,    eod: false },
-    "15min":  { unit: "minutes", minutes: 15,   eod: false },
-    "30min":  { unit: "minutes", minutes: 30,   eod: false },
-    "1hour":  { unit: "minutes", minutes: 60,   eod: false },
-    "4hour":  { unit: "minutes", minutes: 240,  eod: false },
-    "1day":   { unit: "day",     minutes: null, eod: true  },
-    "1week":  { unit: "week",    minutes: null, eod: true  },
-    "1month": { unit: "month",   minutes: null, eod: true  },
+    "1min":   { unit: "minutes", interval: 1,  eod: false },
+    "5min":   { unit: "minutes", interval: 5,  eod: false },
+    "15min":  { unit: "minutes", interval: 15, eod: false },
+    "30min":  { unit: "minutes", interval: 30, eod: false },
+    "1hour":  { unit: "hours",   interval: 1,  eod: false },  // was minutes/60 — FIXED
+    "4hour":  { unit: "hours",   interval: 4,  eod: false },  // was minutes/240 — FIXED
+    "1day":   { unit: "days",    interval: 1,  eod: true  },  // was "day" — FIXED
+    "1week":  { unit: "weeks",   interval: 1,  eod: true  },  // was "week" — FIXED
+    "1month": { unit: "months",  interval: 1,  eod: true  },  // was "month" — FIXED
   };
 
   const tfCfg      = TF_MAP_V3[tf] || TF_MAP_V3["1day"];
   const isIntraday = !tfCfg.eod;
   const fmt        = d => d.toISOString().split("T")[0];
   const headers    = { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" };
+
+  // ── Resolve instrument key ────────────────────────────────────────────────
+  const instrKey = isIntraday
+    ? await resolveInstrumentKey(symbol)
+    : await resolveInstrumentKeyForEOD(symbol);
+
+  if (!instrKey) {
+    return res.json({
+      ok:    false,
+      error: `Symbol ${symbol} not found. Try /api/test-search?symbol=${symbol} to debug.`,
+      symbol,
+      debug: { ramSize: Object.keys(instrumentMap).length },
+    });
+  }
+
   const encodedKey = encodeURIComponent(instrKey);
 
-  const buildHistUrl = (instrKeyEncoded, toDate, fromDate) => {
-    const unitSegment = isIntraday
-      ? `${tfCfg.unit}/${tfCfg.minutes}`
-      : tfCfg.unit;
-    return `https://api.upstox.com/v3/historical-candle/${instrKeyEncoded}/${unitSegment}/${fmt(toDate)}/${fmt(fromDate)}`;
-  };
+  // ── URL builders ──────────────────────────────────────────────────────────
+  // Both historical and intraday use the same unit/interval pattern
+  const buildHistUrl = (enc, toDate, fromDate) =>
+    `https://api.upstox.com/v3/historical-candle/${enc}/${tfCfg.unit}/${tfCfg.interval}/${fmt(toDate)}/${fmt(fromDate)}`;
 
-  const buildIntradayUrl = (instrKeyEncoded) =>
-    `https://api.upstox.com/v3/historical-candle/intraday/${instrKeyEncoded}/minutes/${tfCfg.minutes}`;
+  const buildIntradayUrl = (enc) =>
+    `https://api.upstox.com/v3/historical-candle/intraday/${enc}/${tfCfg.unit}/${tfCfg.interval}`;
 
   // v3 candle format: [timestamp, open, high, low, close, volume, oi]
   // v3 returns newest-first — reverse for chronological order
@@ -1051,7 +1013,8 @@ app.get("/api/candles/:symbol", async (req, res) => {
       // ── Step 1: Today's live intraday candles ─────────────────────────────
       try {
         const url = buildIntradayUrl(encodedKey);
-        const r   = await axios.get(url, { headers, timeout: 15_000 });
+        console.log(`🔍 [candles] intraday today → ${url}`);
+        const r = await axios.get(url, { headers, timeout: 15_000 });
         const todayCandles = parseCandles(r.data?.data?.candles);
         allCandles = todayCandles;
         console.log(`✅ v3 intraday [${symbol}/${tf}]: ${todayCandles.length} candles today`);
@@ -1067,7 +1030,8 @@ app.get("/api/candles/:symbol", async (req, res) => {
 
       try {
         const url = buildHistUrl(encodedKey, toDate, fromDate);
-        const r   = await axios.get(url, { headers, timeout: 15_000 });
+        console.log(`🔍 [candles] intraday hist → ${url}`);
+        const r = await axios.get(url, { headers, timeout: 15_000 });
         const histCandles = parseCandles(r.data?.data?.candles);
         allCandles = [...histCandles, ...allCandles];
         console.log(`✅ v3 historical intraday [${symbol}/${tf}]: ${histCandles.length} candles`);
@@ -1081,21 +1045,18 @@ app.get("/api/candles/:symbol", async (req, res) => {
       const fromDate = new Date(toDate);
       fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
 
-      console.log(`📅 [candles] EOD [${symbol}/${tf}] instrKey=${instrKey} toDate=${fmt(toDate)} (${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][toDate.getDay()]})`);
+      console.log(`📅 [candles] EOD [${symbol}/${tf}] instrKey=${instrKey} toDate=${fmt(toDate)}`);
 
-      // ── ATTEMPT 1: Resolved ISIN key (from resolveInstrumentKeyForEOD) ────
+      // ATTEMPT 1: Resolved ISIN key
       try {
         allCandles = await fetchEODCandles(instrKey, toDate, fromDate);
         console.log(`✅ v3 EOD attempt-1 [${symbol}/${tf}]: ${allCandles.length} candles (key=${instrKey})`);
       } catch (e) {
-        const status = e.response?.status;
-        const msg    = e.response?.data?.message || e.message;
-        console.error(`❌ v3 EOD attempt-1 [${symbol}/${tf}]: HTTP ${status} — ${msg} (key=${instrKey})`);
+        console.error(`❌ v3 EOD attempt-1 [${symbol}/${tf}]: HTTP ${e.response?.status} — ${e.response?.data?.message || e.message}`);
         allCandles = [];
       }
 
-      // ── ATTEMPT 2: NSE symbol-only key (if ISIN key failed/returned 0) ───
-      // The v3 EOD endpoint may accept NSE_EQ|SYMBOL for some stocks
+      // ATTEMPT 2: NSE symbol-only key
       if (allCandles.length === 0) {
         const nseSymKey = `NSE_EQ|${symbol}`;
         if (nseSymKey !== instrKey) {
@@ -1105,9 +1066,9 @@ app.get("/api/candles/:symbol", async (req, res) => {
             if (c2.length > 0) {
               allCandles = c2;
               instrumentMap[symbol] = nseSymKey;
-              console.log(`✅ v3 EOD attempt-2 [${symbol}/${tf}]: ${c2.length} candles (NSE symbol-only)`);
+              console.log(`✅ v3 EOD attempt-2 [${symbol}/${tf}]: ${c2.length} candles`);
             } else {
-              console.warn(`⚠️ v3 EOD attempt-2 [${symbol}/${tf}]: 0 candles (NSE symbol-only)`);
+              console.warn(`⚠️ v3 EOD attempt-2 [${symbol}/${tf}]: 0 candles`);
             }
           } catch (e2) {
             console.warn(`⚠️ v3 EOD attempt-2 [${symbol}/${tf}]: HTTP ${e2.response?.status} — ${e2.response?.data?.message || e2.message}`);
@@ -1115,7 +1076,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
         }
       }
 
-      // ── ATTEMPT 3: BSE symbol-only key ────────────────────────────────────
+      // ATTEMPT 3: BSE symbol-only key
       if (allCandles.length === 0) {
         const bseSymKey = `BSE_EQ|${symbol}`;
         if (bseSymKey !== instrKey) {
@@ -1125,9 +1086,9 @@ app.get("/api/candles/:symbol", async (req, res) => {
             if (c3.length > 0) {
               allCandles = c3;
               instrumentMap[symbol] = bseSymKey;
-              console.log(`✅ v3 EOD attempt-3 [${symbol}/${tf}]: ${c3.length} candles (BSE symbol-only)`);
+              console.log(`✅ v3 EOD attempt-3 [${symbol}/${tf}]: ${c3.length} candles`);
             } else {
-              console.warn(`⚠️ v3 EOD attempt-3 [${symbol}/${tf}]: 0 candles (BSE symbol-only)`);
+              console.warn(`⚠️ v3 EOD attempt-3 [${symbol}/${tf}]: 0 candles`);
             }
           } catch (e3) {
             console.warn(`⚠️ v3 EOD attempt-3 [${symbol}/${tf}]: HTTP ${e3.response?.status} — ${e3.response?.data?.message || e3.message}`);
@@ -1135,11 +1096,9 @@ app.get("/api/candles/:symbol", async (req, res) => {
         }
       }
 
-      // ── ATTEMPT 4: Live Upstox search → fresh ISIN key ────────────────────
-      // Last resort: all 3 key formats failed. Ask Upstox search for the real key.
-      // This handles newly listed stocks whose ISIN isn't in our cached instrument master.
+      // ATTEMPT 4: Live Upstox search → fresh ISIN key
       if (allCandles.length === 0 && upstoxAccessToken) {
-        console.log(`🔍 [candles] attempt-4 live search for fresh ISIN key: ${symbol}`);
+        console.log(`🔍 [candles] attempt-4 live search: ${symbol}`);
         try {
           const r = await axios.get("https://api.upstox.com/v2/market-quote/search", {
             params:  { query: symbol, asset_type: "equity" },
@@ -1147,37 +1106,36 @@ app.get("/api/candles/:symbol", async (req, res) => {
             timeout: 8_000,
           });
           const items = r.data?.data || [];
-          // Find the best match with a real ISIN key
           const match =
             items.find(i => i.tradingsymbol === symbol && isISINKey(i.instrument_key, symbol) && i.instrument_key?.startsWith("NSE_EQ")) ||
             items.find(i => i.tradingsymbol === symbol && isISINKey(i.instrument_key, symbol) && i.instrument_key?.startsWith("BSE_EQ")) ||
             items.find(i => i.tradingsymbol === symbol && i.instrument_key);
 
           if (match?.instrument_key && match.instrument_key !== instrKey) {
-            console.log(`✅ [candles] live search found key for ${symbol}: ${match.instrument_key}`);
+            console.log(`✅ [candles] live search found: ${match.instrument_key}`);
             instrumentMap[symbol] = match.instrument_key;
             try {
               const c4 = await fetchEODCandles(match.instrument_key, toDate, fromDate);
               if (c4.length > 0) {
                 allCandles = c4;
-                console.log(`✅ v3 EOD attempt-4 [${symbol}/${tf}]: ${c4.length} candles (live-search ISIN)`);
+                console.log(`✅ v3 EOD attempt-4 [${symbol}/${tf}]: ${c4.length} candles`);
               } else {
-                console.warn(`⚠️ v3 EOD attempt-4 [${symbol}/${tf}]: live-search key also returned 0 candles`);
+                console.warn(`⚠️ v3 EOD attempt-4 [${symbol}/${tf}]: 0 candles`);
               }
             } catch (e4) {
               console.error(`❌ v3 EOD attempt-4 [${symbol}/${tf}]: HTTP ${e4.response?.status} — ${e4.response?.data?.message || e4.message}`);
             }
           } else if (match?.instrument_key === instrKey) {
-            console.warn(`⚠️ [candles] live search returned same key we already tried: ${instrKey}`);
+            console.warn(`⚠️ [candles] live search returned same key: ${instrKey}`);
           } else {
-            console.warn(`⚠️ [candles] live search found no match for ${symbol}. Returned:`, items.slice(0, 3).map(i => i.tradingsymbol));
+            console.warn(`⚠️ [candles] live search no match for ${symbol}`);
           }
         } catch (eSearch) {
-          console.warn(`⚠️ [candles] live search failed for ${symbol}:`, eSearch.message);
+          console.warn(`⚠️ [candles] live search failed:`, eSearch.message);
         }
       }
 
-      // ── For 1D: append live today candle using intraday 1min data ────────
+      // For 1D: append live today candle using intraday 1min data
       if (tf === "1day") {
         try {
           const todayUrl = `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/1`;
@@ -1222,7 +1180,10 @@ app.get("/api/candles/:symbol", async (req, res) => {
           instrKey,
           isISINKey: isISINKey(instrKey, symbol),
           toDate:    fmt(getLastTradingDay()),
-          hint:      "All 4 key formats tried and failed. Check Render logs for HTTP errors on each attempt. If all return 0 (no HTTP error), the stock may be newly listed, suspended, or the instrument master is stale. Delete data/upstox_instruments.json on Render to force a fresh download.",
+          urlUsed:   isIntraday
+            ? buildIntradayUrl(encodedKey)
+            : buildHistUrl(encodedKey, getLastTradingDay(), (() => { const d = getLastTradingDay(); d.setDate(d.getDate() - Math.min(days, 365)); return d; })()),
+          hint: "Check Render logs for HTTP errors. If all return 0 with no error, the instrument master may be stale — hit /api/admin/clear-instrument-cache?token=backfill2026",
         },
       });
     }
@@ -1236,14 +1197,14 @@ app.get("/api/candles/:symbol", async (req, res) => {
     });
 
     res.json({
-      ok:       true,
+      ok:        true,
       symbol,
       tf,
       instrKey,
       isISINKey: isISINKey(instrKey, symbol),
-      interval: isIntraday ? `${tfCfg.unit}/${tfCfg.minutes}` : tfCfg.unit,
-      count:    allCandles.length,
-      candles:  allCandles,
+      interval:  `${tfCfg.unit}/${tfCfg.interval}`,
+      count:     allCandles.length,
+      candles:   allCandles,
     });
 
   } catch (e) {
@@ -1262,6 +1223,7 @@ app.get("/api/candles/:symbol", async (req, res) => {
 app.get("/api/test-instrument-map", (req, res) => {
   res.json({ total: Object.keys(instrumentMap).length, sample: Object.entries(instrumentMap).slice(0, 10) });
 });
+
 // ── /api/admin/clear-instrument-cache ────────────────────────────────────────
 app.get("/api/admin/clear-instrument-cache", async (req, res) => {
   const secret = req.query.token || "";
@@ -1282,6 +1244,7 @@ app.get("/api/admin/clear-instrument-cache", async (req, res) => {
     res.json({ ok: false, error: e.message });
   }
 });
+
 // ── /api/test-search ──────────────────────────────────────────────────────────
 app.get("/api/test-search", async (req, res) => {
   const symbol = (req.query.symbol || "SCHNEIDER").toUpperCase();
@@ -1555,7 +1518,7 @@ app.get("/api/scanner/technicals/:symbol", async (req, res) => {
   try {
     const symbol    = req.params.symbol.toUpperCase();
     const timeframe = req.query.timeframe || "1day";
-    const validTFs  = ["5min", "15min", "1hour", "4hour", "1day", "1week", "1month"];
+    const validTFs  = ["1min", "5min", "15min", "1hour", "4hour", "1day", "1week", "1month"];
     const tf        = validTFs.includes(timeframe) ? timeframe : "1day";
     const result = await getTechnicalsForTimeframe(symbol, tf);
     if (!result) return res.json({
