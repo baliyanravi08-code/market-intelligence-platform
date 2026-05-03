@@ -41,7 +41,6 @@
     flex-direction: column;
   }
 
-  /* ── TOP BAR ── */
   .topbar {
     display: flex;
     align-items: center;
@@ -154,7 +153,6 @@
   .hdr-btn:hover { background:var(--surface3); border-color:var(--border2); color:var(--accent); }
   .hdr-btn.active { background: rgba(0,229,255,.08); border-color:var(--accent); color:var(--accent); }
 
-  /* ── TOOLBAR ── */
   .toolbar {
     display:flex; align-items:center; gap:8px;
     padding: 6px 16px;
@@ -200,6 +198,7 @@
   .ind-st    { color:#00bcd4; }
   .ind-vwap  { color:#ffeb3b; }
   .ind-bb    { color:#607d8b; }
+  .ind-ivol  { color:#64b5f6; }
 
   .zoom-group { display:flex; gap:2px; margin-left:auto; }
   .zoom-btn {
@@ -253,7 +252,6 @@
   }
   .back-btn:hover { background:rgba(0,230,118,.12); box-shadow:var(--glow2); }
 
-  /* loading overlay */
   #loadingOverlay {
     display: none;
     position: absolute; inset: 0;
@@ -275,7 +273,36 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .loading-text { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text2); }
 
-  /* error banner */
+  /* ── NO-DATA overlay: shown when Upstox returns nothing for a timeframe ── */
+  #noDataOverlay {
+    display: none;
+    position: absolute; inset: 0;
+    background: rgba(6,11,20,0.92);
+    z-index: 48;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 14px;
+  }
+  #noDataOverlay.show { display: flex; }
+  .nd-icon   { font-size: 32px; opacity: 0.5; }
+  .nd-title  { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--red); font-weight: 600; }
+  .nd-sub    { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text2); text-align: center; max-width: 340px; line-height: 1.6; }
+  .nd-retry  {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 16px;
+    background: rgba(0,229,255,.08);
+    border: 1px solid rgba(0,229,255,.3);
+    border-radius: 5px;
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .nd-retry:hover { background: rgba(0,229,255,.16); }
+  .nd-err-detail { font-size: 10px; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+
   #errorBanner {
     display: none;
     position: absolute;
@@ -300,14 +327,12 @@
   }
   .chart-wrap.tick-flash { animation: candleFlash 0.4s ease-out; }
 
-  /* ── MAIN LAYOUT ── */
   .main { flex:1; display:flex; overflow:hidden; }
   .chart-col {
     flex:1; display:flex; flex-direction:column;
     overflow:hidden; position:relative;
   }
 
-  /* ── CHART AREA ── */
   .chart-wrap {
     flex:1; position:relative; overflow:hidden;
     background: var(--bg);
@@ -344,10 +369,12 @@
     pointer-events:none;
     display:flex; gap:16px;
     font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--text3);
+    background: rgba(6,11,20,0.75);
+    padding: 3px 8px; border-radius: 3px;
+    border: 1px solid rgba(30,48,72,0.5);
   }
   .crosshair-info span { color:var(--text2); }
 
-  /* ── SUB PANELS ── */
   .sub-panels { display:flex; flex-direction:column; border-top: 1px solid var(--border); flex-shrink: 0; }
   .sub-panel { position:relative; overflow:hidden; }
   .sub-panel-label {
@@ -364,7 +391,6 @@
   }
   .resize-handle:hover { background:var(--accent); }
 
-  /* ── RIGHT PANEL ── */
   .right-panel {
     width: 240px; flex-shrink: 0;
     background: var(--surface);
@@ -494,6 +520,15 @@
   .data-badge.mock   { background: rgba(247,183,49,.1);  color: var(--accent3);border: 1px solid rgba(247,183,49,.25); }
   .data-badge.error  { background: rgba(255,69,96,.1);   color: var(--red);    border: 1px solid rgba(255,69,96,.25); }
   .data-badge.stream { background: rgba(0,229,255,.1);   color: var(--accent); border: 1px solid rgba(0,229,255,.25); }
+
+  .kbd-hint {
+    position: absolute;
+    bottom: 8px; right: 72px;
+    font-size: 9px; color: var(--text3);
+    font-family: 'JetBrains Mono', monospace;
+    pointer-events: none;
+    opacity: 0.5;
+  }
 </style>
 </head>
 <body>
@@ -506,7 +541,7 @@
     <span class="sym-name" id="symName">—</span>
     <span class="sym-price" id="symPrice">—</span>
     <span class="sym-change" id="symChange"></span>
-    <span class="data-badge mock" id="dataBadge">SIMULATED</span>
+    <span class="data-badge mock" id="dataBadge">LOADING</span>
   </div>
 
   <div class="sym-search-wrap" style="margin-left:12px">
@@ -545,6 +580,7 @@
   <button class="ind-btn ind-st  active" onclick="toggleInd(this,'st')">SuperTrend</button>
   <button class="ind-btn ind-vwap active" onclick="toggleInd(this,'vwap')">VWAP</button>
   <button class="ind-btn ind-bb  active" onclick="toggleInd(this,'bb')">BB</button>
+  <button class="ind-btn ind-ivol active" onclick="toggleInd(this,'inlineVol')" title="Mini volume bars on chart">Vol↑</button>
 
   <div class="zoom-group">
     <button class="zoom-btn" onclick="zoomChart(-1)" title="Zoom Out">−</button>
@@ -568,6 +604,17 @@
         <div class="spinner"></div>
         <div class="loading-text" id="loadingText">Loading candles…</div>
       </div>
+
+      <!-- NO-DATA overlay: replaces fake simulation with honest error + retry -->
+      <div id="noDataOverlay">
+        <div class="nd-icon">⚠</div>
+        <div class="nd-title" id="ndTitle">No data available</div>
+        <div class="nd-sub" id="ndSub">Upstox could not return candles for this timeframe. This may be due to an expired token, a delisted instrument, or a timeframe not supported by your plan.</div>
+        <div class="nd-err-detail" id="ndErr"></div>
+        <button class="nd-retry" onclick="retryLoad()">↺ Retry</button>
+        <a href="/auth/upstox" class="nd-retry" style="margin-top:0">🔑 Reconnect Upstox</a>
+      </div>
+
       <div id="errorBanner"></div>
       <div class="chart-overlay">
         <div class="co-label" id="coLabel">PRICE · 1D</div>
@@ -577,11 +624,12 @@
       <div class="crosshair-info" id="crosshairInfo">
         <span>Date: <span id="chDate">—</span></span>
         <span>O: <span id="chO">—</span></span>
-        <span>H: <span id="chH">—</span></span>
-        <span>L: <span id="chL">—</span></span>
+        <span>H: <span id="chH" style="color:var(--green)">—</span></span>
+        <span>L: <span id="chL" style="color:var(--red)">—</span></span>
         <span>C: <span id="chC">—</span></span>
         <span>Vol: <span id="chV">—</span></span>
       </div>
+      <div class="kbd-hint">← → arrow keys to pan</div>
     </div>
 
     <div class="panel-tabs">
@@ -730,7 +778,6 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
-// ─── READ SYMBOL FROM URL ─────────────────────────────────────────────────────
 const urlParams    = new URLSearchParams(window.location.search);
 let   CHART_SYMBOL = (urlParams.get('symbol') || sessionStorage.getItem('terminal_symbol') || 'NIFTY').toUpperCase().trim();
 let   SEED_LTP     = parseFloat(urlParams.get('ltp') || sessionStorage.getItem('terminal_ltp') || '0') || null;
@@ -741,37 +788,66 @@ document.getElementById('symName').textContent = CHART_SYMBOL;
 document.getElementById('fsSym').textContent   = CHART_SYMBOL;
 document.getElementById('symSearchInput').placeholder = CHART_SYMBOL;
 
+// ── FIX 1: Correct days params for each timeframe ────────────────────────────
+// 1W needs 730+ days to get 2 years of weekly bars
+// 1M needs 1825+ days to get 5 years of monthly bars
+// Server's Math.min(days, 365) cap is overridden by sending large values —
+// the server will clamp for intraday but EOD uses fromDate calc which respects larger values
 const TF_API_MAP  = { '1m':'1min','5m':'5min','15m':'15min','1H':'1hour','4H':'4hour','1D':'1day','1W':'1week','1M':'1month' };
 const TF_LIVE_MAP = { '1m':'1min','5m':'5min','15m':'15min','1H':'1hour','4H':'4hour' };
-const TF_DAYS     = { '1m':2,'5m':5,'15m':10,'1H':15,'4H':30,'1D':180,'1W':365,'1M':730 };
+const TF_DAYS     = {
+  '1m':2, '5m':5, '15m':10, '1H':15, '4H':30,
+  '1D':365,    // was 180 — bumped to 1yr for better 200MA computation
+  '1W':730,    // FIX: was 365 — need 2yr of weekly bars
+  '1M':1825    // FIX: was 730 — need 5yr of monthly bars
+};
+
+// Track last error for retry
+let _lastLoadSym = CHART_SYMBOL;
+let _lastLoadTF  = CURRENT_TF;
 
 function isIntradayTF(tf) { return tf in TF_LIVE_MAP; }
 
-// ─── FIX 1: SOCKET.IO — upstox-status wired, banner logic correct ─────────────
+function formatCandleLabel(date, tf) {
+  if (!(date instanceof Date) || isNaN(date)) return '';
+  if (isIntradayTF(tf)) {
+    return date.toLocaleTimeString('en-IN', {
+      hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Kolkata'
+    });
+  }
+  if (tf === '1W' || tf === '1M') {
+    return date.toLocaleDateString('en-IN', { month:'short', year:'2-digit' });
+  }
+  return date.toLocaleDateString('en-IN', { day:'2-digit', month:'short' });
+}
+
+function formatCandleFull(date, tf) {
+  if (!(date instanceof Date) || isNaN(date)) return '—';
+  if (isIntradayTF(tf)) {
+    return date.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'2-digit' })
+      + ' '
+      + date.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Kolkata' });
+  }
+  return date.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'2-digit' });
+}
+
 let socket = null;
 let liveTickBadgeTimer = null;
 
 function initSocket() {
   try {
     socket = io({ transports: ['websocket', 'polling'] });
-
     socket.on('connect', () => {
-      console.log('🔌 Socket.IO connected:', socket.id);
       if (isIntradayTF(CURRENT_TF)) subscribeToLiveCandles(CHART_SYMBOL, CURRENT_TF);
     });
-
-    socket.on('disconnect', () => {
-      console.log('⚠️ Socket.IO disconnected');
-    });
-
-    // ── KEY FIX: upstox-status drives the banner, not loadData failures ──────
+    socket.on('disconnect', () => {});
     socket.on('upstox-status', ({ connected, reason } = {}) => {
       if (connected) {
         hideError();
         setDataBadge('stream', '⚡ STREAMING');
-        document.getElementById('liveDot').className = 'live-dot';         // green
+        document.getElementById('liveDot').className = 'live-dot';
       } else {
-        document.getElementById('liveDot').className = 'live-dot red';     // red
+        document.getElementById('liveDot').className = 'live-dot red';
         if (reason === 'token_expired') {
           showError('Live data unavailable — token expired', true);
           setDataBadge('error', '⚠ TOKEN EXPIRED');
@@ -779,30 +855,19 @@ function initSocket() {
           showError('Upstox disconnected — max retries reached', true);
           setDataBadge('error', '⚠ OFFLINE');
         } else {
-          // Transient disconnect — amber dot, wait 15s before showing banner
-          document.getElementById('liveDot').className = 'live-dot amber'; // amber
+          document.getElementById('liveDot').className = 'live-dot amber';
           setDataBadge('mock', 'RECONNECTING…');
-          clearTimeout(window._upstoxBannerTimer);
-          window._upstoxBannerTimer = setTimeout(() => {
-            showError('Live data unavailable — showing simulated chart', true);
-            setDataBadge('mock', 'SIMULATED');
-          }, 15_000);
         }
       }
     });
-
-    // ── Live candle tick ──────────────────────────────────────────────────────
     socket.on('candle:tick', ({ symbol, tf, candle }) => {
       if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
       applyLiveCandleTick(candle);
     });
-
-    // ── Candle period closed ──────────────────────────────────────────────────
     socket.on('candle:closed', ({ symbol, tf, candle }) => {
       if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
       applyClosedCandle(candle);
     });
-
   } catch (e) {
     console.warn('Socket.IO not available:', e.message);
   }
@@ -813,16 +878,13 @@ function subscribeToLiveCandles(symbol, tf) {
   const liveTf = TF_LIVE_MAP[tf];
   if (!liveTf) return;
   socket.emit('candle:subscribe', { symbol, tf: liveTf });
-  console.log(`📡 Subscribed to live candles: ${symbol} @ ${liveTf}`);
 }
-
 function unsubscribeFromLiveCandles(symbol, tf) {
   if (!socket || !socket.connected) return;
   const liveTf = TF_LIVE_MAP[tf];
   if (!liveTf) return;
   socket.emit('candle:unsubscribe', { symbol, tf: liveTf });
 }
-
 function flashLiveBadge() {
   const badge = document.getElementById('liveTickBadge');
   badge.classList.add('show');
@@ -830,7 +892,6 @@ function flashLiveBadge() {
   liveTickBadgeTimer = setTimeout(() => badge.classList.remove('show'), 1500);
 }
 
-// ─── POPULAR STOCKS ───────────────────────────────────────────────────────────
 const POPULAR_STOCKS = [
   {sym:'RELIANCE',name:'Reliance Industries'},{sym:'TCS',name:'Tata Consultancy'},{sym:'INFY',name:'Infosys'},
   {sym:'HDFCBANK',name:'HDFC Bank'},{sym:'ICICIBANK',name:'ICICI Bank'},{sym:'SBIN',name:'State Bank of India'},
@@ -864,7 +925,6 @@ const POPULAR_STOCKS = [
   {sym:'FLUOROCHEM',name:'Gujarat Fluorochemicals'},{sym:'CEMPRO',name:'Cempro'},
 ];
 
-// ─── SYMBOL SEARCH ────────────────────────────────────────────────────────────
 const searchInput = document.getElementById('symSearchInput');
 const dropdown    = document.getElementById('symDropdown');
 
@@ -913,47 +973,30 @@ window.addEventListener('open-terminal', (e) => {
   if (e.detail?.symbol) changeSymbol(e.detail.symbol, e.detail.ltp || null);
 });
 
-// ─── DATA GENERATION (fallback) ───────────────────────────────────────────────
-function symHash(s) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff;
-  return h;
-}
-
-function genCandles(n=120, base=500, vol=18, drift=-0.0002) {
-  const c = []; let p = base;
-  let date = new Date(); date.setDate(date.getDate() - n);
-  for(let i=0;i<n;i++){
-    const r = ()=> Math.random()-0.5;
-    const chg = p*(drift + r()*0.025);
-    const o = p, c2 = p + chg;
-    const h2 = Math.max(o,c2)+Math.abs(r()*vol*0.5);
-    const l  = Math.min(o,c2)-Math.abs(r()*vol*0.5);
-    const v  = 1e6 + Math.abs(r())*3e6;
-    c.push({ date: new Date(date), o: +o.toFixed(2), h: +h2.toFixed(2), l: +Math.max(l,1).toFixed(2), c: +c2.toFixed(2), v: Math.round(v) });
-    p = c2;
-    date.setDate(date.getDate()+1);
-    if(date.getDay()===6) date.setDate(date.getDate()+2);
-    if(date.getDay()===0) date.setDate(date.getDate()+1);
-  }
-  return c;
-}
-
-// ─── API FETCH ────────────────────────────────────────────────────────────────
+// ── FIX 2: fetchCandles — no simulation fallback, throws on failure ───────────
+// Previously this fell through to genCandles() which generated fake trending data.
+// Now it throws so loadData() can show the honest error overlay.
 async function fetchCandles(sym, tf) {
   const apiTf = TF_API_MAP[tf] || '1day';
-  const days  = TF_DAYS[tf] || 180;
+  const days  = TF_DAYS[tf] || 365;
   const res   = await fetch(`/api/candles/${sym}?tf=${apiTf}&days=${days}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status} from server`);
   const data  = await res.json();
-  if (!data.ok || !data.candles?.length) throw new Error(data.error || 'No candles');
+  if (!data.ok || !data.candles?.length) {
+    throw new Error(data.error || `No candles returned for ${sym} [${tf}]`);
+  }
   return data.candles.map(c => ({
     date: new Date(c.time),
     o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume
   }));
 }
 
-// ─── INDICATORS ──────────────────────────────────────────────────────────────
+// ── FIX 3: retryLoad — called from the no-data overlay retry button ──────────
+function retryLoad() {
+  hideNoData();
+  loadData(_lastLoadSym, _lastLoadTF);
+}
+
 function sma(data,n){ return data.map((_,i)=>i<n-1?null:data.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n); }
 function ema(data,n){
   const k=2/(n+1), out=[];
@@ -986,14 +1029,22 @@ function rsi(data,n=14){
   }
   return out;
 }
-function stoch(highs,lows,closes,n=14){
-  return closes.map((_,i)=>{
-    if(i<n-1) return{k:null};
+
+function stoch(highs,lows,closes,n=14,dPeriod=3){
+  const kArr = closes.map((_,i)=>{
+    if(i<n-1) return null;
     const lls=Math.min(...lows.slice(i-n+1,i+1));
     const hhs=Math.max(...highs.slice(i-n+1,i+1));
-    return{k:hhs===lls?50:(closes[i]-lls)/(hhs-lls)*100};
+    return hhs===lls ? 50 : (closes[i]-lls)/(hhs-lls)*100;
   });
+  const dArr = kArr.map((_,i)=>{
+    const slice = kArr.slice(Math.max(0, i-dPeriod+1), i+1).filter(v=>v!==null);
+    if (slice.length < dPeriod) return null;
+    return slice.reduce((a,b)=>a+b,0)/slice.length;
+  });
+  return kArr.map((k,i)=>({k,d:dArr[i]}));
 }
+
 function atr(highs,lows,closes,n=14){
   const tr=closes.map((_,i)=>i===0?highs[0]-lows[0]:Math.max(highs[i]-lows[i],Math.abs(highs[i]-closes[i-1]),Math.abs(lows[i]-closes[i-1])));
   const out=[];
@@ -1040,7 +1091,6 @@ function adx(highs,lows,closes,n=14){
   return{adx:adxArr,pdi:pdiArr,ndi:ndiArr};
 }
 
-// ─── COMPUTE SIGNAL SCORE ─────────────────────────────────────────────────────
 function computeSignal(INDS, closes) {
   const last = closes.length - 1;
   let score = 50;
@@ -1068,38 +1118,50 @@ function pivotLevels(candles) {
   return{P,R1,R2,R3,S1,S2,S3};
 }
 
-// ─── STATE ────────────────────────────────────────────────────────────────────
 let CANDLES = [];
 let INDS    = null;
 const state = {
   zoom: 1.0, panX: 0, fsZoom: 1.0,
   activePanel: 'macd',
-  inds: {ma5:true,ma9:true,ma21:true,ma50:true,ma200:true,st:true,vwap:true,bb:true},
+  inds: {ma5:true,ma9:true,ma21:true,ma50:true,ma200:true,st:true,vwap:true,bb:true,inlineVol:true},
   dragging:false, dragStart:0, panStart:0,
+  crosshairX: null,
+  crosshairY: null,
+  crosshairIdx: null,
 };
 
 function visibleCount() { return Math.round(80/state.zoom); }
 function startIdx()     { const vc=visibleCount(); return Math.max(0,Math.min(CANDLES.length-vc,Math.round(state.panX))); }
 
-// ─── FIX 2: loadData — no persistent banner on API failure ────────────────────
+// ── FIX 4: loadData — no simulation fallback, shows honest error overlay ──────
 async function loadData(sym, tf) {
+  _lastLoadSym = sym;
+  _lastLoadTF  = tf;
   if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(sym, CURRENT_TF);
   showLoading(`Loading ${sym} · ${tf}…`);
   hideError();
+  hideNoData();
+  state.crosshairX = null; state.crosshairY = null; state.crosshairIdx = null;
   try {
     CANDLES = await fetchCandles(sym, tf);
     setDataBadge('live', '⚡ LIVE DATA');
+    hideNoData();
   } catch(e) {
-    const driftMap={'1m':-0.00005,'5m':-0.0001,'15m':-0.0002,'1H':-0.0003,'4H':-0.0004,'1D':-0.003,'1W':-0.008,'1M':-0.02};
-    const nMap={'1m':200,'5m':200,'15m':120,'1H':100,'4H':80,'1D':120,'1W':60,'1M':40};
-    const h2 = symHash(sym);
-    const basePrice = SEED_LTP ?? (100 + (h2 % 1400));
-    const volRatio  = basePrice / 500;
-    const tfVol     = { '1m':0.5,'5m':1.5,'15m':2,'1H':4,'4H':7,'1D':15,'1W':28,'1M':45 };
-    CANDLES = genCandles(nMap[tf]||120, basePrice * 0.88, (tfVol[tf]||15) * volRatio, driftMap[tf]||-0.003);
-    setDataBadge('mock', 'SIMULATED');
-    // Non-persistent — auto-hides after 8s. upstox-status drives the permanent banner.
-    showError(`Historical data unavailable — showing simulated chart`, false);
+    // ── REMOVED: genCandles() simulation fallback that caused fake chart artifacts ──
+    // Instead show an honest error overlay with retry and reconnect options
+    CANDLES = [];
+    INDS    = null;
+    hideLoading();
+    setDataBadge('error', '⚠ NO DATA');
+    document.getElementById('liveDot').className = 'live-dot red';
+    showNoData(
+      `No data for ${sym} · ${tf}`,
+      `Upstox returned no candles.\n${tf === '1W' || tf === '1M'
+        ? 'Weekly/Monthly data requires a valid Upstox Algo token. Analytics-only tokens may not support EOD history.'
+        : 'Check your Upstox connection or try a different timeframe.'}`,
+      e.message
+    );
+    return;
   }
   computeInds();
   state.panX = Math.max(0, CANDLES.length - 80);
@@ -1206,8 +1268,11 @@ function updateSidePanel() {
     const rsiTag = rsiV>70?'<span class="tag tag-ob" style="margin-left:4px">OVERBOUGHT</span>':rsiV<30?'<span class="tag tag-os" style="margin-left:4px">OVERSOLD</span>':'';
     document.getElementById('indRSI').innerHTML = rsiV.toFixed(1) + rsiTag;
   }
+
   const sk = INDS.stoch[last]?.k;
+  const sd = INDS.stoch[last]?.d;
   document.getElementById('indStochK').textContent = sk !== null ? sk.toFixed(1) : '—';
+  document.getElementById('indStochD').textContent = sd !== null ? sd.toFixed(1) : '—';
 
   const macdLine = INDS.macd.line[last];
   const macdSig  = INDS.macd.signal[last];
@@ -1246,10 +1311,17 @@ function updateSidePanel() {
   });
 }
 
-// ─── FIX 3: HELPERS — showError no longer always shows Reconnect link ─────────
-function fmtVol(v) { return v>1e6?(v/1e6).toFixed(2)+'M':v>1e3?(v/1e3).toFixed(0)+'K':v; }
+function fmtVol(v) { return v>1e7?(v/1e7).toFixed(2)+'Cr':v>1e5?(v/1e5).toFixed(2)+'L':v>1e3?(v/1e3).toFixed(0)+'K':v; }
 function showLoading(txt) { document.getElementById('loadingOverlay').classList.add('show'); document.getElementById('loadingText').textContent = txt||'Loading…'; }
 function hideLoading()    { document.getElementById('loadingOverlay').classList.remove('show'); }
+
+function showNoData(title, sub, errDetail) {
+  document.getElementById('ndTitle').textContent = title || 'No data available';
+  document.getElementById('ndSub').textContent   = sub   || '';
+  document.getElementById('ndErr').textContent   = errDetail ? `Error: ${errDetail}` : '';
+  document.getElementById('noDataOverlay').classList.add('show');
+}
+function hideNoData() { document.getElementById('noDataOverlay').classList.remove('show'); }
 
 function showError(msg, persistent) {
   const el = document.getElementById('errorBanner');
@@ -1257,26 +1329,22 @@ function showError(msg, persistent) {
     ? ' — <a href="/auth/upstox" style="color:var(--accent);text-decoration:underline">Reconnect Upstox</a>'
     : '');
   el.classList.add('show');
-  // Auto-hide after 8s for non-persistent notices
   if (!persistent) {
     clearTimeout(window._errBannerTimer);
     window._errBannerTimer = setTimeout(() => el.classList.remove('show'), 8_000);
   }
 }
-
 function hideError() {
   clearTimeout(window._errBannerTimer);
   clearTimeout(window._upstoxBannerTimer);
   document.getElementById('errorBanner').classList.remove('show');
 }
-
 function setDataBadge(type, text) {
   const el = document.getElementById('dataBadge');
   el.className = 'data-badge ' + type;
   el.textContent = text;
 }
 
-// ─── APPLY LIVE TICK TO LAST CANDLE ──────────────────────────────────────────
 let renderPending = false;
 
 function applyLiveCandleTick(liveCandle) {
@@ -1318,7 +1386,6 @@ function applyClosedCandle(closedCandle) {
   computeInds(); updateSidePanel(); renderAll();
 }
 
-// ─── CANVAS SETUP ────────────────────────────────────────────────────────────
 function setupCanvas(canvas, wrap) {
   const dpr = window.devicePixelRatio||1;
   const w = wrap.clientWidth, h = wrap.clientHeight;
@@ -1329,11 +1396,14 @@ function setupCanvas(canvas, wrap) {
   return {ctx,w,h};
 }
 
-// ─── DRAW MAIN CHART ──────────────────────────────────────────────────────────
-function drawMain(canvas, wrap, zoom, panX) {
+// ── DRAW MAIN ─────────────────────────────────────────────────────────────────
+function drawMain(canvas, wrap, zoom, panX, crosshairX, crosshairY) {
   const {ctx,w,h} = setupCanvas(canvas,wrap);
   ctx.clearRect(0,0,w,h);
   if (!CANDLES.length) return null;
+
+  const RIGHT_AXIS = 58;
+  const chartW = w - RIGHT_AXIS;
 
   const vc  = Math.round(80/zoom);
   const si  = Math.max(0,Math.min(CANDLES.length-vc,Math.round(panX)));
@@ -1346,28 +1416,45 @@ function drawMain(canvas, wrap, zoom, panX) {
   if(state.inds.bb&&INDS){ indSlice('bb').forEach(b=>{ if(b.upper){mx=Math.max(mx,b.upper);mn=Math.min(mn,b.lower);} }); }
   const pad=(mx-mn)*0.08; mn-=pad; mx+=pad;
 
-  const cw_px = w/vc;
+  const cw_px = chartW/vc;
   const py=(v)=>h-(v-mn)/(mx-mn)*h;
 
-  ctx.strokeStyle='#1e3048'; ctx.lineWidth=0.5;
+  // ── Right axis + grid ─────────────────────────────────────────────────────
   const gridN=6;
+  ctx.fillStyle = 'rgba(13,21,32,0.95)';
+  ctx.fillRect(chartW, 0, RIGHT_AXIS, h);
+  ctx.strokeStyle = '#1e3048';
+  ctx.lineWidth   = 0.5;
+  ctx.beginPath(); ctx.moveTo(chartW, 0); ctx.lineTo(chartW, h); ctx.stroke();
+
   for(let i=0;i<=gridN;i++){
     const y=h*i/gridN;
-    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
-    const val=(mx-(mx-mn)*i/gridN).toFixed(1);
-    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.fillText('₹'+val,4,y-3);
+    ctx.strokeStyle='#1e3048'; ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(chartW,y); ctx.stroke();
+    const val=(mx-(mx-mn)*i/gridN);
+    ctx.fillStyle='#6b8ca8';
+    ctx.font='10px JetBrains Mono';
+    ctx.textAlign='left';
+    const label = val >= 10000 ? val.toFixed(0) : val >= 1000 ? val.toFixed(1) : val.toFixed(2);
+    ctx.fillText('₹'+label, chartW+5, y+4);
   }
+
+  // ── Time labels ───────────────────────────────────────────────────────────
   const step=Math.max(1,Math.floor(vc/8));
   for(let i=0;i<vc;i+=step){
     const x=(i+0.5)*cw_px;
+    ctx.strokeStyle='#1e3048'; ctx.lineWidth=0.5;
     ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
     if(i<vis.length){
-      const d=vis[i].date;
-      const label=d instanceof Date && !isNaN(d) ? d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}) : '';
-      ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.fillText(label,x-14,h-4);
+      const d = vis[i].date;
+      const label = formatCandleLabel(d, CURRENT_TF);
+      ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono';
+      ctx.textAlign='center';
+      ctx.fillText(label, x, h-4);
     }
   }
 
+  // ── Indicators ────────────────────────────────────────────────────────────
   if(INDS){
     if(state.inds.bb){
       const bs=indSlice('bb');
@@ -1410,6 +1497,7 @@ function drawMain(canvas, wrap, zoom, panX) {
     }
   }
 
+  // ── Candles ───────────────────────────────────────────────────────────────
   vis.forEach((c,i)=>{
     const x=(i+0.5)*cw_px;
     const bull=c.c>=c.o;
@@ -1431,27 +1519,105 @@ function drawMain(canvas, wrap, zoom, panX) {
     ctx.strokeStyle=col; ctx.strokeRect(x-bodyW/2,by,bodyW,bh);
   });
 
+  // ── Inline volume bars (mini strip at bottom of price chart) ─────────────
+  if (state.inds.inlineVol) {
+    const volH  = Math.floor(h * 0.14);
+    const volY0 = h - volH - 16;
+    const maxV  = Math.max(...vis.map(c=>c.v), 1);
+    ctx.strokeStyle = 'rgba(30,48,72,0.45)';
+    ctx.lineWidth   = 0.5;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(0, volY0); ctx.lineTo(chartW, volY0); ctx.stroke();
+    ctx.setLineDash([]);
+    vis.forEach((c, i) => {
+      const x    = (i + 0.5) * cw_px;
+      const barH = Math.max(1, (c.v / maxV) * volH);
+      ctx.fillStyle = c.c >= c.o ? 'rgba(38,166,154,0.28)' : 'rgba(239,83,80,0.28)';
+      ctx.fillRect(x - cw_px * 0.38, volY0 + volH - barH, cw_px * 0.76, barH);
+    });
+    ctx.fillStyle = 'rgba(61,90,114,0.7)';
+    ctx.font = '8px JetBrains Mono';
+    ctx.textAlign = 'left';
+    ctx.fillText('VOL', 4, volY0 + 9);
+  }
+
+  // ── Live price line + right-axis label ────────────────────────────────────
   const lp=CANDLES[CANDLES.length-1].c;
   const ly=py(lp);
   if(ly>0&&ly<h){
     ctx.setLineDash([4,4]); ctx.strokeStyle='rgba(0,229,255,.4)'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(0,ly); ctx.lineTo(w,ly); ctx.stroke(); ctx.setLineDash([]);
-    const label='₹'+lp.toFixed(2);
+    ctx.beginPath(); ctx.moveTo(0,ly); ctx.lineTo(chartW,ly); ctx.stroke();
+    ctx.setLineDash([]);
+    const liveLbl='₹'+lp.toFixed(2);
     ctx.font='bold 10px JetBrains Mono';
-    const tw=ctx.measureText(label).width;
-    ctx.fillStyle='rgba(0,37,54,.95)'; ctx.fillRect(w-tw-12,ly-9,tw+10,16);
-    ctx.fillStyle='#00e5ff'; ctx.fillText(label,w-tw-6,ly+3);
+    ctx.textAlign='left';
+    ctx.fillStyle='rgba(0,229,255,.18)';
+    ctx.fillRect(chartW+1, ly-9, RIGHT_AXIS-2, 16);
+    ctx.strokeStyle='rgba(0,229,255,.4)'; ctx.lineWidth=0.5;
+    ctx.strokeRect(chartW+1, ly-9, RIGHT_AXIS-2, 16);
+    ctx.fillStyle='#00e5ff'; ctx.fillText(liveLbl, chartW+5, ly+3);
   }
 
-  return {mn,mx,si,vc,w,h,cw:cw_px};
+  // ── Candle count indicator ────────────────────────────────────────────────
+  {
+    const showing = ei - si;
+    const total   = CANDLES.length;
+    const label   = `${showing} / ${total} candles`;
+    ctx.font      = '9px JetBrains Mono';
+    ctx.textAlign = 'left';
+    const tw = ctx.measureText(label).width;
+    const bx = chartW - tw - 20;
+    const by = 7;
+    ctx.fillStyle = 'rgba(13,21,32,0.75)';
+    const bw = tw + 10, bh2 = 14, br = 3;
+    ctx.beginPath();
+    if (ctx.roundRect) { ctx.roundRect(bx - 4, by, bw, bh2, br); }
+    else               { ctx.rect(bx - 4, by, bw, bh2); }
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(30,48,72,0.6)'; ctx.lineWidth = 0.5; ctx.stroke();
+    ctx.fillStyle = '#3d5a72';
+    ctx.fillText(label, bx, by + 10);
+  }
+
+  // ── Full crosshair lines ──────────────────────────────────────────────────
+  if (crosshairX !== null && crosshairY !== null && crosshairX < chartW) {
+    ctx.save();
+    ctx.setLineDash([3, 4]);
+    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = 'rgba(0,229,255,0.35)';
+    ctx.beginPath(); ctx.moveTo(crosshairX, 0); ctx.lineTo(crosshairX, h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, crosshairY); ctx.lineTo(chartW, crosshairY); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    const hoverPrice = mn + (1 - crosshairY/h) * (mx - mn);
+    const hoverLbl   = '₹' + (hoverPrice >= 1000 ? hoverPrice.toFixed(1) : hoverPrice.toFixed(2));
+    ctx.font = '10px JetBrains Mono'; ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(0,229,255,0.2)';
+    ctx.fillRect(chartW+1, crosshairY-8, RIGHT_AXIS-2, 14);
+    ctx.fillStyle = '#00e5ff';
+    ctx.fillText(hoverLbl, chartW+4, crosshairY+4);
+
+    ctx.fillStyle = 'rgba(0,229,255,0.6)';
+    ctx.beginPath(); ctx.arc(crosshairX, h-2, 3, 0, Math.PI*2); ctx.fill();
+  }
+
+  ctx.textAlign = 'left';
+  return {mn,mx,si,ei,vc,w,h,cw:cw_px,chartW};
 }
 
-// ─── DRAW SUB PANELS ─────────────────────────────────────────────────────────
-function drawSub1(canvas, wrap) {
+// ── SUB PANELS ────────────────────────────────────────────────────────────────
+function drawSub1(canvas, wrap, crosshairX) {
   const {ctx,w,h} = setupCanvas(canvas, wrap);
   ctx.clearRect(0,0,w,h);
   if(!INDS) return;
-  const vc=Math.round(80/state.zoom), si=startIdx(), ei=Math.min(CANDLES.length,si+vc), cw_px=w/vc;
+  const RIGHT_AXIS = 58;
+  const chartW = w - RIGHT_AXIS;
+  const vc=Math.round(80/state.zoom), si=startIdx(), ei=Math.min(CANDLES.length,si+vc), cw_px=chartW/vc;
+
+  ctx.fillStyle='rgba(13,21,32,0.95)'; ctx.fillRect(chartW,0,RIGHT_AXIS,h);
+  ctx.strokeStyle='#1e3048'; ctx.lineWidth=0.5;
+  ctx.beginPath(); ctx.moveTo(chartW,0); ctx.lineTo(chartW,h); ctx.stroke();
 
   if(state.activePanel==='macd'){
     const {line,signal,hist}=INDS.macd;
@@ -1464,66 +1630,100 @@ function drawSub1(canvas, wrap) {
     const py=(v)=>h-(v-mn)/(mx-mn)*h;
     const zero=py(0);
     ctx.strokeStyle='#1e3048'; ctx.lineWidth=0.5;
-    ctx.beginPath(); ctx.moveTo(0,zero); ctx.lineTo(w,zero); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,zero); ctx.lineTo(chartW,zero); ctx.stroke();
     sh.forEach((v,i)=>{ if(v==null)return; const x=(i+0.5)*cw_px,y=py(v); ctx.fillStyle=v>=0?'rgba(0,230,118,.5)':'rgba(239,83,80,.5)'; ctx.fillRect(x-cw_px*0.35,Math.min(y,zero),cw_px*0.7,Math.abs(y-zero)); });
     let s1=false; ctx.beginPath(); ctx.strokeStyle='#2196f3'; ctx.lineWidth=1.2;
     sl.forEach((v,i)=>{ if(v==null)return; const x=(i+0.5)*cw_px; s1?ctx.lineTo(x,py(v)):ctx.moveTo(x,py(v)); s1=true; }); ctx.stroke();
     let s2=false; ctx.beginPath(); ctx.strokeStyle='#ff9800'; ctx.lineWidth=1;
     ss.forEach((v,i)=>{ if(v==null)return; const x=(i+0.5)*cw_px; s2?ctx.lineTo(x,py(v)):ctx.moveTo(x,py(v)); s2=true; }); ctx.stroke();
-    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono';
+    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.textAlign='left';
     ctx.fillText(`MACD: ${sl[sl.length-1]?.toFixed(2)??'—'}  Sig: ${ss[ss.length-1]?.toFixed(2)??'—'}  Hist: ${sh[sh.length-1]?.toFixed(2)??'—'}`,6,10);
+
   } else if(state.activePanel==='rsi'){
     const rs=INDS.rsi.slice(si,ei), st2=INDS.stoch.slice(si,ei);
     const py=(v)=>h-(v/100)*h;
-    ctx.fillStyle='rgba(0,229,255,.04)'; ctx.fillRect(0,py(70),w,py(30)-py(70));
-    [70,50,30].forEach(v=>{ ctx.strokeStyle='#1e3048'; ctx.lineWidth=0.5; ctx.beginPath(); ctx.moveTo(0,py(v)); ctx.lineTo(w,py(v)); ctx.stroke(); ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.fillText(v,4,py(v)-3); });
+    ctx.fillStyle='rgba(0,229,255,.04)'; ctx.fillRect(0,py(70),chartW,py(30)-py(70));
+    [70,50,30].forEach(v=>{
+      ctx.strokeStyle='#1e3048'; ctx.lineWidth=0.5;
+      ctx.beginPath(); ctx.moveTo(0,py(v)); ctx.lineTo(chartW,py(v)); ctx.stroke();
+      ctx.fillStyle='#6b8ca8'; ctx.font='9px JetBrains Mono'; ctx.textAlign='left';
+      ctx.fillText(v, chartW+4, py(v)+3);
+    });
     let s=false; ctx.beginPath(); ctx.strokeStyle='#e91e63'; ctx.lineWidth=1.3;
     rs.forEach((v,i)=>{ if(v==null)return; const x=(i+0.5)*cw_px; s?ctx.lineTo(x,py(v)):ctx.moveTo(x,py(v)); s=true; }); ctx.stroke();
-    let s2=false; ctx.beginPath(); ctx.strokeStyle='#ff9800'; ctx.lineWidth=1;
-    st2.forEach((sv,i)=>{ if(sv.k==null)return; const x=(i+0.5)*cw_px; s2?ctx.lineTo(x,py(sv.k)):ctx.moveTo(x,py(sv.k)); s2=true; }); ctx.stroke();
-    const lastRsi=rs[rs.length-1];
-    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.fillText(`RSI(14): ${lastRsi?.toFixed(1)??'—'}`,6,10);
+    let sk=false; ctx.beginPath(); ctx.strokeStyle='#ff9800'; ctx.lineWidth=1;
+    st2.forEach((sv,i)=>{ if(sv.k==null)return; const x=(i+0.5)*cw_px; sk?ctx.lineTo(x,py(sv.k)):ctx.moveTo(x,py(sv.k)); sk=true; }); ctx.stroke();
+    let sd=false; ctx.beginPath(); ctx.strokeStyle='rgba(255,235,59,0.7)'; ctx.lineWidth=1; ctx.setLineDash([3,2]);
+    st2.forEach((sv,i)=>{ if(sv.d==null)return; const x=(i+0.5)*cw_px; sd?ctx.lineTo(x,py(sv.d)):ctx.moveTo(x,py(sv.d)); sd=true; }); ctx.stroke(); ctx.setLineDash([]);
+    const lastRsi=rs[rs.length-1]; const lastK=st2[st2.length-1]?.k; const lastD=st2[st2.length-1]?.d;
+    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.textAlign='left';
+    ctx.fillText(`RSI: ${lastRsi?.toFixed(1)??'—'}  %K: ${lastK?.toFixed(1)??'—'}  %D: ${lastD?.toFixed(1)??'—'}`,6,10);
+
   } else {
     const vs=CANDLES.slice(si,ei).map(c=>c.v);
     const mv=Math.max(...vs,1);
     vs.forEach((v,i)=>{ const c=CANDLES[si+i]; const x=(i+0.5)*cw_px, bh=(v/mv)*(h-4); ctx.fillStyle=c.c>=c.o?'rgba(38,166,154,.6)':'rgba(239,83,80,.6)'; ctx.fillRect(x-cw_px*0.4,h-bh,cw_px*0.8,bh); });
-    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.fillText('VOLUME',6,10);
+    ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.textAlign='left'; ctx.fillText('VOLUME',6,10);
+  }
+
+  if (crosshairX !== null && crosshairX < chartW) {
+    ctx.save();
+    ctx.setLineDash([3,4]); ctx.strokeStyle='rgba(0,229,255,0.25)'; ctx.lineWidth=0.8;
+    ctx.beginPath(); ctx.moveTo(crosshairX, 0); ctx.lineTo(crosshairX, h); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
   }
 }
 
-function drawSub2(canvas, wrap) {
+function drawSub2(canvas, wrap, crosshairX) {
   const {ctx,w,h} = setupCanvas(canvas, wrap);
   ctx.clearRect(0,0,w,h);
   if(!CANDLES.length) return;
-  const vc=Math.round(80/state.zoom), si=startIdx(), ei=Math.min(CANDLES.length,si+vc), cw_px=w/vc;
+  const RIGHT_AXIS = 58;
+  const chartW = w - RIGHT_AXIS;
+  const vc=Math.round(80/state.zoom), si=startIdx(), ei=Math.min(CANDLES.length,si+vc), cw_px=chartW/vc;
   const vis=CANDLES.slice(si,ei);
+
+  ctx.fillStyle='rgba(13,21,32,0.95)'; ctx.fillRect(chartW,0,RIGHT_AXIS,h);
+  ctx.strokeStyle='#1e3048'; ctx.lineWidth=0.5;
+  ctx.beginPath(); ctx.moveTo(chartW,0); ctx.lineTo(chartW,h); ctx.stroke();
+
   const mv=Math.max(...vis.map(c=>c.v),1);
   vis.forEach((c,i)=>{
     const x=(i+0.5)*cw_px, bh=(c.v/mv)*(h-6);
     ctx.fillStyle=c.c>=c.o?'rgba(38,166,154,.5)':'rgba(239,83,80,.5)';
     ctx.fillRect(x-cw_px*0.4,h-bh,cw_px*0.8,bh);
   });
-  ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.fillText('VOLUME · OBV',6,10);
+
+  ctx.fillStyle='#3d5a72'; ctx.font='8px JetBrains Mono'; ctx.textAlign='left';
+  ctx.fillText(fmtVol(mv), chartW+3, 10);
+  ctx.fillText('0', chartW+3, h-2);
+  ctx.fillStyle='#3d5a72'; ctx.font='9px JetBrains Mono'; ctx.textAlign='left';
+  ctx.fillText('VOL', 6, 10);
+
+  if (crosshairX !== null && crosshairX < chartW) {
+    ctx.save();
+    ctx.setLineDash([3,4]); ctx.strokeStyle='rgba(0,229,255,0.25)'; ctx.lineWidth=0.8;
+    ctx.beginPath(); ctx.moveTo(crosshairX,0); ctx.lineTo(crosshairX,h); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+  }
 }
 
-// ─── RENDER ALL ───────────────────────────────────────────────────────────────
 let lastInfo=null;
 function renderAll(){
   const wrap=document.getElementById('chartWrap');
   const canvas=document.getElementById('mainChart');
-  lastInfo=drawMain(canvas,wrap,state.zoom,state.panX);
-  drawSub1(document.getElementById('subChart1'),document.getElementById('subPanel1'));
-  drawSub2(document.getElementById('subChart2'),document.getElementById('subPanel2'));
+  lastInfo = drawMain(canvas, wrap, state.zoom, state.panX, state.crosshairX, state.crosshairY);
+  drawSub1(document.getElementById('subChart1'), document.getElementById('subPanel1'), state.crosshairX);
+  drawSub2(document.getElementById('subChart2'), document.getElementById('subPanel2'), state.crosshairX);
   document.getElementById('zoomLbl').textContent=Math.round(state.zoom*100)+'%';
 }
 function renderFS(){
   const wrap=document.getElementById('fsChartWrap');
   const canvas=document.getElementById('fsChart');
-  drawMain(canvas,wrap,state.fsZoom,state.panX);
+  drawMain(canvas,wrap,state.fsZoom,state.panX, null, null);
   document.getElementById('fsZoomLbl').textContent=Math.round(state.fsZoom*100)+'%';
 }
 
-// ─── ZOOM / PAN ───────────────────────────────────────────────────────────────
 function zoomChart(dir){ state.zoom=Math.max(0.3,Math.min(8,state.zoom+dir*0.15)); renderAll(); }
 function zoomReset()   { state.zoom=1; state.panX=Math.max(0,CANDLES.length-80); renderAll(); }
 function zoomFS(dir)   { state.fsZoom=Math.max(0.3,Math.min(8,state.fsZoom+dir*0.15)); renderFS(); }
@@ -1557,18 +1757,46 @@ window.addEventListener('mousemove',e=>{
 });
 window.addEventListener('mouseup',()=>{ state.dragging=false; });
 
-// ─── CROSSHAIR ────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (document.activeElement === searchInput) return;
+  const vc = Math.round(80/state.zoom);
+  const step = Math.max(1, Math.round(vc * 0.1));
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault(); state.panX = Math.max(0, state.panX - step); renderAll();
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault(); state.panX = Math.min(CANDLES.length - vc, state.panX + step); renderAll();
+  } else if (e.key === '+' || e.key === '=') {
+    zoomChart(+1);
+  } else if (e.key === '-') {
+    zoomChart(-1);
+  } else if (e.key === '0') {
+    zoomReset();
+  } else if (e.key === 'Escape') {
+    closeFullscreen();
+  }
+});
+
 const tt=document.getElementById('tooltip');
 cw_el.addEventListener('mousemove',e=>{
   if(state.dragging||!lastInfo||!CANDLES.length) return;
   const rect=cw_el.getBoundingClientRect();
   const mx=e.clientX-rect.left;
-  const {cw:cwidth,vc,si}=lastInfo;
+  const my=e.clientY-rect.top;
+
+  state.crosshairX = mx;
+  state.crosshairY = my;
+
+  const {cw:cwidth,vc,si,chartW} = lastInfo;
+  if (mx > chartW) {
+    state.crosshairX = null; state.crosshairY = null;
+    tt.style.display='none'; renderAll(); return;
+  }
+
   const idx=Math.floor(mx/cwidth);
   const absIdx=si+idx;
-  if(absIdx<0||absIdx>=CANDLES.length){tt.style.display='none';return;}
+  if(absIdx<0||absIdx>=CANDLES.length){tt.style.display='none'; state.crosshairX=null; state.crosshairY=null; renderAll(); return;}
   const c=CANDLES[absIdx];
-  const d=c.date instanceof Date && !isNaN(c.date) ? c.date.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'2-digit'}) : '—';
+  const d = formatCandleFull(c.date, CURRENT_TF);
   document.getElementById('chDate').textContent=d;
   document.getElementById('chO').textContent='₹'+c.o.toFixed(2);
   document.getElementById('chH').textContent='₹'+c.h.toFixed(2);
@@ -1582,12 +1810,20 @@ cw_el.addEventListener('mousemove',e=>{
   document.getElementById('ttC').textContent='₹'+c.c.toFixed(2);
   document.getElementById('ttV').textContent=fmtVol(c.v);
   tt.style.display='block';
-  tt.style.left=(e.clientX+14)+'px';
-  tt.style.top=(e.clientY-40)+'px';
+  const ttW=160, ttH=120;
+  const tLeft = e.clientX + 14 + ttW > window.innerWidth ? e.clientX - ttW - 10 : e.clientX + 14;
+  const tTop  = e.clientY - 40;
+  tt.style.left=tLeft+'px';
+  tt.style.top=tTop+'px';
+  renderAll();
 });
-cw_el.addEventListener('mouseleave',()=>{ tt.style.display='none'; });
 
-// ─── TIMEFRAME ────────────────────────────────────────────────────────────────
+cw_el.addEventListener('mouseleave',()=>{
+  tt.style.display='none';
+  state.crosshairX=null; state.crosshairY=null;
+  renderAll();
+});
+
 function setTF(tf, btn){
   if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(CHART_SYMBOL, CURRENT_TF);
   CURRENT_TF = tf;
@@ -1604,22 +1840,19 @@ function setPanel(panel,btn){
   state.activePanel=panel;
   document.querySelectorAll('.panel-tab').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
-  const labels={macd:'MACD (12,26,9)',rsi:'RSI (14) · STOCHASTIC',vol:'VOLUME · OBV'};
+  const labels={macd:'MACD (12,26,9)',rsi:'RSI (14) · STOCH %K/%D',vol:'VOLUME'};
   document.getElementById('subLabel1').textContent=labels[panel];
   renderAll();
 }
 
-// ─── FULLSCREEN ───────────────────────────────────────────────────────────────
 function openFullscreen(){ document.getElementById('fs-overlay').classList.add('open'); state.fsZoom=state.zoom; setTimeout(renderFS,50); }
 function closeFullscreen(){ document.getElementById('fs-overlay').classList.remove('open'); }
-document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeFullscreen(); });
 document.getElementById('fsChartWrap').addEventListener('wheel',e=>{
   e.preventDefault();
   state.fsZoom=Math.max(0.3,Math.min(8,state.fsZoom+(e.deltaY<0?1:-1)*0.12));
   renderFS();
 },{passive:false});
 
-// ─── RESIZE HANDLE ───────────────────────────────────────────────────────────
 let resizing=false, resizeY=0;
 const rh=document.getElementById('resizeH');
 const sp1=document.getElementById('subPanel1');
@@ -1633,13 +1866,11 @@ window.addEventListener('mousemove',e=>{
 });
 window.addEventListener('mouseup',()=>{ resizing=false; });
 
-// ─── RESIZE OBSERVER ─────────────────────────────────────────────────────────
 const ro=new ResizeObserver(()=>renderAll());
 ro.observe(document.getElementById('chartWrap'));
 ro.observe(document.getElementById('subPanel1'));
 ro.observe(document.getElementById('subPanel2'));
 
-// ─── INIT ─────────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
   initSocket();
   loadData(CHART_SYMBOL, CURRENT_TF);
