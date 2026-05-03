@@ -1262,7 +1262,26 @@ app.get("/api/candles/:symbol", async (req, res) => {
 app.get("/api/test-instrument-map", (req, res) => {
   res.json({ total: Object.keys(instrumentMap).length, sample: Object.entries(instrumentMap).slice(0, 10) });
 });
-
+// ── /api/admin/clear-instrument-cache ────────────────────────────────────────
+app.get("/api/admin/clear-instrument-cache", async (req, res) => {
+  const secret = req.query.token || "";
+  if (secret !== (process.env.ADMIN_SECRET || "backfill2026")) {
+    return res.status(401).json({ error: "Unauthorized — add ?token=backfill2026" });
+  }
+  try {
+    if (fs.existsSync(INSTRUMENT_FILE)) {
+      fs.unlinkSync(INSTRUMENT_FILE);
+      console.log("🗑️ Instrument cache deleted");
+    }
+    instrumentMap = {};
+    loadInstrumentMaster().then(() => {
+      console.log("✅ Fresh instrument master loaded:", Object.keys(instrumentMap).length, "symbols");
+    }).catch(e => console.error("❌ Reload failed:", e.message));
+    res.json({ ok: true, message: "Cache cleared. Wait 60s then check /health for instrumentMap count." });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
 // ── /api/test-search ──────────────────────────────────────────────────────────
 app.get("/api/test-search", async (req, res) => {
   const symbol = (req.query.symbol || "SCHNEIDER").toUpperCase();
