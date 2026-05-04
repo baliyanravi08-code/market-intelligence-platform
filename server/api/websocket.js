@@ -3,31 +3,12 @@
 /**
  * server/api/websocket.js — Binary Protocol Edition
  *
- * WHAT CHANGED vs previous version:
- *   • All high-frequency events now sent as binary buffers (not JSON strings)
- *   • market-tick    → encodeMarketTick()   ~83% smaller per update
- *   • ltp            → encodeLTPTick()      ~80% smaller per update
- *   • scanner:diff   → encodeScannerDiff()  ~79% smaller per update
- *   • scanner:snapshot→ encodeScannerSnapshot() — sends symbol table once
- *   • candle:tick    → encodeCandle()       ~75% smaller per candle
- *   • candle:closed  → encodeCandle()       ~75% smaller per candle
- *   • Rare/complex events (circuit alerts, gann, composite) stay JSON
- *
- * ROOMS (unchanged):
- *   "scanner"            — MarketScannerPage
- *   "chart:{SYMBOL}"     — stock chart viewers
- *   "chain:{UNDERLYING}" — option chain viewers
- *   "backtest:{socketId}"— private backtest room
- *   "alerts"             — circuit / delivery subscribers
- *
- * CLIENT MIGRATION:
- *   socket.on("binary", (buf) => {
- *     const msg = BinaryProtocol.decode(buf);
- *     // msg.type === "market-tick" | "ltp" | "scanner:diff" | "scanner:snapshot"
- *     //           | "candle:tick" | "candle:closed" | eventName (JSON fallback)
- *   });
- *   // Keep old event listeners as fallback during migration (server sends BOTH
- *   // if client hasn't sent "use-binary" signal yet).
+ * FIXES:
+ *  1. emitCandleTick / emitCandleClosed now emit to chart:{SYMBOL} room (not io.emit to everyone)
+ *  2. Added emitPriceTick → sends "price:tick" + "candle:tick" to chart room for ALL timeframes
+ *     so StockTerminal.html shows live candle formation without refresh on 1D/1W/1M too
+ *  3. emitMarketTick still broadcasts globally (indices ticker bar needs it)
+ *  4. Scanner flush unchanged
  */
 
 const { Server } = require("socket.io");
@@ -36,14 +17,10 @@ const bp = require("./binaryProtocol");
 
 let _io = null;
 
-// ── Track which clients have opted into binary protocol ──────────────────────
-// Client sends "use-binary" on connect to signal readiness.
-// During rollout, non-binary clients still get JSON events.
 const _binaryClients = new Set();
 
 function isBinary(socketId) { return _binaryClients.has(socketId); }
 
-// ── Gann integration reference ───────────────────────────────────────────────
 let _gannIntegration = null;
 
 function setGannIntegration(gi) {
@@ -51,7 +28,6 @@ function setGannIntegration(gi) {
   console.log("📐 websocket.js: gannIntegration wired");
 }
 
-// ── upstoxStream lazy-loader ─────────────────────────────────────────────────
 let _upstoxStream = null;
 function getStream() {
   if (!_upstoxStream) {
@@ -60,7 +36,6 @@ function getStream() {
   return _upstoxStream;
 }
 
-// ── Symbol normaliser ────────────────────────────────────────────────────────
 function normaliseSymbol(raw) {
   if (!raw) return "";
   return raw
@@ -76,10 +51,8 @@ function normaliseSymbol(raw) {
 // ── Option chain helpers ─────────────────────────────────────────────────────
 function emitChainUpdate(underlying, data) {
   if (!_io) return;
-  // Option chain data is complex/rare → JSON fallback
   const buf = bp.encodeJSON("option-chain-update", { underlying, data });
   _io.to(`chain:${underlying}`).emit("binary", buf);
-  // JSON fallback for non-binary clients
   _io.to(`chain:${underlying}`).emit("option-chain-update", { underlying, data });
 }
 
@@ -87,7 +60,7 @@ function broadcastUpstoxStatus(connected) {
   if (!_io) return;
   const buf = bp.encodeJSON("upstox-status", { connected });
   _io.emit("binary", buf);
-  _io.emit("upstox-status", { connected }); // JSON fallback
+  _io.emit("upstox-status", { connected });
 }
 
 // ── Intel / chain / expiry caches ────────────────────────────────────────────
@@ -124,7 +97,7 @@ function setCachedExpiries(underlying, expiries) {
   if (_io) {
     const buf = bp.encodeJSON("option-expiries", { underlying, expiries });
     _io.emit("binary", buf);
-    _io.emit("option-expiries", { underlying, expiries }); // JSON fallback
+    _io.emit("option-expiries", { underlying, expiries });
   }
 }
 
@@ -177,7 +150,6 @@ function _startScannerFlush(io) {
     _scannerBuffer.clear();
 
     if (diff.length > 0) {
-      // ── BINARY: scanner diff (~79% smaller than JSON) ──────────────────
       try {
         const binaryDiff = bp.encodeScannerDiff(diff);
         io.to("scanner").emit("binary", binaryDiff);
@@ -185,7 +157,6 @@ function _startScannerFlush(io) {
         console.warn("⚠️ binary scanner diff encode error:", e.message);
       }
 
-      // ── JSON fallback for clients not yet on binary ────────────────────
       const compressed = diff.map(s => ({
         s: s.symbol, l: s.ltp, c: s.changePct, ch: s.change,
         v: s.volume, sc: s.techScore, sg: s.signal, rs: s.rsi,
@@ -214,7 +185,6 @@ function emitChartLTP(symbol, price) {
   if (now - last < 500) return;
   _ltpThrottle.set(sym, now);
 
-  // ── BINARY: LTP tick (~80% smaller) ──────────────────────────────────
   try {
     const buf = bp.encodeLTPTick(sym, price);
     _io.to(room).emit("binary", buf);
@@ -222,12 +192,10 @@ function emitChartLTP(symbol, price) {
     console.warn("⚠️ binary LTP encode error:", e.message);
   }
 
-  // JSON fallback
   _io.to(room).emit("ltp", { s: sym, p: price, t: now });
 }
 
-// ── Market tick broadcast ────────────────────────────────────────────────────
-// Called from upstoxStream.js parseAndEmit() — replaces ioRef.emit("market-tick")
+// ── Market tick broadcast (indices/global — stays global emit) ───────────────
 function emitMarketTick(updates) {
   if (!_io || !updates?.length) return;
   try {
@@ -236,31 +204,84 @@ function emitMarketTick(updates) {
   } catch (e) {
     console.warn("⚠️ binary market-tick encode error:", e.message);
   }
-  _io.emit("market-tick", updates); // JSON fallback
+  _io.emit("market-tick", updates);
 }
 
-// ── Candle emission ──────────────────────────────────────────────────────────
-// Called from upstoxStream.js processCandleTick() — replaces ioRef.emit("candle:tick")
+// ── FIX: Candle emission → emit to chart:{SYMBOL} room only, not io.emit ─────
+// Previously used io.emit() which sent candles to ALL connected clients.
+// Now correctly targets only sockets watching that specific symbol's chart room.
 function emitCandleTick(symbol, tf, candle) {
   if (!_io) return;
+  const sym  = symbol.toUpperCase().trim();
+  const room = `chart:${sym}`;
+
   try {
-    const buf = bp.encodeCandle(bp.MSG.CANDLE_TICK, symbol, tf, candle);
-    _io.emit("binary", buf);
+    const buf = bp.encodeCandle(bp.MSG.CANDLE_TICK, sym, tf, candle);
+    _io.to(room).emit("binary", buf);
   } catch (e) {
     console.warn("⚠️ binary candle:tick encode error:", e.message);
   }
-  _io.emit("candle:tick", { symbol, tf, candle }); // JSON fallback
+
+  // JSON fallback — terminal listens on "candle:tick"
+  _io.to(room).emit("candle:tick", { symbol: sym, tf, candle });
 }
 
 function emitCandleClosed(symbol, tf, candle) {
   if (!_io) return;
+  const sym  = symbol.toUpperCase().trim();
+  const room = `chart:${sym}`;
+
   try {
-    const buf = bp.encodeCandle(bp.MSG.CANDLE_CLOSED, symbol, tf, candle);
-    _io.emit("binary", buf);
+    const buf = bp.encodeCandle(bp.MSG.CANDLE_CLOSED, sym, tf, candle);
+    _io.to(room).emit("binary", buf);
   } catch (e) {
     console.warn("⚠️ binary candle:closed encode error:", e.message);
   }
-  _io.emit("candle:closed", { symbol, tf, candle }); // JSON fallback
+
+  // JSON fallback
+  _io.to(room).emit("candle:closed", { symbol: sym, tf, candle });
+}
+
+// ── FIX: price:tick — live LTP update for ALL timeframes ────────────────────
+// This is separate from candle:tick (which only fires on intraday TFs).
+// StockTerminal.html listens on "price:tick" to update the current candle's
+// close/high/low on ANY timeframe (1D, 1W, 1M included) without a full reload.
+// Called from upstoxStream.js whenever any LTP update arrives for a symbol.
+const _priceTickThrottle = new Map();
+
+function emitPriceTick(symbol, price, change, changePct, prevClose) {
+  if (!_io) return;
+  const sym  = symbol.toUpperCase().trim();
+  const room = `chart:${sym}`;
+
+  const members = _io.sockets.adapter.rooms.get(room);
+  if (!members || members.size === 0) return;
+
+  // Throttle to max 1 update/500ms per symbol to avoid flooding
+  const now  = Date.now();
+  const last = _priceTickThrottle.get(sym) || 0;
+  if (now - last < 500) return;
+  _priceTickThrottle.set(sym, now);
+
+  const payload = {
+    symbol:    sym,
+    ltp:       price,
+    change:    change    ?? 0,
+    changePct: changePct ?? 0,
+    prevClose: prevClose ?? 0,
+    t:         now,
+  };
+
+  // Binary encoding — reuse encodeLTPTick for compact wire format
+  try {
+    const buf = bp.encodeLTPTick(sym, price);
+    _io.to(room).emit("binary", buf);
+  } catch (e) {
+    console.warn("⚠️ binary price:tick encode error:", e.message);
+  }
+
+  // JSON event — terminal's socket.on("price:tick") handler picks this up
+  _io.to(room).emit("price:tick", payload);
 }
 
 // ── Backtest tick delivery ───────────────────────────────────────────────────
@@ -268,7 +289,7 @@ function emitBacktestTick(socketId, payload) {
   if (!_io) return;
   const buf = bp.encodeJSON("backtest-live-tick", payload);
   _io.to(`backtest:${socketId}`).emit("binary", buf);
-  _io.to(`backtest:${socketId}`).emit("backtest-live-tick", payload); // fallback
+  _io.to(`backtest:${socketId}`).emit("backtest-live-tick", payload);
 }
 
 function broadcastBacktestTick(payload) {
@@ -277,7 +298,7 @@ function broadcastBacktestTick(payload) {
   for (const [roomName] of _io.sockets.adapter.rooms) {
     if (roomName.startsWith("backtest:")) {
       _io.to(roomName).emit("binary", buf);
-      _io.to(roomName).emit("backtest-live-tick", payload); // fallback
+      _io.to(roomName).emit("backtest-live-tick", payload);
     }
   }
 }
@@ -287,21 +308,21 @@ function emitCircuitAlerts(alerts) {
   if (!_io || !alerts?.length) return;
   const buf = bp.encodeJSON("circuit-alerts", alerts);
   _io.to("alerts").emit("binary", buf);
-  _io.to("alerts").emit("circuit-alerts", alerts); // fallback
+  _io.to("alerts").emit("circuit-alerts", alerts);
 }
 
 function emitDeliverySpikes(spikes) {
   if (!_io || !spikes?.length) return;
   const buf = bp.encodeJSON("delivery-spikes", spikes);
   _io.to("alerts").emit("binary", buf);
-  _io.to("alerts").emit("delivery-spikes", spikes); // fallback
+  _io.to("alerts").emit("delivery-spikes", spikes);
 }
 
 function emitCompositeUpdate(data) {
   if (!_io || !data) return;
   const buf = bp.encodeJSON("composite-update", data);
   _io.emit("binary", buf);
-  _io.emit("composite-update", data); // fallback
+  _io.emit("composite-update", data);
 }
 
 // ── Main attach function ─────────────────────────────────────────────────────
@@ -310,8 +331,6 @@ function attachSocketIO(server) {
     cors:         { origin: "*" },
     pingInterval: 25_000,
     pingTimeout:  10_000,
-    // ── KEY: enable binary transport for ArrayBuffer ──────────────────────
-    // socket.io sends Buffer as ArrayBuffer on client side automatically
     transports:   ["websocket", "polling"],
   });
 
@@ -327,8 +346,6 @@ function attachSocketIO(server) {
     console.log(`👤 Client connected: ${socket.id}`);
 
     // ── Binary protocol handshake ──────────────────────────────────────────
-    // Client sends this immediately on connect to opt into binary mode.
-    // We send back the protocol version so client knows what decoder to use.
     socket.on("use-binary", ({ version } = {}) => {
       _binaryClients.add(socket.id);
       socket.emit("binary-ready", {
@@ -361,14 +378,12 @@ function attachSocketIO(server) {
       socket.join("scanner");
       const snapshot = getScannerSnapshot();
       if (snapshot.length > 0) {
-        // ── BINARY snapshot: sends symbol table + full data ────────────────
         try {
           const buf = bp.encodeScannerSnapshot(snapshot);
           socket.emit("binary", buf);
         } catch (e) {
           console.warn("⚠️ binary snapshot encode error:", e.message);
         }
-        // JSON fallback
         socket.emit("scanner:snapshot", snapshot);
       }
       console.log(`📊 ${socket.id} joined scanner room (${snapshot.length} stocks, binary=${isBinary(socket.id)})`);
@@ -378,8 +393,11 @@ function attachSocketIO(server) {
       socket.leave("scanner");
     });
 
-    // ── Chart LTP room ─────────────────────────────────────────────────────
+    // ── Chart room — FIX: auto-join chart:{SYMBOL} room ───────────────────
+    // Terminal emits "watch:chart" with symbol on load and symbol change.
+    // This ensures candle:tick, candle:closed, price:tick reach the right client.
     socket.on("watch:chart", (symbol) => {
+      // Leave any previously watched chart rooms
       [...socket.rooms]
         .filter(r => r.startsWith("chart:"))
         .forEach(r => socket.leave(r));
@@ -411,7 +429,6 @@ function attachSocketIO(server) {
       if (_gannIntegration?.getGannAnalysis) {
         const analysis = _gannIntegration.getGannAnalysis(sym, ltp);
         if (analysis) {
-          // Gann data is complex — JSON fallback is fine (rare request)
           const buf = bp.encodeJSON("gann-analysis", analysis);
           socket.emit("binary", buf);
           socket.emit("gann-analysis", analysis);
@@ -464,6 +481,11 @@ function attachSocketIO(server) {
       _watchedSymbol = symbol.toUpperCase().trim();
       _watchedTf     = tf;
       stream.registerLiveCandleSubscription(_watchedSymbol, _watchedTf);
+
+      // FIX: also join chart room here as a safety net
+      // (terminal sends "candle:subscribe" on intraday TF load)
+      socket.join(`chart:${_watchedSymbol}`);
+      console.log(`🕯️  ${socket.id} subscribed candle: ${_watchedSymbol} [${_watchedTf}]`);
     });
 
     socket.on("candle:unsubscribe", ({ symbol, tf } = {}) => {
@@ -513,11 +535,12 @@ module.exports = {
   updateScannerTick,
   getScannerSnapshot,
 
-  // ── NEW binary-aware emitters ──────────────────────────────────────────
-  emitMarketTick,      // replaces ioRef.emit("market-tick") in upstoxStream
-  emitChartLTP,        // replaces ioRef.emit("ltp") in upstoxStream
-  emitCandleTick,      // replaces ioRef.emit("candle:tick") in upstoxStream
-  emitCandleClosed,    // replaces ioRef.emit("candle:closed") in upstoxStream
+  // Emitters
+  emitMarketTick,
+  emitChartLTP,
+  emitCandleTick,
+  emitCandleClosed,
+  emitPriceTick,       // ← NEW: call this from upstoxStream for ALL-TF live price
 
   // Backtest
   emitBacktestTick,

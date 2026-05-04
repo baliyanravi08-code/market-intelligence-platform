@@ -329,7 +329,6 @@
     flex:1; position:relative; overflow:hidden;
     background: var(--bg);
     cursor: crosshair;
-    /* Prevent text selection during drag */
     user-select: none;
     -webkit-user-select: none;
   }
@@ -360,6 +359,23 @@
     z-index: 2;
   }
   #liveTickBadge.show { opacity: 1; }
+
+  /* ── Y-axis zoom hint ── */
+  #yZoomHint {
+    position: absolute;
+    top: 50%; right: 65px;
+    transform: translateY(-50%);
+    font-size: 8px;
+    color: rgba(0,229,255,0.3);
+    font-family: 'JetBrains Mono', monospace;
+    pointer-events: none;
+    writing-mode: vertical-rl;
+    letter-spacing: 1px;
+    opacity: 0;
+    transition: opacity 0.4s;
+    z-index: 2;
+  }
+  #yZoomHint.show { opacity: 1; }
 
   .crosshair-info {
     position:absolute; bottom:8px; left:12px;
@@ -530,6 +546,9 @@
     opacity: 0.5;
     z-index: 2;
   }
+
+  /* ── Y-axis zoom cursor when hovering right axis ── */
+  .chart-wrap.yzoom-hover { cursor: ns-resize; }
 </style>
 </head>
 <body>
@@ -618,6 +637,7 @@
         <div class="co-label" id="coLabel">PRICE · 1D</div>
       </div>
       <div id="liveTickBadge">⚡ LIVE</div>
+      <div id="yZoomHint">SCROLL · Y-ZOOM</div>
       <div class="watermark">MARKET INTELLIGENCE</div>
       <div class="crosshair-info" id="crosshairInfo">
         <span>Date: <span id="chDate">—</span></span>
@@ -627,7 +647,7 @@
         <span>C: <span id="chC">—</span></span>
         <span>Vol: <span id="chV">—</span></span>
       </div>
-      <div class="kbd-hint">← → pan  |  scroll/+− zoom  |  drag to pan</div>
+      <div class="kbd-hint">← → pan  |  scroll/+− zoom  |  drag to pan  |  right-axis scroll = Y-zoom</div>
     </div>
 
     <div class="panel-tabs">
@@ -811,34 +831,34 @@ function formatCandleFull(date, tf) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ZOOM / PAN STATE — Redesigned for consistency
-// visibleBars: how many candles fit in view (zoom level)
-// panOffset:   index of LEFTMOST candle shown (integer)
-// DEFAULT_BARS: reference bar count = 100%
+// ZOOM / PAN STATE
 // ═══════════════════════════════════════════════════════════════════════════════
 const DEFAULT_BARS = 80;
 const MIN_BARS     = 10;
 const MAX_BARS     = 500;
-const RIGHT_AXIS_W = 62; // pixels reserved for price axis
+const RIGHT_AXIS_W = 62;
 
 const state = {
-  visibleBars: DEFAULT_BARS,
-  panOffset:   0,             // leftmost visible candle index
+  visibleBars:   DEFAULT_BARS,
+  panOffset:     0,
   fsVisibleBars: DEFAULT_BARS,
   fsPanOffset:   0,
-  activePanel: 'macd',
+  activePanel:   'macd',
   inds: {ma5:true,ma9:true,ma21:true,ma50:true,ma200:true,st:true,vwap:true,bb:true,inlineVol:true},
+  // ── NEW: Y-axis (vertical) zoom scale — 1.0 = default, <1 = zoomed in, >1 = zoomed out
+  yScale: 1.0,
   // drag
-  dragging:    false,
-  dragStartX:  0,
-  dragStartPan:0,
+  dragging:     false,
+  dragStartX:   0,
+  dragStartPan: 0,
   // crosshair
-  crosshairPx: null, // pixel X in chart area (NOT whole canvas)
-  crosshairPy: null, // pixel Y
+  crosshairPx:  null,
+  crosshairPy:  null,
   crosshairIdx: null,
+  // y-axis hover flag
+  overYAxis: false,
 };
 
-// ── Clamp helpers ─────────────────────────────────────────────────────────────
 function clampPan(pan, vb) {
   if (!CANDLES.length) return 0;
   return Math.max(0, Math.min(CANDLES.length - vb, Math.round(pan)));
@@ -850,27 +870,26 @@ function zoomPct() {
   return Math.round(DEFAULT_BARS / state.visibleBars * 100);
 }
 
-// ── Zoom toward a fractional position in the chart (0=left, 1=right) ──────────
-// fraction: where the mouse/cursor is (0–1)
-// direction: +1=zoom in (fewer bars), -1=zoom out (more bars)
 function applyZoom(direction, fraction) {
   if (!CANDLES.length) return;
-  fraction = fraction ?? 0.5; // default: zoom toward center
-
-  // Candle index at the cursor before zoom
+  fraction = fraction ?? 0.5;
   const candleAtCursor = state.panOffset + fraction * state.visibleBars;
-
-  // Change visibleBars — steps feel natural at any zoom level
   const step = Math.max(1, Math.round(state.visibleBars * 0.12));
   let newVB = state.visibleBars - direction * step;
   newVB = clampBars(newVB);
-
-  // Adjust panOffset so the candle under cursor stays in same position
   let newPan = candleAtCursor - fraction * newVB;
   newPan = clampPan(newPan, newVB);
-
   state.visibleBars = newVB;
   state.panOffset   = newPan;
+}
+
+// ── NEW: Y-axis vertical zoom ────────────────────────────────────────────────
+// scroll UP (deltaY < 0) on price axis → candles get BIGGER (zoom in = narrow price range)
+// scroll DOWN (deltaY > 0) on price axis → candles get SMALLER (zoom out = wider price range)
+function applyYZoom(direction) {
+  // direction: +1 = scroll up = zoom in (bigger candles), -1 = scroll down = zoom out (smaller)
+  const factor = direction > 0 ? 0.82 : 1.22;
+  state.yScale = Math.max(0.05, Math.min(8.0, state.yScale * factor));
 }
 
 function applyFSZoom(direction) {
@@ -887,13 +906,13 @@ function applyFSZoom(direction) {
 function zoomChart(dir, cursorFraction) { applyZoom(dir, cursorFraction); renderAll(); updateZoomLabel(); }
 function zoomReset() {
   state.visibleBars = DEFAULT_BARS;
+  state.yScale      = 1.0;         // ← also reset Y-zoom
   state.panOffset   = clampPan(CANDLES.length - DEFAULT_BARS, DEFAULT_BARS);
   renderAll(); updateZoomLabel();
 }
 function zoomFS(dir) { applyFSZoom(dir); renderFS(); document.getElementById('fsZoomLbl').textContent = Math.round(DEFAULT_BARS / state.fsVisibleBars * 100) + '%'; }
 function updateZoomLabel() { document.getElementById('zoomLbl').textContent = zoomPct() + '%'; }
 
-// ── Visibility window ─────────────────────────────────────────────────────────
 function getWindow() {
   const vb = Math.min(state.visibleBars, CANDLES.length || state.visibleBars);
   const si = Math.max(0, Math.min((CANDLES.length || 0) - vb, state.panOffset));
@@ -902,7 +921,7 @@ function getWindow() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CANVAS SETUP — only resize when DOM size changes (no flicker)
+// CANVAS SETUP
 // ═══════════════════════════════════════════════════════════════════════════════
 const _canvasDims = new WeakMap();
 
@@ -925,7 +944,7 @@ function ensureCanvas(canvas, wrap) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SOCKET.IO
+// SOCKET.IO — Fixed: added price:tick listener for ALL timeframe live updates
 // ═══════════════════════════════════════════════════════════════════════════════
 let socket = null;
 let liveTickBadgeTimer = null;
@@ -933,9 +952,14 @@ let liveTickBadgeTimer = null;
 function initSocket() {
   try {
     socket = io({ transports: ['websocket', 'polling'] });
+
     socket.on('connect', () => {
+      console.log('Socket connected, watching chart:', CHART_SYMBOL);
+      // FIX: always join chart room on connect (needed for price:tick on all TFs)
+      socket.emit('watch:chart', CHART_SYMBOL);
       if (isIntradayTF(CURRENT_TF)) subscribeToLiveCandles(CHART_SYMBOL, CURRENT_TF);
     });
+
     socket.on('upstox-status', ({ connected, reason } = {}) => {
       if (connected) {
         hideError();
@@ -948,14 +972,57 @@ function initSocket() {
         else { document.getElementById('liveDot').className = 'live-dot amber'; setDataBadge('mock', 'RECONNECTING…'); }
       }
     });
+
+    // ── Intraday candle tick (existing — unchanged) ────────────────────────
     socket.on('candle:tick', ({ symbol, tf, candle }) => {
       if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
       applyLiveCandleTick(candle);
     });
+
     socket.on('candle:closed', ({ symbol, tf, candle }) => {
       if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
       applyClosedCandle(candle);
     });
+
+    // ── FIX: price:tick listener — live price update for ALL timeframes ────
+    // This fires on 1D, 1W, 1M too (not just intraday) so you see the
+    // current candle update in real-time without refreshing the page.
+    socket.on('price:tick', ({ symbol, ltp, change, changePct }) => {
+      if (symbol !== CHART_SYMBOL) return;
+      if (!CANDLES.length) return;
+      if (!ltp || ltp <= 0) return;
+
+      const last = CANDLES[CANDLES.length - 1];
+      // Update the live candle's close/high/low in-place
+      last.c = ltp;
+      last.h = Math.max(last.h, ltp);
+      last.l = Math.min(last.l, ltp);
+
+      // Update price display
+      document.getElementById('symPrice').textContent = '₹' + ltp.toFixed(2);
+      document.getElementById('fsPrice').textContent  = '₹' + ltp.toFixed(2);
+
+      // Update change display if data provided
+      if (change !== undefined && changePct !== undefined) {
+        const isPos = change >= 0;
+        const chgEl = document.getElementById('symChange');
+        chgEl.textContent = `${isPos ? '▲' : '▼'} ${isPos ? '+' : ''}${change.toFixed(2)} (${isPos ? '+' : ''}${changePct.toFixed(2)}%)`;
+        chgEl.className   = 'sym-change ' + (isPos ? 'pos' : 'neg');
+      }
+
+      if (!renderPending) {
+        renderPending = true;
+        requestAnimationFrame(() => {
+          renderPending = false;
+          computeInds();
+          updateSidePanel();
+          renderAll();
+          flashLiveBadge();
+        });
+      }
+      setDataBadge('stream', '⚡ STREAMING');
+    });
+
   } catch (e) { console.warn('Socket.IO not available:', e.message); }
 }
 
@@ -1009,11 +1076,6 @@ const POPULAR_STOCKS = [
   {sym:'JUBLFOOD',name:'Jubilant FoodWorks'},{sym:'NIFTY',name:'Nifty 50 Index'},
   {sym:'BANKNIFTY',name:'Bank Nifty Index'},{sym:'SENSEX',name:'BSE Sensex'},
   {sym:'LALPATHLAB',name:'Dr Lal PathLabs'},{sym:'BHEL',name:'BHEL'},
-  {sym:'CHOLAHLDNG',name:'Cholamandalam Holdings'},{sym:'RRKABEL',name:'RR Kabel'},
-  {sym:'TECHNOE',name:'Techno Electric & Engg'},{sym:'ZENTEC',name:'Zen Technologies'},
-  {sym:'SUNTV',name:'Sun TV Network'},{sym:'NETWEB',name:'Netweb Technologies'},
-  {sym:'KAJARIACER',name:'Kajaria Ceramics'},{sym:'SAPPHIRE',name:'Sapphire Foods'},
-  {sym:'SONACOMS',name:'Sona BLW Precision'},{sym:'MEESHO',name:'Meesho'},
 ];
 
 const searchInput = document.getElementById('symSearchInput');
@@ -1042,6 +1104,8 @@ document.addEventListener('click', e => {
 
 function changeSymbol(sym, seedPrice) {
   if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(CHART_SYMBOL, CURRENT_TF);
+  // Leave old chart room, join new one
+  if (socket?.connected) socket.emit('watch:chart', null);
   CHART_SYMBOL = sym.toUpperCase().trim();
   SEED_LTP = seedPrice || null;
   dropdown.style.display = 'none';
@@ -1054,6 +1118,8 @@ function changeSymbol(sym, seedPrice) {
   const url = new URL(window.location.href);
   url.searchParams.set('symbol', CHART_SYMBOL);
   window.history.replaceState({}, '', url.toString());
+  // FIX: join new chart room before loading data
+  if (socket?.connected) socket.emit('watch:chart', CHART_SYMBOL);
   loadData(CHART_SYMBOL, CURRENT_TF);
 }
 
@@ -1239,10 +1305,8 @@ async function loadData(sym, tf) {
     return;
   }
   computeInds();
-  // Start panned to rightmost (most recent) candles
   state.visibleBars=clampBars(Math.min(DEFAULT_BARS,CANDLES.length));
   state.panOffset=clampPan(CANDLES.length-state.visibleBars,state.visibleBars);
-  // Sync FS view
   state.fsVisibleBars=state.visibleBars;
   state.fsPanOffset=state.panOffset;
   updateHeader();updateSidePanel();renderAll();updateZoomLabel();
@@ -1355,6 +1419,8 @@ function hideError(){clearTimeout(window._errTimer);document.getElementById('err
 function setDataBadge(type,text){const el=document.getElementById('dataBadge');el.className='data-badge '+type;el.textContent=text;}
 
 let renderPending=false;
+
+// ── Intraday candle tick (existing) ──────────────────────────────────────────
 function applyLiveCandleTick(liveCandle){
   if(!CANDLES.length||!isIntradayTF(CURRENT_TF))return;
   const last=CANDLES[CANDLES.length-1];
@@ -1366,6 +1432,7 @@ function applyLiveCandleTick(liveCandle){
   if(!renderPending){renderPending=true;requestAnimationFrame(()=>{renderPending=false;computeInds();updateSidePanel();renderAll();flashLiveBadge();});}
   setDataBadge('stream','⚡ STREAMING');
 }
+
 function applyClosedCandle(closedCandle){
   if(!CANDLES.length)return;
   const last=CANDLES[CANDLES.length-1],ct=closedCandle.time;
@@ -1375,13 +1442,12 @@ function applyClosedCandle(closedCandle){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DRAWING ENGINE — fully rewritten zoom/pan
+// DRAWING ENGINE — Y-zoom (state.yScale) applied to price padding
 // ═══════════════════════════════════════════════════════════════════════════════
 function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
   const {ctx,w,h} = ensureCanvas(canvas, wrap);
   ctx.clearRect(0,0,w,h);
   if(!CANDLES.length){
-    // draw empty grid
     ctx.fillStyle='#060b14';ctx.fillRect(0,0,w,h);
     return null;
   }
@@ -1391,8 +1457,6 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
   const ei = Math.min(CANDLES.length, si + vb);
   const vis = CANDLES.slice(si, ei);
   const count = vis.length;
-
-  // Per-candle pixel width
   const cw_px = chartW / vb;
 
   // Price range across visible candles + BB
@@ -1402,18 +1466,24 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
     INDS.bb.slice(si,ei).forEach(b=>{if(b.upper){mx=Math.max(mx,b.upper);mn=Math.min(mn,b.lower);}});
   }
   if(!isFinite(mn)||!isFinite(mx)){mn=0;mx=1;}
-  const pad=(mx-mn)*0.08;mn-=pad;mx+=pad;
+
+  // ── FIX: apply Y-scale — higher yScale = more padding = candles look smaller
+  //         lower yScale = less padding = candles look bigger (zoom in)
+  const yScl = isFS ? 1.0 : (state.yScale || 1.0);
+  const pad = (mx - mn) * 0.08 * yScl;
+  mn -= pad; mx += pad;
+
   const py=(v)=>h-(v-mn)/(mx-mn)*h;
 
-  // ── Background ────────────────────────────────────────────────────────────
+  // Background
   ctx.fillStyle='#060b14';ctx.fillRect(0,0,w,h);
 
-  // ── Right axis background ─────────────────────────────────────────────────
+  // Right axis background
   ctx.fillStyle='rgba(13,21,32,0.97)';ctx.fillRect(chartW,0,RIGHT_AXIS_W,h);
   ctx.strokeStyle='#1e3048';ctx.lineWidth=0.5;
   ctx.beginPath();ctx.moveTo(chartW,0);ctx.lineTo(chartW,h);ctx.stroke();
 
-  // ── Grid + price axis ─────────────────────────────────────────────────────
+  // Grid + price axis
   const gridN=6;
   for(let i=0;i<=gridN;i++){
     const y=h*i/gridN;
@@ -1425,7 +1495,7 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
     ctx.fillText('₹'+lbl,chartW+5,y+4);
   }
 
-  // ── Time axis labels ──────────────────────────────────────────────────────
+  // Time axis labels
   const labelStep=Math.max(1,Math.floor(count/8));
   for(let i=0;i<count;i+=labelStep){
     const x=(i+0.5)*cw_px;
@@ -1435,7 +1505,7 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
     if(d){ctx.fillStyle='#3d5a72';ctx.font='9px JetBrains Mono';ctx.textAlign='center';ctx.fillText(formatCandleLabel(d,CURRENT_TF),x,h-4);}
   }
 
-  // ── Indicators ────────────────────────────────────────────────────────────
+  // Indicators
   if(INDS){
     // BB
     if(state.inds.bb){
@@ -1446,7 +1516,6 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
       ctx.stroke();s=false;ctx.beginPath();
       bs.forEach((b,i)=>{if(b.lower==null)return;const x=(i+.5)*cw_px;s?ctx.lineTo(x,py(b.lower)):ctx.moveTo(x,py(b.lower));s=true;});
       ctx.stroke();ctx.setLineDash([]);
-      // fill
       ctx.beginPath();let f=false;
       bs.forEach((b,i)=>{if(b.upper==null)return;const x=(i+.5)*cw_px;f?ctx.lineTo(x,py(b.upper)):ctx.moveTo(x,py(b.upper));f=true;});
       bs.slice().reverse().forEach((b,i)=>{if(b.lower==null)return;const x=(count-1-i+.5)*cw_px;ctx.lineTo(x,py(b.lower));});
@@ -1480,10 +1549,11 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
     }
   }
 
-  // ── Candles ───────────────────────────────────────────────────────────────
+  // Candles — color based on positive/negative vs prev close
   vis.forEach((c,i)=>{
     const x=(i+.5)*cw_px;
-    const bull=c.c>=c.o;
+    // ── FIX: green = close >= open (bull candle), red = close < open (bear candle)
+    const bull = c.c >= c.o;
     const bodyW=Math.max(cw_px*0.55,1.5);
     // Wick
     ctx.strokeStyle=bull?'#26a69a':'#ef5350';ctx.lineWidth=Math.max(1,cw_px*0.08);
@@ -1502,7 +1572,7 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
     ctx.strokeRect(x-bodyW/2,by,bodyW,bh);
   });
 
-  // ── Inline volume strip ───────────────────────────────────────────────────
+  // Inline volume strip
   if(state.inds.inlineVol){
     const volH=Math.floor(h*0.12),volY0=h-volH-16,maxV=Math.max(...vis.map(c=>c.v),1);
     ctx.setLineDash([2,3]);ctx.strokeStyle='rgba(30,48,72,0.45)';ctx.lineWidth=0.5;
@@ -1516,7 +1586,7 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
     ctx.fillText('VOL',4,volY0+9);
   }
 
-  // ── Live price dashed line ────────────────────────────────────────────────
+  // Live price dashed line
   const lp=CANDLES[CANDLES.length-1].c;
   const ly=py(lp);
   if(ly>0&&ly<h){
@@ -1530,7 +1600,13 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
     ctx.fillText('₹'+lp.toFixed(2),chartW+5,ly+3);
   }
 
-  // ── Candle count badge ────────────────────────────────────────────────────
+  // Y-zoom level indicator in axis (only if zoomed)
+  if(Math.abs(state.yScale - 1.0) > 0.05 && !isFS){
+    ctx.fillStyle='rgba(0,229,255,0.6)';ctx.font='8px JetBrains Mono';ctx.textAlign='left';
+    ctx.fillText('Y:'+state.yScale.toFixed(2)+'×', chartW+4, 10);
+  }
+
+  // Candle count badge
   {
     const lbl=`${ei-si}/${CANDLES.length} bars`;
     ctx.font='9px JetBrains Mono';ctx.textAlign='right';
@@ -1538,21 +1614,19 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
     ctx.fillText(lbl,chartW-6,12);
   }
 
-  // ── Crosshair ─────────────────────────────────────────────────────────────
+  // Crosshair
   if(cxPx!==null&&cyPy!==null&&cxPx>=0&&cxPx<chartW){
     ctx.save();
     ctx.setLineDash([3,4]);ctx.strokeStyle='rgba(0,229,255,0.4)';ctx.lineWidth=0.8;
     ctx.beginPath();ctx.moveTo(cxPx,0);ctx.lineTo(cxPx,h);ctx.stroke();
     ctx.beginPath();ctx.moveTo(0,cyPy);ctx.lineTo(chartW,cyPy);ctx.stroke();
     ctx.setLineDash([]);
-    // Price label on right axis
     const hoverPrice=mn+(1-cyPy/h)*(mx-mn);
     const hoverLbl='₹'+(hoverPrice>=1000?hoverPrice.toFixed(1):hoverPrice.toFixed(2));
     ctx.fillStyle='rgba(0,229,255,0.22)';ctx.fillRect(chartW+1,cyPy-8,RIGHT_AXIS_W-2,14);
     ctx.strokeStyle='rgba(0,229,255,0.4)';ctx.lineWidth=0.5;ctx.strokeRect(chartW+1,cyPy-8,RIGHT_AXIS_W-2,14);
     ctx.fillStyle='#00e5ff';ctx.font='10px JetBrains Mono';ctx.textAlign='left';
     ctx.fillText(hoverLbl,chartW+4,cyPy+4);
-    // Dot on time axis
     ctx.fillStyle='rgba(0,229,255,0.6)';
     ctx.beginPath();ctx.arc(cxPx,h-2,3,0,Math.PI*2);ctx.fill();
     ctx.restore();
@@ -1562,7 +1636,7 @@ function drawMain(canvas, wrap, vb, pan, cxPx, cyPy, isFS) {
   return {si,ei,vb,count,cw_px,chartW,w,h,mn,mx};
 }
 
-// ── Sub-panel 1 (MACD/RSI/Vol) ───────────────────────────────────────────────
+// Sub-panel 1 (MACD/RSI/Vol)
 function drawSub1(canvas, wrap, cxFraction) {
   const {ctx,w,h}=ensureCanvas(canvas,wrap);
   ctx.clearRect(0,0,w,h);
@@ -1572,7 +1646,6 @@ function drawSub1(canvas, wrap, cxFraction) {
   const cw_px=chartW/vb;
   const cxPx=cxFraction!==null?cxFraction*chartW:null;
 
-  // bg + axis separator
   ctx.fillStyle='#0a1219';ctx.fillRect(0,0,w,h);
   ctx.fillStyle='rgba(13,21,32,0.97)';ctx.fillRect(chartW,0,RIGHT_AXIS_W,h);
   ctx.strokeStyle='#1e3048';ctx.lineWidth=0.5;
@@ -1627,7 +1700,6 @@ function drawSub1(canvas, wrap, cxFraction) {
     ctx.fillStyle='#3d5a72';ctx.font='9px JetBrains Mono';ctx.textAlign='left';ctx.fillText('VOLUME',6,10);
   }
 
-  // crosshair sync
   if(cxPx!==null&&cxPx<chartW){
     ctx.save();ctx.setLineDash([3,4]);ctx.strokeStyle='rgba(0,229,255,0.25)';ctx.lineWidth=0.8;
     ctx.beginPath();ctx.moveTo(cxPx,0);ctx.lineTo(cxPx,h);ctx.stroke();ctx.setLineDash([]);ctx.restore();
@@ -1665,18 +1737,15 @@ function drawSub2(canvas, wrap, cxFraction) {
   }
 }
 
-// ── Render all ────────────────────────────────────────────────────────────────
 let lastMainInfo=null;
 function renderAll(){
   const wrap=document.getElementById('chartWrap');
   const canvas=document.getElementById('mainChart');
-  // crosshair fraction for sub-panels
   let cxFraction=null;
   if(state.crosshairPx!==null&&lastMainInfo){
     cxFraction=state.crosshairPx/lastMainInfo.chartW;
   }
   lastMainInfo=drawMain(canvas,wrap,state.visibleBars,state.panOffset,state.crosshairPx,state.crosshairPy,false);
-  // recompute fraction after draw (chartW now accurate)
   if(state.crosshairPx!==null&&lastMainInfo){
     cxFraction=state.crosshairPx/lastMainInfo.chartW;
   }
@@ -1695,21 +1764,117 @@ function renderFS(){
 // INPUT HANDLING
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Mouse wheel zoom toward cursor ────────────────────────────────────────────
-const cw_el=document.getElementById('chartWrap');
-cw_el.addEventListener('wheel',e=>{
-  e.preventDefault();
-  if(!CANDLES.length)return;
-  const rect=cw_el.getBoundingClientRect();
-  const chartW=cw_el.clientWidth-RIGHT_AXIS_W;
-  const mx=e.clientX-rect.left;
-  const fraction=Math.max(0,Math.min(1,mx/chartW));
-  const dir=e.deltaY<0?1:-1; // scroll up = zoom in
-  applyZoom(dir,fraction);
-  renderAll();updateZoomLabel();
-},{passive:false});
+const cw_el = document.getElementById('chartWrap');
+let yZoomHintTimer = null;
 
-// ── Touch pinch ───────────────────────────────────────────────────────────────
+function showYZoomHint() {
+  const hint = document.getElementById('yZoomHint');
+  hint.classList.add('show');
+  clearTimeout(yZoomHintTimer);
+  yZoomHintTimer = setTimeout(() => hint.classList.remove('show'), 1200);
+}
+
+// ── FIX: Mouse wheel — detect right-axis hover for Y-zoom ────────────────────
+// When scroll is over the right price axis → vertical zoom (candles bigger/smaller)
+// When scroll is over chart area → horizontal zoom (more/fewer candles)
+cw_el.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (!CANDLES.length) return;
+
+  const rect   = cw_el.getBoundingClientRect();
+  const chartW = cw_el.clientWidth - RIGHT_AXIS_W;
+  const mx     = e.clientX - rect.left;
+
+  if (mx >= chartW) {
+    // ── Mouse is over RIGHT PRICE AXIS → vertical Y-zoom ──────────────────
+    // scroll UP (deltaY < 0) → candles get BIGGER (zoom in: tighter price range)
+    // scroll DOWN (deltaY > 0) → candles get SMALLER (zoom out: wider price range)
+    const dir = e.deltaY < 0 ? 1 : -1; // +1 = zoom in (bigger), -1 = zoom out (smaller)
+    applyYZoom(dir);
+    showYZoomHint();
+    renderAll();
+  } else {
+    // ── Mouse over chart area → horizontal zoom (existing behaviour) ───────
+    const fraction = Math.max(0, Math.min(1, mx / chartW));
+    const dir      = e.deltaY < 0 ? 1 : -1; // scroll up = zoom in (fewer bars)
+    applyZoom(dir, fraction);
+    renderAll();
+    updateZoomLabel();
+  }
+}, { passive: false });
+
+// ── Right-axis hover cursor change ─────────────────────────────────────────────
+cw_el.addEventListener('mousemove', e => {
+  if (state.dragging || !lastMainInfo || !CANDLES.length) return;
+  const rect   = cw_el.getBoundingClientRect();
+  const mx     = e.clientX - rect.left;
+  const chartW = cw_el.clientWidth - RIGHT_AXIS_W;
+
+  // Change cursor when over right axis
+  if (mx >= chartW) {
+    if (!state.overYAxis) {
+      state.overYAxis = true;
+      cw_el.style.cursor = 'ns-resize';
+    }
+    // Don't draw crosshair over axis
+    state.crosshairPx = null;
+    state.crosshairPy = null;
+    document.getElementById('tooltip').style.display = 'none';
+    renderAll();
+    return;
+  }
+
+  if (state.overYAxis) {
+    state.overYAxis = false;
+    cw_el.style.cursor = state.dragging ? 'grabbing' : 'crosshair';
+  }
+
+  const my = e.clientY - rect.top;
+  const { cw_px, si, ei } = lastMainInfo;
+
+  state.crosshairPx = mx;
+  state.crosshairPy = my;
+
+  const idx    = Math.floor(mx / cw_px);
+  const absIdx = si + idx;
+  if (absIdx < 0 || absIdx >= CANDLES.length) {
+    document.getElementById('tooltip').style.display = 'none';
+    renderAll();
+    return;
+  }
+  const c = CANDLES[absIdx];
+  const d = formatCandleFull(c.date, CURRENT_TF);
+  document.getElementById('chDate').textContent = d;
+  document.getElementById('chO').textContent    = '₹' + c.o.toFixed(2);
+  document.getElementById('chH').textContent    = '₹' + c.h.toFixed(2);
+  document.getElementById('chL').textContent    = '₹' + c.l.toFixed(2);
+  document.getElementById('chC').textContent    = '₹' + c.c.toFixed(2);
+  document.getElementById('chV').textContent    = fmtVol(c.v);
+  document.getElementById('ttDate').textContent = d;
+  document.getElementById('ttO').textContent    = '₹' + c.o.toFixed(2);
+  document.getElementById('ttH').textContent    = '₹' + c.h.toFixed(2);
+  document.getElementById('ttL').textContent    = '₹' + c.l.toFixed(2);
+  document.getElementById('ttC').textContent    = '₹' + c.c.toFixed(2);
+  document.getElementById('ttV').textContent    = fmtVol(c.v);
+  const tt = document.getElementById('tooltip');
+  tt.style.display = 'block';
+  const ttW   = 160;
+  const tLeft = e.clientX + 14 + ttW > window.innerWidth ? e.clientX - ttW - 10 : e.clientX + 14;
+  tt.style.left = tLeft + 'px';
+  tt.style.top  = (e.clientY - 40) + 'px';
+  renderAll();
+});
+
+cw_el.addEventListener('mouseleave', () => {
+  document.getElementById('tooltip').style.display = 'none';
+  state.crosshairPx = null;
+  state.crosshairPy = null;
+  state.overYAxis   = false;
+  cw_el.style.cursor = 'crosshair';
+  renderAll();
+});
+
+// Touch pinch
 let lastPinchDist=0;
 cw_el.addEventListener('touchmove',e=>{
   if(e.touches.length===2){
@@ -1723,9 +1888,13 @@ cw_el.addEventListener('touchmove',e=>{
 },{passive:true});
 cw_el.addEventListener('touchend',()=>{lastPinchDist=0;});
 
-// ── Mouse drag to pan ─────────────────────────────────────────────────────────
+// Mouse drag to pan
 cw_el.addEventListener('mousedown',e=>{
   if(e.button!==0)return;
+  const rect   = cw_el.getBoundingClientRect();
+  const mx     = e.clientX - rect.left;
+  const chartW = cw_el.clientWidth - RIGHT_AXIS_W;
+  if(mx >= chartW) return; // don't start drag on axis
   state.dragging=true;
   state.dragStartX=e.clientX;
   state.dragStartPan=state.panOffset;
@@ -1735,19 +1904,17 @@ window.addEventListener('mousemove',e=>{
   if(!state.dragging)return;
   const dx=e.clientX-state.dragStartX;
   const chartW=cw_el.clientWidth-RIGHT_AXIS_W;
-  // pixels per candle
   const pxPerCandle=chartW/state.visibleBars;
   const deltaBars=Math.round(dx/pxPerCandle);
-  // drag left = pan right (show later candles), drag right = pan left
   const newPan=state.dragStartPan-deltaBars;
   state.panOffset=clampPan(newPan,state.visibleBars);
   renderAll();
 });
 window.addEventListener('mouseup',()=>{
-  if(state.dragging){state.dragging=false;cw_el.style.cursor='crosshair';}
+  if(state.dragging){state.dragging=false;cw_el.style.cursor=state.overYAxis?'ns-resize':'crosshair';}
 });
 
-// ── Keyboard ─────────────────────────────────────────────────────────────────
+// Keyboard
 document.addEventListener('keydown',e=>{
   if(document.activeElement===searchInput)return;
   const step=Math.max(1,Math.round(state.visibleBars*0.1));
@@ -1759,51 +1926,7 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='Escape'){closeFullscreen();}
 });
 
-// ── Crosshair + tooltip ───────────────────────────────────────────────────────
-const tt=document.getElementById('tooltip');
-cw_el.addEventListener('mousemove',e=>{
-  if(state.dragging||!lastMainInfo||!CANDLES.length)return;
-  const rect=cw_el.getBoundingClientRect();
-  const mx=e.clientX-rect.left;
-  const my=e.clientY-rect.top;
-  const {chartW,cw_px,si,ei}=lastMainInfo;
-
-  if(mx>=chartW){
-    state.crosshairPx=null;state.crosshairPy=null;tt.style.display='none';renderAll();return;
-  }
-  state.crosshairPx=mx;
-  state.crosshairPy=my;
-
-  const idx=Math.floor(mx/cw_px);
-  const absIdx=si+idx;
-  if(absIdx<0||absIdx>=CANDLES.length){tt.style.display='none';renderAll();return;}
-  const c=CANDLES[absIdx];
-  const d=formatCandleFull(c.date,CURRENT_TF);
-  document.getElementById('chDate').textContent=d;
-  document.getElementById('chO').textContent='₹'+c.o.toFixed(2);
-  document.getElementById('chH').textContent='₹'+c.h.toFixed(2);
-  document.getElementById('chL').textContent='₹'+c.l.toFixed(2);
-  document.getElementById('chC').textContent='₹'+c.c.toFixed(2);
-  document.getElementById('chV').textContent=fmtVol(c.v);
-  document.getElementById('ttDate').textContent=d;
-  document.getElementById('ttO').textContent='₹'+c.o.toFixed(2);
-  document.getElementById('ttH').textContent='₹'+c.h.toFixed(2);
-  document.getElementById('ttL').textContent='₹'+c.l.toFixed(2);
-  document.getElementById('ttC').textContent='₹'+c.c.toFixed(2);
-  document.getElementById('ttV').textContent=fmtVol(c.v);
-  tt.style.display='block';
-  const ttW=160;
-  const tLeft=e.clientX+14+ttW>window.innerWidth?e.clientX-ttW-10:e.clientX+14;
-  tt.style.left=tLeft+'px';tt.style.top=(e.clientY-40)+'px';
-  renderAll();
-});
-cw_el.addEventListener('mouseleave',()=>{
-  tt.style.display='none';
-  state.crosshairPx=null;state.crosshairPy=null;
-  renderAll();
-});
-
-// ── FS wheel ──────────────────────────────────────────────────────────────────
+// FS wheel
 document.getElementById('fsChartWrap').addEventListener('wheel',e=>{
   e.preventDefault();
   if(!CANDLES.length)return;
@@ -1811,7 +1934,7 @@ document.getElementById('fsChartWrap').addEventListener('wheel',e=>{
   applyFSZoom(dir);renderFS();
 },{passive:false});
 
-// ── Timeframe / indicator / panel buttons ─────────────────────────────────────
+// Timeframe / indicator / panel buttons
 function setTF(tf,btn){
   if(isIntradayTF(CURRENT_TF))unsubscribeFromLiveCandles(CHART_SYMBOL,CURRENT_TF);
   CURRENT_TF=tf;
@@ -1831,7 +1954,7 @@ function setPanel(panel,btn){
   renderAll();
 }
 
-// ── Fullscreen ────────────────────────────────────────────────────────────────
+// Fullscreen
 function openFullscreen(){
   state.fsVisibleBars=state.visibleBars;
   state.fsPanOffset=state.panOffset;
@@ -1841,7 +1964,7 @@ function openFullscreen(){
 function closeFullscreen(){document.getElementById('fs-overlay').classList.remove('open');}
 function zoomFS(dir){applyFSZoom(dir);renderFS();}
 
-// ── Sub-panel resize ──────────────────────────────────────────────────────────
+// Sub-panel resize
 let resizing=false,resizeY=0;
 const rh=document.getElementById('resizeH');
 const sp1=document.getElementById('subPanel1');
@@ -1855,12 +1978,12 @@ window.addEventListener('mousemove',e=>{
 });
 window.addEventListener('mouseup',()=>{resizing=false;});
 
-// ── ResizeObserver ────────────────────────────────────────────────────────────
+// ResizeObserver
 const ro=new ResizeObserver(()=>renderAll());
 ro.observe(document.getElementById('chartWrap'));
 ro.observe(sp1);ro.observe(sp2);
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// Init
 window.addEventListener('load',()=>{
   initSocket();
   loadData(CHART_SYMBOL,CURRENT_TF);
