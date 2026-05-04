@@ -5,11 +5,15 @@
  * Location: server/services/intelligence/marketScanner.js
  *
  * FIXES IN THIS VERSION:
- *  1. fetchCandles() now calls internal /api/candles/:symbol (v3 + BSE + retries)
+ *  1. normaliseNSE / normaliseBSE — robust prevClose extraction; never falls back to ltp
+ *  2. changePct sanity cap: ±25% max to suppress data-feed artefacts (+551% / -97%)
+ *  3. applyLiveTick — only updates changePct when prevClose is firmly known; never overwrites
+ *     a valid exchange-sourced prevClose with a live-tick estimate
+ *  4. fetchCandles() calls internal /api/candles/:symbol (v3 + BSE + retries)
  *     instead of calling Upstox v2 directly — fixes BSE stocks like SAMMAANCAP
- *  2. TIMEFRAME_CONFIG interval names fixed to match what server.js tf param expects
- *  3. NSE/BSE fallback chains preserved for intraday when internal endpoint fails
- *  4. All signal filters, market-open aware entry, pre-warm logic unchanged
+ *  5. TIMEFRAME_CONFIG interval names fixed to match what server.js tf param expects
+ *  6. NSE/BSE fallback chains preserved for intraday when internal endpoint fails
+ *  7. All signal filters, market-open aware entry, pre-warm logic unchanged
  */
 
 const axios = require("axios");
@@ -24,8 +28,12 @@ const PREWARM_BETWEEN   = 350;
 const MAX_TECH_CACHE    = 500;
 const MAX_CANDLES_STORE = 200;
 
+// ── Sanity cap for changePct — anything beyond ±25% in a single session
+//    is almost certainly a bad prevClose from the exchange feed.
+//    Real circuit limits in India are ±20% for most stocks.
+const CHANGE_PCT_SANITY_CAP = 25;
+
 // ── Timeframe config ──────────────────────────────────────────────────────────
-// interval values must match server.js TF_MAP_V3 keys (tf param)
 const TIMEFRAME_CONFIG = {
   "5min":   { interval: "5min",   days: 10,   candles: 200, ttl: 2  * 60 * 1000 },
   "15min":  { interval: "15min",  days: 30,   candles: 200, ttl: 5  * 60 * 1000 },
@@ -201,7 +209,7 @@ function getUpstoxToken() {
   return process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
 }
 
-// ── getInstrumentKey — checks live map first, then fallback ──────────────────
+// ── getInstrumentKey ──────────────────────────────────────────────────────────
 function getInstrumentKey(symbol) {
   if (_instrumentMap[symbol]) return _instrumentMap[symbol];
   if (_instrumentMap[symbol?.toUpperCase()]) return _instrumentMap[symbol.toUpperCase()];
@@ -289,23 +297,62 @@ async function fetchBSEMarketData() {
   } catch (e2) { console.warn("📊 BSE 500 fallback also failed:", e2.message); return []; }
 }
 
+// ── FIX 1: sanitiseChangePct — cap extreme values caused by bad prevClose ─────
+// The NSE/BSE feed sometimes sends prevClose=0 or a stale price from a corporate
+// action (bonus/split/merger) that makes the computed change look like ±500%.
+// India's circuit limits are ±20% for most stocks; we cap at ±25% to be safe.
+function sanitiseChangePct(changePct, ltp, prevClose) {
+  if (!isFinite(changePct)) return 0;
+  // If derived value is absurd AND prevClose looks unreliable, discard
+  if (Math.abs(changePct) > CHANGE_PCT_SANITY_CAP) {
+    // Only suppress if prevClose looks like a bad seed value
+    if (!prevClose || prevClose <= 0 || prevClose === ltp) return 0;
+    // Corp-action check: if ratio is > 2× or < 0.5× it's likely a split/bonus artefact
+    const ratio = ltp / prevClose;
+    if (ratio > 2 || ratio < 0.5) return 0;
+    // Cap at sanity limit preserving sign
+    return Math.sign(changePct) * CHANGE_PCT_SANITY_CAP;
+  }
+  return Math.round(changePct * 100) / 100;
+}
+
+// ── FIX 2: normaliseNSE — robust prevClose; never treat 0 as valid ────────────
 function normaliseNSE(s) {
   if (!s.symbol || !s.lastPrice) return null;
-  const ltp       = parseFloat(s.lastPrice || 0);
-  const changePct = parseFloat(s.pChange   || 0);
-  const volume    = parseInt(s.totalTradedVolume || 0, 10);
+  const ltp = parseFloat(s.lastPrice || 0);
   if (ltp <= 0) return null;
-  const prevClose = parseFloat(s.previousClose || 0);
+
+  // NSE field priority: previousClose → lastClosedPrice → open-derived
+  let prevClose = parseFloat(s.previousClose || s.lastClosedPrice || 0);
+  // If prevClose is 0 or equals ltp (common bad-data case), try to derive from change
+  if (prevClose <= 0 || prevClose === ltp) {
+    const changeAbs = parseFloat(s.change || 0);
+    if (changeAbs !== 0) {
+      prevClose = ltp - changeAbs;
+    }
+  }
+  // If still bad, mark as untrustworthy
+  const prevCloseFromExchange = prevClose > 0 && prevClose !== ltp;
+
+  const changeAbs = prevCloseFromExchange ? (ltp - prevClose) : parseFloat(s.change || 0);
+  let   changePct = prevCloseFromExchange && prevClose > 0
+    ? (changeAbs / prevClose) * 100
+    : parseFloat(s.pChange || 0);
+
+  changePct = sanitiseChangePct(changePct, ltp, prevClose);
+
+  const volume = parseInt(s.totalTradedVolume || 0, 10);
   return {
-    symbol:     s.symbol,
-    name:       s.meta?.companyName || s.symbol,
-    ltp, changePct, volume,
-    change:     parseFloat(s.change   || 0),
-    open:       parseFloat(s.open     || 0),
-    high:       parseFloat(s.dayHigh  || 0),
-    low:        parseFloat(s.dayLow   || 0),
-    prevClose,
-    _prevCloseFromExchange: prevClose > 0,
+    symbol:    s.symbol,
+    name:      s.meta?.companyName || s.symbol,
+    ltp, changePct,
+    change:    Math.round(changeAbs * 100) / 100,
+    open:      parseFloat(s.open     || 0),
+    high:      parseFloat(s.dayHigh  || 0),
+    low:       parseFloat(s.dayLow   || 0),
+    prevClose: prevCloseFromExchange ? prevClose : 0,
+    _prevCloseFromExchange: prevCloseFromExchange,
+    volume,
     totalValue: parseFloat(s.totalTradedValue || 0),
     yearHigh:   parseFloat(s.yearHigh || 0),
     yearLow:    parseFloat(s.yearLow  || 0),
@@ -314,6 +361,7 @@ function normaliseNSE(s) {
   };
 }
 
+// ── FIX 3: normaliseBSE — robust prevClose; reject ltp-as-prevClose fallback ──
 function normaliseBSE(s) {
   const symbol =
     s.NSE_Symbol || s.NseSymbol || s.nseSymbol ||
@@ -321,19 +369,40 @@ function normaliseBSE(s) {
   const name = s.Scrip_Name || s.LONG_NAME || s.CompanyName || s.name || symbol || "";
   const ltp  = parseFloat(s.LTP || s.CurrentValue || s.Close || s.lastPrice || 0);
   if (!ltp || ltp <= 0 || !symbol) return null;
-  const prevClose = parseFloat(s.PrevClose || s.PreviousClose || s.ClosePrice || ltp);
-  const change    = ltp - prevClose;
-  const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
-  const volume    = parseInt(s.TotalVolume || s.Volume || s.TotalTradedVolume || 0, 10);
+
+  // FIX: never fall back to ltp as prevClose — that causes change=0 then feed overwrites badly
+  let prevClose = parseFloat(s.PrevClose || s.PreviousClose || s.ClosePrice || 0);
+  const prevCloseFromExchange = prevClose > 0 && Math.abs(prevClose - ltp) > 0.001;
+
+  let changeAbs, changePct;
+  if (prevCloseFromExchange) {
+    changeAbs = ltp - prevClose;
+    changePct = (changeAbs / prevClose) * 100;
+  } else {
+    // Try to get from feed fields
+    changeAbs = parseFloat(s.Change || s.NetChange || 0);
+    changePct = parseFloat(s.PerChange || s.PctChange || 0);
+    if (changePct === 0 && changeAbs !== 0 && ltp !== 0) {
+      // Derive prevClose from change amount
+      prevClose = ltp - changeAbs;
+      if (prevClose > 0) {
+        changePct = (changeAbs / prevClose) * 100;
+      }
+    }
+  }
+
+  changePct = sanitiseChangePct(changePct, ltp, prevClose);
+
+  const volume = parseInt(s.TotalVolume || s.Volume || s.TotalTradedVolume || 0, 10);
   return {
-    symbol: symbol.toUpperCase(), name, ltp, volume,
-    change:     Math.round(change * 100) / 100,
-    changePct:  Math.round(changePct * 100) / 100,
-    open:       parseFloat(s.Open || s.OpenValue || ltp),
-    high:       parseFloat(s.High || s.DayHigh   || ltp),
-    low:        parseFloat(s.Low  || s.DayLow    || ltp),
-    prevClose,
-    _prevCloseFromExchange: prevClose > 0 && prevClose !== ltp,
+    symbol:    symbol.toUpperCase(), name, ltp, volume,
+    change:    Math.round(changeAbs * 100) / 100,
+    changePct,
+    open:      parseFloat(s.Open || s.OpenValue || ltp),
+    high:      parseFloat(s.High || s.DayHigh   || ltp),
+    low:       parseFloat(s.Low  || s.DayLow    || ltp),
+    prevClose: prevClose > 0 ? prevClose : 0,
+    _prevCloseFromExchange: prevCloseFromExchange,
     totalValue: parseFloat(s.TotalTurnover || s.Turnover || 0),
     yearHigh:   parseFloat(s["52WeekHigh"] || s.YearHigh || 0),
     yearLow:    parseFloat(s["52WeekLow"]  || s.YearLow  || 0),
@@ -342,24 +411,35 @@ function normaliseBSE(s) {
   };
 }
 
-// ── applyLiveTick ─────────────────────────────────────────────────────────────
+// ── FIX 4: applyLiveTick — never overwrite a good exchange prevClose ──────────
 function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
   if (!symbol || !price) return;
   const stock = stockBySymbol.get(symbol);
   if (!stock) return;
 
   stock.ltp = price;
-  if (!stock._prevCloseFromExchange && prevClose != null && prevClose > 0) {
-    stock.prevClose = prevClose;
+
+  // Only update prevClose from live tick if we don't already have a trustworthy one
+  if (!stock._prevCloseFromExchange) {
+    if (prevClose != null && prevClose > 0 && Math.abs(prevClose - price) > 0.001) {
+      stock.prevClose = prevClose;
+      stock._prevCloseFromExchange = true;
+    }
   }
+
+  // Recompute change from prevClose when available (more reliable than tick changePct)
   const pc = stock.prevClose;
   if (pc && pc > 0) {
-    stock.change    = Math.round((price - pc) * 100) / 100;
-    stock.changePct = Math.round(((price - pc) / pc) * 10000) / 100;
-  } else if (changePct != null) {
-    stock.changePct = changePct;
+    const rawChange    = price - pc;
+    const rawChangePct = (rawChange / pc) * 100;
+    stock.change       = Math.round(rawChange * 100) / 100;
+    stock.changePct    = sanitiseChangePct(rawChangePct, price, pc);
+  } else if (changePct != null && Math.abs(changePct) <= CHANGE_PCT_SANITY_CAP) {
+    // Only accept tick changePct if it's within sane range
+    stock.changePct = Math.round(changePct * 100) / 100;
     if (change != null) stock.change = change;
   }
+  // If changePct from tick is absurd and we have no prevClose, don't update
 
   const ws = getWS();
   if (ws?.updateScannerTick) {
@@ -389,17 +469,17 @@ function getISTTime() {
 
 function isMarketOpenWindow() {
   const { totalMins } = getISTTime();
-  return totalMins >= 560 && totalMins <= 575; // 9:20–9:35 IST
+  return totalMins >= 560 && totalMins <= 575;
 }
 
 function isPreOpenWindow() {
   const { totalMins } = getISTTime();
-  return totalMins >= 548 && totalMins <= 555; // 9:08–9:15 IST
+  return totalMins >= 548 && totalMins <= 555;
 }
 
 function isMarketHours() {
   const { totalMins } = getISTTime();
-  return totalMins >= 560 && totalMins <= 925; // 9:20–3:25 IST
+  return totalMins >= 560 && totalMins <= 925;
 }
 
 // ── Signal filters ────────────────────────────────────────────────────────────
@@ -646,7 +726,6 @@ function calcMASummary(closes, ltp) {
   return { buy, sell, neutral, total: buy + sell + neutral, summary, emas: mas };
 }
 
-// ── computeTechnicals ─────────────────────────────────────────────────────────
 function computeTechnicals(symbol, candles) {
   if (!candles || candles.length < 20) return null;
   const closes = candles.map(c => c.c);
@@ -692,9 +771,7 @@ function computeTechnicals(symbol, candles) {
   const inOpenWindow = isMarketOpenWindow();
   const inMarket     = isMarketHours();
 
-  let confirmedOpen;
-  let entryType;
-
+  let confirmedOpen, entryType;
   if (inOpenWindow) {
     confirmedOpen = todayCandle?.c > 0 ? todayCandle.c : ltp;
     entryType     = "MARKET_OPEN";
@@ -797,36 +874,19 @@ function resampleCandles(candles1min, targetMinutes) {
   return buckets;
 }
 
-// ── fetchCandles — now calls internal /api/candles/:symbol ───────────────────
-// This piggybacks on server.js which already handles:
-//   • Upstox v3 API with correct intervals
-//   • BSE numeric codes (e.g. BSE_EQ|543066)
-//   • ISIN resolution + 4 retry attempts
-//   • Weekend / intraday mode switching
+// ── fetchCandles — calls internal /api/candles/:symbol ───────────────────────
 async function fetchCandles(symbol, days, interval) {
   const PORT    = process.env.PORT || 10000;
   const baseUrl = `http://localhost:${PORT}`;
 
-  // Map our internal interval names → server.js tf param
   const INTERVAL_TO_TF = {
-    "5min":    "5min",
-    "15min":   "15min",
-    "1hour":   "1hour",
-    "4hour":   "4hour",
-    "1day":    "1day",
-    "1week":   "1week",
-    "1month":  "1month",
-    // legacy names just in case anything still uses them
-    "5minute":  "5min",
-    "15minute": "15min",
-    "60minute": "1hour",
-    "day":      "1day",
-    "week":     "1week",
-    "month":    "1month",
+    "5min":    "5min",  "15min":   "15min", "1hour":   "1hour",
+    "4hour":   "4hour", "1day":    "1day",  "1week":   "1week",  "1month":  "1month",
+    "5minute":  "5min", "15minute": "15min", "60minute": "1hour",
+    "day":      "1day", "week":     "1week", "month":    "1month",
   };
   const tf = INTERVAL_TO_TF[interval] || "1day";
 
-  // ── ATTEMPT 1: internal server endpoint (handles everything) ──────────────
   try {
     const res = await axios.get(
       `${baseUrl}/api/candles/${encodeURIComponent(symbol)}?tf=${tf}&days=${Math.min(days, 365)}`,
@@ -835,21 +895,13 @@ async function fetchCandles(symbol, days, interval) {
     const data = res.data;
     if (data?.ok && Array.isArray(data.candles) && data.candles.length >= 5) {
       console.log(`📊 [${symbol}][${tf}] internal: ${data.candles.length} candles (key=${data.instrKey})`);
-      // Convert server format → scanner format {o,h,l,c,v}
-      return data.candles.map(c => ({
-        o: c.open,
-        h: c.high,
-        l: c.low,
-        c: c.close,
-        v: c.volume || 0,
-      }));
+      return data.candles.map(c => ({ o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume || 0 }));
     }
     console.warn(`📊 [${symbol}][${tf}] internal returned no candles: ${data?.error || "unknown"}`);
   } catch (e) {
     console.warn(`📊 [${symbol}][${tf}] internal fetch failed: ${e.message}`);
   }
 
-  // ── ATTEMPT 2: NSE EOD historical (for daily/weekly/monthly) ─────────────
   if (["1day","1week","1month"].includes(tf)) {
     await refreshNSECookie();
     try {
@@ -876,7 +928,6 @@ async function fetchCandles(symbol, days, interval) {
     }
   }
 
-  // ── ATTEMPT 3: NSE intraday (for intraday timeframes) ────────────────────
   if (["5min","15min","1hour","4hour"].includes(tf)) {
     try {
       const rawCandles = await fetchNSEIntraday(symbol);
@@ -933,7 +984,6 @@ async function getTechnicals(symbol) {
   return getTechnicalsForTimeframe(symbol, "1day");
 }
 
-// ── preWarmTechCache ──────────────────────────────────────────────────────────
 async function preWarmTechCache(symbols) {
   if (!symbols || !symbols.length) return;
   const token = getUpstoxToken();
@@ -965,7 +1015,8 @@ async function preWarmTechCache(symbols) {
             if (!stock._prevCloseFromExchange && prev && prev.close > 0) stock.prevClose = prev.close;
             const pc = stock.prevClose;
             if (pc && pc > 0) {
-              stock.changePct = Math.round(((last.close - pc) / pc) * 10000) / 100;
+              const rawPct    = ((last.close - pc) / pc) * 100;
+              stock.changePct = sanitiseChangePct(rawPct, last.close, pc);
               stock.change    = Math.round((last.close - pc) * 100) / 100;
             }
           }
@@ -1135,7 +1186,6 @@ async function runScanner() {
   } catch (e) { console.error("📊 Scanner error:", e.message, e.stack); }
 }
 
-// ── Heap monitor ──────────────────────────────────────────────────────────────
 let _heapMonitorStarted = false;
 function startHeapMonitor() {
   if (_heapMonitorStarted) return;
