@@ -975,12 +975,14 @@ function initSocket() {
 
     // ── Intraday candle tick (existing — unchanged) ────────────────────────
     socket.on('candle:tick', ({ symbol, tf, candle }) => {
-      if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
+      if (!symbol || symbol.toUpperCase().trim() !== CHART_SYMBOL) return;
+      if (tf !== TF_LIVE_MAP[CURRENT_TF]) return;
       applyLiveCandleTick(candle);
     });
 
     socket.on('candle:closed', ({ symbol, tf, candle }) => {
-      if (symbol !== CHART_SYMBOL || tf !== TF_LIVE_MAP[CURRENT_TF]) return;
+      if (!symbol || symbol.toUpperCase().trim() !== CHART_SYMBOL) return;
+      if (tf !== TF_LIVE_MAP[CURRENT_TF]) return;
       applyClosedCandle(candle);
     });
 
@@ -988,7 +990,7 @@ function initSocket() {
     // This fires on 1D, 1W, 1M too (not just intraday) so you see the
     // current candle update in real-time without refreshing the page.
     socket.on('price:tick', ({ symbol, ltp, change, changePct }) => {
-      if (symbol !== CHART_SYMBOL) return;
+      if (!symbol || symbol.toUpperCase().trim() !== CHART_SYMBOL) return;
       if (!CANDLES.length) return;
       if (!ltp || ltp <= 0) return;
 
@@ -1311,6 +1313,7 @@ async function loadData(sym, tf) {
   state.fsPanOffset=state.panOffset;
   updateHeader();updateSidePanel();renderAll();updateZoomLabel();
   hideLoading();
+  if(socket?.connected) socket.emit('watch:chart', sym); // re-affirm room after load
   if(isIntradayTF(tf))subscribeToLiveCandles(sym,tf);
 }
 
