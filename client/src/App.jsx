@@ -6,7 +6,6 @@ import SmartCircuitPage from "./pages/SmartCircuitPage";
 import OptionsIntelligencePage from "./pages/OptionsIntelligencePage";
 import MarketScannerPage from "./pages/MarketScannerPage";
 import GannBadge from "./components/GannBadge";
-import StockTerminal from "./components/StockTerminal";
 
 const SIGNAL_COLOR = {
   ORDER_ALERT:         { bg: "#00ff9c", fg: "#000" },
