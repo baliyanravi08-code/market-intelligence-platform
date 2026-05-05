@@ -42,7 +42,7 @@ const {
   getWindowLabel,
 } = require("./database");
 
-const attachSocketIO = require("./api/websocket");
+const { attachSocketIO } = require("./api/websocket");
 const { startIndexCandleFetcher, setToken: setICFToken, getDebugInfo } = require("./services/intelligence/indexCandleFetcher");
 
 // ── Market Scanner ────────────────────────────────────────────────────────────
