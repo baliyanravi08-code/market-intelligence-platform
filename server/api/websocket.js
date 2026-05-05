@@ -397,16 +397,21 @@ function attachSocketIO(server) {
     // Terminal emits "watch:chart" with symbol on load and symbol change.
     // This ensures candle:tick, candle:closed, price:tick reach the right client.
     socket.on('watch:chart', (symbol) => {
-  [...socket.rooms]
-    .filter(r => r.startsWith('chart:'))
-    .forEach(r => socket.leave(r));
+      [...socket.rooms]
+        .filter(r => r.startsWith('chart:'))
+        .forEach(r => socket.leave(r));
 
-  if (symbol && symbol.trim()) {   // ← trim() check added
-    const sym = symbol.toUpperCase().trim();
-    socket.join(`chart:${sym}`);
-    console.log(`📈 ${socket.id} watching chart: ${sym}`);
-  }
-});
+      if (symbol && symbol.trim()) {
+        const sym = symbol.toUpperCase().trim();
+        socket.join(`chart:${sym}`);
+        console.log(`📈 ${socket.id} watching chart: ${sym}`);
+        // Subscribe to Upstox stream so price:tick fires for this symbol
+        try {
+          const stream = require('../services/upstoxStream');
+          if (stream.subscribeSymbolForPriceTick) stream.subscribeSymbolForPriceTick(sym);
+        } catch (_) {}
+      }
+    });
 
     // ── Backtest private room ──────────────────────────────────────────────
     socket.on("backtest:start", () => {

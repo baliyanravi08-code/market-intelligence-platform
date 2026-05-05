@@ -3,12 +3,12 @@
 /**
  * services/upstoxStream.js — Binary Protocol Edition
  *
- * WHAT CHANGED vs previous:
- *   1. market-tick  → ws.emitMarketTick(updates)     instead of ioRef.emit("market-tick")
- *   2. candle:tick  → ws.emitCandleTick(...)          instead of ioRef.emit("candle:tick")
- *   3. candle:closed→ ws.emitCandleClosed(...)         instead of ioRef.emit("candle:closed")
- *   4. ioRef kept only for status events (upstox-status) — those stay JSON (rare)
- *   All other logic (subscriptions, reconnect, Gann, OI) UNCHANGED.
+ * FIXES:
+ *   1. emitChartLTP + emitPriceTick both called on every equity tick
+ *   2. subscribeSymbolForPriceTick — subscribes symbol when chart:watch fires (1D/1W/1M support)
+ *   3. market-tick  → ws.emitMarketTick(updates)
+ *   4. candle:tick  → ws.emitCandleTick(...)
+ *   5. candle:closed→ ws.emitCandleClosed(...)
  */
 
 let UpstoxClient = null;
@@ -58,9 +58,9 @@ const instrKeyToSymbol    = new Map();
 const prevCloseCache      = new Map();
 
 // ── Candle aggregation ────────────────────────────────────────────────────────
-const liveCandleState     = new Map(); // "SYMBOL_tf" → { time, open, high, low, close, volume }
-const candleSubscriptions = new Map(); // "SYMBOL_tf" → subscriberCount
-const candleEmitThrottle  = new Map(); // "SYMBOL_tf" → lastEmitMs
+const liveCandleState     = new Map();
+const candleSubscriptions = new Map();
+const candleEmitThrottle  = new Map();
 
 function symbolToInstrKey(symbol) { return `NSE_EQ|${symbol.toUpperCase()}`; }
 
@@ -99,14 +99,33 @@ function unregisterLiveCandleSubscription(symbol, tf) {
   }
 }
 
-// ── Lazy-load websocket module (avoids circular require) ─────────────────────
+// ── Subscribe symbol for price:tick on EOD timeframes (1D/1W/1M) ─────────────
+// Called from websocket.js watch:chart handler so 1D/1W/1M charts get live ticks
+function subscribeSymbolForPriceTick(symbol) {
+  if (!symbol) return;
+  const sym      = symbol.toUpperCase().trim();
+  const instrKey = symbolToInstrKey(sym);
+  if (stockInstrumentKeys.has(instrKey)) return; // already subscribed
+  stockInstrumentKeys.add(instrKey);
+  instrKeyToSymbol.set(instrKey, sym);
+  if (streamer) {
+    try {
+      streamer.subscribe([instrKey], "full");
+      console.log(`📡 price:tick subscribed: ${sym}`);
+    } catch (e) {
+      console.warn("⚠️ price:tick subscribe error:", e.message);
+    }
+  }
+}
+
+// ── Lazy-load websocket module (avoids circular require) ──────────────────────
 let _ws = null;
 function getWS() {
   if (!_ws) { try { _ws = require("../api/websocket"); } catch (_) {} }
   return _ws;
 }
 
-// ── FIX: Candle tick now uses binary-aware emitters ──────────────────────────
+// ── Candle tick processing ────────────────────────────────────────────────────
 function processCandleTick(symbol, price, volume) {
   const ws = getWS();
   if (!ws) return;
@@ -124,12 +143,10 @@ function processCandleTick(symbol, price, volume) {
 
     if (!existing || existing.time !== periodStart) {
       if (existing) {
-        // ── BINARY: candle:closed ───────────────────────────────────────
         ws.emitCandleClosed(keySym, tf, existing);
       }
       const newCandle = { time: periodStart, open: price, high: price, low: price, close: price, volume: volume || 0 };
       liveCandleState.set(key, newCandle);
-      // ── BINARY: candle:tick ─────────────────────────────────────────
       ws.emitCandleTick(keySym, tf, newCandle);
       candleEmitThrottle.set(key, now);
     } else {
@@ -138,10 +155,8 @@ function processCandleTick(symbol, price, volume) {
       existing.close  = price;
       existing.volume = (existing.volume || 0) + (volume || 0);
 
-      // Throttle: max 1 candle emit per 2 seconds
       const lastEmit = candleEmitThrottle.get(key) || 0;
       if (now - lastEmit >= 2000) {
-        // ── BINARY: candle:tick ───────────────────────────────────────
         ws.emitCandleTick(keySym, tf, { ...existing });
         candleEmitThrottle.set(key, now);
       }
@@ -213,7 +228,7 @@ function parseAndEmit(raw) {
       const ff   = feed?.ff || feed;
       const name = NAME_MAP[key];
 
-      // ── Index tick ─────────────────────────────────────────────────────────
+      // ── Index tick ────────────────────────────────────────────────────────
       if (name) {
         const ltpc = ff?.indexFF?.ltpc || ff?.marketFF?.ltpc || feed?.ltpc || null;
         if (ltpc) {
@@ -239,13 +254,13 @@ function parseAndEmit(raw) {
         continue;
       }
 
-      // ── Options / Futures tick ─────────────────────────────────────────────
+      // ── Options / Futures tick ────────────────────────────────────────────
       if (key.startsWith("NSE_FO|") || key.startsWith("BSE_FO|")) {
         if (oiTickHandler) oiTickHandler(key, ff || {});
         continue;
       }
 
-      // ── Equity tick ────────────────────────────────────────────────────────
+      // ── Equity tick ───────────────────────────────────────────────────────
       if (key.startsWith("NSE_EQ|") || key.startsWith("BSE_EQ|")) {
         const ltpc = ff?.equityFF?.ltpc || ff?.marketFF?.ltpc || feed?.ltpc || null;
         if (ltpc) {
@@ -263,16 +278,20 @@ function parseAndEmit(raw) {
             if (!symbol) symbol = key.replace(/^(NSE_EQ|BSE_EQ)\|/, "");
 
             const ws = getWS();
+
             if (ws?.broadcastBacktestTick) {
               ws.broadcastBacktestTick({ symbol, price, prevClose, change, changePct });
             }
 
-            // ── BINARY: chart LTP via binary-aware emitter ─────────────────
-            if (ws?.emitPriceTick) {
-  const pc = prevCloseCache.get(key) || null;
-  const chg = pc ? Math.round((price - pc) * 100) / 100 : null;
-  const chgPct = pc ? Math.round(((price - pc) / pc) * 10000) / 100 : null;
-  ws.emitPriceTick(symbol, price, chg, chgPct, pc);
+            // ── chart LTP + price:tick for ALL timeframes (1m, 5m ... 1D, 1W, 1M)
+            if (ws) {
+              if (ws.emitChartLTP) ws.emitChartLTP(symbol, price);
+              if (ws.emitPriceTick) {
+                const pc     = prevCloseCache.get(key) || null;
+                const chg    = pc && pc > 0 ? Math.round((price - pc) * 100) / 100 : null;
+                const chgPct = pc && pc > 0 ? Math.round(((price - pc) / pc) * 10000) / 100 : null;
+                ws.emitPriceTick(symbol, price, chg, chgPct, pc);
+              }
             }
 
             const scanner = getScanner();
@@ -290,13 +309,12 @@ function parseAndEmit(raw) {
       }
     }
 
-    // ── BINARY: market-tick via binary-aware emitter ───────────────────────
+    // ── market-tick via binary-aware emitter ──────────────────────────────
     if (updates.length > 0) {
       const ws = getWS();
       if (ws?.emitMarketTick) {
         ws.emitMarketTick(updates);
       } else if (ioRef) {
-        // Fallback if websocket module not yet loaded
         ioRef.emit("market-tick", updates);
       }
     }
@@ -304,7 +322,7 @@ function parseAndEmit(raw) {
   } catch (_) {}
 }
 
-// ── Streamer lifecycle (UNCHANGED) ────────────────────────────────────────────
+// ── Streamer lifecycle ────────────────────────────────────────────────────────
 function patchStreamerInternals(streamerInstance) {
   setImmediate(() => {
     try {
@@ -437,4 +455,5 @@ module.exports = {
   subscribeStocksForBacktest, subscribeWithInstrumentKeys,
   registerLiveCandleSubscription,
   unregisterLiveCandleSubscription,
+  subscribeSymbolForPriceTick,
 };
