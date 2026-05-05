@@ -1436,16 +1436,10 @@ export default function App() {
   }
 
   if (currentPage === "terminal") {
-    return (
-      <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
-        {sharedHeader}
-        {sharedTicker}
-        <div style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
-          <StockTerminal initialSymbol={terminalSymbol} />
-        </div>
-        <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
-      </div>
-    );
+    const sym = terminalSymbol || sessionStorage.getItem("terminal_symbol") || "NIFTY";
+    const ltp = sessionStorage.getItem("terminal_ltp") || "";
+    window.location.href = `/stockterminal.html?symbol=${sym}${ltp ? `&ltp=${ltp}` : ""}`;
+    return null;
   }
 
   return (
@@ -1476,7 +1470,11 @@ export default function App() {
           {mobilePanelTab === "feed"          && <FeedPanel filteredFeed={filteredFeed} activeTab={activeTab} setActiveTab={setActiveTab} feedFilter={feedFilter} setFeedFilter={setFeedFilter} />}
           {mobilePanelTab === "data"          && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
           {mobilePanelTab === "options-intel" && <OptionsIntelligencePage socket={socket} />}
-          {mobilePanelTab === "terminal"      && <StockTerminal />}
+          {mobilePanelTab === "terminal" && (() => {
+  const sym = sessionStorage.getItem("terminal_symbol") || "NIFTY";
+  window.location.href = `/stockterminal.html?symbol=${sym}`;
+  return null;
+})()}
         </div>
       </div>
 
