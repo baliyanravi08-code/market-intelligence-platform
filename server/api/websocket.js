@@ -396,18 +396,17 @@ function attachSocketIO(server) {
     // ── Chart room — FIX: auto-join chart:{SYMBOL} room ───────────────────
     // Terminal emits "watch:chart" with symbol on load and symbol change.
     // This ensures candle:tick, candle:closed, price:tick reach the right client.
-    socket.on("watch:chart", (symbol) => {
-      // Leave any previously watched chart rooms
-      [...socket.rooms]
-        .filter(r => r.startsWith("chart:"))
-        .forEach(r => socket.leave(r));
+    socket.on('watch:chart', (symbol) => {
+  [...socket.rooms]
+    .filter(r => r.startsWith('chart:'))
+    .forEach(r => socket.leave(r));
 
-      if (symbol) {
-        const sym = symbol.toUpperCase().trim();
-        socket.join(`chart:${sym}`);
-        console.log(`📈 ${socket.id} watching chart: ${sym}`);
-      }
-    });
+  if (symbol && symbol.trim()) {   // ← trim() check added
+    const sym = symbol.toUpperCase().trim();
+    socket.join(`chart:${sym}`);
+    console.log(`📈 ${socket.id} watching chart: ${sym}`);
+  }
+});
 
     // ── Backtest private room ──────────────────────────────────────────────
     socket.on("backtest:start", () => {

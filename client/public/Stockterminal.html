@@ -1105,7 +1105,7 @@ document.addEventListener('click', e => {
 function changeSymbol(sym, seedPrice) {
   if (isIntradayTF(CURRENT_TF)) unsubscribeFromLiveCandles(CHART_SYMBOL, CURRENT_TF);
   // Leave old chart room, join new one
-  if (socket?.connected) socket.emit('watch:chart', null);
+  if (socket?.connected) socket.emit('watch:chart', '');  // empty string leaves all chart rooms
   CHART_SYMBOL = sym.toUpperCase().trim();
   SEED_LTP = seedPrice || null;
   dropdown.style.display = 'none';
@@ -1897,7 +1897,7 @@ cw_el.addEventListener('mousedown',e=>{
   if(mx >= chartW) return; // don't start drag on axis
   state.dragging=true;
   state.dragStartX=e.clientX;
-  state.dragStartPan=state.panOffset;
+  state.dragStartPan = Math.round(state.panOffset);
   cw_el.style.cursor='grabbing';
 });
 window.addEventListener('mousemove',e=>{

@@ -268,8 +268,11 @@ function parseAndEmit(raw) {
             }
 
             // ── BINARY: chart LTP via binary-aware emitter ─────────────────
-            if (ws?.emitChartLTP) {
-              ws.emitChartLTP(symbol, price);
+            if (ws?.emitPriceTick) {
+  const pc = prevCloseCache.get(key) || null;
+  const chg = pc ? Math.round((price - pc) * 100) / 100 : null;
+  const chgPct = pc ? Math.round(((price - pc) / pc) * 10000) / 100 : null;
+  ws.emitPriceTick(symbol, price, chg, chgPct, pc);
             }
 
             const scanner = getScanner();

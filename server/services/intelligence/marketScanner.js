@@ -303,14 +303,10 @@ async function fetchBSEMarketData() {
 // India's circuit limits are ±20% for most stocks; we cap at ±25% to be safe.
 function sanitiseChangePct(changePct, ltp, prevClose) {
   if (!isFinite(changePct)) return 0;
-  // If derived value is absurd AND prevClose looks unreliable, discard
+  if (!prevClose || prevClose <= 0) return 0;   // ← NEW GUARD
   if (Math.abs(changePct) > CHANGE_PCT_SANITY_CAP) {
-    // Only suppress if prevClose looks like a bad seed value
-    if (!prevClose || prevClose <= 0 || prevClose === ltp) return 0;
-    // Corp-action check: if ratio is > 2× or < 0.5× it's likely a split/bonus artefact
     const ratio = ltp / prevClose;
     if (ratio > 2 || ratio < 0.5) return 0;
-    // Cap at sanity limit preserving sign
     return Math.sign(changePct) * CHANGE_PCT_SANITY_CAP;
   }
   return Math.round(changePct * 100) / 100;
