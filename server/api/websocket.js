@@ -1,599 +1,556 @@
 "use strict";
 
 /**
- * backtestEngine.js
- * Location: server/services/backtestEngine.js
+ * server/api/websocket.js — Binary Protocol Edition
  *
- * CHANGES vs previous version:
- *
- *  1. Added fetchUpstoxOHLC()     — fetches today's OHLC from Upstox historical
- *                                   candle API using your existing access token.
- *                                   Zero new npm deps.
- *  2. Added runEODResolution()    — at 3:30 PM, resolves ALL still-pending signals
- *                                   using real HIGH/LOW from Upstox (not just last
- *                                   LTP tick which could be stale/missing).
- *  3. Added scheduleEODResolution() — self-scheduling timer at 3:30 PM IST daily.
- *  4. init() now calls scheduleEODResolution() alongside scheduleIntradayExpiry().
- *  5. runEODResolution exported for manual trigger via a route if needed.
- *
- *  WHY TWO PASSES:
- *   • 3:25 PM runIntradayExpiry()  — fast first pass, uses lastKnownLTP (live ticks).
- *                                    Catches most signals instantly during market hours.
- *   • 3:30 PM runEODResolution()   — authoritative second pass using Upstox OHLC.
- *                                    Catches anything missed: halted stocks, symbols
- *                                    not in your Upstox subscription, PRE-captured
- *                                    signals that arrived after stream started, etc.
- *
- *  Removed duplicate `backtest-live-tick` emit (upstoxStream.js handles it).
+ * FIXES:
+ *  1. emitCandleTick / emitCandleClosed now emit to chart:{SYMBOL} room (not io.emit to everyone)
+ *  2. Added emitPriceTick → sends "price:tick" + "candle:tick" to chart room for ALL timeframes
+ *     so StockTerminal.html shows live candle formation without refresh on 1D/1W/1M too
+ *  3. emitMarketTick still broadcasts globally (indices ticker bar needs it)
+ *  4. Scanner flush unchanged
  */
 
-const fs    = require("fs");
-const path  = require("path");
-const https = require("https");
+const { Server } = require("socket.io");
+const { subscribe } = require("../queue");
+const bp = require("./binaryProtocol");
 
-// ── Storage ───────────────────────────────────────────────────────────────────
-const DATA_DIR  = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "backtest_signals.json");
+let _io = null;
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const _binaryClients = new Set();
+
+function isBinary(socketId) { return _binaryClients.has(socketId); }
+
+let _gannIntegration = null;
+
+function setGannIntegration(gi) {
+  _gannIntegration = gi;
+  console.log("📐 websocket.js: gannIntegration wired");
 }
 
-function loadData() {
-  ensureDataDir();
-  if (!fs.existsSync(DATA_FILE)) return { signals: [], sessions: {} };
-  try { return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")); }
-  catch { return { signals: [], sessions: {} }; }
-}
-
-function saveData(data) {
-  ensureDataDir();
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-// ── In-memory active signals (PENDING only) ───────────────────────────────────
-const activeSignals = new Map();
-
-// ── Track last known LTP per symbol ──────────────────────────────────────────
-const lastKnownLTP = new Map();
-
-let ioRef = null;
-function setIO(io) { ioRef = io; }
-
-// ── IST helpers ───────────────────────────────────────────────────────────────
-function getIST() {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-}
-
-function todayStr() {
-  const d = getIST();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-}
-
-function isMarketOpen() {
-  const d   = getIST();
-  const day = d.getDay();
-  if (day === 0 || day === 6) return false;
-  const mins = d.getHours() * 60 + d.getMinutes();
-  return mins >= 555 && mins <= 935;
-}
-
-// ── Capture a session of signals ──────────────────────────────────────────────
-function captureSession(signals) {
-  if (!signals || !signals.length) return { skipped: true, reason: "empty" };
-
-  const data    = loadData();
-  const today   = todayStr();
-  const now     = getIST();
-  const hh      = String(now.getHours()).padStart(2,"0");
-  const mm      = String(now.getMinutes()).padStart(2,"0");
-  const captureTime = `${hh}:${mm}`;
-  const sessionKey  = `${today}_${captureTime}`;
-
-  if (data.sessions[sessionKey]) {
-    return { skipped: true, reason: "already_captured", sessionKey };
+let _upstoxStream = null;
+function getStream() {
+  if (!_upstoxStream) {
+    try { _upstoxStream = require("../services/upstoxStream"); } catch (_) {}
   }
-
-  const processed = signals.map((s, idx) => {
-    const signalId  = `${today}_${idx}_${(s.symbol || s.stock || "UNK").replace(/[^A-Z0-9]/gi,"_")}`;
-    const entry     = parseFloat(s.price || s.ltp || s.entry || 0);
-    const target    = parseFloat(s.target || s.tp || (entry * 1.03));
-    const stopLoss  = parseFloat(s.stopLoss || s.sl || (entry * 0.98));
-    const isSwing   = !!(s.isSwing || (s.signal || "").toLowerCase().includes("swing"));
-
-    const record = {
-      signalId,
-      date:        today,
-      captureTime,
-      symbol:      (s.symbol || s.stock || "UNKNOWN").toUpperCase(),
-      sector:      s.sector || s.industry || "Unknown",
-      signalType:  s.signal || s.type || "BUY",
-      entry,
-      target,
-      stopLoss,
-      rsi:         parseFloat(s.rsi || 50),
-      techScore:   parseFloat(s.techScore || s.strength || s.score || 0),
-      macd:        s.macd?.crossover || s.macdSignal || "NEUTRAL",
-      isSwing,
-      status:      "PENDING",
-      exitPrice:   null,
-      exitTime:    null,
-      pnlPct:      null,
-      resolvedBy:  null,
-      highReached: entry,
-      lowReached:  entry,
-      lastLTP:     entry,
-    };
-
-    if (!activeSignals.has(record.symbol)) activeSignals.set(record.symbol, []);
-    activeSignals.get(record.symbol).push(record);
-
-    return record;
-  });
-
-  data.sessions[sessionKey] = {
-    date: today, captureTime,
-    totalSignals: processed.length,
-    resolved: 0, wins: 0, losses: 0,
-  };
-  data.signals.push(...processed);
-
-  // Prune to last 60 days
-  const cutoff = new Date(getIST());
-  cutoff.setDate(cutoff.getDate() - 60);
-  const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth()+1).padStart(2,"0")}-${String(cutoff.getDate()).padStart(2,"0")}`;
-  data.signals = data.signals.filter(s => s.date >= cutoffStr);
-
-  saveData(data);
-  console.log(`✅ Backtest: captured ${processed.length} signals for ${today} @ ${captureTime}`);
-  if (ioRef) ioRef.emit("backtest-session-captured", { sessionKey, count: processed.length, date: today });
-  return { success: true, sessionKey, count: processed.length };
+  return _upstoxStream;
 }
 
-// ── Live LTP tick ─────────────────────────────────────────────────────────────
-function onLTPTick(symbol, price) {
-  lastKnownLTP.set(symbol, price);
+function normaliseSymbol(raw) {
+  if (!raw) return "";
+  return raw
+    .toUpperCase()
+    .trim()
+    .replace(/^NIFTY\s+50$/, "NIFTY")
+    .replace(/^NIFTY50$/, "NIFTY")
+    .replace(/^BANK\s+NIFTY$/, "BANKNIFTY")
+    .replace(/^NIFTY\s+BANK$/, "BANKNIFTY")
+    .replace(/\s+/g, "");
+}
 
-  if (!activeSignals.has(symbol)) return;
-  const pending = activeSignals.get(symbol).filter(s => s.status === "PENDING");
-  if (!pending.length) return;
+// ── Option chain helpers ─────────────────────────────────────────────────────
+function emitChainUpdate(underlying, data) {
+  if (!_io) return;
+  const buf = bp.encodeJSON("option-chain-update", { underlying, data });
+  _io.to(`chain:${underlying}`).emit("binary", buf);
+  _io.to(`chain:${underlying}`).emit("option-chain-update", { underlying, data });
+}
 
-  for (const sig of pending) {
-    sig.lastLTP = price;
-    if (price > sig.highReached) sig.highReached = price;
-    if (price < sig.lowReached)  sig.lowReached  = price;
+function broadcastUpstoxStatus(connected) {
+  if (!_io) return;
+  const buf = bp.encodeJSON("upstox-status", { connected });
+  _io.emit("binary", buf);
+  _io.emit("upstox-status", { connected });
+}
 
-    const isBuy = !["SELL","STRONG_SELL","SHORT","STRONG SELL"]
-      .includes((sig.signalType || "").toUpperCase());
+// ── Intel / chain / expiry caches ────────────────────────────────────────────
+const _intelCache    = new Map();
+const _chainCache    = new Map();
+const _expiriesCache = new Map();
 
-    let hit = null;
-    if (isBuy) {
-      if (price >= sig.target)        hit = "WIN";
-      else if (price <= sig.stopLoss) hit = "LOSS";
-    } else {
-      if (price <= sig.target)        hit = "WIN";
-      else if (price >= sig.stopLoss) hit = "LOSS";
+function setCachedIntel(symbol, payload) {
+  if (!symbol || !payload) return;
+  _intelCache.set(symbol.toUpperCase(), payload);
+}
+
+function getCachedIntel(symbol) {
+  if (!symbol) return null;
+  return _intelCache.get(symbol.toUpperCase()) || null;
+}
+
+function setCachedChain(underlying, expiry, data) {
+  _chainCache.set(`${underlying}_${expiry}`, data);
+}
+
+function getCachedChain(underlying, expiry) {
+  if (!expiry) {
+    for (const [key, val] of _chainCache) {
+      if (key.startsWith(`${underlying}_`)) return val;
+    }
+    return null;
+  }
+  return _chainCache.get(`${underlying}_${expiry}`) || null;
+}
+
+function setCachedExpiries(underlying, expiries) {
+  _expiriesCache.set(underlying, expiries);
+  if (_io) {
+    const buf = bp.encodeJSON("option-expiries", { underlying, expiries });
+    _io.emit("binary", buf);
+    _io.emit("option-expiries", { underlying, expiries });
+  }
+}
+
+function getCachedExpiries(underlying) {
+  return _expiriesCache.get(underlying) || [];
+}
+
+// ── Scanner diff engine ──────────────────────────────────────────────────────
+const _scannerLastEmit = new Map();
+const _scannerBuffer   = new Map();
+
+function updateScannerTick(stockData) {
+  if (!stockData?.symbol) return;
+  _scannerBuffer.set(stockData.symbol.toUpperCase(), stockData);
+}
+
+function getScannerSnapshot() {
+  return [..._scannerLastEmit.values()];
+}
+
+function _startScannerFlush(io) {
+  setInterval(() => {
+    if (_scannerBuffer.size === 0) return;
+
+    const room = io.sockets.adapter.rooms.get("scanner");
+    if (!room || room.size === 0) {
+      for (const [sym, data] of _scannerBuffer) {
+        _scannerLastEmit.set(sym, data);
+      }
+      _scannerBuffer.clear();
+      return;
     }
 
-    if (hit) _resolveSignal(sig, hit, price, `AUTO_${hit === "WIN" ? "TARGET" : "SL"}`);
-  }
-  // NOTE: backtest-live-tick emitted by upstoxStream.js — do NOT add here
-}
-
-// ── Internal resolve ──────────────────────────────────────────────────────────
-function _resolveSignal(sigRecord, result, exitPrice, resolvedBy) {
-  const now      = getIST();
-  const exitTime = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
-
-  sigRecord.status     = result;
-  sigRecord.exitPrice  = exitPrice;
-  sigRecord.exitTime   = exitTime;
-  sigRecord.resolvedBy = resolvedBy;
-
-  const isBuy = !["SELL","STRONG_SELL","SHORT","STRONG SELL"]
-    .includes((sigRecord.signalType || "").toUpperCase());
-  sigRecord.pnlPct = isBuy
-    ? +((( exitPrice - sigRecord.entry) / sigRecord.entry) * 100).toFixed(2)
-    : +((( sigRecord.entry - exitPrice) / sigRecord.entry) * 100).toFixed(2);
-
-  const data = loadData();
-  const idx  = data.signals.findIndex(s => s.signalId === sigRecord.signalId);
-  if (idx !== -1) {
-    data.signals[idx] = { ...data.signals[idx], ...sigRecord };
-
-    const sessKey = Object.keys(data.sessions).find(k => k.startsWith(sigRecord.date));
-    if (sessKey && data.sessions[sessKey]) {
-      data.sessions[sessKey].resolved++;
-      if (result.includes("WIN"))  data.sessions[sessKey].wins++;
-      if (result.includes("LOSS")) data.sessions[sessKey].losses++;
+    const diff = [];
+    for (const [sym, data] of _scannerBuffer) {
+      const prev = _scannerLastEmit.get(sym);
+      if (
+        !prev ||
+        prev.ltp       !== data.ltp       ||
+        prev.changePct !== data.changePct ||
+        prev.rsi       !== data.rsi       ||
+        prev.volume    !== data.volume    ||
+        prev.techScore !== data.techScore ||
+        prev.signal    !== data.signal
+      ) {
+        diff.push(data);
+        _scannerLastEmit.set(sym, data);
+      }
     }
-    saveData(data);
-  }
+    _scannerBuffer.clear();
 
-  console.log(`🎯 Backtest: ${sigRecord.symbol} → ${result} @ ₹${exitPrice} (${resolvedBy}) P&L: ${sigRecord.pnlPct}%`);
+    if (diff.length > 0) {
+      try {
+        const binaryDiff = bp.encodeScannerDiff(diff);
+        io.to("scanner").emit("binary", binaryDiff);
+      } catch (e) {
+        console.warn("⚠️ binary scanner diff encode error:", e.message);
+      }
 
-  if (ioRef) {
-    ioRef.emit("backtest-resolved", {
-      signalId: sigRecord.signalId, symbol: sigRecord.symbol,
-      result, exitPrice, pnlPct: sigRecord.pnlPct, resolvedBy, exitTime,
-    });
-  }
-}
-
-// ── Manual override ───────────────────────────────────────────────────────────
-function manualResolve(signalId, result, exitPrice) {
-  for (const sigs of activeSignals.values()) {
-    const sig = sigs.find(s => s.signalId === signalId);
-    if (sig && sig.status === "PENDING") {
-      _resolveSignal(sig, result === "WIN" ? "MANUAL_WIN" : "MANUAL_LOSS", exitPrice, "MANUAL");
-      return { success: true };
+      const compressed = diff.map(s => ({
+        s: s.symbol, l: s.ltp, c: s.changePct, ch: s.change,
+        v: s.volume, sc: s.techScore, sg: s.signal, rs: s.rsi,
+        mc: s.macd, bb: s.bollingerBands, ms: s.maSummary,
+        mb: s.mcapBucket, ml: s.mcapLabel, nm: s.name,
+        ex: s.exchange, sk: s.sector, pc: s.prevClose,
+        en: s.entry, sl: s.sl, tp: s.tp, et: s.entryType, gp: s.gapPct,
+      }));
+      io.to("scanner").emit("scanner:diff", compressed);
     }
-  }
-  const data = loadData();
-  const sig  = data.signals.find(s => s.signalId === signalId);
-  if (!sig) return { error: "Signal not found" };
-  _resolveSignal(sig, result === "WIN" ? "MANUAL_WIN" : "MANUAL_LOSS", exitPrice, "MANUAL");
-  return { success: true };
+  }, 1000);
 }
 
-// ── Intraday expiry at 3:25 PM (fast pass — uses live LTP) ───────────────────
-function runIntradayExpiry() {
-  const today = todayStr();
-  const data  = loadData();
-  let expiredCount = 0, winCount = 0, lossCount = 0;
+// ── LTP chart throttle ───────────────────────────────────────────────────────
+const _ltpThrottle = new Map();
 
-  for (const sig of data.signals) {
-    if (sig.date !== today || sig.status !== "PENDING" || sig.isSwing) continue;
+function emitChartLTP(symbol, price) {
+  if (!_io) return;
+  const sym  = symbol.toUpperCase();
+  const room = `chart:${sym}`;
+  const members = _io.sockets.adapter.rooms.get(room);
+  if (!members || members.size === 0) return;
 
-    const ltp = lastKnownLTP.get(sig.symbol) || sig.lastLTP || sig.highReached || sig.entry;
+  const now  = Date.now();
+  const last = _ltpThrottle.get(sym) || 0;
+  if (now - last < 500) return;
+  _ltpThrottle.set(sym, now);
 
-    const isBuy = !["SELL","STRONG_SELL","SHORT","STRONG SELL"]
-      .includes((sig.signalType || "").toUpperCase());
-
-    let result;
-    if (isBuy) {
-      if (ltp >= sig.target)        result = "WIN";
-      else if (ltp <= sig.stopLoss) result = "LOSS";
-      else                          result = "EXPIRED";
-    } else {
-      if (ltp <= sig.target)        result = "WIN";
-      else if (ltp >= sig.stopLoss) result = "LOSS";
-      else                          result = "EXPIRED";
-    }
-
-    _resolveSignal(sig, result, ltp, "INTRADAY_EXPIRE");
-    if (result === "WIN")       winCount++;
-    else if (result === "LOSS") lossCount++;
-    else                        expiredCount++;
-  }
-
-  for (const [sym, sigs] of activeSignals.entries()) {
-    const remaining = sigs.filter(s => s.isSwing && s.status === "PENDING");
-    if (!remaining.length) activeSignals.delete(sym);
-    else activeSignals.set(sym, remaining);
-  }
-
-  console.log(`⏰ Backtest: intraday expiry — WIN:${winCount} LOSS:${lossCount} EXPIRED:${expiredCount}`);
-  if (ioRef) {
-    ioRef.emit("backtest-expiry-complete", {
-      date: today, wins: winCount, losses: lossCount,
-      expired: expiredCount, total: winCount + lossCount + expiredCount,
-    });
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// EOD RESOLUTION  —  3:30 PM authoritative pass via Upstox Historical API
-// ─────────────────────────────────────────────────────────────────────────────
-
-function getUpstoxToken() {
-  // Lazy-load upstoxStream to avoid circular require at module load time
   try {
-    const stream = require("./upstoxStream");
-    const t = stream.getAccessToken();
-    if (t) return t;
-  } catch (_) {}
-  return process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN || "";
+    const buf = bp.encodeLTPTick(sym, price);
+    _io.to(room).emit("binary", buf);
+  } catch (e) {
+    console.warn("⚠️ binary LTP encode error:", e.message);
+  }
+
+  _io.to(room).emit("ltp", { s: sym, p: price, t: now });
 }
 
-// Fetch a single day's OHLC from Upstox historical candle API
-// Endpoint: GET /v2/historical-candle/{instrumentKey}/day/{toDate}/{fromDate}
-// Candle array: [timestamp, open, high, low, close, volume, oi]
-function fetchUpstoxOHLC(symbol, dateStr) {
-  return new Promise((resolve) => {
-    const token    = getUpstoxToken();
-    if (!token) { console.warn("⚠️  EOD: No Upstox token available"); return resolve(null); }
+// ── Market tick broadcast (indices/global — stays global emit) ───────────────
+function emitMarketTick(updates) {
+  if (!_io || !updates?.length) return;
+  try {
+    const buf = bp.encodeMarketTick(updates);
+    _io.emit("binary", buf);
+  } catch (e) {
+    console.warn("⚠️ binary market-tick encode error:", e.message);
+  }
+  _io.emit("market-tick", updates);
+}
 
-    const instrKey = encodeURIComponent(`NSE_EQ|${symbol.toUpperCase()}`);
-    const options  = {
-      hostname: "api.upstox.com",
-      path:     `/v2/historical-candle/${instrKey}/day/${dateStr}/${dateStr}`,
-      method:   "GET",
-      headers:  {
-        "Accept":        "application/json",
-        "Authorization": `Bearer ${token}`,
-      },
-      timeout: 10000,
-    };
+// ── FIX: Candle emission → emit to chart:{SYMBOL} room only, not io.emit ─────
+// Previously used io.emit() which sent candles to ALL connected clients.
+// Now correctly targets only sockets watching that specific symbol's chart room.
+function emitCandleTick(symbol, tf, candle) {
+  if (!_io) return;
+  const sym  = symbol.toUpperCase().trim();
+  const room = `chart:${sym}`;
 
-    const req = https.get(options, (res) => {
-      let raw = "";
-      res.on("data", c => raw += c);
-      res.on("end", () => {
-        try {
-          const json    = JSON.parse(raw);
-          const candles = json?.data?.candles;
-          if (!candles || !candles.length) return resolve(null);
-          const [, open, high, low, close] = candles[0];
-          if (high == null || low == null) return resolve(null);
-          resolve({ open, high, low, close });
-        } catch { resolve(null); }
-      });
-    });
+  try {
+    const buf = bp.encodeCandle(bp.MSG.CANDLE_TICK, sym, tf, candle);
+    _io.to(room).emit("binary", buf);
+  } catch (e) {
+    console.warn("⚠️ binary candle:tick encode error:", e.message);
+  }
 
-    req.on("error",   () => resolve(null));
-    req.on("timeout", () => { req.destroy(); resolve(null); });
+  // JSON fallback — terminal listens on "candle:tick"
+  _io.to(room).emit("candle:tick", { symbol: sym, tf, candle });
+}
+
+function emitCandleClosed(symbol, tf, candle) {
+  if (!_io) return;
+  const sym  = symbol.toUpperCase().trim();
+  const room = `chart:${sym}`;
+
+  try {
+    const buf = bp.encodeCandle(bp.MSG.CANDLE_CLOSED, sym, tf, candle);
+    _io.to(room).emit("binary", buf);
+  } catch (e) {
+    console.warn("⚠️ binary candle:closed encode error:", e.message);
+  }
+
+  // JSON fallback
+  _io.to(room).emit("candle:closed", { symbol: sym, tf, candle });
+}
+
+// ── FIX: price:tick — live LTP update for ALL timeframes ────────────────────
+// This is separate from candle:tick (which only fires on intraday TFs).
+// StockTerminal.html listens on "price:tick" to update the current candle's
+// close/high/low on ANY timeframe (1D, 1W, 1M included) without a full reload.
+// Called from upstoxStream.js whenever any LTP update arrives for a symbol.
+const _priceTickThrottle = new Map();
+
+function emitPriceTick(symbol, price, change, changePct, prevClose) {
+  if (!_io) return;
+  const sym  = symbol.toUpperCase().trim();
+  const room = `chart:${sym}`;
+
+  const members = _io.sockets.adapter.rooms.get(room);
+  if (!members || members.size === 0) return;
+
+  // Throttle to max 1 update/500ms per symbol to avoid flooding
+  const now  = Date.now();
+  const last = _priceTickThrottle.get(sym) || 0;
+  if (now - last < 500) return;
+  _priceTickThrottle.set(sym, now);
+
+  const payload = {
+    symbol:    sym,
+    ltp:       price,
+    change:    change    ?? 0,
+    changePct: changePct ?? 0,
+    prevClose: prevClose ?? 0,
+    t:         now,
+  };
+
+  // Binary encoding — reuse encodeLTPTick for compact wire format
+  try {
+    const buf = bp.encodeLTPTick(sym, price);
+    _io.to(room).emit("binary", buf);
+  } catch (e) {
+    console.warn("⚠️ binary price:tick encode error:", e.message);
+  }
+
+  // JSON event — terminal's socket.on("price:tick") handler picks this up
+  _io.to(room).emit("price:tick", payload);
+}
+
+// ── Backtest tick delivery ───────────────────────────────────────────────────
+function emitBacktestTick(socketId, payload) {
+  if (!_io) return;
+  const buf = bp.encodeJSON("backtest-live-tick", payload);
+  _io.to(`backtest:${socketId}`).emit("binary", buf);
+  _io.to(`backtest:${socketId}`).emit("backtest-live-tick", payload);
+}
+
+function broadcastBacktestTick(payload) {
+  if (!_io) return;
+  const buf = bp.encodeJSON("backtest-live-tick", payload);
+  for (const [roomName] of _io.sockets.adapter.rooms) {
+    if (roomName.startsWith("backtest:")) {
+      _io.to(roomName).emit("binary", buf);
+      _io.to(roomName).emit("backtest-live-tick", payload);
+    }
+  }
+}
+
+// ── Alert broadcasting ───────────────────────────────────────────────────────
+function emitCircuitAlerts(alerts) {
+  if (!_io || !alerts?.length) return;
+  const buf = bp.encodeJSON("circuit-alerts", alerts);
+  _io.to("alerts").emit("binary", buf);
+  _io.to("alerts").emit("circuit-alerts", alerts);
+}
+
+function emitDeliverySpikes(spikes) {
+  if (!_io || !spikes?.length) return;
+  const buf = bp.encodeJSON("delivery-spikes", spikes);
+  _io.to("alerts").emit("binary", buf);
+  _io.to("alerts").emit("delivery-spikes", spikes);
+}
+
+function emitCompositeUpdate(data) {
+  if (!_io || !data) return;
+  const buf = bp.encodeJSON("composite-update", data);
+  _io.emit("binary", buf);
+  _io.emit("composite-update", data);
+}
+
+// ── Main attach function ─────────────────────────────────────────────────────
+function attachSocketIO(server) {
+  const io = new Server(server, {
+    cors:         { origin: "*" },
+    pingInterval: 25_000,
+    pingTimeout:  10_000,
+    transports:   ["websocket", "polling"],
   });
-}
 
-async function runEODResolution() {
-  const today = todayStr();
-  const data  = loadData();
+  _io = io;
 
-  const pendingToday = data.signals.filter(s => s.date === today && s.status === "PENDING");
-  if (!pendingToday.length) {
-    console.log("⏰ EOD: No pending signals for today.");
-    return { wins: 0, losses: 0, expired: 0, failed: 0 };
-  }
+  subscribe("SECTOR_UPDATED", (data) => {
+    io.emit("update", data);
+  });
 
-  const symbols = [...new Set(pendingToday.map(s => s.symbol))];
-  console.log(`⏰ EOD Resolution: fetching OHLC for ${symbols.length} symbol(s) via Upstox…`);
+  _startScannerFlush(io);
 
-  // Fetch OHLC for all symbols
-  const ohlcMap = {};
-  for (const sym of symbols) {
-    ohlcMap[sym] = await fetchUpstoxOHLC(sym, today);
-    if (!ohlcMap[sym]) console.log(`   ⚠️  ${sym}: no data from Upstox`);
-    await new Promise(r => setTimeout(r, 250)); // rate limit
-  }
+  io.on("connection", (socket) => {
+    console.log(`👤 Client connected: ${socket.id}`);
 
-  // Re-load fresh in case _resolveSignal already wrote some (from live ticks)
-  const freshData = loadData();
-  let wins = 0, losses = 0, expired = 0, failed = 0;
-
-  for (const sig of freshData.signals) {
-    if (sig.date !== today || sig.status !== "PENDING") continue;
-
-    const ohlc = ohlcMap[sig.symbol];
-    if (!ohlc) { failed++; continue; }
-
-    // Update tracking with real day data
-    sig.highReached = Math.max(sig.highReached || sig.entry, ohlc.high);
-    sig.lowReached  = Math.min(sig.lowReached  || sig.entry, ohlc.low);
-    sig.lastLTP     = ohlc.close;
-
-    const isBuy = !["SELL","STRONG_SELL","SHORT","STRONG SELL"]
-      .includes((sig.signalType || "").toUpperCase());
-
-    let result, exitPrice;
-
-    if (isBuy) {
-      const hitT  = ohlc.high >= sig.target;
-      const hitSL = ohlc.low  <= sig.stopLoss;
-      if      (hitT && hitSL) { result = "LOSS";    exitPrice = sig.stopLoss; }
-      else if (hitT)           { result = "WIN";     exitPrice = sig.target;   }
-      else if (hitSL)          { result = "LOSS";    exitPrice = sig.stopLoss; }
-      else                     { result = "EXPIRED"; exitPrice = ohlc.close;   }
-    } else {
-      const hitT  = ohlc.low  <= sig.target;
-      const hitSL = ohlc.high >= sig.stopLoss;
-      if      (hitT && hitSL) { result = "LOSS";    exitPrice = sig.stopLoss; }
-      else if (hitT)           { result = "WIN";     exitPrice = sig.target;   }
-      else if (hitSL)          { result = "LOSS";    exitPrice = sig.stopLoss; }
-      else                     { result = "EXPIRED"; exitPrice = ohlc.close;   }
-    }
-
-    _resolveSignal(sig, result, exitPrice, "EOD_UPSTOX");
-    if (result === "WIN")    wins++;
-    else if (result === "LOSS") losses++;
-    else expired++;
-  }
-
-  console.log(`✅ EOD Resolution: WIN:${wins} LOSS:${losses} EXPIRED:${expired} FAILED:${failed}`);
-
-  if (ioRef) {
-    ioRef.emit("backtest-eod-complete", {
-      date: today, wins, losses, expired, failed,
-      total: wins + losses + expired,
+    // ── Binary protocol handshake ──────────────────────────────────────────
+    socket.on("use-binary", ({ version } = {}) => {
+      _binaryClients.add(socket.id);
+      socket.emit("binary-ready", {
+        version:  1,
+        encoding: "big-endian",
+        msgTypes: bp.MSG,
+        indexIds: bp.INDEX_ID,
+        tfIds:    bp.TF_ID,
+      });
+      console.log(`⚡ ${socket.id} upgraded to binary protocol (client v${version || "?"})`);
     });
-  }
 
-  return { wins, losses, expired, failed };
-}
-
-// Schedule runEODResolution at 3:30 PM IST daily
-function scheduleEODResolution() {
-  const now = getIST();
-  const eod = new Date(now);
-  eod.setHours(15, 30, 0, 0);
-
-  let ms = eod - now;
-
-  if (ms <= 0) {
-    // Already past 3:30 PM — check if there are still pending signals
-    const data       = loadData();
-    const hasPending = data.signals.some(s => s.date === todayStr() && s.status === "PENDING");
-    if (hasPending) {
-      console.log("⏰ EOD: past 3:30 PM with pending signals — running now");
-      runEODResolution();
+    // ── Replay intel snapshots ─────────────────────────────────────────────
+    if (_intelCache.size > 0) {
+      for (const [, payload] of _intelCache) {
+        socket.emit("options-intelligence", payload);
+      }
     }
-    ms += 24 * 60 * 60 * 1000; // next day
-  }
 
-  setTimeout(async () => {
-    await runEODResolution();
-    scheduleEODResolution(); // self-reschedule
-  }, ms);
+    socket.on("ping", () => socket.emit("pong"));
 
-  const minsUntil = Math.round(ms / 60000);
-  console.log(`⏰ Backtest: EOD resolution scheduled in ${Math.floor(minsUntil/60)}h ${minsUntil%60}m (3:30 PM IST via Upstox)`);
-}
+    socket.on("request-intel-snapshot", () => {
+      for (const [, payload] of _intelCache) {
+        socket.emit("options-intelligence", payload);
+      }
+    });
 
-// ── Analytics ─────────────────────────────────────────────────────────────────
-function getAnalytics(days = 30) {
-  const data   = loadData();
-  const cutoff = new Date(getIST());
-  cutoff.setDate(cutoff.getDate() - days);
-  const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth()+1).padStart(2,"0")}-${String(cutoff.getDate()).padStart(2,"0")}`;
+    // ── Scanner room ───────────────────────────────────────────────────────
+    socket.on("join:scanner", () => {
+      socket.join("scanner");
+      const snapshot = getScannerSnapshot();
+      if (snapshot.length > 0) {
+        try {
+          const buf = bp.encodeScannerSnapshot(snapshot);
+          socket.emit("binary", buf);
+        } catch (e) {
+          console.warn("⚠️ binary snapshot encode error:", e.message);
+        }
+        socket.emit("scanner:snapshot", snapshot);
+      }
+      console.log(`📊 ${socket.id} joined scanner room (${snapshot.length} stocks, binary=${isBinary(socket.id)})`);
+    });
 
-  const RESOLVED = ["WIN","LOSS","MANUAL_WIN","MANUAL_LOSS","EXPIRED"];
-  const signals  = data.signals.filter(s => s.date >= cutoffStr && RESOLVED.includes(s.status));
+    socket.on("leave:scanner", () => {
+      socket.leave("scanner");
+    });
 
-  const acc = (arr) => {
-    if (!arr.length) return { wins: 0, losses: 0, expired: 0, total: 0, pct: 0, avgPnl: 0 };
-    const wins    = arr.filter(s => s.status.includes("WIN")).length;
-    const expired = arr.filter(s => s.status === "EXPIRED").length;
-    const losses  = arr.length - wins - expired;
-    const avgPnl  = arr.reduce((sum, s) => sum + (s.pnlPct || 0), 0) / arr.length;
-    const resolved = wins + losses;
-    return {
-      wins, losses, expired, total: arr.length,
-      pct:    resolved > 0 ? Math.round((wins / resolved) * 100) : 0,
-      avgPnl: +avgPnl.toFixed(2),
-    };
-  };
+    // ── Chart room — FIX: auto-join chart:{SYMBOL} room ───────────────────
+    // Terminal emits "watch:chart" with symbol on load and symbol change.
+    // This ensures candle:tick, candle:closed, price:tick reach the right client.
+    socket.on("watch:chart", (symbol) => {
+      // Leave any previously watched chart rooms
+      [...socket.rooms]
+        .filter(r => r.startsWith("chart:"))
+        .forEach(r => socket.leave(r));
 
-  const byType    = {};
-  const bySector  = {};
-  const byStock   = {};
-  const dailyMap  = {};
+      if (symbol) {
+        const sym = symbol.toUpperCase().trim();
+        socket.join(`chart:${sym}`);
+        console.log(`📈 ${socket.id} watching chart: ${sym}`);
+      }
+    });
 
-  for (const s of signals) {
-    (byType[s.signalType]  = byType[s.signalType]  || []).push(s);
-    (bySector[s.sector]    = bySector[s.sector]    || []).push(s);
-    (byStock[s.symbol]     = byStock[s.symbol]     || []).push(s);
-    (dailyMap[s.date]      = dailyMap[s.date]      || []).push(s);
-  }
+    // ── Backtest private room ──────────────────────────────────────────────
+    socket.on("backtest:start", () => {
+      socket.join(`backtest:${socket.id}`);
+    });
 
-  const rsiRanges  = { "<30": [], "30-50": [], "50-60": [], "60-70": [], ">70": [] };
-  const techRanges = { "<40": [], "40-60": [], "60-75": [], "75-90": [], ">90": [] };
-  const timeSlots  = { "9:15-10:00": [], "10:00-11:30": [], "11:30-13:00": [], "13:00-15:25": [] };
+    socket.on("backtest:stop", () => {
+      socket.leave(`backtest:${socket.id}`);
+    });
 
-  for (const s of signals) {
-    const r = s.rsi;
-    if      (r < 30) rsiRanges["<30"].push(s);
-    else if (r < 50) rsiRanges["30-50"].push(s);
-    else if (r < 60) rsiRanges["50-60"].push(s);
-    else if (r < 70) rsiRanges["60-70"].push(s);
-    else             rsiRanges[">70"].push(s);
+    // ── Alerts room ────────────────────────────────────────────────────────
+    socket.on("join:alerts", () => socket.join("alerts"));
+    socket.on("leave:alerts", () => socket.leave("alerts"));
 
-    const t = s.techScore;
-    if      (t < 40) techRanges["<40"].push(s);
-    else if (t < 60) techRanges["40-60"].push(s);
-    else if (t < 75) techRanges["60-75"].push(s);
-    else if (t < 90) techRanges["75-90"].push(s);
-    else             techRanges[">90"].push(s);
+    // ── Gann analysis ──────────────────────────────────────────────────────
+    socket.on("get-gann-analysis", ({ symbol, ltp } = {}) => {
+      if (!symbol) return;
+      const sym = normaliseSymbol(symbol);
+      if (_gannIntegration?.getGannAnalysis) {
+        const analysis = _gannIntegration.getGannAnalysis(sym, ltp);
+        if (analysis) {
+          const buf = bp.encodeJSON("gann-analysis", analysis);
+          socket.emit("binary", buf);
+          socket.emit("gann-analysis", analysis);
+          return;
+        }
+      }
+      console.warn(`⚠️ get-gann-analysis: no result for ${sym}`);
+    });
 
-    const [h, m] = (s.captureTime || "09:15").split(":").map(Number);
-    const mins   = h * 60 + m;
-    if      (mins < 600) timeSlots["9:15-10:00"].push(s);
-    else if (mins < 690) timeSlots["10:00-11:30"].push(s);
-    else if (mins < 780) timeSlots["11:30-13:00"].push(s);
-    else                 timeSlots["13:00-15:25"].push(s);
-  }
+    // ── Option chain ───────────────────────────────────────────────────────
+    socket.on("request-option-chain", ({ underlying, expiry } = {}) => {
+      if (!underlying) return;
+      [...socket.rooms]
+        .filter(r => r.startsWith("chain:"))
+        .forEach(r => socket.leave(r));
+      socket.join(`chain:${underlying}`);
+      const cached   = getCachedChain(underlying, expiry);
+      const expiries = getCachedExpiries(underlying);
+      if (cached) {
+        const buf = bp.encodeJSON("option-chain-update", { underlying, data: cached });
+        socket.emit("binary", buf);
+        socket.emit("option-chain-update", { underlying, data: cached });
+      }
+      if (expiries.length > 0) {
+        const buf = bp.encodeJSON("option-expiries", { underlying, expiries });
+        socket.emit("binary", buf);
+        socket.emit("option-expiries", { underlying, expiries });
+      }
+    });
 
-  const dailyTrend = Object.entries(dailyMap)
-    .sort(([a],[b]) => a.localeCompare(b))
-    .map(([date, arr]) => ({ date, ...acc(arr) }));
+    socket.on("request-expiries", ({ underlying } = {}) => {
+      if (!underlying) return;
+      const expiries = getCachedExpiries(underlying);
+      const buf = bp.encodeJSON("option-expiries", { underlying, expiries });
+      socket.emit("binary", buf);
+      socket.emit("option-expiries", { underlying, expiries });
+    });
 
-  return {
-    overall:  acc(signals),
-    byType:   Object.fromEntries(Object.entries(byType).map(([k,v])  => [k, acc(v)])),
-    byRSI:    Object.fromEntries(Object.entries(rsiRanges).map(([k,v])  => [k, acc(v)])),
-    byTech:   Object.fromEntries(Object.entries(techRanges).map(([k,v]) => [k, acc(v)])),
-    byTime:   Object.fromEntries(Object.entries(timeSlots).map(([k,v])  => [k, acc(v)])),
-    bySector: Object.fromEntries(
-      Object.entries(bySector).sort(([,a],[,b]) => b.length - a.length).slice(0,10).map(([k,v]) => [k, acc(v)])
-    ),
-    byStock: Object.fromEntries(
-      Object.entries(byStock).sort(([,a],[,b]) => b.length - a.length).slice(0,20).map(([k,v]) => [k, acc(v)])
-    ),
-    dailyTrend,
-    totalSignals: signals.length,
-  };
-}
+    // ── Live candle subscriptions ──────────────────────────────────────────
+    let _watchedSymbol = null;
+    let _watchedTf     = null;
 
-// ── Data access ───────────────────────────────────────────────────────────────
-function getSessionSignals(date) {
-  return loadData().signals.filter(s => s.date === (date || todayStr()));
-}
+    socket.on("candle:subscribe", ({ symbol, tf } = {}) => {
+      if (!symbol || !tf) return;
+      const stream = getStream();
+      if (!stream) return;
+      if (_watchedSymbol && _watchedTf) {
+        stream.unregisterLiveCandleSubscription(_watchedSymbol, _watchedTf);
+      }
+      _watchedSymbol = symbol.toUpperCase().trim();
+      _watchedTf     = tf;
+      stream.registerLiveCandleSubscription(_watchedSymbol, _watchedTf);
 
-function getSessions() {
-  const data = loadData();
-  return Object.entries(data.sessions)
-    .map(([key, s]) => ({ key, ...s }))
-    .sort((a, b) => b.date.localeCompare(a.date));
-}
+      // FIX: also join chart room here as a safety net
+      // (terminal sends "candle:subscribe" on intraday TF load)
+      socket.join(`chart:${_watchedSymbol}`);
+      console.log(`🕯️  ${socket.id} subscribed candle: ${_watchedSymbol} [${_watchedTf}]`);
+    });
 
-// ── Reload pending signals on server restart ──────────────────────────────────
-function reloadActiveSignals() {
-  const data  = loadData();
-  const today = todayStr();
-  let count   = 0;
-  for (let i = 0; i < data.signals.length; i++) {
-    const sig = data.signals[i];
-    if (sig.date === today && sig.status === "PENDING") {
-      if (!activeSignals.has(sig.symbol)) activeSignals.set(sig.symbol, []);
-      activeSignals.get(sig.symbol).push(data.signals[i]);
-      count++;
-    }
-  }
-  if (count) console.log(`🔄 Backtest: reloaded ${count} active pending signals from disk`);
-}
+    socket.on("candle:unsubscribe", ({ symbol, tf } = {}) => {
+      const stream = getStream();
+      if (!stream) return;
+      const sym = (symbol || _watchedSymbol || "").toUpperCase().trim();
+      const t   = tf || _watchedTf;
+      if (sym && t) stream.unregisterLiveCandleSubscription(sym, t);
+    });
 
-// ── Intraday expiry scheduler ─────────────────────────────────────────────────
-function scheduleIntradayExpiry() {
-  const now = getIST();
-  const exp = new Date(now);
-  exp.setHours(15, 25, 0, 0);
+    // ── Disconnect ─────────────────────────────────────────────────────────
+    socket.on("disconnect", (reason) => {
+      console.log(`👋 ${socket.id} disconnected — ${reason}`);
+      _binaryClients.delete(socket.id);
 
-  let ms = exp - now;
+      const stream = getStream();
+      if (stream && _watchedSymbol && _watchedTf) {
+        stream.unregisterLiveCandleSubscription(_watchedSymbol, _watchedTf);
+      }
+    });
 
-  if (ms <= 0) {
-    const data       = loadData();
-    const hasPending = data.signals.some(s => s.date === todayStr() && s.status === "PENDING" && !s.isSwing);
-    if (hasPending) {
-      console.log("⏰ Backtest: past 3:25 PM with pending signals — running intraday expiry now");
-      runIntradayExpiry();
-    }
-    ms += 24 * 60 * 60 * 1000;
-  }
+    socket.on("error", (err) => {
+      console.error(`Socket error [${socket.id}]:`, err?.message);
+    });
+  });
 
-  setTimeout(() => { runIntradayExpiry(); scheduleIntradayExpiry(); }, ms);
-
-  const minsUntil = Math.round(ms / 60000);
-  console.log(`⏰ Backtest: intraday expiry scheduled in ${Math.floor(minsUntil/60)}h ${minsUntil%60}m (3:25 PM IST)`);
-}
-
-// ── Init ──────────────────────────────────────────────────────────────────────
-function init(io) {
-  ioRef = io;
-  reloadActiveSignals();
-  scheduleIntradayExpiry();
-  scheduleEODResolution();  // ← NEW: authoritative EOD pass at 3:30 PM via Upstox
-  console.log("✅ Backtest Engine initialized");
+  console.log("🌐 Socket.io attached — Binary Protocol v1 enabled");
+  console.log("   Rooms: scanner | chart:{SYM} | chain:{SYM} | backtest:{id} | alerts");
+  return io;
 }
 
 module.exports = {
-  init,
-  setIO,
-  captureSession,
-  onLTPTick,
-  manualResolve,
-  getAnalytics,
-  getSessionSignals,
-  getSessions,
-  todayStr,
-  isMarketOpen,
-  runEODResolution,  // ← exported for manual trigger via route
+  // Core
+  attachSocketIO,
+  setGannIntegration,
+
+  // Option chain
+  emitChainUpdate,
+  setCachedChain,
+  getCachedChain,
+  setCachedExpiries,
+  getCachedExpiries,
+  setCachedIntel,
+  getCachedIntel,
+
+  // Scanner
+  updateScannerTick,
+  getScannerSnapshot,
+
+  // Emitters
+  emitMarketTick,
+  emitChartLTP,
+  emitCandleTick,
+  emitCandleClosed,
+  emitPriceTick,       // ← NEW: call this from upstoxStream for ALL-TF live price
+
+  // Backtest
+  emitBacktestTick,
+  broadcastBacktestTick,
+
+  // Alerts
+  emitCircuitAlerts,
+  emitDeliverySpikes,
+  emitCompositeUpdate,
+
+  // Status
+  broadcastUpstoxStatus,
 };
