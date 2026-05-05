@@ -990,9 +990,11 @@ function initSocket() {
     // This fires on 1D, 1W, 1M too (not just intraday) so you see the
     // current candle update in real-time without refreshing the page.
     socket.on('price:tick', ({ symbol, ltp, change, changePct }) => {
-      if (!symbol || symbol.toUpperCase().trim() !== CHART_SYMBOL) return;
-      if (!CANDLES.length) return;
-      if (!ltp || ltp <= 0) return;
+  if (!symbol || symbol.toUpperCase().trim() !== CHART_SYMBOL) return;
+  if (!CANDLES.length) return;
+  if (!ltp || ltp <= 0) return;
+  // For intraday TFs, candle:tick handles updates — skip price:tick to avoid conflict
+  if (isIntradayTF(CURRENT_TF)) return;
 
       const last = CANDLES[CANDLES.length - 1];
       // Update the live candle's close/high/low in-place
