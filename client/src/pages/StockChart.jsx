@@ -304,13 +304,13 @@ export default function StockChart({ symbol, socket }) {
   };
 
   const openFullChart = () => {
-    if (!symbol) return;
-    const last = candles[candles.length - 1];
-    const ltp  = last?.close ?? null;
-    sessionStorage.setItem("terminal_symbol", symbol);
-    if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
-    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol, ltp } }));
-  };
+  if (!symbol) return;
+  const last = candles[candles.length - 1];
+  const ltp  = last?.close ?? null;
+  sessionStorage.setItem("terminal_symbol", symbol);
+  if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
+  window.open(`/StockTerminal.html?symbol=${symbol}${ltp ? `&ltp=${ltp}` : ""}`, "_blank");
+};
 
   const last   = candles[candles.length - 1];
   const first  = candles[0];
