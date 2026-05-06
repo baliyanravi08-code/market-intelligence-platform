@@ -319,9 +319,8 @@ function parseAndEmit(raw) {
       }
     }
 
-  } catch (_) {}
+  } catch (e) { console.log("❌ parseAndEmit error:", e.message); }
 }
-
 // ── Streamer lifecycle ────────────────────────────────────────────────────────
 function patchStreamerInternals(streamerInstance) {
   setImmediate(() => {
@@ -418,7 +417,10 @@ function startStreamer(accessToken, io) {
       if (ioRef) ioRef.emit("upstox-status", { connected: true });
     });
 
-    newStreamer.on("message", parseAndEmit);
+    newStreamer.on("message", (raw) => {
+  console.log("🔥 RAW MSG len:", raw?.length || raw?.byteLength || 0);
+  parseAndEmit(raw);
+});
 
     newStreamer.on("error", (e) => {
       const msg = e?.message || String(e);
