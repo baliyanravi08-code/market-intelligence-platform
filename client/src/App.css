@@ -83,14 +83,11 @@ body { font-family: 'IBM Plex Sans', sans-serif; color: #b8cfe8; font-size: 14px
 }
 
 @keyframes blink-flash {
-  0%   { opacity: 1; color: #e8f4ff; background: transparent; }
-  20%  { opacity: 1; color: #00ff9c; background: rgba(0,255,156,0.15); }
-  50%  { opacity: 1; color: #ffffff; background: rgba(0,255,156,0.08); }
-  100% { opacity: 1; color: #e8f4ff; background: transparent; }
+  0%   { color: #00ff9c; text-shadow: 0 0 8px #00ff9c; }
+  100% { color: #e8f4ff; text-shadow: none; }
 }
 .blink {
-  animation: blink-flash 0.7s ease forwards;
-  animation-fill-mode: forwards;
+  animation: blink-flash 0.8s ease-out forwards;
 }
 
 .ticker-change {

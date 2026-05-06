@@ -459,7 +459,7 @@ function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) 
           <div className="ticker-item ticker-clickable" key={`idx-${i}`} style={isDash ? { opacity: 0.4 } : {}} onClick={() => !isDash && onTickerClick(m)} title={`Click to view ${m.name} chart`}>
             <span className="ticker-name">{m.name}</span>
             {/* key={m._ts} forces React to remount span on every tick → CSS animation retriggers → blink works */}
-            <span key={m._ts || m.price} className={`ticker-price${m._ts && Date.now() - m._ts < 1500 ? " blink" : ""}`}>{m.price}</span>
+            <span key={`${m.name}-${m._ts}`} className="ticker-price blink">{m.price}</span>
             <span className={`ticker-change ${cls}`}>{isUp ? "▲" : isDown ? "▼" : "●"} {m.change} ({m.pct})</span>
           </div>
         );
