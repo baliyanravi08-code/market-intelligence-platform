@@ -470,7 +470,7 @@ function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
 }
 
 // ── TechPanel ─────────────────────────────────────────────────────────────────
-function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeChange, onClose }) {
+function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeChange, onClose, socket }) {
   if (!symbol) return null;
 
   const scoreColor = tech
@@ -551,7 +551,7 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <StockChart symbol={symbol} defaultTf={timeframe} />
+        <StockChart symbol={symbol} defaultTf={timeframe} socket={socket} />
       </div>
 
       {loading && (
@@ -1665,6 +1665,7 @@ if (d.error && d.weekend) {
           timeframe={activeTF}
           livePrice={livePriceMap[selectedSym] ?? null}
           onTimeframeChange={handleTimeframeChange}
+          socket={getSocket()}
           onClose={() => {
             selectedSymRef.current = null;
             setSelectedSym(null);

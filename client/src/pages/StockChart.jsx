@@ -9,29 +9,40 @@ const TF_OPTIONS = [
   { label: "1W",   value: "1week" },
 ];
 
-const COLORS = {
-  bg:       "#010812",
-  grid:     "#0d1f35",
-  text:     "#4a8adf",
-  up:       "#00ff9c",
-  down:     "#ff4466",
-  volume:   "#1a3a5c",
-  wick:     "#2a5a8c",
-  cross:    "#4a8adf55",
-  label:    "#b8cfe8",
+const TF_LIVE_MAP = { "5min": "5min", "15min": "15min", "1hour": "1hour", "4hour": "4hour" };
+const TF_MS = {
+  "5min":  5  * 60_000,
+  "15min": 15 * 60_000,
+  "1hour": 60 * 60_000,
+  "4hour": 4  * 60 * 60_000,
 };
 
-export default function StockChart({ symbol }) {
+const COLORS = {
+  bg:    "#010812",
+  grid:  "#0d1f35",
+  text:  "#4a8adf",
+  up:    "#00ff9c",
+  down:  "#ff4466",
+  label: "#b8cfe8",
+};
+
+export default function StockChart({ symbol, socket }) {
   const canvasRef    = useRef(null);
-  const overlayRef   = useRef(null);
   const [tf, setTf]  = useState("1day");
   const [candles, setCandles]     = useState([]);
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState(null);
   const [crosshair, setCrosshair] = useState(null);
-  const dataRef = useRef([]);
+  const [liveBlink, setLiveBlink] = useState(false);
+  const candlesRef = useRef([]);
+  const tfRef      = useRef("1day");
+  const blinkTimer = useRef(null);
 
-  // ── Fetch candles from server ─────────────────────────────────────────────
+  // keep refs in sync so socket handlers always see latest values
+  useEffect(() => { candlesRef.current = candles; }, [candles]);
+  useEffect(() => { tfRef.current = tf; }, [tf]);
+
+  // ── Fetch candles ──────────────────────────────────────────────────────────
   const fetchCandles = useCallback(async (sym, timeframe) => {
     if (!sym) return;
     setLoading(true);
@@ -43,18 +54,10 @@ export default function StockChart({ symbol }) {
                  : 180;
       const res  = await fetch(`/api/candles/${sym}?tf=${timeframe}&days=${days}`);
       const data = await res.json();
-      if (!data.ok) {
-        setError(data.error || "No data");
-        setCandles([]);
-        return;
-      }
-      if (!data.candles || data.candles.length === 0) {
-        setError("No candle data returned");
-        setCandles([]);
-        return;
-      }
+      if (!data.ok) { setError(data.error || "No data"); setCandles([]); return; }
+      if (!data.candles?.length) { setError("No candle data returned"); setCandles([]); return; }
       setCandles(data.candles);
-      dataRef.current = data.candles;
+      candlesRef.current = data.candles;
     } catch (e) {
       setError("Fetch failed: " + e.message);
       setCandles([]);
@@ -63,7 +66,6 @@ export default function StockChart({ symbol }) {
     }
   }, []);
 
-  // ── FIX: clear stale ltp from previous symbol so terminal inherits correct price ──
   useEffect(() => {
     if (symbol) {
       sessionStorage.removeItem("terminal_ltp");
@@ -71,7 +73,119 @@ export default function StockChart({ symbol }) {
     }
   }, [symbol, tf, fetchCandles]);
 
-  // ── Draw chart ────────────────────────────────────────────────────────────
+  // ── Live tick flash helper ─────────────────────────────────────────────────
+  const flashBlink = useCallback(() => {
+    setLiveBlink(true);
+    clearTimeout(blinkTimer.current);
+    blinkTimer.current = setTimeout(() => setLiveBlink(false), 800);
+  }, []);
+
+  // ── Socket: candle:tick + candle:closed + price:tick ──────────────────────
+  useEffect(() => {
+    if (!socket || !symbol) return;
+
+    // join chart room for this symbol
+    socket.emit("watch:chart", symbol);
+
+    // subscribe live candles if intraday TF
+    const isIntraday = (t) => !!TF_LIVE_MAP[t];
+    if (isIntraday(tf)) {
+      socket.emit("candle:subscribe", { symbol, tf: TF_LIVE_MAP[tf] });
+    }
+
+    function applyTick(candle) {
+      const current = [...candlesRef.current];
+      if (!current.length) return;
+      const tfMs   = TF_MS[TF_LIVE_MAP[tfRef.current]] || 60_000;
+      const period = Math.floor(candle.time / tfMs) * tfMs;
+      const last   = current[current.length - 1];
+      const lastPeriod = Math.floor(new Date(last.time).getTime() / tfMs) * tfMs;
+
+      let updated;
+      if (lastPeriod === period) {
+        updated = [...current];
+        updated[updated.length - 1] = {
+          ...last,
+          high:   Math.max(last.high,   candle.high   ?? candle.close),
+          low:    Math.min(last.low,    candle.low    ?? candle.close),
+          close:  candle.close,
+          volume: (last.volume || 0) + (candle.volume || 0),
+        };
+      } else if (candle.time > last.time) {
+        updated = [...current, {
+          time:   candle.time,
+          open:   candle.open,
+          high:   candle.high,
+          low:    candle.low,
+          close:  candle.close,
+          volume: candle.volume || 0,
+        }];
+        if (updated.length > 500) updated.splice(0, updated.length - 500);
+      } else {
+        return;
+      }
+      candlesRef.current = updated;
+      setCandles(updated);
+      flashBlink();
+    }
+
+    function onCandleTick({ symbol: sym, tf: evTf, candle }) {
+      if (!sym || sym.toUpperCase() !== symbol.toUpperCase()) return;
+      if (!TF_LIVE_MAP[tfRef.current] || evTf !== TF_LIVE_MAP[tfRef.current]) return;
+      applyTick(candle);
+    }
+
+    function onCandleClosed({ symbol: sym, tf: evTf, candle }) {
+      if (!sym || sym.toUpperCase() !== symbol.toUpperCase()) return;
+      if (!TF_LIVE_MAP[tfRef.current] || evTf !== TF_LIVE_MAP[tfRef.current]) return;
+      applyTick(candle);
+    }
+
+    // price:tick fires for ALL timeframes (1D/1W/1M too)
+    function onPriceTick({ symbol: sym, ltp }) {
+      if (!sym || sym.toUpperCase() !== symbol.toUpperCase()) return;
+      if (!ltp || ltp <= 0) return;
+      // for intraday, candle:tick handles it
+      if (isIntraday(tfRef.current)) return;
+      const current = [...candlesRef.current];
+      if (!current.length) return;
+      const updated = [...current];
+      const last    = updated[updated.length - 1];
+      updated[updated.length - 1] = {
+        ...last,
+        high:  Math.max(last.high, ltp),
+        low:   Math.min(last.low, ltp),
+        close: ltp,
+      };
+      candlesRef.current = updated;
+      setCandles(updated);
+      flashBlink();
+    }
+
+    socket.on("candle:tick",   onCandleTick);
+    socket.on("candle:closed", onCandleClosed);
+    socket.on("price:tick",    onPriceTick);
+
+    return () => {
+      socket.off("candle:tick",   onCandleTick);
+      socket.off("candle:closed", onCandleClosed);
+      socket.off("price:tick",    onPriceTick);
+      if (isIntraday(tf)) {
+        socket.emit("candle:unsubscribe", { symbol, tf: TF_LIVE_MAP[tf] });
+      }
+    };
+  }, [socket, symbol, tf, flashBlink]);
+
+  // ── Re-subscribe when TF changes ──────────────────────────────────────────
+  useEffect(() => {
+    if (!socket || !symbol) return;
+    const isIntraday = (t) => !!TF_LIVE_MAP[t];
+    if (isIntraday(tf)) {
+      socket.emit("candle:subscribe", { symbol, tf: TF_LIVE_MAP[tf] });
+    }
+  }, [socket, symbol, tf]);
+
+  // ── Draw chart ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || candles.length === 0) return;
@@ -94,7 +208,6 @@ export default function StockChart({ symbol }) {
     const candleW = Math.max(1, Math.floor(chartW / n) - 1);
     const gap     = Math.max(1, Math.floor(chartW / n));
 
-    // Price range
     const highs  = data.map(c => c.high);
     const lows   = data.map(c => c.low);
     const maxP   = Math.max(...highs);
@@ -106,7 +219,6 @@ export default function StockChart({ symbol }) {
     const vx = (vol)   => PAD.top + priceH + 10 + volH - (vol / maxVol) * volH;
     const cx = (i)     => PAD.left + i * gap + gap / 2;
 
-    // Grid lines
     ctx.strokeStyle = COLORS.grid;
     ctx.lineWidth   = 0.5;
     for (let g = 0; g <= 5; g++) {
@@ -119,13 +231,11 @@ export default function StockChart({ symbol }) {
       ctx.fillText(price.toFixed(0), W - PAD.right + 4, y + 4);
     }
 
-    // Candles
     data.forEach((c, i) => {
       const x    = cx(i);
       const isUp = c.close >= c.open;
       const col  = isUp ? COLORS.up : COLORS.down;
 
-      // Wick
       ctx.strokeStyle = col;
       ctx.lineWidth   = 1;
       ctx.beginPath();
@@ -133,21 +243,39 @@ export default function StockChart({ symbol }) {
       ctx.lineTo(x, px(c.low));
       ctx.stroke();
 
-      // Body
       const bodyTop = px(Math.max(c.open, c.close));
       const bodyBot = px(Math.min(c.open, c.close));
       const bodyH   = Math.max(1, bodyBot - bodyTop);
+
+      // last candle glows if live
+      if (i === n - 1 && liveBlink) {
+        ctx.shadowBlur  = 8;
+        ctx.shadowColor = col;
+      }
       ctx.fillStyle = col;
       ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
+      ctx.shadowBlur = 0;
 
-      // Volume bar
       ctx.fillStyle   = col + "88";
       const volTop    = vx(c.volume);
       const volBottom = PAD.top + priceH + 10 + volH;
       ctx.fillRect(x - candleW / 2, volTop, candleW, volBottom - volTop);
     });
 
-    // X-axis time labels
+    // live price line
+    const ltp = data[data.length - 1].close;
+    const ly  = px(ltp);
+    if (ly > 0 && ly < PAD.top + priceH) {
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = "rgba(0,229,255,0.4)";
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.moveTo(PAD.left, ly);
+      ctx.lineTo(W - PAD.right, ly);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
     ctx.fillStyle = COLORS.label;
     ctx.font      = "10px monospace";
     ctx.textAlign = "center";
@@ -160,47 +288,30 @@ export default function StockChart({ symbol }) {
       ctx.fillText(lbl, cx(i), H - 10);
     }
 
-    // Store layout for crosshair
     canvas._layout = { PAD, chartW, chartH, priceH, volH, gap, n, minP, maxP, rangeP, data, px, cx };
+  }, [candles, tf, liveBlink]);
 
-  }, [candles, tf]);
-
-  // ── Crosshair ─────────────────────────────────────────────────────────────
+  // ── Crosshair ──────────────────────────────────────────────────────────────
   const handleMouseMove = (e) => {
     const canvas  = canvasRef.current;
     if (!canvas || !canvas._layout || candles.length === 0) return;
-
     const rect   = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    const { PAD, gap, n, data, px, cx } = canvas._layout;
-
+    const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const { PAD, gap, n, data, cx } = canvas._layout;
     const i = Math.round((mouseX - PAD.left) / gap - 0.5);
     if (i < 0 || i >= n) { setCrosshair(null); return; }
-
-    const c = data[i];
-    setCrosshair({ x: cx(i), y: mouseY, candle: c, i });
+    setCrosshair({ candle: data[i], i });
   };
 
-  // ── FIX: Open full terminal — pass live ltp so chart renders correct price ─
   const openFullChart = () => {
     if (!symbol) return;
-
-    // Use last known close as the seed price for StockTerminal
     const last = candles[candles.length - 1];
     const ltp  = last?.close ?? null;
-
     sessionStorage.setItem("terminal_symbol", symbol);
     if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
-
-    window.dispatchEvent(
-      new CustomEvent("open-terminal", {
-        detail: { symbol, ltp },
-      })
-    );
+    window.dispatchEvent(new CustomEvent("open-terminal", { detail: { symbol, ltp } }));
   };
 
-  // ── Summary stats ─────────────────────────────────────────────────────────
   const last   = candles[candles.length - 1];
   const first  = candles[0];
   const chg    = last && first ? last.close - first.open : 0;
@@ -216,6 +327,11 @@ export default function StockChart({ symbol }) {
           <span style={{ color: "#00cfff", fontFamily: "monospace", fontWeight: "bold", fontSize: 15 }}>
             {symbol}
           </span>
+          {liveBlink && (
+            <span style={{ fontSize: 8, color: "#00ff9c", background: "#001a0a", border: "1px solid #00ff9c33", borderRadius: 2, padding: "1px 5px", fontFamily: "monospace", fontWeight: 700 }}>
+              ⚡ LIVE
+            </span>
+          )}
           {last && (
             <>
               <span style={{ color: "#e8f4ff", fontFamily: "monospace", fontSize: 14 }}>
@@ -228,21 +344,17 @@ export default function StockChart({ symbol }) {
           )}
         </div>
 
-        {/* Timeframe selector */}
         <div style={{ display: "flex", gap: 4 }}>
           {TF_OPTIONS.map(opt => (
             <button
               key={opt.value}
               onClick={() => setTf(opt.value)}
               style={{
-                padding:      "3px 10px",
-                borderRadius: 4,
-                border:       `1px solid ${tf === opt.value ? "#00cfff" : "#0d2a45"}`,
-                background:   tf === opt.value ? "#00cfff22" : "transparent",
-                color:        tf === opt.value ? "#00cfff" : "#4a8adf",
-                fontFamily:   "monospace",
-                fontSize:     12,
-                cursor:       "pointer",
+                padding: "3px 10px", borderRadius: 4, fontSize: 12, cursor: "pointer",
+                fontFamily: "monospace",
+                border:      `1px solid ${tf === opt.value ? "#00cfff" : "#0d2a45"}`,
+                background:  tf === opt.value ? "#00cfff22" : "transparent",
+                color:       tf === opt.value ? "#00cfff" : "#4a8adf",
               }}
             >
               {opt.label}
@@ -272,20 +384,12 @@ export default function StockChart({ symbol }) {
       {/* Canvas */}
       <div style={{ position: "relative" }}>
         {loading && (
-          <div style={{
-            position: "absolute", inset: 0, display: "flex",
-            alignItems: "center", justifyContent: "center",
-            background: "#010812cc", borderRadius: 6, zIndex: 10,
-          }}>
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#010812cc", borderRadius: 6, zIndex: 10 }}>
             <span style={{ color: "#00cfff", fontFamily: "monospace" }}>Loading {tf} candles...</span>
           </div>
         )}
         {error && !loading && (
-          <div style={{
-            position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-            alignItems: "center", justifyContent: "center",
-            background: "#010812cc", borderRadius: 6, zIndex: 10, gap: 8,
-          }}>
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#010812cc", borderRadius: 6, zIndex: 10, gap: 8 }}>
             <span style={{ color: "#ff4466", fontFamily: "monospace", fontSize: 13 }}>⚠️ {error}</span>
             {error.includes("token") || error.includes("auth") ? (
               <a href="/auth/upstox" style={{ color: "#00cfff", fontFamily: "monospace", fontSize: 12 }}>
@@ -312,18 +416,16 @@ export default function StockChart({ symbol }) {
             onMouseLeave={() => setCrosshair(null)}
           />
 
-          {/* Full Chart button — fires open-terminal with correct symbol + ltp */}
           <div
             onClick={openFullChart}
             style={{
-              position:   "absolute", top: 8, right: 8,
+              position: "absolute", top: 8, right: 8,
               background: "rgba(0,207,255,0.12)",
-              border:     "1px solid rgba(0,207,255,0.35)",
+              border: "1px solid rgba(0,207,255,0.35)",
               borderRadius: 4, padding: "3px 10px",
-              color:      "#00cfff", fontSize: 10,
+              color: "#00cfff", fontSize: 10,
               fontFamily: "monospace", cursor: "pointer",
               zIndex: 5, userSelect: "none",
-              transition: "background 0.15s",
             }}
             title={`Open full chart for ${symbol}`}
           >
@@ -332,7 +434,6 @@ export default function StockChart({ symbol }) {
         </div>
       </div>
 
-      {/* Footer */}
       <div style={{ marginTop: 6, fontFamily: "monospace", fontSize: 10, color: "#2a5a8c", textAlign: "right" }}>
         {candles.length > 0 ? `${candles.length} candles · ${tf} · Upstox` : ""}
       </div>
