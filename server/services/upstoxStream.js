@@ -417,19 +417,7 @@ function startStreamer(accessToken, io) {
       if (ioRef) ioRef.emit("upstox-status", { connected: true });
     });
 
-    newStreamer.on("message", (raw) => {
-  try {
-    const parsed = JSON.parse(raw);
-    const feeds = parsed.feeds || {};
-    for (const [key, feed] of Object.entries(feeds)) {
-      if (key.includes("INDEX")) {
-        console.log("🔥 INDEX FEED:", key, JSON.stringify(feed).substring(0, 200));
-        break;
-      }
-    }
-  } catch(e) {}
-  parseAndEmit(raw);
-});
+    newStreamer.on("message", parseAndEmit);
     newStreamer.on("error", (e) => {
       const msg = e?.message || String(e);
       console.log("⚠️  Upstox WS error:", msg);
