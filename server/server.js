@@ -154,116 +154,180 @@ const MAX_INSTRUMENT_SYMBOLS = 50000; // raised from 5000 — was silently slici
 let instrumentMap = {};
 
 async function loadInstrumentMaster(retryCount = 0) {
-  // Check disk cache first (valid for 24h)
+  // ── 1. Check disk cache (valid 24h, must have 1000+ symbols) ─────────────
   try {
     if (fs.existsSync(INSTRUMENT_FILE)) {
-      const cached = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
-      if (cached._ts && Date.now() - cached._ts < 24 * 60 * 60 * 1000) {
-        const fullMap = cached.map || {};
-        const entries = Object.entries(fullMap);
-        instrumentMap = entries.length > MAX_INSTRUMENT_SYMBOLS
-          ? Object.fromEntries(entries.slice(0, MAX_INSTRUMENT_SYMBOLS))
+      const cached  = JSON.parse(fs.readFileSync(INSTRUMENT_FILE, "utf8"));
+      const fullMap = cached.map || {};
+      const count   = Object.keys(fullMap).length;
+      if (cached._ts && Date.now() - cached._ts < 24 * 60 * 60 * 1000 && count >= 1000) {
+        instrumentMap = count > MAX_INSTRUMENT_SYMBOLS
+          ? Object.fromEntries(Object.entries(fullMap).slice(0, MAX_INSTRUMENT_SYMBOLS))
           : fullMap;
-        console.log(`✅ Instrument master loaded from cache: ${Object.keys(instrumentMap).length} symbols`);
+        console.log(`✅ Instrument master from cache: ${Object.keys(instrumentMap).length} symbols`);
         _pushMapToGann(instrumentMap);
+        setScannerInstrumentMap(instrumentMap);
         return;
       }
+      if (count < 1000) {
+        console.log(`⚠️ Cache has only ${count} symbols — deleting and rebuilding`);
+        try { fs.unlinkSync(INSTRUMENT_FILE); } catch (_) {}
+      }
     }
-  } catch (e) { /* rebuild below */ }
+  } catch (e) { console.warn("⚠️ Cache read error:", e.message); }
+
+  // ── 2. Wait for token (retry up to 3 times with backoff if no token yet) ──
+  const token = upstoxAccessToken || process.env.UPSTOX_ACCESS_TOKEN || process.env.UPSTOX_ANALYTICS_TOKEN;
+  if (!token) {
+    if (retryCount < 3) {
+      const delay = [15, 30, 60][retryCount] || 60;
+      console.log(`⏳ No token yet for instrument master — retrying in ${delay}s (${retryCount + 1}/3)`);
+      setTimeout(() => loadInstrumentMaster(retryCount + 1).catch(() => {}), delay * 1000);
+    } else {
+      console.warn("⚠️ No token after 3 retries — using hardcoded fallback");
+      _applyHardcodedFallback();
+    }
+    return;
+  }
 
   const map = {};
 
-  // ── METHOD 1: Upstox API with token ──────────────────────────────────────
-  const token = upstoxAccessToken || process.env.UPSTOX_ACCESS_TOKEN || process.env.UPSTOX_ANALYTICS_TOKEN;
-  if (token) {
-    try {
-      console.log("📥 Fetching instrument master via Upstox API...");
-      for (const exchange of ["NSE", "BSE"]) {
-        try {
-          const res = await axios.get(
-            `https://api.upstox.com/v2/market/instruments/${exchange}`,
-            {
-              headers: { Authorization: "Bearer " + token, Accept: "application/json" },
-              timeout: 60_000,
-            }
-          );
-          const instruments = Array.isArray(res.data) ? res.data : (res.data?.data || []);
-          console.log(`📥 ${exchange}: ${instruments.length} instruments received`);
-          for (const inst of instruments) {
-            const sym  = inst.trading_symbol || inst.tradingsymbol;
-            const key  = inst.instrument_key || inst.instrumentKey;
-            const type = inst.instrument_type || inst.instrumentType || "";
-            if (sym && key && type.toUpperCase() === "EQ") {
-              if (!map[sym] || exchange === "NSE") map[sym] = key;
-            }
-          }
-          console.log(`✅ ${exchange} loaded: ${Object.keys(map).length} symbols so far`);
-        } catch (exErr) {
-          console.warn(`⚠️ ${exchange} API fetch failed: ${exErr.response?.status || exErr.message}`);
-        }
+  // ── 3. Upstox v2 instruments CSV endpoint (most reliable, no auth needed) ─
+  // This is the official public download endpoint Upstox provides
+  try {
+    console.log("📥 Downloading instrument master from Upstox CSV...");
+    const res = await axios.get(
+      "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz",
+      {
+        timeout: 120_000,
+        responseType: "arraybuffer",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Accept-Encoding": "gzip, deflate",
+          "Accept": "*/*",
+          "Referer": "https://upstox.com/",
+        },
+        decompress: true,
       }
-    } catch (e) {
-      console.warn("⚠️ Upstox API instrument fetch failed:", e.message);
+    );
+    const zlib = require("zlib");
+    let jsonData;
+    try {
+      const decompressed = zlib.gunzipSync(Buffer.from(res.data));
+      jsonData = JSON.parse(decompressed.toString("utf8"));
+    } catch (_) {
+      // axios may have already decompressed
+      jsonData = JSON.parse(Buffer.from(res.data).toString("utf8"));
+    }
+    const instruments = Array.isArray(jsonData) ? jsonData : [];
+    console.log(`📥 complete.json.gz: ${instruments.length} total instruments`);
+    for (const inst of instruments) {
+      const sym  = inst.trading_symbol || inst.tradingsymbol;
+      const key  = inst.instrument_key || inst.instrumentKey;
+      const type = (inst.instrument_type || inst.instrumentType || "").toUpperCase();
+      const seg  = inst.segment || "";
+      if (!sym || !key || type !== "EQ") continue;
+      if (seg === "NSE_EQ" || seg === "BSE_EQ") {
+        if (!map[sym] || seg === "NSE_EQ") map[sym] = key;
+      }
+    }
+    console.log(`✅ complete.json.gz parsed: ${Object.keys(map).length} EQ symbols`);
+  } catch (e) {
+    console.warn(`⚠️ complete.json.gz failed: ${e.response?.status || e.message}`);
+  }
+
+  // ── 4. Upstox API fallback (uses token, correct v2 endpoint) ─────────────
+  if (Object.keys(map).length < 1000) {
+    console.log("📥 Trying Upstox API instrument download...");
+    for (const exchange of ["NSE", "BSE"]) {
+      try {
+        // Correct Upstox v2 endpoint for instruments
+        const res = await axios.get(
+          `https://api.upstox.com/v2/market-quote/instruments/${exchange}`,
+          {
+            headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+            timeout: 90_000,
+          }
+        );
+        const instruments = Array.isArray(res.data) ? res.data
+          : Array.isArray(res.data?.data) ? res.data.data : [];
+        console.log(`📥 API ${exchange}: ${instruments.length} instruments`);
+        let added = 0;
+        for (const inst of instruments) {
+          const sym  = inst.trading_symbol || inst.tradingSymbol || inst.tradingsymbol;
+          const key  = inst.instrument_key || inst.instrumentKey;
+          const type = (inst.instrument_type || inst.instrumentType || "").toUpperCase();
+          const seg  = inst.segment || "";
+          if (!sym || !key || type !== "EQ") continue;
+          if (seg === `${exchange}_EQ` && (!map[sym] || exchange === "NSE")) {
+            map[sym] = key; added++;
+          }
+        }
+        console.log(`✅ API ${exchange}: +${added} symbols (total: ${Object.keys(map).length})`);
+      } catch (e) {
+        console.warn(`⚠️ API ${exchange} failed (${e.response?.status}): ${e.response?.data?.message || e.message}`);
+      }
     }
   }
 
-  // ── METHOD 2: CDN fallback ────────────────────────────────────────────────
-  if (Object.keys(map).length < 100) {
-    console.log("📥 Trying CDN fallback for instrument master...");
-    const cdnUrls = [
-      { url: "https://assets.upstox.com/market-quote/instruments/exchange/complete.json", segment: "ALL" },
-      { url: "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json",      segment: "NSE_EQ" },
-      { url: "https://assets.upstox.com/market-quote/instruments/exchange/BSE.json",      segment: "BSE_EQ" },
-    ];
-    for (const { url, segment } of cdnUrls) {
+  // ── 5. NSE/BSE individual CDN JSON fallback ───────────────────────────────
+  if (Object.keys(map).length < 1000) {
+    for (const { url, seg } of [
+      { url: "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json", seg: "NSE_EQ" },
+      { url: "https://assets.upstox.com/market-quote/instruments/exchange/BSE.json", seg: "BSE_EQ" },
+    ]) {
       try {
         const res = await axios.get(url, {
-          timeout: 60_000, responseType: "json",
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json, */*", "Referer": "https://upstox.com/", "Origin": "https://upstox.com" },
+          timeout: 90_000, responseType: "json",
+          headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json", "Referer": "https://upstox.com/" },
         });
         const instruments = Array.isArray(res.data) ? res.data : [];
-        console.log(`📥 CDN ${segment}: ${instruments.length} instruments`);
+        let added = 0;
         for (const inst of instruments) {
           const sym  = inst.trading_symbol || inst.tradingsymbol;
           const key  = inst.instrument_key || inst.instrumentKey;
-          const type = inst.instrument_type || inst.instrumentType || "";
-          const seg  = inst.segment || "";
-          if (!sym || !key || type.toUpperCase() !== "EQ") continue;
-          if (segment === "ALL") {
-            if (seg === "NSE_EQ" || seg === "BSE_EQ") { if (!map[sym] || seg === "NSE_EQ") map[sym] = key; }
-          } else {
-            if (seg === segment && (!map[sym] || segment === "NSE_EQ")) map[sym] = key;
+          const type = (inst.instrument_type || inst.instrumentType || "").toUpperCase();
+          const s    = inst.segment || "";
+          if (sym && key && type === "EQ" && s === seg) {
+            if (!map[sym] || seg === "NSE_EQ") { map[sym] = key; added++; }
           }
         }
-        if (Object.keys(map).length > 100) { console.log(`✅ CDN loaded: ${Object.keys(map).length} symbols`); break; }
-      } catch (cdnErr) {
-        console.warn(`⚠️ CDN ${url} failed: ${cdnErr.response?.status || cdnErr.message}`);
+        console.log(`✅ CDN ${seg}: +${added} (total: ${Object.keys(map).length})`);
+      } catch (e) {
+        console.warn(`⚠️ CDN ${seg}: ${e.response?.status || e.message}`);
       }
     }
   }
 
-  // ── Save if we got enough symbols ─────────────────────────────────────────
-  if (Object.keys(map).length > 100) {
-    const entries = Object.entries(map);
-    instrumentMap = entries.length > MAX_INSTRUMENT_SYMBOLS
-      ? Object.fromEntries(entries.slice(0, MAX_INSTRUMENT_SYMBOLS))
+  // ── 6. Save or retry ──────────────────────────────────────────────────────
+  const total = Object.keys(map).length;
+  if (total >= 1000) {
+    instrumentMap = total > MAX_INSTRUMENT_SYMBOLS
+      ? Object.fromEntries(Object.entries(map).slice(0, MAX_INSTRUMENT_SYMBOLS))
       : map;
     try {
       const dir = path.dirname(INSTRUMENT_FILE);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(INSTRUMENT_FILE, JSON.stringify({ _ts: Date.now(), map }), "utf8");
-    } catch (e) { console.warn("⚠️ Could not save instrument cache:", e.message); }
-    console.log(`✅ Instrument master: ${Object.keys(instrumentMap).length} symbols in RAM`);
+      console.log(`💾 Instrument master saved to disk`);
+    } catch (e) { console.warn("⚠️ Disk save failed:", e.message); }
+    console.log(`✅ Instrument master READY: ${Object.keys(instrumentMap).length} symbols in RAM`);
     _pushMapToGann(instrumentMap);
+    setScannerInstrumentMap(instrumentMap);
     return;
   }
 
-  // ── METHOD 3: Hardcoded fallback ──────────────────────────────────────────
-  console.warn("⚠️ All instrument downloads failed — using hardcoded fallback");
-  if (retryCount < 3) {
-    console.log(`🔄 Retrying in 30s (attempt ${retryCount + 1}/3)...`);
-    setTimeout(() => loadInstrumentMaster(retryCount + 1).catch(() => {}), 30_000);
+  // ── 7. Schedule retry + use hardcoded fallback in the meantime ────────────
+  console.warn(`⚠️ Only got ${total} symbols — using hardcoded fallback`);
+  if (retryCount < 5) {
+    const delay = [30, 60, 120, 180, 300][retryCount] || 60;
+    console.log(`🔄 Will retry in ${delay}s (attempt ${retryCount + 1}/5)`);
+    setTimeout(() => loadInstrumentMaster(retryCount + 1).catch(() => {}), delay * 1000);
   }
+  _applyHardcodedFallback();
+}
+
+function _applyHardcodedFallback() {
   instrumentMap = {
     "RELIANCE":"NSE_EQ|INE002A01018","TCS":"NSE_EQ|INE467B01029","HDFCBANK":"NSE_EQ|INE040A01034",
     "INFY":"NSE_EQ|INE009A01021","ICICIBANK":"NSE_EQ|INE090A01021","SBIN":"NSE_EQ|INE062A01020",
@@ -287,29 +351,24 @@ async function loadInstrumentMaster(retryCount = 0) {
     "VEDL":"NSE_EQ|INE205A01025","SUZLON":"NSE_EQ|INE040H01021","RVNL":"NSE_EQ|INE415G01027",
     "SAIL":"NSE_EQ|INE114A01011","NMDC":"NSE_EQ|INE584A01023","GAIL":"NSE_EQ|INE129A01019",
     "IOC":"NSE_EQ|INE242A01010","HPCL":"NSE_EQ|INE142A01065","BANKBARODA":"NSE_EQ|INE028A01039",
-    "CANBK":"NSE_EQ|INE476A01022","PNB":"NSE_EQ|INE160A01022","IDFCFIRSTB":"NSE_EQ|INE134E01011",
-    "FEDERALBNK":"NSE_EQ|INE171A01029","TATAPOWER":"NSE_EQ|INE245A01021","ADANIGREEN":"NSE_EQ|INE364U01010",
-    "BHEL":"NSE_EQ|INE257A01026","BDL":"NSE_EQ|INE171Z01018","COCHINSHIP":"NSE_EQ|INE704P01017",
-    "BEML":"NSE_EQ|INE258A01016","TITAGARH":"NSE_EQ|INE615H01020","JUPITERWAG":"NSE_EQ|INE0C3A01013",
+    "CANBK":"NSE_EQ|INE476A01022","PNB":"NSE_EQ|INE160A01022","FEDERALBNK":"NSE_EQ|INE171A01029",
+    "TATAPOWER":"NSE_EQ|INE245A01021","ADANIGREEN":"NSE_EQ|INE364U01010","BHEL":"NSE_EQ|INE257A01026",
     "COFORGE":"NSE_EQ|INE591G01017","LTIM":"NSE_EQ|INE214T01019","MPHASIS":"NSE_EQ|INE356A01018",
     "PERSISTENT":"NSE_EQ|INE262H01021","CHOLAFIN":"NSE_EQ|INE121A01024","MUTHOOTFIN":"NSE_EQ|INE414G01012",
-    "OBEROIRLTY":"NSE_EQ|INE093I01010","DLF":"NSE_EQ|INE271C01023","GODREJPROP":"NSE_EQ|INE484J01027",
-    "DMART":"NSE_EQ|INE192R01011","HAVELLS":"NSE_EQ|INE176B01034","DIXON":"NSE_EQ|INE935N01020",
-    "NYKAA":"NSE_EQ|INE388Y01029","PAYTM":"NSE_EQ|INE982J01020","CAMS":"NSE_EQ|INE173J01021",
-    "CREDITACC":"NSE_EQ|INE491G01018","ASTRAL":"NSE_EQ|INE006I01046","DEEPAKFERT":"NSE_EQ|INE501A01019",
-    "NUVAMA":"NSE_EQ|INE531F01023","VBL":"NSE_EQ|INE200M01013","M&M":"NSE_EQ|INE101A01026",
-    "SHRIRAMFIN":"NSE_EQ|INE721A01013","HDFCAMC":"NSE_EQ|INE127D01025","CDSL":"NSE_EQ|INE736A01011",
-    "MCX":"NSE_EQ|INE745G01035","360ONE":"NSE_EQ|INE01EQ01016","CONCOR":"NSE_EQ|INE111A01025",
-    "APOLLOHOSP":"NSE_EQ|INE437A01024","JUBLFOOD":"NSE_EQ|INE797F01020","PAGEIND":"NSE_EQ|INE761H01022",
-    "AMBER":"NSE_EQ|INE371P01015","AFFLE":"NSE_EQ|INE00WC01010","TANLA":"NSE_EQ|INE483C01032",
-    "KPIT":"NSE_EQ|INE818I01017","TATATECH":"NSE_EQ|INE142M01025","DELHIVERY":"NSE_EQ|INE152O01027",
-    "LICI":"NSE_EQ|INE0J1Y01017","BSE":"NSE_EQ|INE118H01025","CRISIL":"NSE_EQ|INE007B01023",
+    "DLF":"NSE_EQ|INE271C01023","GODREJPROP":"NSE_EQ|INE484J01027","DMART":"NSE_EQ|INE192R01011",
+    "HAVELLS":"NSE_EQ|INE176B01034","DIXON":"NSE_EQ|INE935N01020","NYKAA":"NSE_EQ|INE388Y01029",
+    "CAMS":"NSE_EQ|INE173J01021","CREDITACC":"NSE_EQ|INE491G01018","ASTRAL":"NSE_EQ|INE006I01046",
+    "DEEPAKFERT":"NSE_EQ|INE501A01019","NUVAMA":"NSE_EQ|INE531F01023","VBL":"NSE_EQ|INE200M01013",
+    "M&M":"NSE_EQ|INE101A01026","SHRIRAMFIN":"NSE_EQ|INE721A01013","HDFCAMC":"NSE_EQ|INE127D01025",
+    "CDSL":"NSE_EQ|INE736A01011","MCX":"NSE_EQ|INE745G01035","APOLLOHOSP":"NSE_EQ|INE437A01024",
+    "JUBLFOOD":"NSE_EQ|INE797F01020","KPIT":"NSE_EQ|INE818I01017","TATATECH":"NSE_EQ|INE142M01025",
     "MARICO":"NSE_EQ|INE196A01026","DABUR":"NSE_EQ|INE016A01026","COLPAL":"NSE_EQ|INE259A01022",
     "GODREJCP":"NSE_EQ|INE102D01028","PIIND":"NSE_EQ|INE603J01030","DEEPAKNTR":"NSE_EQ|INE288B01029",
-    "LALPATHLAB":"NSE_EQ|INE600L01024","METROPOLIS":"NSE_EQ|INE875R01011","CEMPRO":"BSE_EQ|543066",
+    "LALPATHLAB":"NSE_EQ|INE600L01024","METROPOLIS":"NSE_EQ|INE875R01011",
   };
-  console.log(`⚠️ Using fallback instrument map: ${Object.keys(instrumentMap).length} symbols`);
+  console.log(`⚠️ Hardcoded fallback active: ${Object.keys(instrumentMap).length} symbols`);
   _pushMapToGann(instrumentMap);
+  setScannerInstrumentMap(instrumentMap);
 }
 
 function _pushMapToGann(map) {
@@ -714,6 +773,9 @@ function scheduleDailyTokenCheck() {
     } else {
       console.log("✅ [TokenCheck] Token valid at market open — restarting stream");
       restartWithNewToken(upstoxAccessToken, io);
+      // Refresh instrument master daily at market open
+      try { if (fs.existsSync(INSTRUMENT_FILE)) fs.unlinkSync(INSTRUMENT_FILE); } catch (_) {}
+      loadInstrumentMaster().catch(() => {});
     }
     scheduleDailyTokenCheck();
   }, ms);
@@ -1614,6 +1676,18 @@ app.get("/api/admin/backfill", async (req, res) => {
 });
 
 // ── SPA fallback ──────────────────────────────────────────────────────────────
+// ── /api/admin/reload-instruments ────────────────────────────────────────────
+app.get("/api/admin/reload-instruments", async (req, res) => {
+  if ((req.query.token || "") !== (process.env.ADMIN_SECRET || "backfill2026"))
+    return res.status(401).json({ error: "Unauthorized" });
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.write("Starting instrument master reload...\n");
+  try { if (fs.existsSync(INSTRUMENT_FILE)) { fs.unlinkSync(INSTRUMENT_FILE); res.write("🗑️ Old cache deleted\n"); } } catch (_) {}
+  instrumentMap = {};
+  await loadInstrumentMaster();
+  res.write(`✅ Done: ${Object.keys(instrumentMap).length} symbols loaded\n`);
+  res.end();
+});
 app.use((req, res, next) => {
   if (req.method !== "GET") return next();
   if (req.path.startsWith("/api") || req.path.startsWith("/auth")) return next();

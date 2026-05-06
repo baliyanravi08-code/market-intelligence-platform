@@ -101,20 +101,26 @@ function unregisterLiveCandleSubscription(symbol, tf) {
 
 // ── Subscribe symbol for price:tick on EOD timeframes (1D/1W/1M) ─────────────
 // Called from websocket.js watch:chart handler so 1D/1W/1M charts get live ticks
+const pendingSubscriptions = new Set(); // queued before streamer connects
+
 function subscribeSymbolForPriceTick(symbol) {
   if (!symbol) return;
   const sym      = symbol.toUpperCase().trim();
   const instrKey = symbolToInstrKey(sym);
-  if (stockInstrumentKeys.has(instrKey)) return; // already subscribed
-  stockInstrumentKeys.add(instrKey);
   instrKeyToSymbol.set(instrKey, sym);
+  if (stockInstrumentKeys.has(instrKey)) return;
+  stockInstrumentKeys.add(instrKey);
   if (streamer) {
     try {
       streamer.subscribe([instrKey], "full");
       console.log(`📡 price:tick subscribed: ${sym}`);
     } catch (e) {
       console.warn("⚠️ price:tick subscribe error:", e.message);
+      pendingSubscriptions.add(instrKey);
     }
+  } else {
+    pendingSubscriptions.add(instrKey);
+    console.log(`📡 price:tick queued (streamer not ready): ${sym}`);
   }
 }
 
@@ -356,10 +362,17 @@ function stopStreamer() {
 
 function resubscribeAll() {
   if (!streamer) return;
-  try { streamer.subscribe(INDEX_INSTRUMENTS, "full"); } catch (e) { console.log("⚠️  index subscribe error:", e.message); }
-  if (optionInstruments.size   > 0) { try { streamer.subscribe(Array.from(optionInstruments),   "full_d30"); } catch (e) { console.log("⚠️  option re-subscribe error:",         e.message); } }
-  if (stockInstruments.size    > 0) { try { streamer.subscribe(Array.from(stockInstruments),    "full");     } catch (e) { console.log("⚠️  stock re-subscribe error:",          e.message); } }
-  if (stockInstrumentKeys.size > 0) { try { streamer.subscribe(Array.from(stockInstrumentKeys), "full");     } catch (e) { console.log("⚠️  instrument key re-subscribe error:", e.message); } }
+  try { streamer.subscribe(INDEX_INSTRUMENTS, "full"); } catch (e) { console.log("⚠️ index subscribe error:", e.message); }
+  if (optionInstruments.size   > 0) { try { streamer.subscribe(Array.from(optionInstruments),   "full_d30"); } catch (e) { console.log("⚠️ option re-subscribe error:", e.message); } }
+  if (stockInstruments.size    > 0) { try { streamer.subscribe(Array.from(stockInstruments),    "full");     } catch (e) { console.log("⚠️ stock re-subscribe error:", e.message); } }
+  if (stockInstrumentKeys.size > 0) { try { streamer.subscribe(Array.from(stockInstrumentKeys), "full");     } catch (e) { console.log("⚠️ instrument key re-subscribe error:", e.message); } }
+  if (pendingSubscriptions.size > 0) {
+    try {
+      streamer.subscribe(Array.from(pendingSubscriptions), "full");
+      console.log(`📡 Flushed ${pendingSubscriptions.size} pending subscriptions`);
+      pendingSubscriptions.clear();
+    } catch (e) { console.warn("⚠️ pending flush error:", e.message); }
+  }
 }
 
 function scheduleReconnect() {
