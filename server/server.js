@@ -183,25 +183,28 @@ async function loadInstrumentMaster(retryCount = 0) {
 
     for (const { url, segment } of exchanges) {
       console.log(`📥 Downloading ${segment} from ${url}...`);
-      const res = await axios.get(url, { timeout: 25_000, responseType: "json",
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept": "application/json, text/plain, */*",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Referer": "https://upstox.com/",
-      "Origin": "https://upstox.com",
-  },
-});
-      const instruments = res.data; // already parsed JSON — no gunzip needed
-      console.log(`📥 ${segment}: ${instruments.length} instruments received`);
-
-      for (const inst of instruments) {
-        if (inst.segment === segment && inst.instrument_type === "EQ") {
-          if (!map[inst.trading_symbol] || segment === "NSE_EQ") {
-            map[inst.trading_symbol] = inst.instrument_key;
+      try {
+        const res = await axios.get(url, { timeout: 60_000, responseType: "json",
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://upstox.com/",
+        "Origin": "https://upstox.com",
+        },
+        });
+        const instruments = res.data;
+        console.log(`📥 ${segment}: ${instruments.length} instruments received`);
+        for (const inst of instruments) {
+          if (inst.segment === segment && inst.instrument_type === "EQ") {
+            if (!map[inst.trading_symbol] || segment === "NSE_EQ") {
+              map[inst.trading_symbol] = inst.instrument_key;
+            }
           }
         }
+        console.log(`✅ ${segment} loaded: ${Object.keys(map).length} symbols so far`);
+      } catch (segErr) {
+        console.warn(`⚠️ ${segment} download failed: ${segErr.message} — skipping`);
       }
-      console.log(`✅ ${segment} loaded: ${Object.keys(map).length} symbols so far`);
     }
 
     const entries = Object.entries(map);
