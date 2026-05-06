@@ -418,10 +418,14 @@ function startStreamer(accessToken, io) {
     });
 
     newStreamer.on("message", (raw) => {
-  console.log("🔥 RAW MSG len:", raw?.length || raw?.byteLength || 0);
+  try {
+    const parsed = JSON.parse(raw);
+    console.log("🔥 KEYS:", JSON.stringify(Object.keys(parsed)));
+    if (parsed.feeds) console.log("🔥 FEED KEYS:", JSON.stringify(Object.keys(parsed.feeds).slice(0,2)));
+    if (parsed.feed) console.log("🔥 FEED(alt) KEYS:", JSON.stringify(Object.keys(parsed.feed).slice(0,2)));
+  } catch(e) { console.log("🔥 PARSE ERR:", e.message, "raw:", String(raw).substring(0,100)); }
   parseAndEmit(raw);
 });
-
     newStreamer.on("error", (e) => {
       const msg = e?.message || String(e);
       console.log("⚠️  Upstox WS error:", msg);
