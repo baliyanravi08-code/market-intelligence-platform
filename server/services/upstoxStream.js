@@ -221,7 +221,7 @@ function parseAndEmit(raw) {
     const updates = [];
 
     for (const [key, feed] of Object.entries(feeds)) {
-      const ff   = feed?.ff || feed;
+      const ff   = feed?.ff || feed?.fullFeed || feed;
       const name = NAME_MAP[key];
 
       // ── Index tick ────────────────────────────────────────────────────────
