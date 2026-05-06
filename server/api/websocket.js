@@ -328,10 +328,13 @@ function emitCompositeUpdate(data) {
 // ── Main attach function ─────────────────────────────────────────────────────
 function attachSocketIO(server) {
   const io = new Server(server, {
-    cors:         { origin: "*" },
-    pingInterval: 25_000,
-    pingTimeout:  10_000,
-    transports:   ["websocket", "polling"],
+    cors:              { origin: "*" },
+    pingInterval:      20_000,
+    pingTimeout:       60_000,
+    upgradeTimeout:    30_000,
+    transports:        ["websocket", "polling"],
+    allowUpgrades:     true,
+    perMessageDeflate: false,
   });
 
   _io = io;
