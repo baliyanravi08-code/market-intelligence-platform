@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef } from "react";
-import { useBinarySocket } from "./utils/binaryProtocol";
 import "./App.css";
 import OptionChain from "./pages/OptionChain";
 import SmartCircuitPage from "./pages/SmartCircuitPage";
@@ -173,7 +172,7 @@ function extractAmount(text) {
 
 // ─── TRADINGVIEW SYMBOL MAPS ──────────────────────────────────────────────────
 const TV_WIDGET_SYMBOLS = {
-  "NIFTY 50":   "NSE:NIFTY_INDEX",
+  "NIFTY 50":   "NSE:NIFTY50",
   "SENSEX":     "BSE:SENSEX",
   "BANK NIFTY": "NSE:BANKNIFTY",
   "BTC":        "BINANCE:BTCUSDT",
@@ -1081,71 +1080,95 @@ export default function App() {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  const sock = useBinarySocket({
-    // ── Binary-decoded events (low bandwidth) ────────────────────────────
-    "market-tick": (updates) => {
-      if (!Array.isArray(updates)) return;
-      setMarketIndices(prev => prev.map(idx => {
-        const update = updates.find(u => u.name === idx.name);
-        if (!update) return idx;
-        return { ...update, _ts: Date.now() };
-      }));
-      setTickerSource("upstox");
-      setTickerLastOk(Date.now());
-      setTickerStale(false);
-    },
-    "upstox-status": ({ connected } = {}) => {
-      if (!connected) setTickerSource("connecting");
-    },
-    "gann-signal": (signal) => {
-      if (!signal?.symbol) return;
-      setGannSignals(prev => {
-        const next = prev.filter(g => g.symbol !== signal.symbol);
-        return [signal, ...next];
-      });
-    },
-    "sector-update": (boom) => {
-      if (!boom?.sector) return;
-      setSector(prev => {
-        const next = prev.filter(s => s.sector !== boom.sector);
-        return [boom, ...next];
-      });
-    },
-    "nse_events": (events) => {
-      if (!Array.isArray(events)) return;
-      setNseEvents(prev => {
-        const combined = [...events, ...prev];
-        const seen = new Set();
-        return combined.filter(e => {
-          const key = `${e.company}||${(e.title||"").substring(0,60)}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        }).slice(0, 200);
-      });
-    },
-    "bse_events": (events) => {
-      if (!Array.isArray(events)) return;
-      setBseEvents(prev => {
-        const combined = [...events, ...prev];
-        const seen = new Set();
-        return combined.filter(e => {
-          const key = `${e.company}||${(e.title||"").substring(0,60)}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        }).slice(0, 200);
-      });
-    },
-    "disconnect": () => {
-      setTickerSource("error");
-    },
-  }, { shared: true });
+  const socketRef = useRef(null);
 
-  // Keep socket in state for child components that need it
   useEffect(() => {
-    if (sock) setSocket(sock);
-  }, [sock]);
+    import("socket.io-client").then(({ io }) => {
+      const sock = io({ transports: ["websocket", "polling"] });
+      socketRef.current = sock;
+      setSocket(sock);
+
+      sock.on("connect", () => {
+        console.log("Socket connected");
+        sock.emit("use-binary", { version: 1 });
+        if (window._appKeepalive) clearInterval(window._appKeepalive);
+        window._appKeepalive = setInterval(() => {
+          if (sock.connected) sock.emit("ping");
+        }, 15_000);
+      });
+
+      sock.on("disconnect", () => {
+        setTickerSource("error");
+        if (window._appKeepalive) { clearInterval(window._appKeepalive); window._appKeepalive = null; }
+      });
+
+      sock.on("market-tick", (updates) => {
+        if (!Array.isArray(updates)) return;
+        setMarketIndices(prev => prev.map(idx => {
+          const update = updates.find(u => u.name === idx.name);
+          if (!update) return idx;
+          return { ...update, _ts: Date.now() };
+        }));
+        setTickerSource("upstox");
+        setTickerLastOk(Date.now());
+        setTickerStale(false);
+      });
+
+      sock.on("upstox-status", ({ connected } = {}) => {
+        if (!connected) setTickerSource("connecting");
+      });
+
+      sock.on("gann-signal", (signal) => {
+        if (!signal?.symbol) return;
+        setGannSignals(prev => {
+          const next = prev.filter(g => g.symbol !== signal.symbol);
+          return [signal, ...next];
+        });
+      });
+
+      sock.on("sector-update", (boom) => {
+        if (!boom?.sector) return;
+        setSector(prev => {
+          const next = prev.filter(s => s.sector !== boom.sector);
+          return [boom, ...next];
+        });
+      });
+
+      sock.on("nse_events", (events) => {
+        if (!Array.isArray(events)) return;
+        setNseEvents(prev => {
+          const combined = [...events, ...prev];
+          const seen = new Set();
+          return combined.filter(e => {
+            const key = `${e.company}||${(e.title||"").substring(0,60)}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }).slice(0, 200);
+        });
+      });
+
+      sock.on("bse_events", (events) => {
+        if (!Array.isArray(events)) return;
+        setBseEvents(prev => {
+          const combined = [...events, ...prev];
+          const seen = new Set();
+          return combined.filter(e => {
+            const key = `${e.company}||${(e.title||"").substring(0,60)}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }).slice(0, 200);
+        });
+      });
+    });
+
+    return () => {
+      if (window._appKeepalive) clearInterval(window._appKeepalive);
+      if (socketRef.current) socketRef.current.disconnect();
+    };
+  // eslint-disable-next-line
+  }, []);
 
   useEffect(() => {
     fetch("/api/market").then(r => r.json()).then(data => {

@@ -223,10 +223,24 @@ function StockChart({ symbol, defaultTf }) {
 
 let _socket = null;
 function getSocket() {
-  if (!_socket) _socket = io({ transports: ["websocket"] });
+  if (!_socket || _socket.disconnected) {
+    _socket = io({ transports: ["websocket", "polling"] });
+
+    _socket.on("connect", () => {
+      console.log("Scanner socket connected");
+      _socket.emit("use-binary", { version: 1 });
+      if (window._scannerKeepalive) clearInterval(window._scannerKeepalive);
+      window._scannerKeepalive = setInterval(() => {
+        if (_socket?.connected) _socket.emit("ping");
+      }, 15_000);
+    });
+
+    _socket.on("disconnect", () => {
+      if (window._scannerKeepalive) { clearInterval(window._scannerKeepalive); window._scannerKeepalive = null; }
+    });
+  }
   return _socket;
 }
-
 function expandDiffStock(d) {
   return {
     symbol:         d.s,
@@ -1411,6 +1425,7 @@ if (d.error && d.weekend) {
       socket.off("scanner-tech-batch");
       socket.off("ltp");
       socket.off("backtest-live-tick");
+      if (window._scannerKeepalive) { clearInterval(window._scannerKeepalive); window._scannerKeepalive = null; }
     };
   }, [rebuildDataFromMap]);
 
