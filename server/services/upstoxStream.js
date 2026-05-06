@@ -420,10 +420,14 @@ function startStreamer(accessToken, io) {
     newStreamer.on("message", (raw) => {
   try {
     const parsed = JSON.parse(raw);
-    console.log("🔥 KEYS:", JSON.stringify(Object.keys(parsed)));
-    if (parsed.feeds) console.log("🔥 FEED KEYS:", JSON.stringify(Object.keys(parsed.feeds).slice(0,2)));
-    if (parsed.feed) console.log("🔥 FEED(alt) KEYS:", JSON.stringify(Object.keys(parsed.feed).slice(0,2)));
-  } catch(e) { console.log("🔥 PARSE ERR:", e.message, "raw:", String(raw).substring(0,100)); }
+    const feeds = parsed.feeds || {};
+    for (const [key, feed] of Object.entries(feeds)) {
+      if (key.includes("INDEX")) {
+        console.log("🔥 INDEX FEED:", key, JSON.stringify(feed).substring(0, 200));
+        break;
+      }
+    }
+  } catch(e) {}
   parseAndEmit(raw);
 });
     newStreamer.on("error", (e) => {
