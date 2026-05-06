@@ -3,12 +3,9 @@
 /**
  * services/upstoxStream.js — Binary Protocol Edition
  *
- * FIXES:
- *   1. emitChartLTP + emitPriceTick both called on every equity tick
- *   2. subscribeSymbolForPriceTick — subscribes symbol when chart:watch fires (1D/1W/1M support)
- *   3. market-tick  → ws.emitMarketTick(updates)
- *   4. candle:tick  → ws.emitCandleTick(...)
- *   5. candle:closed→ ws.emitCandleClosed(...)
+ * FIX: Removed 0.05 dedup gate on index ticks — every Upstox tick now
+ *      flows directly to emitMarketTick → binary frame → frontend blink.
+ *      No polling, no timers, pure live WebSocket push.
  */
 
 let UpstoxClient = null;
@@ -100,8 +97,7 @@ function unregisterLiveCandleSubscription(symbol, tf) {
 }
 
 // ── Subscribe symbol for price:tick on EOD timeframes (1D/1W/1M) ─────────────
-// Called from websocket.js watch:chart handler so 1D/1W/1M charts get live ticks
-const pendingSubscriptions = new Set(); // queued before streamer connects
+const pendingSubscriptions = new Set();
 
 function subscribeSymbolForPriceTick(symbol) {
   if (!symbol) return;
@@ -124,7 +120,7 @@ function subscribeSymbolForPriceTick(symbol) {
   }
 }
 
-// ── Lazy-load websocket module (avoids circular require) ──────────────────────
+// ── Lazy-load websocket module ────────────────────────────────────────────────
 let _ws = null;
 function getWS() {
   if (!_ws) { try { _ws = require("../api/websocket"); } catch (_) {} }
@@ -148,9 +144,7 @@ function processCandleTick(symbol, price, volume) {
     const existing    = liveCandleState.get(key);
 
     if (!existing || existing.time !== periodStart) {
-      if (existing) {
-        ws.emitCandleClosed(keySym, tf, existing);
-      }
+      if (existing) ws.emitCandleClosed(keySym, tf, existing);
       const newCandle = { time: periodStart, open: price, high: price, low: price, close: price, volume: volume || 0 };
       liveCandleState.set(key, newCandle);
       ws.emitCandleTick(keySym, tf, newCandle);
@@ -160,7 +154,6 @@ function processCandleTick(symbol, price, volume) {
       existing.low    = Math.min(existing.low, price);
       existing.close  = price;
       existing.volume = (existing.volume || 0) + (volume || 0);
-
       const lastEmit = candleEmitThrottle.get(key) || 0;
       if (now - lastEmit >= 2000) {
         ws.emitCandleTick(keySym, tf, { ...existing });
@@ -169,9 +162,6 @@ function processCandleTick(symbol, price, volume) {
     }
   }
 }
-
-// ── Index price dedup ─────────────────────────────────────────────────────────
-const prevEmittedIndexPrice = new Map();
 
 // ── Instrument helpers ────────────────────────────────────────────────────────
 function getSafePrevClose(key, ltpc, currentPrice) {
@@ -245,15 +235,19 @@ function parseAndEmit(raw) {
             const pct  = prev > 0 ? parseFloat(((diff / prev) * 100).toFixed(2)) : 0;
             const up   = diff >= 0;
 
-            const lastEmitted = prevEmittedIndexPrice.get(name);
-            if (lastEmitted === undefined || Math.abs(price - lastEmitted) >= 0.05) {
-              prevEmittedIndexPrice.set(name, price);
-              updates.push({
-                name, price: price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
-                raw: price, change: (up ? "+" : "") + diff.toFixed(2),
-                pct: (up ? "+" : "") + pct.toFixed(2) + "%", up, _ts: Date.now(),
-              });
-            }
+            // ✅ FIX: NO dedup gate — every single Upstox tick goes straight through
+            // Previously: if (Math.abs(price - lastEmitted) >= 0.05) { ... }
+            // That gate was silently swallowing ticks → frontend never updated
+            updates.push({
+              name,
+              price: price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
+              raw:   price,
+              change: (up ? "+" : "") + diff.toFixed(2),
+              pct:    (up ? "+" : "") + pct.toFixed(2) + "%",
+              up,
+              _ts: Date.now(),
+            });
+
             if (typeof ltpTickHandler === "function") ltpTickHandler(GANN_SYMBOL_MAP[name] || name, price);
           }
         }
@@ -289,7 +283,6 @@ function parseAndEmit(raw) {
               ws.broadcastBacktestTick({ symbol, price, prevClose, change, changePct });
             }
 
-            // ── chart LTP + price:tick for ALL timeframes (1m, 5m ... 1D, 1W, 1M)
             if (ws) {
               if (ws.emitChartLTP) ws.emitChartLTP(symbol, price);
               if (ws.emitPriceTick) {
@@ -300,6 +293,7 @@ function parseAndEmit(raw) {
               }
             }
 
+            // ✅ FIX: Feed every equity tick to scanner — no gate, no delay
             const scanner = getScanner();
             if (scanner && typeof scanner.applyLiveTick === "function") {
               scanner.applyLiveTick({ symbol, price, changePct, change, prevClose });
@@ -315,7 +309,7 @@ function parseAndEmit(raw) {
       }
     }
 
-    // ── market-tick via binary-aware emitter ──────────────────────────────
+    // ── Emit market-tick as binary — every tick, no filter ───────────────
     if (updates.length > 0) {
       const ws = getWS();
       if (ws?.emitMarketTick) {

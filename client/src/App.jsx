@@ -32,10 +32,58 @@ const MOBILE_TABS = [
   { key: "terminal",     label: "📈 Chart"   },
 ];
 
-// ── Valid page keys — used for localStorage restore ────────────────────────
 const VALID_PAGES = new Set([
   "dashboard", "options", "scores", "options-intel", "scanner", "terminal"
 ]);
+
+// ── Binary decoder — reads market-tick binary frame from websocket.js ─────────
+// MSG type 0x01 = MARKET_TICK (must match bp.MSG.MARKET_TICK in binaryProtocol.js)
+// Layout per index: [1b msgType] then N × [1b idx | 4b float32 price | 4b float32 diff | 4b float32 pct | 1b up | 4b uint32 ts]
+const MARKET_TICK_MSG_TYPE = 0x01;
+const INDEX_NAMES_BIN      = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
+const TICK_STRIDE          = 14; // 1+4+4+4+1 = 14 bytes per index entry (no ts in some encoders)
+
+function decodeMarketTickBinary(data) {
+  try {
+    let ab;
+    if (data instanceof ArrayBuffer) {
+      ab = data;
+    } else if (data?.buffer) {
+      ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    } else {
+      return null;
+    }
+    if (ab.byteLength < 2) return null;
+    const view = new DataView(ab);
+    if (view.getUint8(0) !== MARKET_TICK_MSG_TYPE) return null;
+
+    const results = [];
+    let offset = 1;
+    // Try 18-byte stride first (with ts), fallback to 14-byte
+    const stride = ((ab.byteLength - 1) % 18 === 0) ? 18 : 14;
+    while (offset + stride <= ab.byteLength) {
+      const idx   = view.getUint8(offset);
+      const name  = INDEX_NAMES_BIN[idx];
+      if (!name) { offset += stride; continue; }
+      const raw   = view.getFloat32(offset + 1, false);
+      const diff  = view.getFloat32(offset + 5, false);
+      const pct   = view.getFloat32(offset + 9, false);
+      const up    = view.getUint8(offset + 13) === 1;
+      results.push({
+        name,
+        price:  raw.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
+        raw, up,
+        change: (up ? "+" : "") + diff.toFixed(2),
+        pct:    (up ? "+" : "") + Math.abs(pct).toFixed(2) + "%",
+        _ts:    Date.now(),
+      });
+      offset += stride;
+    }
+    return results.length ? results : null;
+  } catch (_) {
+    return null;
+  }
+}
 
 function getCurrentQuarter() {
   const now   = new Date();
@@ -410,6 +458,7 @@ function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) 
         return (
           <div className="ticker-item ticker-clickable" key={`idx-${i}`} style={isDash ? { opacity: 0.4 } : {}} onClick={() => !isDash && onTickerClick(m)} title={`Click to view ${m.name} chart`}>
             <span className="ticker-name">{m.name}</span>
+            {/* key={m._ts} forces React to remount span on every tick → CSS animation retriggers → blink works */}
             <span key={m._ts || m.price} className={`ticker-price${m._ts ? " blink" : ""}`}>{m.price}</span>
             <span className={`ticker-change ${cls}`}>{isUp ? "▲" : isDown ? "▼" : "●"} {m.change} ({m.pct})</span>
           </div>
@@ -810,7 +859,6 @@ function RightPanel({ computedMegaOrders, computedOpportunities, sector, orderBo
         ))}
       </div>
 
-      {/* ── UPGRADED SECTORS PANEL ── */}
       <div className="section">
         <div className="section-divider">
           🏭 Sectors
@@ -938,54 +986,32 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
         <span className="title">Market Intelligence</span>
         <MarketStatus />
 
-        <button
-          className={`options-nav-btn${isOptions ? " active" : ""}`}
-          onClick={() => setCurrentPage(isOptions ? "dashboard" : "options")}
-          title="Option Chain OI Heatmap"
-        >
+        <button className={`options-nav-btn${isOptions ? " active" : ""}`} onClick={() => setCurrentPage(isOptions ? "dashboard" : "options")} title="Option Chain OI Heatmap">
           <span className="options-nav-icon">⚡</span>
           <span className="options-nav-label">{isOptions ? "Dashboard" : "Options"}</span>
           {isOptions && <span className="options-nav-back">←</span>}
         </button>
 
-        <button
-          className={`options-nav-btn${isCircuit ? " active" : ""}`}
-          onClick={() => setCurrentPage(isCircuit ? "dashboard" : "scores")}
-          title="Smart Circuit Tracker"
-          style={{ marginLeft: 4 }}
-        >
+        <button className={`options-nav-btn${isCircuit ? " active" : ""}`} onClick={() => setCurrentPage(isCircuit ? "dashboard" : "scores")} title="Smart Circuit Tracker" style={{ marginLeft: 4 }}>
           <span className="options-nav-icon">🔔</span>
           <span className="options-nav-label">{isCircuit ? "Dashboard" : "Circuit"}</span>
           {isCircuit && <span className="options-nav-back">←</span>}
         </button>
 
-        <button
-          className={`options-nav-btn${isOptionsIntel ? " active" : ""}`}
-          onClick={() => setCurrentPage(isOptionsIntel ? "dashboard" : "options-intel")}
-          title="Options Intelligence — Greeks, GEX, IV Rank, OI"
-          style={{ marginLeft: 4 }}
-        >
+        <button className={`options-nav-btn${isOptionsIntel ? " active" : ""}`} onClick={() => setCurrentPage(isOptionsIntel ? "dashboard" : "options-intel")} title="Options Intelligence — Greeks, GEX, IV Rank, OI" style={{ marginLeft: 4 }}>
           <span className="options-nav-icon">📐</span>
           <span className="options-nav-label">{isOptionsIntel ? "Dashboard" : "OI Intel"}</span>
           {isOptionsIntel && <span className="options-nav-back">←</span>}
         </button>
 
-        <button
-          className={`options-nav-btn${isScanner ? " active" : ""}`}
-          onClick={() => setCurrentPage(isScanner ? "dashboard" : "scanner")}
-          title="Market Scanner — Gainers, Losers, Technicals"
-          style={{ marginLeft: 4 }}
-        >
+        <button className={`options-nav-btn${isScanner ? " active" : ""}`} onClick={() => setCurrentPage(isScanner ? "dashboard" : "scanner")} title="Market Scanner — Gainers, Losers, Technicals" style={{ marginLeft: 4 }}>
           <span className="options-nav-icon">📊</span>
           <span className="options-nav-label">{isScanner ? "Dashboard" : "Scanner"}</span>
           {isScanner && <span className="options-nav-back">←</span>}
         </button>
 
         {needsConnect && !isAltPage && (
-          <span
-            style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }}
-            onClick={() => window.open("/auth/upstox", "_blank")}
-          >
+          <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }} onClick={() => window.open("/auth/upstox", "_blank")}>
             Connect Upstox →
           </span>
         )}
@@ -994,20 +1020,11 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {!isAltPage && <GlobalSearch onSelectCompany={onSelectCompany} />}
         {isAltPage && (
-          <button
-            className="back-to-dashboard-btn"
-            onClick={() => setCurrentPage("dashboard")}
-          >
-            ← Dashboard
-          </button>
+          <button className="back-to-dashboard-btn" onClick={() => setCurrentPage("dashboard")}>← Dashboard</button>
         )}
       </div>
 
-      <button
-        className="mode-toggle"
-        onClick={() => setDarkMode(d => !d)}
-        title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-      >
+      <button className="mode-toggle" onClick={() => setDarkMode(d => !d)} title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
         {darkMode ? "☀ Light" : "🌙 Dark"}
       </button>
     </div>
@@ -1017,17 +1034,13 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  // ── FIX: Restore page from localStorage on refresh ────────────────────────
   const [currentPage, setCurrentPageRaw] = useState(() => {
     try {
       const saved = localStorage.getItem("mi-current-page");
       return saved && VALID_PAGES.has(saved) ? saved : "dashboard";
-    } catch {
-      return "dashboard";
-    }
+    } catch { return "dashboard"; }
   });
 
-  // Wrap setter — also persists to localStorage so refresh restores the page
   const setCurrentPage = (page) => {
     setCurrentPageRaw(page);
     try { localStorage.setItem("mi-current-page", page); } catch {}
@@ -1082,6 +1095,10 @@ export default function App() {
 
   const socketRef = useRef(null);
 
+  // ── SOCKET — live tick pipeline ───────────────────────────────────────────
+  // Flow: Upstox WS → parseAndEmit → emitMarketTick → binary "binary" event
+  //       + JSON "market-tick" fallback → both handled here → setMarketIndices
+  //       → new _ts → key prop changes → React remounts span → CSS blink fires
   useEffect(() => {
     import("socket.io-client").then(({ io }) => {
       const sock = io({ transports: ["websocket", "polling"] });
@@ -1089,7 +1106,7 @@ export default function App() {
       setSocket(sock);
 
       sock.on("connect", () => {
-        console.log("Socket connected");
+        console.log("✅ Socket connected");
         sock.emit("use-binary", { version: 1 });
         if (window._appKeepalive) clearInterval(window._appKeepalive);
         window._appKeepalive = setInterval(() => {
@@ -1102,12 +1119,25 @@ export default function App() {
         if (window._appKeepalive) { clearInterval(window._appKeepalive); window._appKeepalive = null; }
       });
 
+      // ✅ PRIMARY: binary frame — zero JSON overhead, fires on every Upstox tick
+      sock.on("binary", (data) => {
+        const updates = decodeMarketTickBinary(data);
+        if (!updates) return; // not a market-tick frame — candles, options etc handled elsewhere
+        setMarketIndices(prev => prev.map(idx => {
+          const u = updates.find(u => u.name === idx.name);
+          return u ? { ...u, _ts: Date.now() } : idx;
+        }));
+        setTickerSource("upstox");
+        setTickerLastOk(Date.now());
+        setTickerStale(false);
+      });
+
+      // ✅ FALLBACK: JSON market-tick — websocket.js emits both so this always fires too
       sock.on("market-tick", (updates) => {
         if (!Array.isArray(updates)) return;
         setMarketIndices(prev => prev.map(idx => {
-          const update = updates.find(u => u.name === idx.name);
-          if (!update) return idx;
-          return { ...update, _ts: Date.now() };
+          const u = updates.find(u => u.name === idx.name);
+          return u ? { ...u, _ts: Date.now() } : idx;
         }));
         setTickerSource("upstox");
         setTickerLastOk(Date.now());
@@ -1170,20 +1200,24 @@ export default function App() {
   // eslint-disable-next-line
   }, []);
 
+  // ── Initial market data load (one-time, socket takes over after) ──────────
   useEffect(() => {
     fetch("/api/market").then(r => r.json()).then(data => {
       if (!Array.isArray(data)) return;
       const indices    = data.filter(d => d.name && !d._source);
       const sourceMeta = data.find(d => d._source);
       const src        = sourceMeta?._source || "disconnected";
-      if (indices.length) setMarketIndices(indices);
+      if (indices.length) setMarketIndices(indices.map(i => ({ ...i, _ts: Date.now() })));
       if (src !== "upstox") setTickerSource(src);
       else { setTickerSource("upstox"); setTickerLastOk(Date.now()); }
     }).catch(() => setTickerSource("disconnected"));
   }, []);
 
+  // ── Stale detection — mark stale if no tick for 30s ──────────────────────
   useEffect(() => {
-    const t = setInterval(() => { if (tickerLastOk && Date.now() - tickerLastOk > 90000) setTickerStale(true); }, 10000);
+    const t = setInterval(() => {
+      if (tickerLastOk && Date.now() - tickerLastOk > 30000) setTickerStale(true);
+    }, 5000);
     return () => clearInterval(t);
   }, [tickerLastOk]);
 
@@ -1293,7 +1327,7 @@ export default function App() {
     fetch("/api/mcap").then(r => r.json()).then(data => { if (Array.isArray(data) && data.length > 0) window._mcapDb = data; }).catch(() => {});
   }, []);
 
-  // ── Computed data ─────────────────────────────────────────────────────────
+  // ── Computed data ──────────────────────────────────────────────────────────
   const seenFeedKeys = new Set();
   const filteredFeed = (activeTab === "bse" ? bseEvents : nseEvents).filter(e => {
     const t = (e?.title || "").toLowerCase();
@@ -1406,11 +1440,8 @@ export default function App() {
   if (currentPage === "options") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
-        {sharedHeader}
-        {sharedTicker}
-        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-          <OptionChain onBack={() => setCurrentPage("dashboard")} />
-        </div>
+        {sharedHeader}{sharedTicker}
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}><OptionChain onBack={() => setCurrentPage("dashboard")} /></div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
     );
@@ -1419,11 +1450,8 @@ export default function App() {
   if (currentPage === "scores") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
-        {sharedHeader}
-        {sharedTicker}
-        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-          <SmartCircuitPage socket={socket} />
-        </div>
+        {sharedHeader}{sharedTicker}
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}><SmartCircuitPage socket={socket} /></div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
     );
@@ -1432,11 +1460,8 @@ export default function App() {
   if (currentPage === "options-intel") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
-        {sharedHeader}
-        {sharedTicker}
-        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-          <OptionsIntelligencePage socket={socket} />
-        </div>
+        {sharedHeader}{sharedTicker}
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}><OptionsIntelligencePage socket={socket} /></div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
     );
@@ -1445,11 +1470,8 @@ export default function App() {
   if (currentPage === "scanner") {
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
-        {sharedHeader}
-        {sharedTicker}
-        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-          <MarketScannerPage socket={socket} />
-        </div>
+        {sharedHeader}{sharedTicker}
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}><MarketScannerPage socket={socket} /></div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
     );
@@ -1491,10 +1513,10 @@ export default function App() {
           {mobilePanelTab === "data"          && <RightPanel computedMegaOrders={computedMegaOrders} computedOpportunities={computedOpportunities} sector={sector} orderBook={orderBook} intelStats={intelStats} liveOrderBook={liveOrderBook} obExpanded={obExpanded} setObExpanded={setObExpanded} obSearch={obSearch} setObSearch={setObSearch} />}
           {mobilePanelTab === "options-intel" && <OptionsIntelligencePage socket={socket} />}
           {mobilePanelTab === "terminal" && (() => {
-  const sym = sessionStorage.getItem("terminal_symbol") || "NIFTY";
-  window.location.href = `/stockterminal.html?symbol=${sym}`;
-  return null;
-})()}
+            const sym = sessionStorage.getItem("terminal_symbol") || "NIFTY";
+            window.location.href = `/stockterminal.html?symbol=${sym}`;
+            return null;
+          })()}
         </div>
       </div>
 

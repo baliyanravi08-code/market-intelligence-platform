@@ -3,12 +3,9 @@
 /**
  * server/api/websocket.js — Binary Protocol Edition
  *
- * FIXES:
- *  1. emitCandleTick / emitCandleClosed now emit to chart:{SYMBOL} room (not io.emit to everyone)
- *  2. Added emitPriceTick → sends "price:tick" + "candle:tick" to chart room for ALL timeframes
- *     so StockTerminal.html shows live candle formation without refresh on 1D/1W/1M too
- *  3. emitMarketTick still broadcasts globally (indices ticker bar needs it)
- *  4. Scanner flush unchanged
+ * FIX: emitMarketTick now emits binary frame via "binary" event AND
+ *      plain "market-tick" JSON — frontend listens to both.
+ *      Scanner flush unchanged, all other emitters intact.
  */
 
 const { Server } = require("socket.io");
@@ -195,21 +192,27 @@ function emitChartLTP(symbol, price) {
   _io.to(room).emit("ltp", { s: sym, p: price, t: now });
 }
 
-// ── Market tick broadcast (indices/global — stays global emit) ───────────────
+// ── Market tick broadcast ────────────────────────────────────────────────────
+// ✅ FIX: emits binary frame to ALL clients via "binary" event
+//         AND plain "market-tick" JSON as fallback.
+//         Frontend App.jsx listens to "binary" → decodes with bp.MSG.MARKET_TICK
+//         AND listens to "market-tick" as fallback — both paths trigger blink.
 function emitMarketTick(updates) {
   if (!_io || !updates?.length) return;
+
+  // Binary path — compact, fast
   try {
     const buf = bp.encodeMarketTick(updates);
     _io.emit("binary", buf);
   } catch (e) {
     console.warn("⚠️ binary market-tick encode error:", e.message);
   }
+
+  // JSON fallback — for clients that haven't completed binary handshake yet
   _io.emit("market-tick", updates);
 }
 
-// ── FIX: Candle emission → emit to chart:{SYMBOL} room only, not io.emit ─────
-// Previously used io.emit() which sent candles to ALL connected clients.
-// Now correctly targets only sockets watching that specific symbol's chart room.
+// ── Candle emission → chart:{SYMBOL} room only ───────────────────────────────
 function emitCandleTick(symbol, tf, candle) {
   if (!_io) return;
   const sym  = symbol.toUpperCase().trim();
@@ -222,7 +225,6 @@ function emitCandleTick(symbol, tf, candle) {
     console.warn("⚠️ binary candle:tick encode error:", e.message);
   }
 
-  // JSON fallback — terminal listens on "candle:tick"
   _io.to(room).emit("candle:tick", { symbol: sym, tf, candle });
 }
 
@@ -238,15 +240,10 @@ function emitCandleClosed(symbol, tf, candle) {
     console.warn("⚠️ binary candle:closed encode error:", e.message);
   }
 
-  // JSON fallback
   _io.to(room).emit("candle:closed", { symbol: sym, tf, candle });
 }
 
-// ── FIX: price:tick — live LTP update for ALL timeframes ────────────────────
-// This is separate from candle:tick (which only fires on intraday TFs).
-// StockTerminal.html listens on "price:tick" to update the current candle's
-// close/high/low on ANY timeframe (1D, 1W, 1M included) without a full reload.
-// Called from upstoxStream.js whenever any LTP update arrives for a symbol.
+// ── price:tick — live LTP for ALL timeframes ─────────────────────────────────
 const _priceTickThrottle = new Map();
 
 function emitPriceTick(symbol, price, change, changePct, prevClose) {
@@ -257,7 +254,6 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
   const members = _io.sockets.adapter.rooms.get(room);
   if (!members || members.size === 0) return;
 
-  // Throttle to max 1 update/500ms per symbol to avoid flooding
   const now  = Date.now();
   const last = _priceTickThrottle.get(sym) || 0;
   if (now - last < 500) return;
@@ -272,7 +268,6 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
     t:         now,
   };
 
-  // Binary encoding — reuse encodeLTPTick for compact wire format
   try {
     const buf = bp.encodeLTPTick(sym, price);
     _io.to(room).emit("binary", buf);
@@ -280,7 +275,6 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
     console.warn("⚠️ binary price:tick encode error:", e.message);
   }
 
-  // JSON event — terminal's socket.on("price:tick") handler picks this up
   _io.to(room).emit("price:tick", payload);
 }
 
@@ -396,21 +390,18 @@ function attachSocketIO(server) {
       socket.leave("scanner");
     });
 
-    // ── Chart room — FIX: auto-join chart:{SYMBOL} room ───────────────────
-    // Terminal emits "watch:chart" with symbol on load and symbol change.
-    // This ensures candle:tick, candle:closed, price:tick reach the right client.
-    socket.on('watch:chart', (symbol) => {
+    // ── Chart room ────────────────────────────────────────────────────────
+    socket.on("watch:chart", (symbol) => {
       [...socket.rooms]
-        .filter(r => r.startsWith('chart:'))
+        .filter(r => r.startsWith("chart:"))
         .forEach(r => socket.leave(r));
 
       if (symbol && symbol.trim()) {
         const sym = symbol.toUpperCase().trim();
         socket.join(`chart:${sym}`);
         console.log(`📈 ${socket.id} watching chart: ${sym}`);
-        // Subscribe to Upstox stream so price:tick fires for this symbol
         try {
-          const stream = require('../services/upstoxStream');
+          const stream = require("../services/upstoxStream");
           if (stream.subscribeSymbolForPriceTick) stream.subscribeSymbolForPriceTick(sym);
         } catch (_) {}
       }
@@ -488,9 +479,6 @@ function attachSocketIO(server) {
       _watchedSymbol = symbol.toUpperCase().trim();
       _watchedTf     = tf;
       stream.registerLiveCandleSubscription(_watchedSymbol, _watchedTf);
-
-      // FIX: also join chart room here as a safety net
-      // (terminal sends "candle:subscribe" on intraday TF load)
       socket.join(`chart:${_watchedSymbol}`);
       console.log(`🕯️  ${socket.id} subscribed candle: ${_watchedSymbol} [${_watchedTf}]`);
     });
@@ -547,7 +535,7 @@ module.exports = {
   emitChartLTP,
   emitCandleTick,
   emitCandleClosed,
-  emitPriceTick,       // ← NEW: call this from upstoxStream for ALL-TF live price
+  emitPriceTick,
 
   // Backtest
   emitBacktestTick,
