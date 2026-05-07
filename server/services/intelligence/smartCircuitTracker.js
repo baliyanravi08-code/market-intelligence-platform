@@ -125,11 +125,11 @@ function updateDayHistory(symbol, side, distPct) {
 
 async function scanCircuits(symbols) {
   const token = tokenGetter?.();
-  if (!token) return;
-
-  const instrMap   = instrumentGetter?.() || {};
+  const instrMap = instrumentGetter?.() || {};
   const toScan = symbols.filter(s => instrMap[s]).slice(0, CIRCUIT_SCAN_SYMBOLS);
-  if (!toScan.length) return;
+  console.log(`🔍 SmartCircuit scan: token=${!!token}, instrMap=${Object.keys(instrMap).length}, toScan=${toScan.length}`);
+  if (!token) { console.warn("⚠️ SmartCircuit: no token"); return; }
+  if (!toScan.length) { console.warn("⚠️ SmartCircuit: no symbols matched in instrument map"); return; }
 
   // Upstox allows up to 500 keys per request
   const BATCH = 100;
@@ -269,10 +269,27 @@ function startSmartCircuitTracker(io, tokenGetterFn, instrumentGetterFn) {
   }, POLL_INTERVAL_MS);
 
   // Initial scan
-  if (isMarketOpen()) {
-    setTimeout(() => scanCircuits(DEFAULT_SYMBOLS), 5_000);
-  }
-
+  // NEW — waits for instrument map to have entries:
+if (isMarketOpen()) {
+  let attempts = 0;
+  const waitForMap = setInterval(() => {
+    attempts++;
+    const map = instrumentGetter?.() || {};
+    const count = Object.keys(map).length;
+    console.log(`🔍 SmartCircuit waiting for instrument map... attempt ${attempts}, size=${count}`);
+    if (count >= 50) {
+      clearInterval(waitForMap);
+      console.log(`✅ SmartCircuit: instrument map ready (${count} symbols) — starting scan`);
+      scanCircuits(DEFAULT_SYMBOLS).catch(e =>
+        console.warn("SmartCircuit initial scan error:", e.message)
+      );
+    }
+    if (attempts >= 24) { // give up after 2 min
+      clearInterval(waitForMap);
+      console.warn("⚠️ SmartCircuit: gave up waiting for instrument map");
+    }
+  }, 5_000);
+}
   console.log("🔔 SmartCircuitTracker started");
 }
 
