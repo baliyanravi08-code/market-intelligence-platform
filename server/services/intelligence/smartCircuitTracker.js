@@ -128,7 +128,7 @@ async function scanCircuits(symbols) {
   if (!token) return;
 
   const instrMap   = instrumentGetter?.() || {};
-  const toScan     = symbols.filter(s => instrMap[s]).slice(0, SCAN_BATCH);
+  const toScan = symbols.filter(s => instrMap[s]).slice(0, CIRCUIT_SCAN_SYMBOLS);
   if (!toScan.length) return;
 
   // Upstox allows up to 500 keys per request
@@ -227,8 +227,6 @@ async function scanCircuits(symbols) {
     watchlistCbs.forEach(cb => { try { cb(sortedWatchlist); } catch {} });
   }
 }
-
-const SCAN_BATCH = CIRCUIT_SCAN_SYMBOLS;
 
 // ── Default symbol list (NIFTY 500 large caps first) ─────────────────────────
 
