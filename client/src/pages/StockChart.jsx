@@ -27,19 +27,18 @@ const COLORS = {
 };
 
 export default function StockChart({ symbol, socket }) {
-  const canvasRef    = useRef(null);
-  const [tf, setTf]  = useState("1day");
-  const [candles, setCandles]     = useState([]);
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState(null);
-  const [crosshair, setCrosshair] = useState(null);
-  const [liveBlink, setLiveBlink] = useState(false);
+  const canvasRef  = useRef(null);
   const candlesRef = useRef([]);
   const tfRef      = useRef("1day");
   const blinkTimer = useRef(null);
 
-  // keep refs in sync
- 
+  const [tf, setTf]           = useState("1day");
+  const [candles, setCandles] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState(null);
+  const [crosshair, setCrosshair] = useState(null);
+  const [liveBlink, setLiveBlink] = useState(false);
+
   // keep refs in sync so socket handlers always see latest values
   useEffect(() => { candlesRef.current = candles; }, [candles]);
   useEffect(() => { tfRef.current = tf; }, [tf]);
@@ -82,14 +81,12 @@ export default function StockChart({ symbol, socket }) {
     blinkTimer.current = setTimeout(() => setLiveBlink(false), 800);
   }, []);
 
-  // ── Socket: candle:tick + candle:closed + price:tick ──────────────────────
+  // ── Socket: candle:tick + candle:closed + price:tick + scanner-tech-batch ──
   useEffect(() => {
     if (!socket || !symbol) return;
 
-    // join chart room for this symbol
     socket.emit("watch:chart", symbol);
 
-    // subscribe live candles if intraday TF
     const isIntraday = (t) => !!TF_LIVE_MAP[t];
     if (isIntraday(tf)) {
       socket.emit("candle:subscribe", { symbol, tf: TF_LIVE_MAP[tf] });
@@ -98,9 +95,9 @@ export default function StockChart({ symbol, socket }) {
     function applyTick(candle) {
       const current = [...candlesRef.current];
       if (!current.length) return;
-      const tfMs   = TF_MS[TF_LIVE_MAP[tfRef.current]] || 60_000;
-      const period = Math.floor(candle.time / tfMs) * tfMs;
-      const last   = current[current.length - 1];
+      const tfMs       = TF_MS[TF_LIVE_MAP[tfRef.current]] || 60_000;
+      const period     = Math.floor(candle.time / tfMs) * tfMs;
+      const last       = current[current.length - 1];
       const lastPeriod = Math.floor(new Date(last.time).getTime() / tfMs) * tfMs;
 
       let updated;
@@ -108,24 +105,40 @@ export default function StockChart({ symbol, socket }) {
         updated = [...current];
         updated[updated.length - 1] = {
           ...last,
-          high:   Math.max(last.high,   candle.high   ?? candle.close),
-          low:    Math.min(last.low,    candle.low    ?? candle.close),
+          high:   Math.max(last.high,  candle.high  ?? candle.close),
+          low:    Math.min(last.low,   candle.low   ?? candle.close),
           close:  candle.close,
           volume: (last.volume || 0) + (candle.volume || 0),
         };
       } else if (candle.time > last.time) {
         updated = [...current, {
-          time:   candle.time,
-          open:   candle.open,
-          high:   candle.high,
-          low:    candle.low,
-          close:  candle.close,
-          volume: candle.volume || 0,
+          time: candle.time, open: candle.open,
+          high: candle.high, low:  candle.low,
+          close: candle.close, volume: candle.volume || 0,
         }];
         if (updated.length > 500) updated.splice(0, updated.length - 500);
       } else {
         return;
       }
+      candlesRef.current = updated;
+      setCandles(updated);
+      flashBlink();
+    }
+
+    function applyLTP(ltp) {
+      if (!ltp || ltp <= 0) return;
+      // for intraday, candle:tick handles it — skip to avoid double update
+      if (isIntraday(tfRef.current)) return;
+      const current = [...candlesRef.current];
+      if (!current.length) return;
+      const updated = [...current];
+      const last    = updated[updated.length - 1];
+      updated[updated.length - 1] = {
+        ...last,
+        high:  Math.max(last.high, ltp),
+        low:   Math.min(last.low,  ltp),
+        close: ltp,
+      };
       candlesRef.current = updated;
       setCandles(updated);
       flashBlink();
@@ -143,36 +156,51 @@ export default function StockChart({ symbol, socket }) {
       applyTick(candle);
     }
 
-    // price:tick fires for ALL timeframes (1D/1W/1M too)
     function onPriceTick({ symbol: sym, ltp, price }) {
-  ltp = ltp ?? price;
       if (!sym || sym.toUpperCase() !== symbol.toUpperCase()) return;
-      if (!ltp || ltp <= 0) return;
-      // for intraday, candle:tick handles it
-      if (isIntraday(tfRef.current)) return;
-      const current = [...candlesRef.current];
-      if (!current.length) return;
-      const updated = [...current];
-      const last    = updated[updated.length - 1];
-      updated[updated.length - 1] = {
-        ...last,
-        high:  Math.max(last.high, ltp),
-        low:   Math.min(last.low, ltp),
-        close: ltp,
-      };
-      candlesRef.current = updated;
-      setCandles(updated);
-      flashBlink();
+      applyLTP(ltp ?? price);
     }
 
-    socket.on("candle:tick",   onCandleTick);
-    socket.on("candle:closed", onCandleClosed);
-    socket.on("price:tick",    onPriceTick);
+    // ── KEY FIX: scanner-tech-batch broadcasts to ALL clients (no room filter)
+    // so this always arrives even when price:tick is blocked by room check
+    function onTechBatch(batch) {
+      if (!Array.isArray(batch)) return;
+      for (const item of batch) {
+        if (!item?.key || !item?.data) continue;
+        const sym = item.key.split(":")[0];
+        if (sym.toUpperCase() !== symbol.toUpperCase()) continue;
+        const ltp = item.data.ltp;
+        if (ltp && ltp > 0) applyLTP(ltp);
+      }
+    }
+
+    // ── ltp event (also broadcast to all) ────────────────────────────────────
+    function onLTP({ s, p }) {
+      if (!s || s.toUpperCase() !== symbol.toUpperCase()) return;
+      applyLTP(p);
+    }
+
+    // ── scanner-update also has live ltp per stock ────────────────────────────
+    function onScannerUpdate(d) {
+      if (!d?.allStocks) return;
+      const stock = d.allStocks.find(s => s.symbol?.toUpperCase() === symbol.toUpperCase());
+      if (stock?.ltp) applyLTP(stock.ltp);
+    }
+
+    socket.on("candle:tick",         onCandleTick);
+    socket.on("candle:closed",       onCandleClosed);
+    socket.on("price:tick",          onPriceTick);
+    socket.on("scanner-tech-batch",  onTechBatch);
+    socket.on("ltp",                 onLTP);
+    socket.on("scanner-update",      onScannerUpdate);
 
     return () => {
-      socket.off("candle:tick",   onCandleTick);
-      socket.off("candle:closed", onCandleClosed);
-      socket.off("price:tick",    onPriceTick);
+      socket.off("candle:tick",        onCandleTick);
+      socket.off("candle:closed",      onCandleClosed);
+      socket.off("price:tick",         onPriceTick);
+      socket.off("scanner-tech-batch", onTechBatch);
+      socket.off("ltp",                onLTP);
+      socket.off("scanner-update",     onScannerUpdate);
       if (isIntraday(tf)) {
         socket.emit("candle:unsubscribe", { symbol, tf: TF_LIVE_MAP[tf] });
       }
@@ -210,13 +238,10 @@ export default function StockChart({ symbol, socket }) {
     const n       = data.length;
     const candleW = Math.max(1, Math.floor(chartW / n) - 1);
     const gap     = Math.max(1, Math.floor(chartW / n));
-
-    const highs  = data.map(c => c.high);
-    const lows   = data.map(c => c.low);
-    const maxP   = Math.max(...highs);
-    const minP   = Math.min(...lows);
-    const rangeP = maxP - minP || 1;
-    const maxVol = Math.max(...data.map(c => c.volume)) || 1;
+    const maxP    = Math.max(...data.map(c => c.high));
+    const minP    = Math.min(...data.map(c => c.low));
+    const rangeP  = maxP - minP || 1;
+    const maxVol  = Math.max(...data.map(c => c.volume)) || 1;
 
     const px = (price) => PAD.top + priceH - ((price - minP) / rangeP) * priceH;
     const vx = (vol)   => PAD.top + priceH + 10 + volH - (vol / maxVol) * volH;
@@ -228,9 +253,9 @@ export default function StockChart({ symbol, socket }) {
       const y = PAD.top + (priceH / 5) * g;
       ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
       const price = maxP - (rangeP / 5) * g;
-      ctx.fillStyle  = COLORS.text;
-      ctx.font       = "11px monospace";
-      ctx.textAlign  = "left";
+      ctx.fillStyle = COLORS.text;
+      ctx.font      = "11px monospace";
+      ctx.textAlign = "left";
       ctx.fillText(price.toFixed(0), W - PAD.right + 4, y + 4);
     }
 
@@ -250,7 +275,6 @@ export default function StockChart({ symbol, socket }) {
       const bodyBot = px(Math.min(c.open, c.close));
       const bodyH   = Math.max(1, bodyBot - bodyTop);
 
-      // last candle glows if live
       if (i === n - 1 && liveBlink) {
         ctx.shadowBlur  = 8;
         ctx.shadowColor = col;
@@ -265,7 +289,7 @@ export default function StockChart({ symbol, socket }) {
       ctx.fillRect(x - candleW / 2, volTop, candleW, volBottom - volTop);
     });
 
-    // live price line
+    // live price dashed line
     const ltp = data[data.length - 1].close;
     const ly  = px(ltp);
     if (ly > 0 && ly < PAD.top + priceH) {
@@ -296,24 +320,24 @@ export default function StockChart({ symbol, socket }) {
 
   // ── Crosshair ──────────────────────────────────────────────────────────────
   const handleMouseMove = (e) => {
-    const canvas  = canvasRef.current;
+    const canvas = canvasRef.current;
     if (!canvas || !canvas._layout || candles.length === 0) return;
     const rect   = canvas.getBoundingClientRect();
     const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const { PAD, gap, n, data, cx } = canvas._layout;
+    const { PAD, gap, n, data } = canvas._layout;
     const i = Math.round((mouseX - PAD.left) / gap - 0.5);
     if (i < 0 || i >= n) { setCrosshair(null); return; }
     setCrosshair({ candle: data[i], i });
   };
 
   const openFullChart = () => {
-  if (!symbol) return;
-  const last = candles[candles.length - 1];
-  const ltp  = last?.close ?? null;
-  sessionStorage.setItem("terminal_symbol", symbol);
-  if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
-  window.open(`/StockTerminal.html?symbol=${symbol}${ltp ? `&ltp=${ltp}` : ""}`, "_blank");
-};
+    if (!symbol) return;
+    const last = candles[candles.length - 1];
+    const ltp  = last?.close ?? null;
+    sessionStorage.setItem("terminal_symbol", symbol);
+    if (ltp) sessionStorage.setItem("terminal_ltp", String(ltp));
+    window.open(`/StockTerminal.html?symbol=${symbol}${ltp ? `&ltp=${ltp}` : ""}`, "_blank");
+  };
 
   const last   = candles[candles.length - 1];
   const first  = candles[0];
@@ -324,7 +348,6 @@ export default function StockChart({ symbol, socket }) {
   return (
     <div style={{ background: COLORS.bg, border: "1px solid #0d2a45", borderRadius: 8, padding: 12, userSelect: "none" }}>
 
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ color: "#00cfff", fontFamily: "monospace", fontWeight: "bold", fontSize: 15 }}>
@@ -349,30 +372,21 @@ export default function StockChart({ symbol, socket }) {
 
         <div style={{ display: "flex", gap: 4 }}>
           {TF_OPTIONS.map(opt => (
-            <button
-              key={opt.value}
-              onClick={() => setTf(opt.value)}
-              style={{
-                padding: "3px 10px", borderRadius: 4, fontSize: 12, cursor: "pointer",
-                fontFamily: "monospace",
-                border:      `1px solid ${tf === opt.value ? "#00cfff" : "#0d2a45"}`,
-                background:  tf === opt.value ? "#00cfff22" : "transparent",
-                color:       tf === opt.value ? "#00cfff" : "#4a8adf",
-              }}
-            >
+            <button key={opt.value} onClick={() => setTf(opt.value)} style={{
+              padding: "3px 10px", borderRadius: 4, fontSize: 12, cursor: "pointer",
+              fontFamily: "monospace",
+              border:     `1px solid ${tf === opt.value ? "#00cfff" : "#0d2a45"}`,
+              background: tf === opt.value ? "#00cfff22" : "transparent",
+              color:      tf === opt.value ? "#00cfff" : "#4a8adf",
+            }}>
               {opt.label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Crosshair tooltip */}
       {crosshair && (
-        <div style={{
-          fontFamily: "monospace", fontSize: 11, color: COLORS.label,
-          marginBottom: 6, display: "flex", gap: 16,
-          background: "#0d1f35", padding: "4px 10px", borderRadius: 4,
-        }}>
+        <div style={{ fontFamily: "monospace", fontSize: 11, color: COLORS.label, marginBottom: 6, display: "flex", gap: 16, background: "#0d1f35", padding: "4px 10px", borderRadius: 4 }}>
           <span>O: <b style={{ color: "#e8f4ff" }}>{crosshair.candle.open.toFixed(2)}</b></span>
           <span>H: <b style={{ color: COLORS.up }}>{crosshair.candle.high.toFixed(2)}</b></span>
           <span>L: <b style={{ color: COLORS.down }}>{crosshair.candle.low.toFixed(2)}</b></span>
@@ -384,7 +398,6 @@ export default function StockChart({ symbol, socket }) {
         </div>
       )}
 
-      {/* Canvas */}
       <div style={{ position: "relative" }}>
         {loading && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#010812cc", borderRadius: 6, zIndex: 10 }}>
@@ -395,14 +408,9 @@ export default function StockChart({ symbol, socket }) {
           <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#010812cc", borderRadius: 6, zIndex: 10, gap: 8 }}>
             <span style={{ color: "#ff4466", fontFamily: "monospace", fontSize: 13 }}>⚠️ {error}</span>
             {error.includes("token") || error.includes("auth") ? (
-              <a href="/auth/upstox" style={{ color: "#00cfff", fontFamily: "monospace", fontSize: 12 }}>
-                Click here to connect Upstox →
-              </a>
+              <a href="/auth/upstox" style={{ color: "#00cfff", fontFamily: "monospace", fontSize: 12 }}>Click here to connect Upstox →</a>
             ) : (
-              <button
-                onClick={() => fetchCandles(symbol, tf)}
-                style={{ color: "#00cfff", background: "transparent", border: "1px solid #00cfff44", padding: "4px 12px", borderRadius: 4, fontFamily: "monospace", cursor: "pointer" }}
-              >
+              <button onClick={() => fetchCandles(symbol, tf)} style={{ color: "#00cfff", background: "transparent", border: "1px solid #00cfff44", padding: "4px 12px", borderRadius: 4, fontFamily: "monospace", cursor: "pointer" }}>
                 Retry
               </button>
             )}
@@ -418,20 +426,12 @@ export default function StockChart({ symbol, socket }) {
             onMouseMove={handleMouseMove}
             onMouseLeave={() => setCrosshair(null)}
           />
-
-          <div
-            onClick={openFullChart}
-            style={{
-              position: "absolute", top: 8, right: 8,
-              background: "rgba(0,207,255,0.12)",
-              border: "1px solid rgba(0,207,255,0.35)",
-              borderRadius: 4, padding: "3px 10px",
-              color: "#00cfff", fontSize: 10,
-              fontFamily: "monospace", cursor: "pointer",
-              zIndex: 5, userSelect: "none",
-            }}
-            title={`Open full chart for ${symbol}`}
-          >
+          <div onClick={openFullChart} style={{
+            position: "absolute", top: 8, right: 8,
+            background: "rgba(0,207,255,0.12)", border: "1px solid rgba(0,207,255,0.35)",
+            borderRadius: 4, padding: "3px 10px", color: "#00cfff", fontSize: 10,
+            fontFamily: "monospace", cursor: "pointer", zIndex: 5, userSelect: "none",
+          }} title={`Open full chart for ${symbol}`}>
             ↗ Full Chart
           </div>
         </div>
