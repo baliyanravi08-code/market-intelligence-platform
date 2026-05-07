@@ -41,34 +41,34 @@ const VALID_PAGES = new Set([
 // Layout per index: [1b msgType] then N × [1b idx | 4b float32 price | 4b float32 diff | 4b float32 pct | 1b up | 4b uint32 ts]
 const MARKET_TICK_MSG_TYPE = 0x01;
 const INDEX_NAMES_BIN      = ["NIFTY 50", "SENSEX", "BANK NIFTY"];
-const TICK_STRIDE          = 14; // 1+4+4+4+1 = 14 bytes per index entry (no ts in some encoders)
+const TICK_STRIDE          = 14;
 
 function decodeMarketTickBinary(data) {
   try {
     let ab;
     if (data instanceof ArrayBuffer) {
       ab = data;
-    } else if (data?.buffer) {
+    } else if (data?.buffer instanceof ArrayBuffer) {
       ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     } else {
       return null;
     }
-    if (ab.byteLength < 2) return null;
+    if (ab.byteLength < 6) return null;
     const view = new DataView(ab);
-    if (view.getUint8(0) !== MARKET_TICK_MSG_TYPE) return null;
+    if (view.getUint8(0) !== 0x01) return null;
 
     const results = [];
-    let offset = 1;
-    // Try 18-byte stride first (with ts), fallback to 14-byte
-    const stride = ((ab.byteLength - 1) % 18 === 0) ? 18 : 14;
-    while (offset + stride <= ab.byteLength) {
-      const idx   = view.getUint8(offset);
-      const name  = INDEX_NAMES_BIN[idx];
-      if (!name) { offset += stride; continue; }
-      const raw   = view.getFloat32(offset + 1, false);
-      const diff  = view.getFloat32(offset + 5, false);
-      const pct   = view.getFloat32(offset + 9, false);
-      const up    = view.getUint8(offset + 13) === 1;
+    let off = 5; // 5-byte header: 1 type + 4 length (uint32)
+    const names = ["NIFTY 50", "SENSEX", "BANK NIFTY", "BTC", "GOLD", "SILVER", "PI"];
+    // Each entry: 1b id + 4b uint32 price + 2b int16 pct + 1b up = 8 bytes
+    while (off + 8 <= ab.byteLength) {
+      const id   = view.getUint8(off);
+      const name = names[id - 1];
+      if (!name) { off += 8; continue; }
+      const raw  = view.getUint32(off + 1, false) / 100;
+      const pct  = view.getInt16(off + 5, false) / 100;
+      const up   = view.getUint8(off + 7) === 1;
+      const diff = parseFloat((pct * raw / 100).toFixed(2));
       results.push({
         name,
         price:  raw.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
@@ -77,7 +77,7 @@ function decodeMarketTickBinary(data) {
         pct:    (up ? "+" : "") + Math.abs(pct).toFixed(2) + "%",
         _ts:    Date.now(),
       });
-      offset += stride;
+      off += 8;
     }
     return results.length ? results : null;
   } catch (_) {
