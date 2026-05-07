@@ -57,8 +57,6 @@ function StockChart({ symbol, defaultTf, socket }) {
   }, [symbol, tf, fetchCandles]);
 
   useEffect(() => { if (defaultTf && defaultTf !== tf) setTf(defaultTf); }, [defaultTf]); // eslint-disable-line
-
-  const candlesRef = useRef([]);
   const tfRef      = useRef("1day");
   const blinkTimer = useRef(null);
   const [liveBlink, setLiveBlink] = useState(false);

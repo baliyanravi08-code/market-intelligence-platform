@@ -37,83 +37,9 @@ export default function StockChart({ symbol, socket }) {
   const candlesRef = useRef([]);
   const tfRef      = useRef("1day");
   const blinkTimer = useRef(null);
-  const [liveBlink, setLiveBlink] = useState(false);
 
-  useEffect(() => { candlesRef.current = candles; }, [candles]);
-  useEffect(() => { tfRef.current = tf; }, [tf]);
-
-  const flashBlink = useCallback(() => {
-    setLiveBlink(true);
-    clearTimeout(blinkTimer.current);
-    blinkTimer.current = setTimeout(() => setLiveBlink(false), 800);
-  }, []);
-
-  const TF_LIVE_MAP_L = { "5min":"5min","15min":"15min","1hour":"1hour","4hour":"4hour" };
-  const TF_MS_L = { "5min":300000,"15min":900000,"1hour":3600000,"4hour":14400000 };
-
-  useEffect(() => {
-    if (!socket || !symbol) return;
-    socket.emit("watch:chart", symbol);
-    const isIntraday = t => !!TF_LIVE_MAP_L[t];
-    if (isIntraday(tf)) socket.emit("candle:subscribe", { symbol, tf: TF_LIVE_MAP_L[tf] });
-
-    function applyTick(candle) {
-      const current = [...candlesRef.current];
-      if (!current.length) return;
-      const tfMs   = TF_MS_L[TF_LIVE_MAP_L[tfRef.current]] || 60000;
-      const period = Math.floor(candle.time / tfMs) * tfMs;
-      const last   = current[current.length - 1];
-      const lastPeriod = Math.floor(new Date(last.time).getTime() / tfMs) * tfMs;
-      let updated;
-      if (lastPeriod === period) {
-        updated = [...current];
-        updated[updated.length - 1] = { ...last, high: Math.max(last.high, candle.high ?? candle.close), low: Math.min(last.low, candle.low ?? candle.close), close: candle.close, volume: (last.volume||0)+(candle.volume||0) };
-      } else if (candle.time > last.time) {
-        updated = [...current, { time:candle.time, open:candle.open, high:candle.high, low:candle.low, close:candle.close, volume:candle.volume||0 }];
-        if (updated.length > 500) updated.splice(0, updated.length - 500);
-      } else return;
-      candlesRef.current = updated;
-      setCandles(updated);
-      flashBlink();
-    }
-
-    function onCandleTick({ symbol: sym, tf: evTf, candle }) {
-      if (!sym || sym.toUpperCase() !== symbol.toUpperCase()) return;
-      if (!TF_LIVE_MAP_L[tfRef.current] || evTf !== TF_LIVE_MAP_L[tfRef.current]) return;
-      applyTick(candle);
-    }
-    function onCandleClosed({ symbol: sym, tf: evTf, candle }) {
-      if (!sym || sym.toUpperCase() !== symbol.toUpperCase()) return;
-      if (!TF_LIVE_MAP_L[tfRef.current] || evTf !== TF_LIVE_MAP_L[tfRef.current]) return;
-      applyTick(candle);
-    }
-    function onPriceTick({ symbol: sym, ltp, price }) {
-      ltp = ltp ?? price;
-      if (!sym || sym.toUpperCase() !== symbol.toUpperCase()) return;
-      if (!ltp || ltp <= 0) return;
-      if (isIntraday(tfRef.current)) return;
-      const current = [...candlesRef.current];
-      if (!current.length) return;
-      const updated = [...current];
-      const last = updated[updated.length - 1];
-      updated[updated.length - 1] = { ...last, high: Math.max(last.high, ltp), low: Math.min(last.low, ltp), close: ltp };
-      candlesRef.current = updated;
-      setCandles(updated);
-      flashBlink();
-    }
-
-    socket.on("candle:tick",   onCandleTick);
-    socket.on("candle:closed", onCandleClosed);
-    socket.on("price:tick",    onPriceTick);
-    return () => {
-      socket.off("candle:tick",   onCandleTick);
-      socket.off("candle:closed", onCandleClosed);
-      socket.off("price:tick",    onPriceTick);
-      if (isIntraday(tf)) socket.emit("candle:unsubscribe", { symbol, tf: TF_LIVE_MAP_L[tf] });
-    };
-  }, [socket, symbol, tf, flashBlink]);
-  const blinkTimer = useRef(null);
-
+  // keep refs in sync
+ 
   // keep refs in sync so socket handlers always see latest values
   useEffect(() => { candlesRef.current = candles; }, [candles]);
   useEffect(() => { tfRef.current = tf; }, [tf]);
