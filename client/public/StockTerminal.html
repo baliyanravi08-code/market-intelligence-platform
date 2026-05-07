@@ -990,7 +990,7 @@ function initSocket() {
         if (!buf) return;
         const dv  = new DataView(buf);
         const msg = dv.getUint8(0);
-        let off = 3;
+        let off = 5;
 
         // CANDLE_TICK = 0x05, CANDLE_CLOSED = 0x06
         if (msg === 0x05 || msg === 0x06) {

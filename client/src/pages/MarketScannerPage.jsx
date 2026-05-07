@@ -20,7 +20,7 @@ const CHART_COLORS = {
   label: "#94a3b8",
 };
 
-function StockChart({ symbol, defaultTf }) {
+function StockChart({ symbol, defaultTf, socket }) {
   const canvasRef         = useRef(null);
   const [tf, setTf]       = useState(defaultTf || "1day");
   const [candles, setCandles]     = useState([]);
@@ -106,8 +106,10 @@ function StockChart({ symbol, defaultTf }) {
       ctx.beginPath(); ctx.moveTo(x, px(c.high)); ctx.lineTo(x, px(c.low)); ctx.stroke();
       const bodyTop = px(Math.max(c.open, c.close));
       const bodyBot = px(Math.min(c.open, c.close));
+      if (i === n - 1 && liveBlink) { ctx.shadowBlur = 8; ctx.shadowColor = col; }
       ctx.fillStyle = col;
       ctx.fillRect(x - candleW / 2, bodyTop, candleW, Math.max(1, bodyBot - bodyTop));
+      ctx.shadowBlur = 0;
       ctx.fillStyle = col + "66";
       const vTop = vx(c.volume);
       ctx.fillRect(x - candleW / 2, vTop, candleW, PAD.top + priceH + 8 + volH - vTop);
@@ -126,7 +128,7 @@ function StockChart({ symbol, defaultTf }) {
     }
 
     canvas._layout = { PAD, gap, n, minP, maxP, rangeP, data, px, cx };
-  }, [candles, tf]);
+  }, [candles, tf, liveBlink]);
 
   const handleMouseMove = (e) => {
     const canvas = canvasRef.current;
