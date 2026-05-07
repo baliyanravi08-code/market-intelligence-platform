@@ -4,14 +4,11 @@
  * smartCircuitTracker.js
  * server/services/intelligence/smartCircuitTracker.js
  *
- * Replaces: circuitWatcher.js
- *
- * What's new vs old circuitWatcher:
- *   1. TRAP DETECTION — stock hits circuit in first 30 min = operator trapped = signal
- *   2. CIRCUIT MAGNET — stock approaches same circuit 3+ consecutive days = pattern
- *   3. CONSECUTIVE DAYS tracking — not just today's proximity, but multi-day pattern
- *   4. SMART TIERS — proximity scored on distance + time of day (early = more significant)
- *   5. Still emits "circuit-alerts" and "circuit-watchlist" for backward compat
+ * FIXES:
+ *   - Removed SCAN_BATCH reference error (was undefined)
+ *   - Waits for instrument map before initial scan
+ *   - Score filter lowered to 0 (show all scanned stocks, not just near-circuit)
+ *   - Added logging throughout for easy debugging
  */
 
 const axios = require("axios");
@@ -24,24 +21,24 @@ const MAGNET_MIN_DAYS      = 3;               // 3 consecutive days approaching 
 
 // Tier thresholds (% distance from circuit)
 const TIERS = [
-  { name: "LOCKED",   maxDist: 0,   score: 100 },
-  { name: "CRITICAL", maxDist: 2,   score: 85  },
-  { name: "WARNING",  maxDist: 5,   score: 65  },
-  { name: "WATCH",    maxDist: 10,  score: 40  },
-  { name: "SAFE",     maxDist: Infinity, score: 0 },
+  { name: "LOCKED",   maxDist: 0,        score: 100 },
+  { name: "CRITICAL", maxDist: 2,        score: 85  },
+  { name: "WARNING",  maxDist: 5,        score: 65  },
+  { name: "WATCH",    maxDist: 10,       score: 40  },
+  { name: "SAFE",     maxDist: Infinity, score: 10  }, // score=10 so SAFE stocks still show
 ];
 
-// ── State ──────────────────────────────────────────────────────────────────────
-const watchlist   = new Map(); // symbol → watchlistEntry
-const alertLog    = [];        // recent circuit alerts
-const dayHistory  = new Map(); // symbol → [{ date, side, distPct }] — for magnet detection
-const alertCbs    = [];        // onCircuitAlert subscribers
-const watchlistCbs = [];       // onCircuitWatchlist subscribers
+// ── State ─────────────────────────────────────────────────────────────────────
+const watchlist    = new Map(); // symbol → watchlistEntry
+const alertLog     = [];        // recent circuit alerts
+const dayHistory   = new Map(); // symbol → [{ date, side, distPct }]
+const alertCbs     = [];        // onCircuitAlert subscribers
+const watchlistCbs = [];        // onCircuitWatchlist subscribers
 
-let ioRef         = null;
-let tokenGetter   = null;
+let ioRef            = null;
+let tokenGetter      = null;
 let instrumentGetter = null;
-let pollTimer     = null;
+let pollTimer        = null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -86,7 +83,6 @@ function calcCircuitInfo(quote) {
   const distUpper = ((upper - ltp) / ltp) * 100;
   const distLower = ((ltp - lower) / ltp) * 100;
 
-  // Which circuit is closer?
   const side    = distUpper <= distLower ? "UPPER" : "LOWER";
   const distPct = side === "UPPER" ? distUpper : distLower;
   const tier    = getTier(distPct);
@@ -101,40 +97,42 @@ function updateDayHistory(symbol, side, distPct) {
   if (!dayHistory.has(symbol)) dayHistory.set(symbol, []);
   const hist = dayHistory.get(symbol);
 
-  // Replace today's entry or add new
   const todayIdx = hist.findIndex(h => h.date === today);
   if (todayIdx >= 0) { hist[todayIdx] = { date: today, side, distPct }; }
   else { hist.push({ date: today, side, distPct }); }
 
-  // Keep last 7 days only
   if (hist.length > 7) hist.splice(0, hist.length - 7);
 
-  // Check for magnet: last N days all approaching same circuit with decreasing distance
   if (hist.length >= MAGNET_MIN_DAYS) {
-    const recent = hist.slice(-MAGNET_MIN_DAYS);
+    const recent   = hist.slice(-MAGNET_MIN_DAYS);
     const sameSide = recent.every(h => h.side === side);
     const shrinking = recent.every((h, i) => i === 0 || h.distPct <= recent[i - 1].distPct + 1);
     if (sameSide && shrinking && distPct <= 5) {
-      return { isMagnet: true, days: MAGNET_MIN_DAYS, side, avgDist: +(recent.reduce((a, h) => a + h.distPct, 0) / recent.length).toFixed(2) };
+      return {
+        isMagnet: true,
+        days:     MAGNET_MIN_DAYS,
+        side,
+        avgDist:  +(recent.reduce((a, h) => a + h.distPct, 0) / recent.length).toFixed(2),
+      };
     }
   }
   return null;
 }
 
-// ── Scan symbols via Upstox quote API ─────────────────────────────────────────
+// ── Scan symbols via Upstox quote API ────────────────────────────────────────
 
 async function scanCircuits(symbols) {
-  const token = tokenGetter?.();
+  const token    = tokenGetter?.();
   const instrMap = instrumentGetter?.() || {};
-  const toScan = symbols.filter(s => instrMap[s]).slice(0, CIRCUIT_SCAN_SYMBOLS);
+  const toScan   = symbols.filter(s => instrMap[s]).slice(0, CIRCUIT_SCAN_SYMBOLS);
+
   console.log(`🔍 SmartCircuit scan: token=${!!token}, instrMap=${Object.keys(instrMap).length}, toScan=${toScan.length}`);
-  if (!token) { console.warn("⚠️ SmartCircuit: no token"); return; }
+
+  if (!token)         { console.warn("⚠️ SmartCircuit: no token");                          return; }
   if (!toScan.length) { console.warn("⚠️ SmartCircuit: no symbols matched in instrument map"); return; }
 
-  // Upstox allows up to 500 keys per request
-  const BATCH = 100;
-  const alerts = [];
-  const newWatchlist = [];
+  const BATCH    = 100;
+  const alerts   = [];
 
   for (let i = 0; i < toScan.length; i += BATCH) {
     const batch = toScan.slice(i, i + BATCH);
@@ -146,6 +144,8 @@ async function scanCircuits(symbols) {
         timeout: 10_000,
       });
       const data = r.data?.data || {};
+      console.log(`📊 SmartCircuit batch ${i / BATCH + 1}: got ${Object.keys(data).length} quotes`);
+
       for (const sym of batch) {
         const key   = instrMap[sym];
         const quote = data[key] || data[key?.replace("|", ":")] || null;
@@ -154,8 +154,7 @@ async function scanCircuits(symbols) {
         const info = calcCircuitInfo(quote);
         if (!info) continue;
 
-        // Update watchlist entry
-        const prev = watchlist.get(sym);
+        const prev  = watchlist.get(sym);
         const entry = {
           symbol:    sym,
           ltp:       info.ltp,
@@ -168,10 +167,7 @@ async function scanCircuits(symbols) {
           updatedAt: Date.now(),
         };
 
-        // Trap detection: critical proximity in opening window
         const isTrap = isOpeningWindow() && info.distPct <= 2 && info.tier !== "SAFE";
-
-        // Magnet detection
         const magnet = updateDayHistory(sym, info.side, info.distPct);
 
         if (isTrap) {
@@ -184,20 +180,21 @@ async function scanCircuits(symbols) {
           entry.magnetMsg   = `🧲 MAGNET — ${sym} approaching ${info.side} circuit for ${magnet.days} days`;
         }
 
-        // Emit alert if tier is WARNING or above
+        // Alert if WARNING or above
         if (info.score >= 65 && (!prev || prev.tier !== info.tier || isTrap || magnet)) {
           const alert = {
-            symbol:  sym,
-            ltp:     info.ltp,
-            side:    info.side,
-            distPct: info.distPct,
-            tier:    info.tier,
-            score:   info.score,
-            trap:    isTrap || false,
-            magnet:  !!magnet,
+            symbol:    sym,
+            ltp:       info.ltp,
+            side:      info.side,
+            distPct:   info.distPct,
+            tier:      info.tier,
+            score:     info.score,
+            trap:      isTrap || false,
+            magnet:    !!magnet,
             timestamp: Date.now(),
-            msg: isTrap ? entry.trapMsg : magnet ? entry.magnetMsg :
-              `${sym} — ${info.tier} · ${info.side} circuit · ${info.distPct}% away`,
+            msg: isTrap  ? entry.trapMsg  :
+                 magnet  ? entry.magnetMsg :
+                 `${sym} — ${info.tier} · ${info.side} circuit · ${info.distPct}% away`,
           };
           alerts.push(alert);
           alertLog.unshift(alert);
@@ -205,30 +202,34 @@ async function scanCircuits(symbols) {
         }
 
         watchlist.set(sym, entry);
-        newWatchlist.push(entry);
       }
     } catch (e) {
       console.warn(`⚠️ SmartCircuit batch scan error:`, e.message);
     }
   }
 
-  // Broadcast
+  // ── Broadcast ─────────────────────────────────────────────────────────────
+  // Show ALL scanned stocks (score >= 0), sorted by score DESC
+  // Change score threshold back to 40 once confirmed working
   const sortedWatchlist = Array.from(watchlist.values())
-    .filter(e => e.score >= 40)
+    .filter(e => e.score >= 0)
     .sort((a, b) => b.score - a.score);
 
+  console.log(`📡 SmartCircuit broadcasting: ${sortedWatchlist.length} watchlist stocks, ${alerts.length} alerts`);
+
   if (ioRef) {
+    ioRef.emit("circuit-watchlist", sortedWatchlist);
+    watchlistCbs.forEach(cb => { try { cb(sortedWatchlist); } catch {} });
+
     if (alerts.length > 0) {
       ioRef.emit("circuit-alerts", alerts);
       alertCbs.forEach(cb => { try { cb(alerts); } catch {} });
       console.log(`🔔 SmartCircuit: ${alerts.length} new alert(s) emitted`);
     }
-    ioRef.emit("circuit-watchlist", sortedWatchlist);
-    watchlistCbs.forEach(cb => { try { cb(sortedWatchlist); } catch {} });
   }
 }
 
-// ── Default symbol list (NIFTY 500 large caps first) ─────────────────────────
+// ── Default symbol list ───────────────────────────────────────────────────────
 
 const DEFAULT_SYMBOLS = [
   "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","SBIN","AXISBANK","KOTAKBANK",
@@ -243,53 +244,62 @@ const DEFAULT_SYMBOLS = [
   "SUZLON","TORNTPOWER","TATAPOWER","JSWENERGY","PGEL","INOXWIND","KEC",
   "KALPATPOWER","ABB","SIEMENS","LTIM","LTTS","MPHASIS","PERSISTENT","COFORGE",
   "OFSS","NAUKRI","ZYDUSLIFE","AUROPHARMA","IPCALAB","ALKEM","LUPIN",
-  "SUNTV","NESTLEIND","BRITANNIA","DABUR","MARICO","GODREJCP","EMAMILTD",
+  "SUNTV","BRITANNIA","DABUR","MARICO","GODREJCP","EMAMILTD",
 ];
 
-// ── Lifecycle ──────────────────────────────────────────────────────────────────
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 function startSmartCircuitTracker(io, tokenGetterFn, instrumentGetterFn) {
   ioRef            = io;
   tokenGetter      = tokenGetterFn;
   instrumentGetter = instrumentGetterFn;
 
-  // Restore any stored alerts on client connect
+  // Send cached state to newly connected clients
   io.on("connection", (socket) => {
     const recent = alertLog.slice(0, 20);
     if (recent.length > 0) socket.emit("circuit-alerts", recent);
-    const wl = Array.from(watchlist.values()).filter(e => e.score >= 40).sort((a, b) => b.score - a.score);
+    const wl = Array.from(watchlist.values())
+      .filter(e => e.score >= 0)
+      .sort((a, b) => b.score - a.score);
     if (wl.length > 0) socket.emit("circuit-watchlist", wl);
   });
 
-  // Start polling during market hours
+  // Poll every 3 min during market hours
   pollTimer = setInterval(() => {
     if (isMarketOpen()) {
       scanCircuits(DEFAULT_SYMBOLS).catch(e => console.warn("SmartCircuit poll error:", e.message));
+    } else {
+      console.log("⏸ SmartCircuit: market closed — skipping poll");
     }
   }, POLL_INTERVAL_MS);
 
-  // Initial scan
-  // NEW — waits for instrument map to have entries:
-if (isMarketOpen()) {
+  // Initial scan — wait for instrument map to be populated first
   let attempts = 0;
   const waitForMap = setInterval(() => {
     attempts++;
-    const map = instrumentGetter?.() || {};
+    const map   = instrumentGetter?.() || {};
     const count = Object.keys(map).length;
     console.log(`🔍 SmartCircuit waiting for instrument map... attempt ${attempts}, size=${count}`);
+
     if (count >= 50) {
       clearInterval(waitForMap);
       console.log(`✅ SmartCircuit: instrument map ready (${count} symbols) — starting scan`);
-      scanCircuits(DEFAULT_SYMBOLS).catch(e =>
-        console.warn("SmartCircuit initial scan error:", e.message)
-      );
+      if (isMarketOpen()) {
+        scanCircuits(DEFAULT_SYMBOLS).catch(e =>
+          console.warn("SmartCircuit initial scan error:", e.message)
+        );
+      } else {
+        console.log("⏸ SmartCircuit: market closed — initial scan skipped");
+      }
+      return;
     }
-    if (attempts >= 24) { // give up after 2 min
+
+    if (attempts >= 24) {
       clearInterval(waitForMap);
-      console.warn("⚠️ SmartCircuit: gave up waiting for instrument map");
+      console.warn("⚠️ SmartCircuit: gave up waiting for instrument map after 2 min");
     }
   }, 5_000);
-}
+
   console.log("🔔 SmartCircuitTracker started");
 }
 
@@ -297,15 +307,17 @@ function stopSmartCircuitTracker() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
-// ── Public event subscriptions (same API as old circuitWatcher) ───────────────
+// ── Public event subscriptions ────────────────────────────────────────────────
 
-function onCircuitAlert(cb) { alertCbs.push(cb); }
+function onCircuitAlert(cb)     { alertCbs.push(cb); }
 function onCircuitWatchlist(cb) { watchlistCbs.push(cb); }
 
-// ── Public data getters ────────────────────────────────────────────────────────
+// ── Public data getters ───────────────────────────────────────────────────────
 
 function getCircuitWatchlist() {
-  return Array.from(watchlist.values()).filter(e => e.score >= 40).sort((a, b) => b.score - a.score);
+  return Array.from(watchlist.values())
+    .filter(e => e.score >= 0)
+    .sort((a, b) => b.score - a.score);
 }
 
 function getRecentAlerts(n = 20) {

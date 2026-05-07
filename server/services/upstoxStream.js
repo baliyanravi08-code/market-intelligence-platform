@@ -226,7 +226,8 @@ function parseAndEmit(raw) {
 
       // ── Index tick ────────────────────────────────────────────────────────
       if (name) {
-        const ltpc = ff?.indexFF?.ltpc || ff?.marketFF?.ltpc || feed?.ltpc || null;
+  console.log("IDX:", name, JSON.stringify(feed).substring(0, 200));
+  const ltpc = ff?.indexFF?.ltpc || ff?.marketFF?.ltpc || feed?.ltpc || null;
         if (ltpc) {
           const price = parseFloat(ltpc.ltp || 0);
           if (price) {

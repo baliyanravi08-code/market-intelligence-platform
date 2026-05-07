@@ -980,6 +980,13 @@ app.get("/api/debug/candles", async (req, res) => {
 
 // ── /api/test-circuit ─────────────────────────────────────────────────────────
 app.get("/api/test-circuit", async (req, res) => {
+  app.get("/api/debug/circuit", (req, res) => {
+  const { getCircuitWatchlist, getRecentAlerts } = require("./services/intelligence/smartCircuitTracker");
+  res.json({
+    watchlist: getCircuitWatchlist(),
+    alerts: getRecentAlerts(10),
+  });
+});
   const symbol = req.query.symbol || "RELIANCE";
   const ikey   = getInstrumentKeyFull(symbol);
   if (!ikey) return res.json({ error: `Symbol ${symbol} not in instrument map`, mapSize: Object.keys(instrumentMap).length });
