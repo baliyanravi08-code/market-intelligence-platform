@@ -1,10 +1,11 @@
 "use strict";
 
 /**
- * binaryProtocol.js — Zerodha-style binary WebSocket protocol
+ * server/api/binaryProtocol.js
  *
- * FIX: encodeScannerSnapshot now uses uint32 for table length
- *      (was uint16 — overflows with 500+ stocks causing crash)
+ * FIX 1: writeHeader now writes 5 bytes (1 type + 4 length uint32, was 3 bytes uint16)
+ * FIX 2: encodeScannerSnapshot uses uint32 for table length (was uint16 — overflows 500+ stocks)
+ * FIX 3: all decoders start at off=5 to match new header size
  */
 
 const MSG = {
@@ -65,17 +66,17 @@ function changeToInt32(change) {
   return Math.round((change || 0) * 100);
 }
 
+// ✅ FIX: header = 1 byte type + 4 bytes uint32 length = 5 bytes total (was 3)
 function writeHeader(buf, offset, msgType, payloadLen) {
   buf.writeUInt8(msgType, offset);
-  // FIX: payload length stored as uint32 now (was uint16 — same crash risk)
   buf.writeUInt32BE(payloadLen, offset + 1);
-  return offset + 5; // 1 type + 4 length
+  return offset + 5;
 }
 
 // ── MARKET TICK ───────────────────────────────────────────────────────────────
 function encodeMarketTick(updates) {
   const count = updates.length;
-  const buf   = Buffer.allocUnsafe(5 + count * 8); // 5 = header with uint32 len
+  const buf   = Buffer.allocUnsafe(5 + count * 8);
   let off = writeHeader(buf, 0, MSG.MARKET_TICK, count * 8);
 
   for (const u of updates) {
@@ -130,9 +131,8 @@ function encodeScannerDiff(stocks) {
   return buf;
 }
 
-// ── SCANNER SNAPSHOT ─────────────────────────────────────────────────────────
-// FIX: both table length and stocks length now use uint32 (not uint16)
-//      uint16 max = 65535 bytes, but 500 stock symbol table = ~185000 bytes → overflow crash
+// ── SCANNER SNAPSHOT ──────────────────────────────────────────────────────────
+// ✅ FIX: table length now uint32 (was uint16 — max 65535, but 500 stocks = ~185000 bytes)
 function encodeScannerSnapshot(stocks) {
   buildSymbolTable(stocks);
 
@@ -145,7 +145,7 @@ function encodeScannerSnapshot(stocks) {
   const buf     = Buffer.allocUnsafe(5 + payload);
   let off = writeHeader(buf, 0, MSG.SCANNER_SNAPSHOT, payload);
 
-  buf.writeUInt32BE(tableBuf.length, off); off += 4;   // ✅ was UInt16BE
+  buf.writeUInt32BE(tableBuf.length, off); off += 4;  // ✅ was UInt16BE
   tableBuf.copy(buf, off); off += tableBuf.length;
   buf.writeUInt32BE(stocksBuf.length, off); off += 4;
   stocksBuf.copy(buf, off);
@@ -191,7 +191,7 @@ function encodeJSON(eventName, data) {
 function decode(buffer) {
   const buf     = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   const msgType = buf.readUInt8(0);
-  let off = 5; // 1 type + 4 length (uint32)
+  let off = 5; // ✅ FIX: 1 type + 4 length (was 3)
 
   switch (msgType) {
     case MSG.MARKET_TICK: {

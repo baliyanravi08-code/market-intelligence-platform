@@ -1,31 +1,10 @@
 /**
  * client/src/utils/binaryProtocol.js
  *
- * Drop-in client decoder for the server binary protocol.
- *
- * USAGE in any React component / page:
- *
- *   import { useBinarySocket } from '../utils/binaryProtocol';
- *
- *   // In your component:
- *   const socket = useBinarySocket({
- *     'market-tick':      (updates) => setIndices(updates),
- *     'ltp':              ({ s, p, t }) => setLTP(s, p),
- *     'scanner:diff':     (stocks) => applyDiff(stocks),
- *     'scanner:snapshot': (stocks) => setAllStocks(stocks),
- *     'candle:tick':      ({ symbol, tf, candle }) => updateCandle(symbol, tf, candle),
- *     'candle:closed':    ({ symbol, tf, candle }) => closeCandle(symbol, tf, candle),
- *     // Any other event name works — JSON fallback events are decoded automatically
- *   });
- *
- * The hook:
- *   - Sends "use-binary" on connect to enable binary mode
- *   - Listens to "binary" event for all binary + JSON fallback messages
- *   - Still listens to JSON events for backward compatibility during rollout
- *   - Returns the socket instance so you can emit events normally
+ * FIX 1: header is now 5 bytes (1 type + 4 length uint32) — off starts at 5
+ * FIX 2: SCANNER_SNAPSHOT table length is uint32 (was uint16 — overflows 500+ stocks)
  */
 
-// ── Message type constants (must match server binaryProtocol.js) ──────────────
 export const MSG = {
   MARKET_TICK:      0x01,
   LTP_TICK:         0x02,
@@ -57,12 +36,10 @@ const TF_ID_TO_NAME = {
   5: "1hour", 6: "4hour", 7: "1day",  8: "1week", 9: "1month",
 };
 
-// ── Symbol table (populated once from scanner:snapshot) ──────────────────────
 let _symbolTable = [];
 
-// ── DataView helper ───────────────────────────────────────────────────────────
 function readUInt8(dv, off)  { return dv.getUint8(off); }
-function readUInt16(dv, off) { return dv.getUint16(off, false); }  // big-endian
+function readUInt16(dv, off) { return dv.getUint16(off, false); }
 function readUInt32(dv, off) { return dv.getUint32(off, false); }
 function readInt16(dv, off)  { return dv.getInt16(off, false); }
 function readInt32(dv, off)  { return dv.getInt32(off, false); }
@@ -79,12 +56,11 @@ function readUtf8(buffer, off, len) {
   return new TextDecoder("utf-8").decode(new Uint8Array(slice));
 }
 
-// ── Main decoder ──────────────────────────────────────────────────────────────
 export function decode(arrayBuffer) {
   const dv      = new DataView(arrayBuffer);
   const msgType = readUInt8(dv, 0);
-  // const payloadLen = readUInt16(dv, 1); // available if needed
-  let off = 3;
+  // header = 1 byte type + 4 bytes uint32 length = 5 bytes total
+  let off = 5; // ✅ FIX: was 3 (old uint16 header)
 
   switch (msgType) {
 
@@ -104,6 +80,7 @@ export function decode(arrayBuffer) {
           pct:    (up ? "+" : "") + pct.toFixed(2) + "%",
           change: (up ? "+" : "") + diff.toFixed(2),
           up,
+          _ts:    Date.now(),
         });
       }
       return { type: "market-tick", data: updates };
@@ -121,22 +98,22 @@ export function decode(arrayBuffer) {
       const count  = readUInt16(dv, off); off += 2;
       const stocks = [];
       for (let i = 0; i < count; i++) {
-        const idx     = readUInt16(dv, off); off += 2;
-        const ltp     = readUInt32(dv, off) / 100; off += 4;
+        const idx       = readUInt16(dv, off); off += 2;
+        const ltp       = readUInt32(dv, off) / 100; off += 4;
         const changePct = readInt16(dv, off) / 100; off += 2;
-        const change  = readInt32(dv, off) / 100; off += 4;
-        const volume  = readUInt32(dv, off); off += 4;
-        const score   = readInt8(dv, off); off++;
-        const symbol  = _symbolTable[idx] || `SYM_${idx}`;
+        const change    = readInt32(dv, off) / 100; off += 4;
+        const volume    = readUInt32(dv, off); off += 4;
+        const score     = readInt8(dv, off); off++;
+        const symbol    = _symbolTable[idx] || `SYM_${idx}`;
         stocks.push({ symbol, ltp, changePct, change, volume, techScore: score });
       }
       return { type: "scanner:diff", data: stocks };
     }
 
     case MSG.SCANNER_SNAPSHOT: {
-      const tableLen  = readUInt16(dv, off); off += 2;
+      const tableLen  = readUInt32(dv, off); off += 4; // ✅ FIX: was readUInt16 + 2
       const tableJson = readUtf8(arrayBuffer, off, tableLen); off += tableLen;
-      _symbolTable    = JSON.parse(tableJson); // store for diff decoding
+      _symbolTable    = JSON.parse(tableJson);
       const stocksLen = readUInt32(dv, off); off += 4;
       const stocks    = JSON.parse(readUtf8(arrayBuffer, off, stocksLen));
       return { type: "scanner:snapshot", data: stocks };
@@ -144,19 +121,19 @@ export function decode(arrayBuffer) {
 
     case MSG.CANDLE_TICK:
     case MSG.CANDLE_CLOSED: {
-      const symLen  = readUInt8(dv, off); off++;
-      const symbol  = readAscii(dv, off, symLen); off += symLen;
-      const tfId    = readUInt8(dv, off); off++;
-      const tf      = TF_ID_TO_NAME[tfId] || "1min";
-      const tsSec   = readUInt32(dv, off); off += 4;
-      const tsMs16  = readUInt32(dv, off); off += 4;
-      const time    = tsSec * 1000 + tsMs16;
-      const open    = readUInt32(dv, off) / 100; off += 4;
-      const high    = readUInt32(dv, off) / 100; off += 4;
-      const low     = readUInt32(dv, off) / 100; off += 4;
-      const close   = readUInt32(dv, off) / 100; off += 4;
-      const volume  = readUInt32(dv, off);
-      const type    = msgType === MSG.CANDLE_TICK ? "candle:tick" : "candle:closed";
+      const symLen = readUInt8(dv, off); off++;
+      const symbol = readAscii(dv, off, symLen); off += symLen;
+      const tfId   = readUInt8(dv, off); off++;
+      const tf     = TF_ID_TO_NAME[tfId] || "1min";
+      const tsSec  = readUInt32(dv, off); off += 4;
+      const tsRem  = readUInt32(dv, off); off += 4;
+      const time   = tsSec * 1000 + tsRem;
+      const open   = readUInt32(dv, off) / 100; off += 4;
+      const high   = readUInt32(dv, off) / 100; off += 4;
+      const low    = readUInt32(dv, off) / 100; off += 4;
+      const close  = readUInt32(dv, off) / 100; off += 4;
+      const volume = readUInt32(dv, off);
+      const type   = msgType === MSG.CANDLE_TICK ? "candle:tick" : "candle:closed";
       return { type, data: { symbol, tf, candle: { time, open, high, low, close, volume } } };
     }
 
@@ -172,11 +149,10 @@ export function decode(arrayBuffer) {
   }
 }
 
-// ── React hook ────────────────────────────────────────────────────────────────
 import { useEffect, useRef } from "react";
 import { io } from "socket.io-client";
 
-let _sharedSocket = null;
+let _sharedSocket   = null;
 let _socketRefCount = 0;
 
 function getSharedSocket() {
@@ -186,46 +162,28 @@ function getSharedSocket() {
   return _sharedSocket;
 }
 
-/**
- * useBinarySocket — React hook for binary WebSocket
- *
- * @param {Object} handlers  Map of event name → handler function
- * @param {Object} options   { shared: true } to reuse socket across components
- * @returns socket instance
- *
- * Example:
- *   const socket = useBinarySocket({
- *     "market-tick": (data) => setTicker(data),
- *     "ltp": ({ s, p }) => updatePrice(s, p),
- *   });
- */
 export function useBinarySocket(handlers = {}, options = {}) {
-  const socketRef  = useRef(null);
+  const socketRef   = useRef(null);
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers; // always latest without re-subscribing
+  handlersRef.current = handlers;
 
   useEffect(() => {
     const socket = options.shared ? getSharedSocket() : io({ transports: ["websocket", "polling"] });
     socketRef.current = socket;
     _socketRefCount++;
 
-    // ── Opt into binary protocol ───────────────────────────────────────────
     socket.emit("use-binary", { version: 1 });
-
     socket.on("connect", () => {
       socket.emit("use-binary", { version: 1 });
     });
 
-    // ── Single "binary" listener handles ALL high-frequency events ─────────
     function onBinary(data) {
-      // socket.io delivers Buffer as ArrayBuffer in browser
       const buf = data instanceof ArrayBuffer ? data
         : data?.buffer instanceof ArrayBuffer ? data.buffer
         : null;
       if (!buf) return;
-
       try {
-        const msg = decode(buf);
+        const msg     = decode(buf);
         const handler = handlersRef.current[msg.type];
         if (handler) handler(msg.data);
       } catch (e) {
@@ -234,15 +192,12 @@ export function useBinarySocket(handlers = {}, options = {}) {
     }
     socket.on("binary", onBinary);
 
-    // ── JSON fallback listeners (backward compat during rollout) ───────────
-    // These fire alongside binary. Components can ignore if they handle binary.
-    // Remove these listeners once all clients are on binary.
     const jsonEvents = [
       "market-tick", "ltp", "scanner:diff", "scanner:snapshot",
       "candle:tick", "candle:closed", "option-chain-update",
       "option-expiries", "options-intelligence", "gann-analysis",
       "backtest-live-tick", "circuit-alerts", "delivery-spikes",
-      "composite-scores", "composite-update", "market-tick",
+      "composite-scores", "composite-update",
       "upstox-status", "system_event", "pong",
     ];
 
@@ -265,7 +220,6 @@ export function useBinarySocket(handlers = {}, options = {}) {
       if (!options.shared) {
         socket.disconnect();
       } else if (_socketRefCount <= 0) {
-        // Last component using shared socket
         _socketRefCount = 0;
       }
     };
@@ -274,12 +228,8 @@ export function useBinarySocket(handlers = {}, options = {}) {
   return socketRef.current;
 }
 
-/**
- * expandDiff — expands short-key scanner diff objects to full objects
- * (only needed for JSON fallback path; binary path returns full objects)
- */
 export function expandDiff(c) {
-  if (c.symbol) return c; // already expanded
+  if (c.symbol) return c;
   return {
     symbol:         c.s,
     ltp:            c.l,
