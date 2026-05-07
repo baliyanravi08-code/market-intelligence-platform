@@ -1484,16 +1484,43 @@ let renderPending=false;
 // ── Intraday candle tick (existing) ──────────────────────────────────────────
 function applyLiveCandleTick(liveCandle){
   if(!CANDLES.length||!isIntradayTF(CURRENT_TF))return;
-  const last=CANDLES[CANDLES.length-1];
-  const candleTime=liveCandle.time;
-  const TF_MS={'1min':60000,'5min':300000,'15min':900000,'1hour':3600000,'4hour':14400000};
-  const tfMs = TF_MS[TF_LIVE_MAP[CURRENT_TF]] || 60000;
+  const TF_MS_MAP={'1min':60000,'5min':300000,'15min':900000,'1hour':3600000,'4hour':14400000};
+  const tfMs = TF_MS_MAP[TF_LIVE_MAP[CURRENT_TF]] || 60000;
+  const last = CANDLES[CANDLES.length-1];
   const lastPeriod = Math.floor(last.date.getTime() / tfMs) * tfMs;
-  if(lastPeriod===candleTime){last.h=Math.max(last.h,liveCandle.high);last.l=Math.min(last.l,liveCandle.low);last.c=liveCandle.close;last.v=liveCandle.volume;}
-  else if(candleTime>last.date.getTime()){CANDLES.push({date:new Date(candleTime),o:liveCandle.open,h:liveCandle.high,l:liveCandle.low,c:liveCandle.close,v:liveCandle.volume});if(CANDLES.length>500)CANDLES.splice(0,CANDLES.length-500);}
-  document.getElementById('symPrice').textContent='₹'+liveCandle.close.toFixed(2);
-  document.getElementById('fsPrice').textContent='₹'+liveCandle.close.toFixed(2);
-  if(!renderPending){renderPending=true;requestAnimationFrame(()=>{renderPending=false;computeInds();updateSidePanel();renderAll();flashLiveBadge();});}
+  const tickPeriod = Math.floor((liveCandle.time) / tfMs) * tfMs;
+
+  if(lastPeriod === tickPeriod){
+    // same candle — update in place
+    last.h = Math.max(last.h, liveCandle.high ?? liveCandle.close);
+    last.l = Math.min(last.l, liveCandle.low  ?? liveCandle.close);
+    last.c = liveCandle.close;
+    last.v = (last.v || 0) + (liveCandle.volume || 0);
+  } else if(tickPeriod > lastPeriod){
+    // new candle period
+    CANDLES.push({
+      date: new Date(tickPeriod),
+      o: liveCandle.open  ?? liveCandle.close,
+      h: liveCandle.high  ?? liveCandle.close,
+      l: liveCandle.low   ?? liveCandle.close,
+      c: liveCandle.close,
+      v: liveCandle.volume || 0,
+    });
+    if(CANDLES.length > 500) CANDLES.splice(0, CANDLES.length - 500);
+  }
+
+  document.getElementById('symPrice').textContent = '₹' + liveCandle.close.toFixed(2);
+  document.getElementById('fsPrice').textContent  = '₹' + liveCandle.close.toFixed(2);
+  if(!renderPending){
+    renderPending=true;
+    requestAnimationFrame(()=>{
+      renderPending=false;
+      computeInds();
+      updateSidePanel();
+      renderAll();
+      flashLiveBadge();
+    });
+  }
   setDataBadge('stream','⚡ STREAMING');
 }
 
