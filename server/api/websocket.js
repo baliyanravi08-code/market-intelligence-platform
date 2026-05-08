@@ -391,21 +391,26 @@ function attachSocketIO(server) {
     });
 
     // ── Chart room ────────────────────────────────────────────────────────
-    socket.on("watch:chart", (symbol) => {
-      [...socket.rooms]
-        .filter(r => r.startsWith("chart:"))
-        .forEach(r => socket.leave(r));
+socket.on("watch:chart", (symbol) => {
+  [...socket.rooms]
+    .filter(r => r.startsWith("chart:"))
+    .forEach(r => socket.leave(r));
 
-      if (symbol && symbol.trim()) {
-        const sym = symbol.toUpperCase().trim();
-        socket.join(`chart:${sym}`);
-        console.log(`📈 ${socket.id} watching chart: ${sym}`);
-        try {
-          const stream = require("../services/upstoxStream");
-          if (stream.subscribeSymbolForPriceTick) stream.subscribeSymbolForPriceTick(sym);
-        } catch (_) {}
+  if (symbol && symbol.trim()) {
+    const sym = symbol.toUpperCase().trim();
+    socket.join(`chart:${sym}`);
+    console.log(`📈 ${socket.id} watching chart: ${sym}`);
+    try {
+      const stream = require("../services/upstoxStream");
+      if (stream.subscribeSymbolForPriceTick) {
+        stream.subscribeSymbolForPriceTick(sym);
+        console.log(`📡 watch:chart → subscribeSymbolForPriceTick: ${sym}`);
       }
-    });
+    } catch (e) {
+      console.warn(`⚠️ watch:chart subscribe failed for ${sym}:`, e.message);
+    }
+  }
+});
 
     // ── Backtest private room ──────────────────────────────────────────────
     socket.on("backtest:start", () => {

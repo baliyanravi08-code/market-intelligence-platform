@@ -1220,38 +1220,47 @@ app.get("/api/candles/:symbol", async (req, res) => {
 
       // For 1D: append live today candle using intraday 1min data
       if (tf === "1day") {
-        try {
-          const todayUrl = `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/1`;
-          const r2       = await axios.get(todayUrl, { headers, timeout: 10_000 });
-          const ticks    = r2.data?.data?.candles || [];
-          if (ticks.length) {
-            const todayCandle = {
-              time:   new Date(new Date().toISOString().split("T")[0] + "T00:00:00.000Z").getTime(),
-              open:   ticks[ticks.length - 1][1],
-              high:   Math.max(...ticks.map(c => c[2])),
-              low:    Math.min(...ticks.map(c => c[3])),
-              close:  ticks[0][4],
-              volume: ticks.reduce((a, c) => a + c[5], 0),
-            };
-            const todayStr = new Date().toISOString().split("T")[0];
-            const lastHist = allCandles[allCandles.length - 1];
-            const lastStr  = lastHist ? new Date(lastHist.time).toISOString().split("T")[0] : "";
-            if (todayStr !== lastStr) {
-              allCandles.push(todayCandle);
-              console.log(`✅ v3 today-candle appended [${symbol}]: close=${todayCandle.close}`);
-            } else {
-              lastHist.high   = Math.max(lastHist.high, todayCandle.high);
-              lastHist.low    = Math.min(lastHist.low,  todayCandle.low);
-              lastHist.close  = todayCandle.close;
-              lastHist.volume = todayCandle.volume;
-              console.log(`✅ v3 today-candle updated [${symbol}]: close=${todayCandle.close}`);
-            }
-          }
-        } catch (e) {
-          console.warn(`⚠️ v3 today-candle [${symbol}]: ${e.response?.status || e.message}`);
-        }
+  try {
+    // ✅ Declare IST vars FIRST — used by both todayCandle.time and the comparison below
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const nowIST        = new Date(Date.now() + IST_OFFSET_MS);
+
+    const todayUrl = `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/1`;
+    const r2       = await axios.get(todayUrl, { headers, timeout: 10_000 });
+    const ticks    = r2.data?.data?.candles || [];
+
+    if (ticks.length) {
+      const todayCandle = {
+        // ✅ Uses nowIST — now safe because it's declared above
+        time:   new Date(nowIST.toISOString().split("T")[0] + "T00:00:00.000+05:30").getTime(),
+        open:   ticks[ticks.length - 1][1],
+        high:   Math.max(...ticks.map(c => c[2])),
+        low:    Math.min(...ticks.map(c => c[3])),
+        close:  ticks[0][4],
+        volume: ticks.reduce((a, c) => a + c[5], 0),
+      };
+
+      const todayStr = nowIST.toISOString().split("T")[0];
+      const lastHist = allCandles[allCandles.length - 1];
+      const lastStr  = lastHist
+        ? new Date(lastHist.time + IST_OFFSET_MS).toISOString().split("T")[0]
+        : "";
+
+      if (todayStr !== lastStr) {
+        allCandles.push(todayCandle);
+        console.log(`✅ v3 today-candle appended [${symbol}]: close=${todayCandle.close}`);
+      } else {
+        lastHist.high   = Math.max(lastHist.high, todayCandle.high);
+        lastHist.low    = Math.min(lastHist.low,  todayCandle.low);
+        lastHist.close  = todayCandle.close;
+        lastHist.volume = todayCandle.volume;
+        console.log(`✅ v3 today-candle updated [${symbol}]: close=${todayCandle.close}`);
       }
     }
+  } catch (e) {
+    console.warn(`⚠️ v3 today-candle [${symbol}]: ${e.response?.status || e.message}`);
+  }
+      }}
 
     if (!allCandles.length) {
       return res.json({

@@ -118,8 +118,7 @@ function subscribeSymbolForPriceTick(symbol) {
     pendingSubscriptions.add(instrKey);
     console.log(`📡 price:tick queued (streamer not ready): ${sym}`);
   }
-}
-
+  }
 // ── Lazy-load websocket module ────────────────────────────────────────────────
 let _ws = null;
 function getWS() {
@@ -153,7 +152,7 @@ function processCandleTick(symbol, price, volume) {
       existing.high   = Math.max(existing.high, price);
       existing.low    = Math.min(existing.low, price);
       existing.close  = price;
-      existing.volume = (existing.volume || 0) + (volume || 0);
+      existing.volume = volume || existing.volume || 0;
       const lastEmit = candleEmitThrottle.get(key) || 0;
       if (now - lastEmit >= 2000) {
         ws.emitCandleTick(keySym, tf, { ...existing });
