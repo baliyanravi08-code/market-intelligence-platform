@@ -1120,7 +1120,36 @@ export default function App() {
       });
 
       // binary frames for non-market-tick events (candles, scanner etc) — no-op here
-      sock.on("binary", () => {});
+      sock.on("binary", (data) => {
+  try {
+    const ab  = data instanceof ArrayBuffer ? data : data?.buffer instanceof ArrayBuffer ? data.buffer : null;
+    if (!ab || ab.byteLength < 6) return;
+    const view = new DataView(ab);
+    if (view.getUint8(0) !== 0x01) return; // only handle MARKET_TICK here
+    const names = ["NIFTY 50", "SENSEX", "BANK NIFTY", "BTC", "GOLD", "SILVER", "PI"];
+    const results = [];
+    let off = 5;
+    while (off + 8 <= ab.byteLength) {
+      const id    = view.getUint8(off);
+      const name  = names[id - 1];
+      if (!name) { off += 8; continue; }
+      const raw   = view.getUint32(off + 1, false) / 100;
+      const pct   = view.getInt16(off + 5, false) / 100;
+      const up    = view.getUint8(off + 7) === 1;
+      const diff  = parseFloat((pct * raw / 100).toFixed(2));
+      results.push({ name, price: raw.toLocaleString("en-IN", { maximumFractionDigits: 2 }), raw, up, change: (up ? "+" : "") + diff.toFixed(2), pct: (up ? "+" : "") + Math.abs(pct).toFixed(2) + "%", _ts: Date.now() });
+      off += 8;
+    }
+    if (!results.length) return;
+    setMarketIndices(prev => prev.map(idx => {
+      const u = results.find(r => r.name === idx.name);
+      return u ? { ...u, _ts: Date.now() } : idx;
+    }));
+    setTickerSource("upstox");
+    setTickerLastOk(Date.now());
+    setTickerStale(false);
+  } catch (_) {}
+});
 
       // ✅ FALLBACK: JSON market-tick — websocket.js emits both so this always fires too
       sock.on("market-tick", (updates) => {

@@ -276,6 +276,12 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
   }
 
   _io.to(room).emit("price:tick", payload);
+_io.emit("price:tick", payload); // global broadcast for scanner/dashboard
+}
+// ── Scanner tech batch broadcast ─────────────────────────────────────────────
+function emitTechBatch(batch) {
+  if (!_io || !batch?.length) return;
+  _io.emit("scanner-tech-batch", batch);
 }
 
 // ── Backtest tick delivery ───────────────────────────────────────────────────
@@ -521,6 +527,7 @@ module.exports = {
   // Core
   attachSocketIO,
   setGannIntegration,
+  emitTechBatch,
 
   // Option chain
   emitChainUpdate,
