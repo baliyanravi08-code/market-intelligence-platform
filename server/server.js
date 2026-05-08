@@ -377,6 +377,14 @@ function _pushMapToGann(map) {
   } catch (e) {
     console.warn("⚠️ Could not push instrument map to Gann fetcher:", e.message);
   }
+  // ✅ FIX: push ISIN map to upstoxStream so live candle/price subscriptions
+  // use real ISIN keys (e.g. NSE_EQ|INE748A01016) instead of symbol-only keys
+  // (e.g. NSE_EQ|CRAFTSMAN) which Upstox silently ignores on the WebSocket stream
+  try {
+    require("./services/upstoxStream").setInstrumentMapForStream(map);
+  } catch (e) {
+    console.warn("⚠️ Could not push instrument map to upstoxStream:", e.message);
+  }
 }
 
 function getInstrumentMap() { return instrumentMap; }

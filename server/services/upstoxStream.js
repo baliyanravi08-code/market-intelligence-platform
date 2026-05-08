@@ -59,7 +59,20 @@ const liveCandleState     = new Map();
 const candleSubscriptions = new Map();
 const candleEmitThrottle  = new Map();
 
-function symbolToInstrKey(symbol) { return `NSE_EQ|${symbol.toUpperCase()}`; }
+// ── Instrument map for ISIN key lookup ───────────────────────────────────────
+let _instrMap = {};
+
+function setInstrumentMapForStream(map) {
+  _instrMap = map || {};
+  console.log(`📡 upstoxStream: instrument map set — ${Object.keys(_instrMap).length} symbols`);
+}
+
+function symbolToInstrKey(symbol) {
+  const sym = symbol.toUpperCase().trim();
+  // ✅ FIX: use real ISIN key from instrument map (e.g. NSE_EQ|INE748A01016)
+  // instead of symbol-only key (NSE_EQ|CRAFTSMAN) which Upstox silently ignores
+  return _instrMap[sym] || `NSE_EQ|${sym}`;
+}
 
 const TF_MS = {
   "1min":  60_000,
@@ -461,4 +474,5 @@ module.exports = {
   registerLiveCandleSubscription,
   unregisterLiveCandleSubscription,
   subscribeSymbolForPriceTick,
+  setInstrumentMapForStream,
 };
