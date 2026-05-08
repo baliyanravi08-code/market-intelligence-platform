@@ -1141,18 +1141,77 @@ const POPULAR_STOCKS = [
 const searchInput = document.getElementById('symSearchInput');
 const dropdown    = document.getElementById('symDropdown');
 
+let _searchDebounce = null;
+
 searchInput.addEventListener('input', () => {
   const q = searchInput.value.toUpperCase().trim();
   if (!q) { dropdown.style.display = 'none'; return; }
-  const matches = POPULAR_STOCKS.filter(s => s.sym.includes(q) || s.name.toUpperCase().includes(q)).slice(0, 8);
-  if (!matches.length) { dropdown.style.display = 'none'; return; }
-  dropdown.innerHTML = matches.map(s =>
-    `<div class="sym-dd-item" onclick="changeSymbol('${s.sym}')">
-       <span class="sym-dd-sym">${s.sym}</span>
-       <span class="sym-dd-name">${s.name}</span>
-     </div>`
-  ).join('');
-  dropdown.style.display = 'block';
+
+  // ── 1. Show instant local results first ──────────────────────────────────
+  const localMatches = POPULAR_STOCKS
+    .filter(s => s.sym.includes(q) || s.name.toUpperCase().includes(q))
+    .slice(0, 5);
+
+  if (localMatches.length) {
+    dropdown.innerHTML = localMatches.map(s =>
+      `<div class="sym-dd-item" onclick="changeSymbol('${s.sym}')">
+         <span class="sym-dd-sym">${s.sym}</span>
+         <span class="sym-dd-name">${s.name}</span>
+       </div>`
+    ).join('') + `<div class="sym-dd-item" style="opacity:0.4;cursor:default;font-size:9px;justify-content:center">searching live...</div>`;
+    dropdown.style.display = 'block';
+  }
+
+  // ── 2. Live search from full instrument master via API ───────────────────
+  clearTimeout(_searchDebounce);
+  _searchDebounce = setTimeout(async () => {
+    try {
+      const res  = await fetch(`/api/search/${encodeURIComponent(q)}`);
+      const data = await res.json();
+      const results = data.results || [];
+
+      // Merge: live results first, then local matches not already in results
+      const liveSyms = new Set(results.map(r => (r.nseSymbol || r.code || '').toUpperCase()));
+      const extras   = localMatches.filter(s => !liveSyms.has(s.sym));
+
+      const allItems = [
+        ...results.slice(0, 6).map(r => ({
+          sym:  (r.nseSymbol || r.code || '').toUpperCase(),
+          name: r.name || r.code || '',
+        })),
+        ...extras,
+      ].filter(s => s.sym).slice(0, 8);
+
+      if (!allItems.length) {
+        // No results — still allow Enter to try the typed symbol directly
+        dropdown.innerHTML = `<div class="sym-dd-item" style="opacity:0.5;cursor:default;font-size:10px;justify-content:center">
+          No matches — press Enter to try "${q}" directly
+        </div>`;
+        dropdown.style.display = 'block';
+        return;
+      }
+
+      dropdown.innerHTML = allItems.map(s =>
+        `<div class="sym-dd-item" onclick="changeSymbol('${s.sym}')">
+           <span class="sym-dd-sym">${s.sym}</span>
+           <span class="sym-dd-name">${s.name}</span>
+         </div>`
+      ).join('');
+      dropdown.style.display = 'block';
+
+    } catch (e) {
+      // API failed — fall back to local results silently
+      if (localMatches.length) {
+        dropdown.innerHTML = localMatches.map(s =>
+          `<div class="sym-dd-item" onclick="changeSymbol('${s.sym}')">
+             <span class="sym-dd-sym">${s.sym}</span>
+             <span class="sym-dd-name">${s.name}</span>
+           </div>`
+        ).join('');
+        dropdown.style.display = 'block';
+      }
+    }
+  }, 300);
 });
 searchInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') { const v = searchInput.value.toUpperCase().trim(); if (v) changeSymbol(v); }
