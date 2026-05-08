@@ -1119,18 +1119,8 @@ export default function App() {
         if (window._appKeepalive) { clearInterval(window._appKeepalive); window._appKeepalive = null; }
       });
 
-      // ✅ PRIMARY: binary frame — zero JSON overhead, fires on every Upstox tick
-      sock.on("binary", (data) => {
-        const updates = decodeMarketTickBinary(data);
-        if (!updates) return; // not a market-tick frame — candles, options etc handled elsewhere
-        setMarketIndices(prev => prev.map(idx => {
-          const u = updates.find(u => u.name === idx.name);
-          return u ? { ...u, _ts: Date.now() } : idx;
-        }));
-        setTickerSource("upstox");
-        setTickerLastOk(Date.now());
-        setTickerStale(false);
-      });
+      // binary frames for non-market-tick events (candles, scanner etc) — no-op here
+      sock.on("binary", () => {});
 
       // ✅ FALLBACK: JSON market-tick — websocket.js emits both so this always fires too
       sock.on("market-tick", (updates) => {
