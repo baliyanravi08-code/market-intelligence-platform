@@ -69,8 +69,11 @@ let   sessionDate    = null;
 const spotHistory = {};
 
 const UNDERLYINGS = [
-  { name: "NIFTY",     upstoxKey: "NSE_INDEX|Nifty 50",  lotSize: 75 },
-  { name: "BANKNIFTY", upstoxKey: "NSE_INDEX|Nifty Bank", lotSize: 35 },
+  { name: "NIFTY",      upstoxKey: "NSE_INDEX|Nifty 50",      lotSize: 75  },
+  { name: "BANKNIFTY",  upstoxKey: "NSE_INDEX|Nifty Bank",     lotSize: 35  },
+  { name: "FINNIFTY",   upstoxKey: "NSE_INDEX|Nifty Fin Service", lotSize: 65 },
+  { name: "MIDCPNIFTY", upstoxKey: "NSE_INDEX|Nifty MidSelect", lotSize: 120 },
+  { name: "SENSEX",     upstoxKey: "BSE_INDEX|SENSEX",         lotSize: 20  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -886,6 +886,7 @@ function StraddlePanel({ d, spot, activeSymbol }) {
 
 export default function OptionsIntelligencePage({ socket }) {
   const [data,setData]               = useState({});
+  const [weekendCache, setWeekendCache] = useState({});
   const [gannMap,setGannMap]         = useState({});
   const [liveAlerts,setLiveAlerts]   = useState([]);
   const [activeSymbol,setActiveSymbol] = useState(null);
@@ -895,6 +896,32 @@ export default function OptionsIntelligencePage({ socket }) {
 
   useEffect(() => { const t = setInterval(() => setTick(n => n+1), 1000); return () => clearInterval(t); }, []);
   useEffect(() => { if (!socket) return; socket.emit("request-intel-snapshot"); }, [socket]);
+  // Weekend cache loader
+useEffect(() => {
+  if (isMarketOpen()) return;
+  const syms = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
+  syms.forEach(async sym => {
+    try {
+      const r = await fetch(`/api/straddle/snapshot?symbol=${sym}`);
+      if (!r.ok) return;
+      const snap = await r.json();
+      if (snap?.error) return;
+      // Build a minimal d-shaped object from cache
+      const fakePayload = {
+        symbol: sym,
+        spotPrice: snap.spotPrice,
+        spot: snap.spotPrice,
+        structure: { straddlePrice: snap.straddle?.combined, atmStrike: snap.atmStrike },
+        oi: { pcr: snap.oi?.pcr, maxPain: null, unusualOI: [], unusualOITailRisk: [] },
+        volatility: { atmIV: snap.iv?.atm },
+        gex: {}, atmGreeks: {}, dealerExposures: {}, strategy: [], score: null, bias: "NEUTRAL",
+      };
+      setWeekendCache(prev => ({ ...prev, [sym]: fakePayload }));
+      setSymbolList(prev => prev.includes(sym) ? prev : [...prev, sym]);
+      setActiveSymbol(prev => prev || sym);
+    } catch (_) {}
+  });
+}, []);
 
   const requestGann = useCallback((sym, ltp) => {
     if (!socket || !sym) return;
@@ -951,7 +978,7 @@ export default function OptionsIntelligencePage({ socket }) {
     requestGann(sym, d?.ltp || d?.spot || d?.spotPrice || null);
   };
 
-  const current   = data[activeSymbol] || null;
+  const current   = data[activeSymbol] || weekendCache[activeSymbol] || null;
   const d         = current?.data || current || null;
   const score     = d?.score ?? null;
   const bias      = d?.bias ?? "NEUTRAL";
