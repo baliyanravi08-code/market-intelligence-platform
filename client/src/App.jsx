@@ -5,6 +5,7 @@ import SmartCircuitPage from "./pages/SmartCircuitPage";
 import OptionsIntelligencePage from "./pages/OptionsIntelligencePage";
 import MarketScannerPage from "./pages/MarketScannerPage";
 import GannBadge from "./components/GannBadge";
+import StraddlePage from "./pages/StraddlePage";
 
 const SIGNAL_COLOR = {
   ORDER_ALERT:         { bg: "#00ff9c", fg: "#000" },
@@ -33,7 +34,7 @@ const MOBILE_TABS = [
 ];
 
 const VALID_PAGES = new Set([
-  "dashboard", "options", "scores", "options-intel", "scanner", "terminal"
+  "dashboard", "options", "scores", "options-intel", "scanner", "terminal", "straddle"
 ]);
 
 // ── Binary decoder — reads market-tick binary frame from websocket.js ─────────
@@ -1009,6 +1010,13 @@ function AppHeader({ currentPage, setCurrentPage, darkMode, setDarkMode, needsCo
           <span className="options-nav-label">{isScanner ? "Dashboard" : "Scanner"}</span>
           {isScanner && <span className="options-nav-back">←</span>}
         </button>
+        <button className={`options-nav-btn${currentPage === "straddle" ? " active" : ""}`}
+  onClick={() => setCurrentPage(currentPage === "straddle" ? "dashboard" : "straddle")}
+  title="Straddle & Strangle" style={{ marginLeft: 4 }}>
+  <span className="options-nav-icon">📐</span>
+  <span className="options-nav-label">{currentPage === "straddle" ? "Dashboard" : "Straddle"}</span>
+  {currentPage === "straddle" && <span className="options-nav-back">←</span>}
+</button>
 
         {needsConnect && !isAltPage && (
           <span style={{ fontSize: "9px", fontFamily: "IBM Plex Mono, monospace", color: "#ffaa00", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }} onClick={() => window.open("/auth/upstox", "_blank")}>
@@ -1485,6 +1493,15 @@ export default function App() {
       </div>
     );
   }
+  if (currentPage === "straddle") {
+  return (
+    <div className="terminal" style={{ display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden" }}>
+      {sharedHeader}{sharedTicker}
+      <div style={{ flex:1, overflowY:"auto", minHeight:0 }}><StraddlePage /></div>
+      <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
+    </div>
+  );
+}
 
   if (currentPage === "scanner") {
     return (

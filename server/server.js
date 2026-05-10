@@ -791,6 +791,8 @@ function scheduleDailyTokenCheck() {
 
 // ── Backtest API ──────────────────────────────────────────────────────────────
 app.use("/api/backtest", backtestRoutes);
+const straddleRoutes = require("./routes/straddleRoutes");
+app.use("/api/straddle", straddleRoutes);
 
 // ── Auth routes ───────────────────────────────────────────────────────────────
 const UPSTOX_INSTRUMENTS = {

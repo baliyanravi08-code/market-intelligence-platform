@@ -1,7 +1,4 @@
-// OptionsIntelligencePage.jsx — FIXED:
-// 1. Alerts → horizontal scrolling pill strip (thin, saves vertical space)
-// 2. OI Intelligence → single column layout (PCR → Max Pain → Total OI → Net Flow)
-// 3. OI Intelligence → scrollable like other 3 panels
+// OptionsIntelligencePage.jsx
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import GannBadge from "../components/GannBadge";
@@ -247,7 +244,6 @@ function StrategyTag({ signal }) {
   );
 }
 
-// PanelWrap — all 4 panels use this, overflowY:"auto" makes them all scrollable
 function PanelWrap({ children, borderColor }) {
   return (
     <div style={{
@@ -278,19 +274,11 @@ function EmptyState({ symbol }) {
   );
 }
 
-// ── FIXED: Alerts as horizontal scrolling pill strip ──────────────────────────
 function AlertStrip({ alerts }) {
   return (
     <div style={{
-      display:"flex",
-      alignItems:"center",
-      gap:6,
-      flex:1,
-      overflowX:"auto",
-      overflowY:"hidden",
-      scrollbarWidth:"none",
-      msOverflowStyle:"none",
-      minWidth:0,
+      display:"flex", alignItems:"center", gap:6, flex:1,
+      overflowX:"auto", overflowY:"hidden", scrollbarWidth:"none", msOverflowStyle:"none", minWidth:0,
     }}>
       <style>{`.alert-strip::-webkit-scrollbar{display:none}`}</style>
       <span style={{ fontSize:11, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, color:"#c8d8e8", letterSpacing:1.2, textTransform:"uppercase", flexShrink:0 }}>⚡</span>
@@ -304,24 +292,10 @@ function AlertStrip({ alerts }) {
             const color  = isHigh ? "#ef5350" : a.priority === "MEDIUM" ? "#ffd54f" : "#a8c8e0";
             const age    = a.ts ? Math.round((Date.now() - a.ts) / 1000) : null;
             return (
-              <div key={i} style={{
-                display:"flex", alignItems:"center", gap:5,
-                padding:"2px 9px",
-                background:`${color}11`,
-                border:`1px solid ${color}33`,
-                borderRadius:3,
-                flexShrink:0,
-                whiteSpace:"nowrap",
-              }}>
+              <div key={i} style={{ display:"flex", alignItems:"center", gap:5, padding:"2px 9px", background:`${color}11`, border:`1px solid ${color}33`, borderRadius:3, flexShrink:0, whiteSpace:"nowrap" }}>
                 <span style={{ fontSize:11, flexShrink:0 }}>{ALERT_ICONS[a.type]||"◈"}</span>
-                <span style={{ fontSize:10, color, fontFamily:"IBM Plex Mono,monospace", fontWeight:isHigh?700:400 }}>
-                  {a.message||a.detail||String(a)}
-                </span>
-                {age != null && (
-                  <span style={{ fontSize:10, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace" }}>
-                    {age < 60 ? `${age}s` : `${Math.round(age/60)}m`}
-                  </span>
-                )}
+                <span style={{ fontSize:10, color, fontFamily:"IBM Plex Mono,monospace", fontWeight:isHigh?700:400 }}>{a.message||a.detail||String(a)}</span>
+                {age != null && <span style={{ fontSize:10, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace" }}>{age < 60 ? `${age}s` : `${Math.round(age/60)}m`}</span>}
               </div>
             );
           })
@@ -335,17 +309,14 @@ function OIChainViewer({ nearATMSignals, tailRiskSignals, spot, activeSymbol }) 
   const [scrollIdx,setScrollIdx] = useState(0);
   const ROWS=7;
   const nearLabel=(activeSymbol||"").toUpperCase().includes("BANK")?"±10%":"±8%";
-
   const sortRows=(arr)=>[...(arr||[])].sort((a,b)=>{
     const da=Math.abs(a.strike-spot), db=Math.abs(b.strike-spot);
     if(da!==db) return da-db;
     return (a.type||"").toUpperCase()==="CALL"?-1:1;
   });
-
   const rows=sortRows(view==="near"?nearATMSignals:tailRiskSignals);
   const visible=rows.slice(scrollIdx,scrollIdx+ROWS);
   const canUp=scrollIdx>0, canDn=scrollIdx+ROWS<rows.length;
-
   return (
     <div style={{ display:"flex", flexDirection:"column" }}>
       <div style={{ display:"flex", gap:5, marginBottom:6 }}>
@@ -404,13 +375,10 @@ function GEXPanel({ gex, dealerExposures }) {
   const gexCallVal = gex.callGEX ?? null;
   const gexPutVal  = gex.putGEX  ?? null;
   const gexMax = Math.max(Math.abs(gex.netGEX||0), Math.abs(gexCallVal||0), Math.abs(gexPutVal||0), 1);
-  const gexBias   = gex.netGEX > 0 ? "Dealers long gamma — market stabilized"
-                  : gex.netGEX < 0 ? "Dealers short gamma — volatile, trend-amplifying"
-                  : "Neutral dealer positioning";
-  const gexBiasC  = gex.netGEX > 0 ? "#00ff9c" : gex.netGEX < 0 ? "#ef5350" : "#ffd54f";
+  const gexBias  = gex.netGEX > 0 ? "Dealers long gamma — market stabilized" : gex.netGEX < 0 ? "Dealers short gamma — volatile, trend-amplifying" : "Neutral dealer positioning";
+  const gexBiasC = gex.netGEX > 0 ? "#00ff9c" : gex.netGEX < 0 ? "#ef5350" : "#ffd54f";
   const vanna = dealerExposures?.vex  ?? null;
   const charm = dealerExposures?.chex ?? null;
-
   return (
     <PanelWrap>
       <SL>Dealer GEX</SL>
@@ -446,43 +414,18 @@ function GEXPanel({ gex, dealerExposures }) {
   );
 }
 
-// ── FIXED: OI panel — single column + scrollable via PanelWrap ────────────────
 function OIPanel({ oi, nearATMSignals, tailRiskSignals, spot, activeSymbol }) {
-  const oiSummary = oi.pcr > 1.2 ? "Put dominance → bullish (mm hedge)"
-                  : oi.pcr < 0.8 ? "Call dominance → market complacent"
-                  : oi.pcr != null ? "Balanced PCR → neutral" : null;
+  const oiSummary = oi.pcr > 1.2 ? "Put dominance → bullish (mm hedge)" : oi.pcr < 0.8 ? "Call dominance → market complacent" : oi.pcr != null ? "Balanced PCR → neutral" : null;
   const oiColor = oi.pcr > 1.2 ? "#00ff9c" : oi.pcr < 0.8 ? "#ef5350" : "#ffd54f";
-
   return (
     <PanelWrap>
       <SL>OI Intelligence</SL>
-
-      {/* ── Single row: PCR | MAX PAIN | TOTAL OI | NET FLOW ── */}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:5, marginBottom:6 }}>
-        <MiniCard
-          label="PCR"
-          value={fmt2(oi.pcr)}
-          sub="put/call"
-          color={oi.pcr > 1.2 ? "#00ff9c" : oi.pcr < 0.8 ? "#ef5350" : "#ffd54f"}
-        />
-        <MiniCard
-          label="MAX PAIN"
-          value={oi.maxPain ? oi.maxPain.toLocaleString("en-IN") : "—"}
-          sub="expiry"
-          color="#4fc3f7"
-        />
-        <MiniCard
-          label="TOTAL OI"
-          value={fmtOILakhs(oi.totalCallOI, oi.totalPutOI)}
-        />
-        <MiniCard
-          label="NET FLOW"
-          value={oi.netPremiumFlow != null ? fmtCr(oi.netPremiumFlow) : "—"}
-          sub="Cr"
-          color={oi.netPremiumFlow > 0 ? "#00ff9c" : "#ef5350"}
-        />
+        <MiniCard label="PCR"      value={fmt2(oi.pcr)} sub="put/call" color={oi.pcr > 1.2 ? "#00ff9c" : oi.pcr < 0.8 ? "#ef5350" : "#ffd54f"} />
+        <MiniCard label="MAX PAIN" value={oi.maxPain ? oi.maxPain.toLocaleString("en-IN") : "—"} sub="expiry" color="#4fc3f7" />
+        <MiniCard label="TOTAL OI" value={fmtOILakhs(oi.totalCallOI, oi.totalPutOI)} />
+        <MiniCard label="NET FLOW" value={oi.netPremiumFlow != null ? fmtCr(oi.netPremiumFlow) : "—"} sub="Cr" color={oi.netPremiumFlow > 0 ? "#00ff9c" : "#ef5350"} />
       </div>
-
       {oiSummary && (
         <div style={{ fontSize:10, fontFamily:"IBM Plex Mono,monospace", color:oiColor, marginBottom:7, padding:"4px 7px", background:`${oiColor}10`, borderRadius:3, border:`1px solid ${oiColor}22` }}>◈ {oiSummary}</div>
       )}
@@ -525,9 +468,7 @@ function GannPanel({ gann }) {
           {day === 0 || day === 6 ? "Gann data will load\nMon 9:00 AM IST" : "Data loads at\n9:00 AM IST"}
         </div>
         <div style={{ fontSize:10, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace" }}>{hh}:{mm} IST · {days[day]}</div>
-        {gann.symbol && (
-          <div style={{ fontSize:10, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace", padding:"2px 7px", border:"1px solid #1a3040", borderRadius:2 }}>{gann.symbol}</div>
-        )}
+        {gann.symbol && <div style={{ fontSize:10, color:"#2a5070", fontFamily:"IBM Plex Mono,monospace", padding:"2px 7px", border:"1px solid #1a3040", borderRadius:2 }}>{gann.symbol}</div>}
       </div>
     </PanelWrap>
   );
@@ -572,26 +513,17 @@ function GannPanel({ gann }) {
       )}
       <div style={{ display:"flex", alignItems:"center", gap:9, marginBottom:9, padding:"7px 9px", background:gc.bg, borderRadius:4, border:`1px solid ${gc.border}` }}>
         <div style={{ textAlign:"center", minWidth:44 }}>
-          <div style={{ fontSize:24, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace", lineHeight:1 }}>
-            {gScore != null ? Math.round(gScore) : "—"}
-          </div>
+          <div style={{ fontSize:24, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace", lineHeight:1 }}>{gScore != null ? Math.round(gScore) : "—"}</div>
           <div style={{ fontSize:10, color:gc.color, fontFamily:"IBM Plex Mono,monospace", opacity:0.7 }}>/100</div>
         </div>
         <div style={{ flex:1 }}>
-          <div style={{ fontSize:13, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace" }}>
-            {gBias.replace(/_/g," ")}
-          </div>
-          {sig.summary && (
-            <div style={{ fontSize:10, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace", lineHeight:1.4 }}>
-              {sig.summary.replace(/^Gann: [A-Z]+ \(score \d+\/100\)\.\s?/,"")}
-            </div>
-          )}
+          <div style={{ fontSize:13, fontWeight:700, color:gc.color, fontFamily:"IBM Plex Mono,monospace" }}>{gBias.replace(/_/g," ")}</div>
+          {sig.summary && <div style={{ fontSize:10, color:"#a0b8cc", fontFamily:"IBM Plex Mono,monospace", lineHeight:1.4 }}>{sig.summary.replace(/^Gann: [A-Z]+ \(score \d+\/100\)\.\s?/,"")}</div>}
         </div>
         {cardinal?.inCardinalZone?.strength === "ON_CARDINAL" && (
           <span style={{ fontSize:10, padding:"2px 5px", borderRadius:2, background:"#1a0800", border:"1px solid #ffd54f44", color:"#ffd54f", fontFamily:"IBM Plex Mono,monospace" }}>CARDINAL</span>
         )}
       </div>
-
       {(levels.supports?.length > 0 || levels.resistances?.length > 0) && (
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:9 }}>
           <div style={{ background:"#071828", border:"1px solid #00ff9c22", borderRadius:4, padding:"6px 8px" }}>
@@ -614,7 +546,6 @@ function GannPanel({ gann }) {
           </div>
         </div>
       )}
-
       {son?.positionOnSquare && (
         <div style={{ marginBottom:7 }}>
           <div style={{ fontSize:10, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:4 }}>SQUARE OF NINE</div>
@@ -629,19 +560,15 @@ function GannPanel({ gann }) {
           <div style={{ fontSize:10, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:3 }}>{son.positionOnSquare.label}</div>
         </div>
       )}
-
       {fan && (
         <div style={{ marginBottom:7, padding:"6px 8px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>
           <div style={{ fontSize:10, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginBottom:3 }}>GANN FAN</div>
           <div style={{ fontSize:11, fontFamily:"IBM Plex Mono,monospace", color:fan.aboveMasterAngle?"#00ff9c":"#ef5350", fontWeight:700 }}>
             {fan.aboveMasterAngle?"▲ Above":"▼ Below"} 1×1 master
-            {fan.criticalLevel != null && (
-              <span style={{ color:"#a8c8e0", fontWeight:400 }}> @ ₹{fmtInt(fan.criticalLevel)}</span>
-            )}
+            {fan.criticalLevel != null && <span style={{ color:"#a8c8e0", fontWeight:400 }}> @ ₹{fmtInt(fan.criticalLevel)}</span>}
           </div>
         </div>
       )}
-
       {cycles.length > 0 && (
         <div style={{ marginBottom:7 }}>
           <div style={{ fontSize:10, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:4 }}>TIME CYCLES</div>
@@ -655,24 +582,17 @@ function GannPanel({ gann }) {
           ))}
         </div>
       )}
-
       {gAlerts.length > 0 && (
         <div>
           <div style={{ fontSize:10, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", letterSpacing:1, marginBottom:4 }}>HIGH PRIORITY</div>
           {gAlerts.map((a,i) => (
-            <div key={i} style={{ padding:"5px 7px", background:"#1a0000", border:"1px solid #ef535033", borderRadius:3, marginBottom:4, fontSize:11, fontFamily:"IBM Plex Mono,monospace", color:"#ef5350", fontWeight:700 }}>
-              {a.message}
-            </div>
+            <div key={i} style={{ padding:"5px 7px", background:"#1a0000", border:"1px solid #ef535033", borderRadius:3, marginBottom:4, fontSize:11, fontFamily:"IBM Plex Mono,monospace", color:"#ef5350", fontWeight:700 }}>{a.message}</div>
           ))}
         </div>
       )}
-
       {gann.headline && (
-        <div style={{ fontSize:11, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:5, lineHeight:1.5, padding:"5px 7px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>
-          {gann.headline}
-        </div>
+        <div style={{ fontSize:11, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", marginTop:5, lineHeight:1.5, padding:"5px 7px", background:"#071828", borderRadius:3, border:"1px solid #1a3848" }}>{gann.headline}</div>
       )}
-
       {gann._usingCachedLTP && gann.ltp && (
         <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, fontFamily:"IBM Plex Mono,monospace", padding:"6px 0", borderTop:"1px solid #1a3040", marginTop:7 }}>
           <span style={{ color:"#c8d8e8" }}>Last LTP</span>
@@ -688,20 +608,17 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
   const dPut   = putWall   ? calcPct(spot, putWall)   : null;
   const dGamma = gammaFlip ? calcPct(gammaFlip, spot) : null;
   const aboveGF = gammaFlip ? spot > gammaFlip : null;
-
   let rangePct = null;
   if (callWall && putWall && spot) {
     rangePct = Math.round(((spot - putWall) / (callWall - putWall)) * 100);
     rangePct = Math.max(0, Math.min(100, rangePct));
   }
-
   let zoneLabel, zoneColor;
   if      (callWall  && spot >= callWall  * 0.99) { zoneLabel = "At Call Wall — resistance"; zoneColor = "#4fc3f7"; }
   else if (putWall   && spot <= putWall   * 1.01) { zoneLabel = "At Put Wall — support";     zoneColor = "#ff8a65"; }
   else if (gammaFlip && spot >= gammaFlip)         { zoneLabel = "Above Gamma Flip — trend";  zoneColor = "#00ff9c"; }
   else if (gammaFlip && spot <  gammaFlip)         { zoneLabel = "Below Gamma Flip — MR";     zoneColor = "#ffd54f"; }
   else                                              { zoneLabel = "Between walls";             zoneColor = "#4a9abb"; }
-
   const ivEnvDisplay = {
     RICH_SELL_PREMIUM: { label: "RICH — SELL PREMIUM",  color: "#ef5350" },
     ELEVATED:          { label: "ELEVATED",              color: "#ff8a65" },
@@ -712,16 +629,12 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
   };
   const ivEnv     = structure.ivEnvironment || "NORMAL";
   const ivDisplay = ivEnvDisplay[ivEnv] || { label: ivEnv.replace(/_/g," "), color: "#a0b8cc" };
-
   const gannHasData   = gannData && (gannData.signal || gannData._usingCachedLTP);
   const gannHasLevels = gannData?.keyLevels && gannHasData;
-
   return (
     <PanelWrap>
       <SL>Market Structure</SL>
-      {gannHasData && (
-        <div style={{ marginBottom:7 }}><GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={false} /></div>
-      )}
+      {gannHasData && <div style={{ marginBottom:7 }}><GannBadge symbol={activeSymbol} gannMap={gannBadgeMap} compact={false} /></div>}
       {spot && (
         <div style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"4px 8px", borderRadius:3, marginBottom:7, background:`${zoneColor}11`, border:`1px solid ${zoneColor}33` }}>
           <span style={{ width:6, height:6, borderRadius:"50%", background:zoneColor, display:"inline-block" }} />
@@ -789,6 +702,188 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
   );
 }
 
+function StraddlePanel({ d, spot, activeSymbol }) {
+  const [snapData,   setSnapData]   = useState(null);
+  const [payoffData, setPayoffData] = useState(null);
+  const [history,    setHistory]    = useState([]);
+  const [stratType,  setStratType]  = useState("straddle");
+  const [side,       setSide]       = useState("sell");
+  const timerRef = useRef(null);
+
+  const fetchAll = useCallback(async () => {
+    if (!activeSymbol) return;
+    try {
+      const [snapRes, payoffRes] = await Promise.all([
+        fetch(`/api/straddle/snapshot?symbol=${activeSymbol}`),
+        fetch(`/api/straddle/payoff?symbol=${activeSymbol}&type=${stratType}&side=${side}`)
+      ]);
+      const snap   = snapRes.ok   ? await snapRes.json()   : null;
+      const payoff = payoffRes.ok ? await payoffRes.json() : null;
+      if (snap && !snap.error) {
+        setSnapData(snap);
+        const t = new Date().toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit", second:"2-digit" });
+        setHistory(prev => [...prev, { time:t, straddle: snap.straddle?.combined ?? 0, strangle: snap.strangle?.combined ?? 0 }].slice(-80));
+      }
+      if (payoff && !payoff.error) setPayoffData(payoff);
+    } catch (_) {}
+  }, [activeSymbol, stratType, side]);
+
+  useEffect(() => {
+    fetchAll();
+    timerRef.current = setInterval(fetchAll, 5000);
+    return () => clearInterval(timerRef.current);
+  }, [fetchAll]);
+
+  const socketStraddlePrice = d?.structure?.straddlePrice ?? null;
+  const atmIVRaw            = d?.volatility?.atmIV ?? d?.volatility?.iv ?? null;
+  const atmIV               = typeof atmIVRaw === "number" ? atmIVRaw : parseFloat(atmIVRaw) || null;
+  const pcr                 = d?.oi?.pcr ?? null;
+  const activeStrat    = snapData ? (stratType === "straddle" ? snapData.straddle : snapData.strangle) : null;
+  const displayPremium = activeStrat?.combined ?? socketStraddlePrice;
+  const displayUBE     = activeStrat?.upperBreakeven ?? null;
+  const displayLBE     = activeStrat?.lowerBreakeven ?? null;
+  const displayIV      = snapData?.iv?.atm ?? atmIV;
+  const displayPCR     = snapData?.oi?.pcr ?? pcr;
+  const displaySpot    = snapData?.spotPrice ?? spot;
+
+  const svgPayoff = (() => {
+    const pts = payoffData?.points || [];
+    if (pts.length < 4) return null;
+    const W = 290, H = 100;
+    const pad = { t:6, r:6, b:18, l:38 };
+    const IW = W-pad.l-pad.r, IH = H-pad.t-pad.b;
+    const prices = pts.map(p => p.price), pls = pts.map(p => p.pl);
+    const minP = Math.min(...prices), maxP = Math.max(...prices);
+    const minPL = Math.min(...pls),   maxPL = Math.max(...pls);
+    const toX = p  => pad.l + ((p - minP)  / (maxP-minP||1))  * IW;
+    const toY = pl => pad.t + IH - ((pl - minPL) / (maxPL-minPL||1)) * IH;
+    const zeroY  = toY(0);
+    const polyPts = pts.map(p => `${toX(p.price).toFixed(1)},${toY(p.pl).toFixed(1)}`).join(" ");
+    const lineC  = side === "sell" ? "#00ff9c" : "#4fc3f7";
+    return (
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display:"block", background:"#040912", borderRadius:4, border:"1px solid #1a3040" }}>
+        <line x1={pad.l} y1={zeroY} x2={pad.l+IW} y2={zeroY} stroke="#1e3a50" strokeWidth="1" strokeDasharray="4,3" />
+        {displaySpot && <line x1={toX(displaySpot)} y1={pad.t} x2={toX(displaySpot)} y2={pad.t+IH} stroke="#5a90a8" strokeWidth="1" strokeDasharray="3,3" />}
+        {displayUBE  && <line x1={toX(displayUBE)}  y1={pad.t} x2={toX(displayUBE)}  y2={pad.t+IH} stroke="#00ff9c" strokeWidth="1" strokeDasharray="3,2" />}
+        {displayLBE  && <line x1={toX(displayLBE)}  y1={pad.t} x2={toX(displayLBE)}  y2={pad.t+IH} stroke="#ef5350" strokeWidth="1" strokeDasharray="3,2" />}
+        <polyline points={polyPts} fill="none" stroke={lineC} strokeWidth="2" strokeLinejoin="round" />
+        <text x={pad.l-3} y={pad.t+4}  textAnchor="end" fontSize="7" fill="#5a90a8" fontFamily="IBM Plex Mono,monospace">{Math.round(maxPL)}</text>
+        <text x={pad.l-3} y={pad.t+IH} textAnchor="end" fontSize="7" fill="#5a90a8" fontFamily="IBM Plex Mono,monospace">{Math.round(minPL)}</text>
+        <text x={pad.l-3} y={zeroY+3}  textAnchor="end" fontSize="7" fill="#1e3a50" fontFamily="IBM Plex Mono,monospace">0</text>
+      </svg>
+    );
+  })();
+
+  const svgHistory = (() => {
+    if (history.length < 3) return null;
+    const vals = history.map(h => h[stratType] || 0);
+    const W = 290, H = 44;
+    const pad = { t:4, r:6, b:14, l:36 };
+    const IW = W-pad.l-pad.r, IH = H-pad.t-pad.b;
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const range = (max-min)||1;
+    const pts = vals.map((v,i) => `${(pad.l+(i/(vals.length-1))*IW).toFixed(1)},${(pad.t+IH-((v-min)/range)*IH).toFixed(1)}`).join(" ");
+    const last = vals[vals.length-1];
+    return (
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display:"block", background:"#040912", borderRadius:4, border:"1px solid #1a3040" }}>
+        <polyline points={pts} fill="none" stroke="#00cfff" strokeWidth="1.5" strokeLinejoin="round" />
+        <text x={pad.l-3} y={pad.t+7}    textAnchor="end" fontSize="7" fill="#5a90a8" fontFamily="IBM Plex Mono,monospace">{max.toFixed(0)}</text>
+        <text x={pad.l-3} y={pad.t+IH}   textAnchor="end" fontSize="7" fill="#5a90a8" fontFamily="IBM Plex Mono,monospace">{min.toFixed(0)}</text>
+        <text x={pad.l+IW-2} y={pad.t+IH+10} textAnchor="end" fontSize="7" fill="#00cfff" fontFamily="IBM Plex Mono,monospace">₹{last?.toFixed(1)}</text>
+      </svg>
+    );
+  })();
+
+  const isHighIV  = displayIV != null && displayIV > 20;
+  const buyerTip  = isHighIV ? "⚠ IV high — premium expensive" : "✅ Low IV — good time to buy";
+  const sellerTip = isHighIV ? "✅ IV high — collect rich premium" : "⚠ Low IV — less to collect";
+  const f2 = (n) => n != null ? Number(n).toFixed(2) : "—";
+
+  return (
+    <PanelWrap>
+      <SL icon="⚡">Straddle / Strangle</SL>
+
+      {!displayPremium && (
+        <div style={{ fontSize:10, fontFamily:"IBM Plex Mono,monospace", color:"#5a90a8", background:"#071828", borderRadius:3, padding:"6px 8px", marginBottom:7, border:"1px solid #1a3040", lineHeight:1.6 }}>
+          ◷ Market closed — showing last session data.
+        </div>
+      )}
+
+      <div style={{ display:"flex", gap:5, marginBottom:8, flexWrap:"wrap" }}>
+        {["straddle","strangle"].map(t => (
+          <button key={t} onClick={() => setStratType(t)} style={{
+            fontSize:10, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, padding:"3px 9px", borderRadius:3, cursor:"pointer",
+            background: stratType===t ? "#00cfff22" : "transparent",
+            border: `1px solid ${stratType===t ? "#00cfff66" : "#1a3040"}`,
+            color: stratType===t ? "#00cfff" : "#5a90a8",
+          }}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>
+        ))}
+        <div style={{ width:1, background:"#1a3040", margin:"0 2px" }} />
+        {["buy","sell"].map(s => (
+          <button key={s} onClick={() => setSide(s)} style={{
+            fontSize:10, fontFamily:"IBM Plex Mono,monospace", fontWeight:700, padding:"3px 9px", borderRadius:3, cursor:"pointer",
+            background: side===s ? (s==="buy"?"rgba(0,255,156,.12)":"rgba(239,83,80,.12)") : "transparent",
+            border: `1px solid ${side===s ? (s==="buy"?"#00ff9c55":"#ef535055") : "#1a3040"}`,
+            color: side===s ? (s==="buy"?"#00ff9c":"#ef5350") : "#5a90a8",
+          }}>{s.charAt(0).toUpperCase()+s.slice(1)}</button>
+        ))}
+      </div>
+
+      {displayPremium != null && (
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5, marginBottom:8 }}>
+          <MiniCard label={stratType==="straddle"?"STRADDLE PREM":"STRANGLE PREM"} value={`₹${f2(displayPremium)}`} color="#00cfff" />
+          <MiniCard label="ATM IV" value={displayIV!=null?`${f2(displayIV)}%`:"—"} color={isHighIV?"#ef5350":"#00ff9c"} />
+          {displayUBE && <MiniCard label="UPPER BE" value={`₹${Math.round(displayUBE).toLocaleString("en-IN")}`} color="#00ff9c" />}
+          {displayLBE && <MiniCard label="LOWER BE" value={`₹${Math.round(displayLBE).toLocaleString("en-IN")}`} color="#ef5350" />}
+        </div>
+      )}
+
+      {svgPayoff && (
+        <div style={{ marginBottom:8 }}>
+          <div style={{ fontSize:10, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", marginBottom:3, letterSpacing:0.7 }}>
+            PAYOFF AT EXPIRY — {side==="sell"?"SHORT":"LONG"} {stratType.toUpperCase()}
+          </div>
+          {svgPayoff}
+          {(displayUBE || displayLBE) && (
+            <div style={{ display:"flex", gap:8, marginTop:3 }}>
+              {displayUBE && <span style={{ fontSize:9, fontFamily:"IBM Plex Mono,monospace", color:"#00ff9c" }}>▲ UBE ₹{Math.round(displayUBE).toLocaleString("en-IN")}</span>}
+              {displayLBE && <span style={{ fontSize:9, fontFamily:"IBM Plex Mono,monospace", color:"#ef5350" }}>▼ LBE ₹{Math.round(displayLBE).toLocaleString("en-IN")}</span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {svgHistory && (
+        <div style={{ marginBottom:8 }}>
+          <div style={{ fontSize:10, color:"#5a90a8", fontFamily:"IBM Plex Mono,monospace", marginBottom:3, letterSpacing:0.7 }}>
+            LIVE PREMIUM · {history.length} TICKS (5s interval)
+          </div>
+          {svgHistory}
+        </div>
+      )}
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5 }}>
+        <div style={{ background:"rgba(0,255,156,.06)", border:"1px solid rgba(0,255,156,.18)", borderRadius:3, padding:"6px 7px" }}>
+          <div style={{ fontSize:9, fontWeight:700, color:"#00ff9c", fontFamily:"IBM Plex Mono,monospace", marginBottom:3 }}>🟢 BUYER</div>
+          <div style={{ fontSize:9, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", lineHeight:1.55 }}>{buyerTip}<br/>Profit beyond BEs</div>
+        </div>
+        <div style={{ background:"rgba(239,83,80,.06)", border:"1px solid rgba(239,83,80,.18)", borderRadius:3, padding:"6px 7px" }}>
+          <div style={{ fontSize:9, fontWeight:700, color:"#ef5350", fontFamily:"IBM Plex Mono,monospace", marginBottom:3 }}>🔴 SELLER</div>
+          <div style={{ fontSize:9, color:"#c8d8e8", fontFamily:"IBM Plex Mono,monospace", lineHeight:1.55 }}>{sellerTip}<br/>Profit inside BEs</div>
+        </div>
+      </div>
+
+      {displayPCR != null && (
+        <div style={{ marginTop:6, display:"flex", gap:8, alignItems:"center", fontSize:10, fontFamily:"IBM Plex Mono,monospace" }}>
+          <span style={{ color:"#5a90a8" }}>PCR</span>
+          <span style={{ fontWeight:700, color:displayPCR>1.2?"#00ff9c":displayPCR<0.8?"#ef5350":"#ffd54f" }}>{f2(displayPCR)}</span>
+          <span style={{ color:"#5a90a8" }}>{displayPCR>1.2?"Bullish bias":displayPCR<0.8?"Bearish bias":"Neutral"}</span>
+        </div>
+      )}
+    </PanelWrap>
+  );
+}
+
 export default function OptionsIntelligencePage({ socket }) {
   const [data,setData]               = useState({});
   const [gannMap,setGannMap]         = useState({});
@@ -808,7 +903,6 @@ export default function OptionsIntelligencePage({ socket }) {
 
   useEffect(() => {
     if (!socket) return;
-
     const onIntel = (payload) => {
       if (!payload) return;
       const sym = payload.symbol || "UNKNOWN";
@@ -820,12 +914,10 @@ export default function OptionsIntelligencePage({ socket }) {
       setData(prev => ({ ...prev, [sym]: payload }));
       setLastUpdated(Date.now());
     };
-
     const onGann = (analysis) => {
       if (!analysis?.symbol) return;
       setGannMap(prev => ({ ...prev, [analysis.symbol.toUpperCase()]: analysis }));
     };
-
     const onGannAlert = (alert) => {
       if (!alert?.symbol) return;
       (alert.alerts || []).forEach(a => {
@@ -837,12 +929,10 @@ export default function OptionsIntelligencePage({ socket }) {
         return { ...prev, [alert.symbol.toUpperCase()]: { ...ex, alerts: [...(alert.alerts||[]), ...(ex.alerts||[]).filter(a => a.priority !== "HIGH")] } };
       });
     };
-
     const onMarketAlert = (alert) => {
       if (!alert) return;
       setLiveAlerts(prev => [{ ...alert, ts: Date.now() }, ...prev].slice(0, 30));
     };
-
     socket.on("options-intelligence", onIntel);
     socket.on("gann-analysis",        onGann);
     socket.on("gann-alert",           onGannAlert);
@@ -861,18 +951,18 @@ export default function OptionsIntelligencePage({ socket }) {
     requestGann(sym, d?.ltp || d?.spot || d?.spotPrice || null);
   };
 
-  const current  = data[activeSymbol] || null;
-  const d        = current?.data || current || null;
-  const score    = d?.score ?? null;
-  const bias     = d?.bias ?? "NEUTRAL";
-  const band     = score != null ? ScoreBand(score) : null;
-  const vol      = d?.volatility      || {};
-  const greeks   = d?.atmGreeks       || {};
-  const gex      = d?.gex             || {};
+  const current   = data[activeSymbol] || null;
+  const d         = current?.data || current || null;
+  const score     = d?.score ?? null;
+  const bias      = d?.bias ?? "NEUTRAL";
+  const band      = score != null ? ScoreBand(score) : null;
+  const vol       = d?.volatility      || {};
+  const greeks    = d?.atmGreeks       || {};
+  const gex       = d?.gex             || {};
   const dealerExp = d?.dealerExposures || {};
-  const oi       = d?.oi              || {};
-  const structure = d?.structure      || {};
-  const strategy  = d?.strategy       || [];
+  const oi        = d?.oi              || {};
+  const structure = d?.structure       || {};
+  const strategy  = d?.strategy        || [];
 
   const gannData = activeSymbol
     ? (gannMap[toGannSym(activeSymbol)] || gannMap[activeSymbol] || gannMap[activeSymbol?.toUpperCase()] || null)
@@ -912,7 +1002,7 @@ export default function OptionsIntelligencePage({ socket }) {
   const skew25   = vol.skew25 ?? null;
   const lambda   = greeks.lambda ?? greeks.leverage ?? null;
   const lambdaDisplay = (lambda != null && lambda !== 0) ? fmt2(lambda) : "—";
-  const gammaDisplay = (greeks.gamma && greeks.gamma !== 0) ? greeks.gamma.toFixed(6) : "—";
+  const gammaDisplay  = (greeks.gamma && greeks.gamma !== 0) ? greeks.gamma.toFixed(6) : "—";
   const deltaVal      = greeks.delta ?? null;
   const deltaDisplay  = deltaVal != null ? fmt2(deltaVal) : "—";
   const deltaColor    = deltaVal == null ? "#e8f2ff" : Math.abs(deltaVal) > 0.85 ? "#ffd54f" : deltaVal > 0 ? "#00ff9c" : "#ef5350";
@@ -926,11 +1016,8 @@ export default function OptionsIntelligencePage({ socket }) {
       <style>{`@keyframes alertPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`}</style>
       <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"#020d1c", overflow:"hidden" }}>
 
-        {/* ── Toolbar — alerts now inline as horizontal strip ── */}
         <div style={{ display:"flex", alignItems:"center", gap:9, padding:"6px 14px", borderBottom:"1px solid #1c3a58", flexShrink:0, background:"#060f1c", minHeight:42 }}>
           <span style={{ fontFamily:"IBM Plex Mono,monospace", fontSize:12, fontWeight:700, color:"#00cfff", letterSpacing:1, flexShrink:0 }}>⚡ OPTIONS INTEL</span>
-
-          {/* Symbol tabs */}
           <div style={{ display:"flex", gap:4, overflowX:"auto", flexShrink:0 }}>
             {symbolList.length === 0 && <span style={{ fontSize:11, fontFamily:"IBM Plex Mono,monospace", color:"#c8d8e8" }}>◌ Waiting…</span>}
             {symbolList.slice(0,20).map(sym => (
@@ -940,14 +1027,8 @@ export default function OptionsIntelligencePage({ socket }) {
               </button>
             ))}
           </div>
-
-          {/* Divider */}
           <div style={{ width:1, height:20, background:"#1c3a58", flexShrink:0 }} />
-
-          {/* Horizontal alert strip — takes remaining space */}
           {d && <AlertStrip alerts={liveAlerts} />}
-
-          {/* Age indicator */}
           {ageSec != null && (
             <span style={{ fontSize:10, fontFamily:"IBM Plex Mono,monospace", color: ageSec > 120 ? "#ffd54f" : "#a0b8cc", flexShrink:0 }}>
               ↻ {ageSec < 60 ? `${ageSec}s` : `${Math.round(ageSec/60)}m`}
@@ -960,7 +1041,6 @@ export default function OptionsIntelligencePage({ socket }) {
         {!d ? <EmptyState symbol={activeSymbol} /> : (
           <div style={{ flex:1, display:"flex", flexDirection:"column", padding:9, gap:9, overflow:"hidden", minHeight:0 }}>
 
-            {/* Score Card */}
             <div style={{ flexShrink:0, background:band?.bg||"#060f1c", border:`1px solid ${band?.color||"#1c3a58"}44`, borderRadius:6, padding:"9px 15px" }}>
               <div style={{ display:"flex", alignItems:"center", gap:13 }}>
                 <div style={{ display:"flex", flexDirection:"column", alignItems:"center", minWidth:56, flexShrink:0 }}>
@@ -1002,12 +1082,12 @@ export default function OptionsIntelligencePage({ socket }) {
               <TradeDecision spot={spot} callWall={gex.callWall} putWall={gex.putWall} gammaFlip={gex.gammaFlip} regime={gex.regime} pcr={oi.pcr} skew25={skew25} />
             </div>
 
-            {/* 4 Panels — all scrollable via PanelWrap */}
             <div style={{ flex:1, display:"flex", gap:9, minHeight:0 }}>
               <GEXPanel gex={gex} dealerExposures={dealerExp} />
               <OIPanel oi={oi} nearATMSignals={nearATMSignals} tailRiskSignals={tailRiskSignals} spot={spot} activeSymbol={activeSymbol} />
               <GannPanel gann={gannData} />
               <MarketStructurePanel structure={structure} gannData={gannData} gannBadgeMap={gannBadgeMap} activeSymbol={activeSymbol} spot={spot} callWall={gex.callWall} putWall={gex.putWall} gammaFlip={gex.gammaFlip} maxPain={oi.maxPain} pcr={oi.pcr} skew25={skew25} />
+              <StraddlePanel d={d} spot={spot} activeSymbol={activeSymbol} />
             </div>
 
           </div>
