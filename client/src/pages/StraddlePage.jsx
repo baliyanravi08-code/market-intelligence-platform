@@ -130,7 +130,7 @@ function PayoffTooltip({ active, payload, label }) {
 }
 
 // ─── Main Page ───────────────────────────────────────────────────────────────
-export default function StraddlePage() {
+export default function StraddlePage({ socket }) {
   const [symbol,      setSymbol]      = useState("NIFTY");
   const [expiry,      setExpiry]      = useState("");
   const [stratType,   setStratType]   = useState("straddle"); // straddle | strangle
@@ -195,14 +195,36 @@ export default function StraddlePage() {
 
   // ── Polling ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    fetchSnap();
-    fetchPayoff();
-    timerRef.current = setInterval(() => {
-      fetchSnap();
-      fetchPayoff();
-    }, REFRESH_MS);
-    return () => clearInterval(timerRef.current);
-  }, [fetchSnap, fetchPayoff]);
+  if (!socket) return;
+  socket.on("options-intelligence", (data) => {
+    if (data?.symbol !== symbol) return;
+    const s = data?.structure;
+    if (!s) return;
+    const t = now();
+    setSnap(prev => ({
+      ...prev,
+      spotPrice: data.spotPrice ?? prev?.spotPrice,
+      atmStrike: s.atmStrike,
+      straddle: { combined: s.straddlePrice, callStrike: s.atmStrike, putStrike: s.atmStrike,
+                  callPremium: s.callLTP, putPremium: s.putLTP,
+                  upperBreakeven: s.atmStrike + s.straddlePrice,
+                  lowerBreakeven: s.atmStrike - s.straddlePrice },
+      iv:  { atm: data.volatility?.atmIV, ce: data.volatility?.ceIV, pe: data.volatility?.peIV },
+      oi:  { ce: data.oi?.totalCE, pe: data.oi?.totalPE, pcr: data.oi?.pcr },
+      greeks: data.atmGreeks,
+    }));
+    setPremHistory(prev => [...prev, {
+      time: t,
+      straddle: s.straddlePrice,
+      strangle: s.stranglePrice ?? s.straddlePrice,
+    }].slice(-120));
+    setLastRefresh(t);
+    setLoading(false);
+    setError(null);
+  });
+  fetchPayoff();
+  return () => socket.off("options-intelligence");
+}, [socket, symbol, fetchPayoff]);
 
   // ── Payoff chart color (green above 0, red below) ─────────────────────
   const payoffColor = (entry) => (entry.pl >= 0 ? COLOR.green : COLOR.red);

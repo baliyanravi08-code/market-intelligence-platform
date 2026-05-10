@@ -1497,7 +1497,7 @@ export default function App() {
   return (
     <div className="terminal" style={{ display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden" }}>
       {sharedHeader}{sharedTicker}
-      <div style={{ flex:1, overflowY:"auto", minHeight:0 }}><StraddlePage /></div>
+      <div style={{ flex:1, overflowY:"auto", minHeight:0 }}><StraddlePage socket={socket} /></div>
       <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
     </div>
   );
