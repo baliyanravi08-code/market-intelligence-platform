@@ -1015,9 +1015,14 @@ export default function OptionsIntelligencePage({ socket }) {
   }, []);
 
   useEffect(() => {
-    if (!socket) return;
-    socket.emit("request-intel-snapshot");
-  }, [socket]);
+  if (!socket) return;
+  socket.emit("join:intel");
+  socket.on("connect", () => socket.emit("join:intel"));
+  return () => {
+    socket.emit("leave:intel");
+    socket.off("connect");
+  };
+}, [socket]);
 
   // ── Weekend / after-hours REST cache (one-time, not polling) ─────────────
   useEffect(() => {

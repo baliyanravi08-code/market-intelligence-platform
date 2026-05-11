@@ -271,9 +271,12 @@ export default function StraddlePage({ socket }) {
 
   // ── Socket handler (replaces REST polling) ────────────────────────────────
   useEffect(() => {
-    if (!socket) return;
+  if (!socket) return;
 
-    socket.on("options-intelligence", (data) => {
+  socket.emit("join:intel");
+  socket.on("connect", () => socket.emit("join:intel"));
+
+  socket.on("options-intelligence", (data) => {
       if (data?.symbol !== symbol) return;
       const s = data?.structure;
       if (!s) return;
@@ -325,7 +328,11 @@ export default function StraddlePage({ socket }) {
     });
 
     fetchPayoff();
-    return () => socket.off("options-intelligence");
+    return () => {
+      socket.emit("leave:intel");
+      socket.off("connect");
+      socket.off("options-intelligence");
+    };
   }, [socket, symbol, fetchPayoff, stratType, checkBreakevenBreach, expiry]);
 
   // Re-fetch payoff when params change
