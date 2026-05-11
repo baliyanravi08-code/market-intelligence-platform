@@ -1224,7 +1224,6 @@ function registerScannerHandlers(io) {
   });
 }
 
-function startMarketScanner(io) {
 
 function startMarketScanner(io) {
   ioRef = io;
