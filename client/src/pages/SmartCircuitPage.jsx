@@ -191,14 +191,7 @@ export default function SmartCircuitPage({ socket }) {
     });
 
     return () => {
-      socket.emit("leave:alerts"); // leave room when page closes
-      socket.off("circuit-watchlist");
-      socket.off("circuit-alerts");
-      socket.off("connect");
-      socket.off("disconnect");
-    };
-  }, [socket]);
-    return () => {
+      socket.emit("leave:alerts");
       socket.off("circuit-watchlist");
       socket.off("circuit-alerts");
       socket.off("connect");
