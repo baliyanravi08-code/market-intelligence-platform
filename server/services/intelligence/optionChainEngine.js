@@ -242,7 +242,8 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
     // FIX D: cache before emit so new clients get fresh snapshot
     try { setCachedIntel(symbol, payload); } catch (_) {}
 
-    _io.emit("options-intelligence", payload);
+    const ws = require("../../api/websocket");
+ws.emitOptionsIntel(payload);
     console.log(
       `📡 options-intelligence: ${symbol}` +
       ` score=${result.score} bias=${result.bias}` +

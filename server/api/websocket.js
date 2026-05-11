@@ -317,6 +317,19 @@ function emitDeliverySpikes(spikes) {
   _io.to("alerts").emit("binary", buf);
   _io.to("alerts").emit("delivery-spikes", spikes);
 }
+function emitOptionsIntel(data) {
+  if (!_io || !data?.symbol) return;
+  try {
+    const buf = bp.encodeOptionsIntel(data);
+    _io.emit("binary", buf);
+  } catch (e) {
+    console.warn("⚠️ binary options-intel encode error:", e.message);
+  }
+  // JSON fallback for clients not yet on binary
+  _io.emit("options-intelligence", data);
+  // Update cache for new connections
+  setCachedIntel(data.symbol, data);
+}
 
 function emitCompositeUpdate(data) {
   if (!_io || !data) return;
@@ -362,19 +375,27 @@ function attachSocketIO(server) {
     });
 
     // ── Replay intel snapshots ─────────────────────────────────────────────
-    if (_intelCache.size > 0) {
-      for (const [, payload] of _intelCache) {
-        socket.emit("options-intelligence", payload);
-      }
-    }
+if (_intelCache.size > 0) {
+  for (const [, payload] of _intelCache) {
+    try {
+      const buf = bp.encodeOptionsIntel(payload);
+      socket.emit("binary", buf);
+    } catch (_) {}
+    socket.emit("options-intelligence", payload);
+  }
+}
 
     socket.on("ping", () => socket.emit("pong"));
 
     socket.on("request-intel-snapshot", () => {
-      for (const [, payload] of _intelCache) {
-        socket.emit("options-intelligence", payload);
-      }
-    });
+  for (const [, payload] of _intelCache) {
+    try {
+      const buf = bp.encodeOptionsIntel(payload);
+      socket.emit("binary", buf);
+    } catch (_) {}
+    socket.emit("options-intelligence", payload);
+  }
+});
 
     // ── Scanner room ───────────────────────────────────────────────────────
     socket.on("join:scanner", () => {
@@ -560,4 +581,5 @@ module.exports = {
 
   // Status
   broadcastUpstoxStatus,
+  emitOptionsIntel,
 };

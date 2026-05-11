@@ -173,7 +173,38 @@ function encodeCandle(msgType, symbol, tf, candle) {
   buf.writeUInt32BE(Math.min(candle.volume || 0, 0xFFFFFFFF) >>> 0, off);
   return buf;
 }
+// ── OPTIONS INTEL ─────────────────────────────────────────────────────────────
+function encodeOptionsIntel(data) {
+  const sym    = Buffer.from((data.symbol || "NIFTY"), "ascii");
+  const expiry = Buffer.from((data.expiry  || ""), "ascii");
+  const s      = data.structure || {};
+  const g      = data.atmGreeks || {};
+  const v      = data.volatility || {};
+  const oi     = data.oi || {};
 
+  const len = 1 + sym.length + 1 + expiry.length + (4 * 7) + (2 * 4);
+  const buf = Buffer.allocUnsafe(5 + len);
+  let off = writeHeader(buf, 0, MSG.OPTIONS_INTEL, len);
+
+  buf.writeUInt8(sym.length, off); off++;
+  sym.copy(buf, off); off += sym.length;
+  buf.writeUInt8(expiry.length, off); off++;
+  expiry.copy(buf, off); off += expiry.length;
+
+  buf.writeUInt32BE(priceToUint32(data.spotPrice         || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.atmStrike            || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.straddlePrice        || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.stranglePrice        || s.straddlePrice || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.callLTP              || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.putLTP               || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(v.atmIV                || 0), off); off += 4;
+  buf.writeInt16BE(Math.round((oi.pcr                    || 0) * 100), off); off += 2;
+  buf.writeInt16BE(pctToInt16(g.theta                    || 0), off); off += 2;
+  buf.writeInt16BE(pctToInt16(g.delta                    || 0), off); off += 2;
+  buf.writeInt16BE(pctToInt16(g.vega                     || 0), off); off += 2;
+
+  return buf;
+}
 // ── JSON FALLBACK ─────────────────────────────────────────────────────────────
 function encodeJSON(eventName, data) {
   const nameBuf    = Buffer.from(eventName, "ascii");
@@ -273,7 +304,33 @@ function decode(buffer) {
       const data      = JSON.parse(buf.slice(off).toString("utf8"));
       return { type: eventName, data };
     }
-
+case MSG.OPTIONS_INTEL: {
+  const symLen   = buf.readUInt8(off); off++;
+  const symbol   = buf.slice(off, off + symLen).toString("ascii"); off += symLen;
+  const expLen   = buf.readUInt8(off); off++;
+  const expiry   = buf.slice(off, off + expLen).toString("ascii"); off += expLen;
+  const spotPrice     = buf.readUInt32BE(off) / 100; off += 4;
+  const atmStrike     = buf.readUInt32BE(off) / 100; off += 4;
+  const straddlePrice = buf.readUInt32BE(off) / 100; off += 4;
+  const stranglePrice = buf.readUInt32BE(off) / 100; off += 4;
+  const callLTP       = buf.readUInt32BE(off) / 100; off += 4;
+  const putLTP        = buf.readUInt32BE(off) / 100; off += 4;
+  const atmIV         = buf.readUInt32BE(off) / 100; off += 4;
+  const pcr           = buf.readInt16BE(off)  / 100; off += 2;
+  const theta         = buf.readInt16BE(off)  / 100; off += 2;
+  const delta         = buf.readInt16BE(off)  / 100; off += 2;
+  const vega          = buf.readInt16BE(off)  / 100; off += 2;
+  return {
+    type: "options-intelligence",
+    data: {
+      symbol, expiry, spotPrice,
+      structure: { atmStrike, straddlePrice, stranglePrice, callLTP, putLTP },
+      volatility: { atmIV },
+      oi: { pcr },
+      atmGreeks: { theta, delta, vega },
+    },
+  };
+}
     default:
       return { type: "unknown", msgType, data: null };
   }
@@ -300,4 +357,5 @@ module.exports = {
   buildSymbolTable,
   getSymbolIndex,
   stats,
+  encodeOptionsIntel,
 };

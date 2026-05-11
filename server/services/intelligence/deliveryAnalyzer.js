@@ -18,6 +18,7 @@
 
 const https    = require("https");
 const EventEmitter = require("events");
+const bp = require("../../api/binaryProtocol");
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -186,7 +187,7 @@ async function runPoll() {
     if (spikes.length > 0) {
       // Emit to all connected frontend clients
       if (ioRef) {
-        ioRef.emit("delivery-spikes", spikes);
+        try { const b = bp.encodeJSON("delivery-spikes", spikes); ioRef.emit("binary", b); } catch(_){} ioRef.emit("delivery-spikes", spikes);
       }
 
       // Also emit on internal bus for other engines (compositeScoreEngine, etc.)

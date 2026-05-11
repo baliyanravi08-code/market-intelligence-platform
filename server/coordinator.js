@@ -14,7 +14,7 @@
 
 const fs   = require("fs");
 const path = require("path");
-
+const { writeDailyIV } = require("./services/intelligence/ivHistoryWriter");
 const { startGannIntegration }   = require("./services/intelligence/gannIntegration");
 const gannIntegration            = require("./services/intelligence/gannIntegration");
 const ws                         = require("./api/websocket");
@@ -262,6 +262,13 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   onDeliverySpike((spikes) => {
     persistDeliverySpike(spikes);
   });
+  // ── 8. IV History Writer — fires at 15:31 IST (10:01 UTC) Mon–Fri ────────
+  const cron = require("node-cron");
+  cron.schedule("1 10 * * 1-5", () => {
+    console.log("[Coordinator] Market close — recording daily IV");
+    writeDailyIV();
+  }, { timezone: "UTC" });
+
 }
 
 module.exports = {

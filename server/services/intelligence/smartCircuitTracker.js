@@ -12,6 +12,7 @@
  */
 
 const axios = require("axios");
+const ws = require("../../api/websocket");
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS     = 3 * 60 * 1000;   // 3 min during market hours
@@ -257,11 +258,11 @@ function startSmartCircuitTracker(io, tokenGetterFn, instrumentGetterFn) {
   // Send cached state to newly connected clients
   io.on("connection", (socket) => {
     const recent = alertLog.slice(0, 20);
-    if (recent.length > 0) socket.emit("circuit-alerts", recent);
+    if (recent.length > 0) { try { const b = ws.encodeJSON("circuit-alerts", recent); socket.emit("binary", b); } catch(_){} socket.emit("circuit-alerts", recent); }
     const wl = Array.from(watchlist.values())
       .filter(e => e.score >= 0)
       .sort((a, b) => b.score - a.score);
-    if (wl.length > 0) socket.emit("circuit-watchlist", wl);
+    if (wl.length > 0) { try { const b = ws.encodeJSON("circuit-watchlist", wl); socket.emit("binary", b); } catch(_){} socket.emit("circuit-watchlist", wl); }
   });
 
   // Poll every 3 min during market hours

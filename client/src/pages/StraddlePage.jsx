@@ -1,43 +1,85 @@
 // client/src/pages/StraddlePage.jsx
 // Live Straddle & Strangle Chart Page
-// Features: ATM tracker, combined premium chart, payoff diagram, Greeks, IV, PCR
+// NEW: (1) Breakeven breach alert, (2) Expected move cone, (3) Premium % of spot + CSV export
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   LineChart, Line, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ResponsiveContainer, Legend,
+  ReferenceLine, ReferenceArea, ResponsiveContainer, Legend,
 } from "recharts";
 
-// ─── Constants ──────────────────────────────────────────────────────────────
-const SYMBOLS   = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"];
-const REFRESH_MS = 5000; // poll every 5s
+// ─── Constants ───────────────────────────────────────────────────────────────
+const SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"];
 
 const COLOR = {
-  buy:         "#00e5a0",
-  sell:        "#ff4d6d",
-  straddle:    "#7dd3fc",
-  strangle:    "#f9a825",
-  breakeven:   "#94a3b8",
-  spot:        "#ffffff",
-  grid:        "#1e293b",
-  cardBg:      "rgba(15,23,42,0.85)",
-  border:      "rgba(99,120,160,0.18)",
-  green:       "#22c55e",
-  red:         "#ef4444",
-  muted:       "#64748b",
-  text:        "#e2e8f0",
-  accent:      "#38bdf8",
+  buy:       "#00e5a0",
+  sell:      "#ff4d6d",
+  straddle:  "#7dd3fc",
+  strangle:  "#f9a825",
+  breakeven: "#94a3b8",
+  spot:      "#ffffff",
+  grid:      "#1e293b",
+  cardBg:    "rgba(15,23,42,0.85)",
+  border:    "rgba(99,120,160,0.18)",
+  green:     "#22c55e",
+  red:       "#ef4444",
+  muted:     "#64748b",
+  text:      "#e2e8f0",
+  accent:    "#38bdf8",
+  cone1:     "rgba(56,189,248,0.10)",  // 1σ cone fill
+  cone2:     "rgba(56,189,248,0.05)",  // 2σ cone fill
 };
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
-const fmt = (n, d = 2) =>
+const fmt    = (n, d = 2) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: d });
 const fmtPct = (n) => (n == null ? "—" : `${Number(n).toFixed(2)}%`);
-const now = () =>
+const now    = () =>
   new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
+// ── NEW: compute DTE (days to expiry) from "YYYY-MM-DD" string ───────────────
+function getDTE(expiryStr) {
+  if (!expiryStr) return 1;
+  const exp  = new Date(expiryStr);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.max(0, (exp - today) / (1000 * 60 * 60 * 24));
+  return diff < 0.5 ? 0.5 : diff; // minimum half-day so cone never collapses to zero
+}
+
+// ── NEW: compute expected move sigma cone bounds ─────────────────────────────
+// σ move = spot × IV% × sqrt(DTE / 365)
+function getSigmaBounds(spotPrice, ivAtm, expiry) {
+  if (!spotPrice || !ivAtm) return null;
+  const dte   = getDTE(expiry);
+  const sigma = spotPrice * (ivAtm / 100) * Math.sqrt(dte / 365);
+  return {
+    upper1: Math.round(spotPrice + sigma),
+    lower1: Math.round(spotPrice - sigma),
+    upper2: Math.round(spotPrice + 2 * sigma),
+    lower2: Math.round(spotPrice - 2 * sigma),
+    sigma:  Math.round(sigma),
+  };
+}
+
+// ── NEW: export premHistory to CSV ───────────────────────────────────────────
+function exportCSV(symbol, expiry, premHistory) {
+  if (!premHistory.length) return;
+  const header = "Time,Straddle Premium,Strangle Premium\n";
+  const rows   = premHistory
+    .map((r) => `${r.time},${r.straddle ?? ""},${r.strangle ?? ""}`)
+    .join("\n");
+  const blob = new Blob([header + rows], { type: "text/csv" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `straddle_${symbol}_${expiry || "all"}_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatCard({ label, value, sub, color, pulse }) {
   return (
@@ -59,10 +101,12 @@ function StatCard({ label, value, sub, color, pulse }) {
           animation: "blink 1.4s ease-in-out infinite",
         }} />
       )}
-      <div style={{ fontSize: 11, color: COLOR.muted, marginBottom: 4, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+      <div style={{ fontSize: 11, color: COLOR.muted, marginBottom: 4,
+        letterSpacing: "0.06em", textTransform: "uppercase" }}>
         {label}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: color || COLOR.text, fontFamily: "'JetBrains Mono', monospace" }}>
+      <div style={{ fontSize: 22, fontWeight: 700, color: color || COLOR.text,
+        fontFamily: "'JetBrains Mono', monospace" }}>
         {value ?? "—"}
       </div>
       {sub && <div style={{ fontSize: 11, color: COLOR.muted, marginTop: 3 }}>{sub}</div>}
@@ -129,56 +173,87 @@ function PayoffTooltip({ active, payload, label }) {
   );
 }
 
-// ─── Main Page ───────────────────────────────────────────────────────────────
+// ─── NEW: Alert banner shown when spot breaches breakeven ────────────────────
+function AlertBanner({ message, onDismiss }) {
+  if (!message) return null;
+  return (
+    <div style={{
+      background: "rgba(239,68,68,0.15)",
+      border: "1px solid rgba(239,68,68,0.5)",
+      borderRadius: 10, padding: "12px 18px",
+      marginBottom: 14, fontSize: 14,
+      color: "#fca5a5", display: "flex",
+      alignItems: "center", justifyContent: "space-between",
+      animation: "fadeIn .3s ease",
+    }}>
+      <span>🚨 {message}</span>
+      <button onClick={onDismiss} style={{
+        background: "none", border: "none", color: "#fca5a5",
+        cursor: "pointer", fontSize: 18, lineHeight: 1,
+      }}>×</button>
+    </div>
+  );
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
 export default function StraddlePage({ socket }) {
-  const [symbol,      setSymbol]      = useState("NIFTY");
-  const [expiry,      setExpiry]      = useState("");
-  const [stratType,   setStratType]   = useState("straddle"); // straddle | strangle
-  const [side,        setSide]        = useState("sell");     // buy | sell
-  const [strangleStep,setStrangleStep]= useState(1);
+  const [symbol,       setSymbol]       = useState("NIFTY");
+  const [expiry,       setExpiry]       = useState("");
+  const [stratType,    setStratType]    = useState("straddle");
+  const [side,         setSide]         = useState("sell");
+  const [strangleStep, setStrangleStep] = useState(1);
 
   const [snap,        setSnap]        = useState(null);
   const [payoff,      setPayoff]      = useState(null);
-  const [premHistory, setPremHistory] = useState([]); // [{time, straddle, strangle}]
+  const [premHistory, setPremHistory] = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState(null);
   const [lastRefresh, setLastRefresh] = useState("—");
 
-  const timerRef = useRef(null);
+  // ── NEW: alert state ──────────────────────────────────────────────────────
+  const [alertMsg,        setAlertMsg]        = useState(null);
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "default"
+  );
+  const alertedRef = useRef({ upper: false, lower: false }); // prevent repeat alerts
 
-  // ── Fetch snapshot ──────────────────────────────────────────────────────
-  const fetchSnap = useCallback(async () => {
-    try {
-      const expiryQ = expiry ? `&expiry=${expiry}` : "";
-      const r = await fetch(`/api/straddle/snapshot?symbol=${symbol}${expiryQ}`);
-      if (!r.ok) throw new Error(await r.text());
-      const data = await r.json();
-      setSnap(data);
+  // ── NEW: request browser notification permission ──────────────────────────
+  const requestNotifPermission = async () => {
+    if (typeof Notification === "undefined") return;
+    const perm = await Notification.requestPermission();
+    setNotifPermission(perm);
+  };
 
-      // update expiry list default
-      if (!expiry && data.expiries?.[0]) setExpiry(data.expiries[0]);
+  // ── NEW: fire alert when spot crosses breakeven ───────────────────────────
+  const checkBreakevenBreach = useCallback((spotPrice, activeStrat) => {
+    if (!spotPrice || !activeStrat) return;
+    const { upperBreakeven, lowerBreakeven } = activeStrat;
+    if (!upperBreakeven || !lowerBreakeven) return;
 
-      // append to premium history
-      const t = now();
-      setPremHistory((prev) => {
-        const next = [...prev, {
-          time: t,
-          straddle: data.straddle.combined,
-          strangle: data.strangle.combined,
-        }];
-        return next.slice(-120); // keep last 120 ticks (~10 min @ 5s)
-      });
-
-      setLastRefresh(t);
-      setError(null);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
+    if (spotPrice >= upperBreakeven && !alertedRef.current.upper) {
+      alertedRef.current.upper = true;
+      alertedRef.current.lower = false; // reset lower so it can re-alert
+      const msg = `Spot ₹${fmt(spotPrice)} breached UPPER breakeven ₹${fmt(upperBreakeven)} — consider hedging!`;
+      setAlertMsg(msg);
+      if (notifPermission === "granted") {
+        new Notification("⚠ Upper Breakeven Breached", { body: msg, icon: "/vite.svg" });
+      }
+    } else if (spotPrice <= lowerBreakeven && !alertedRef.current.lower) {
+      alertedRef.current.lower = true;
+      alertedRef.current.upper = false;
+      const msg = `Spot ₹${fmt(spotPrice)} breached LOWER breakeven ₹${fmt(lowerBreakeven)} — consider hedging!`;
+      setAlertMsg(msg);
+      if (notifPermission === "granted") {
+        new Notification("⚠ Lower Breakeven Breached", { body: msg, icon: "/vite.svg" });
+      }
+    } else if (spotPrice > lowerBreakeven && spotPrice < upperBreakeven) {
+      // Spot back inside — reset both flags so alerts can fire again if it crosses later
+      alertedRef.current.upper = false;
+      alertedRef.current.lower = false;
     }
-  }, [symbol, expiry]);
+  }, [notifPermission]);
 
-  // ── Fetch payoff ────────────────────────────────────────────────────────
+  // ── Fetch payoff ─────────────────────────────────────────────────────────
   const fetchPayoff = useCallback(async () => {
     try {
       const expiryQ = expiry ? `&expiry=${expiry}` : "";
@@ -193,43 +268,83 @@ export default function StraddlePage({ socket }) {
     }
   }, [symbol, expiry, stratType, side, strangleStep]);
 
-  // ── Polling ─────────────────────────────────────────────────────────────
+  // ── Socket handler (replaces REST polling) ────────────────────────────────
   useEffect(() => {
-  if (!socket) return;
-  socket.on("options-intelligence", (data) => {
-    if (data?.symbol !== symbol) return;
-    const s = data?.structure;
-    if (!s) return;
-    const t = now();
-    setSnap(prev => ({
-      ...prev,
-      spotPrice: data.spotPrice ?? prev?.spotPrice,
-      atmStrike: s.atmStrike,
-      straddle: { combined: s.straddlePrice, callStrike: s.atmStrike, putStrike: s.atmStrike,
-                  callPremium: s.callLTP, putPremium: s.putLTP,
-                  upperBreakeven: s.atmStrike + s.straddlePrice,
-                  lowerBreakeven: s.atmStrike - s.straddlePrice },
-      iv:  { atm: data.volatility?.atmIV, ce: data.volatility?.ceIV, pe: data.volatility?.peIV },
-      oi:  { ce: data.oi?.totalCE, pe: data.oi?.totalPE, pcr: data.oi?.pcr },
-      greeks: data.atmGreeks,
-    }));
-    setPremHistory(prev => [...prev, {
-      time: t,
-      straddle: s.straddlePrice,
-      strangle: s.stranglePrice ?? s.straddlePrice,
-    }].slice(-120));
-    setLastRefresh(t);
-    setLoading(false);
-    setError(null);
-  });
-  fetchPayoff();
-  return () => socket.off("options-intelligence");
-}, [socket, symbol, fetchPayoff]);
+    if (!socket) return;
 
-  // ── Payoff chart color (green above 0, red below) ─────────────────────
-  const payoffColor = (entry) => (entry.pl >= 0 ? COLOR.green : COLOR.red);
+    socket.on("options-intelligence", (data) => {
+      if (data?.symbol !== symbol) return;
+      const s = data?.structure;
+      if (!s) return;
+
+      const t = now();
+      const newSnap = {
+        spotPrice: data.spotPrice ?? null,
+        atmStrike: s.atmStrike,
+        straddle: {
+          combined:       s.straddlePrice,
+          callStrike:     s.atmStrike,
+          putStrike:      s.atmStrike,
+          callPremium:    s.callLTP,
+          putPremium:     s.putLTP,
+          upperBreakeven: s.atmStrike + s.straddlePrice,
+          lowerBreakeven: s.atmStrike - s.straddlePrice,
+        },
+        strangle: {
+          combined:       s.stranglePrice ?? s.straddlePrice,
+          callStrike:     s.strangleCallStrike ?? s.atmStrike,
+          putStrike:      s.stranglePutStrike  ?? s.atmStrike,
+          callPremium:    s.strangleCallLTP    ?? s.callLTP,
+          putPremium:     s.stranglePutLTP     ?? s.putLTP,
+          upperBreakeven: (s.strangleCallStrike ?? s.atmStrike) + (s.stranglePrice ?? s.straddlePrice),
+          lowerBreakeven: (s.stranglePutStrike  ?? s.atmStrike) - (s.stranglePrice ?? s.straddlePrice),
+        },
+        iv:     { atm: data.volatility?.atmIV, ce: data.volatility?.ceIV, pe: data.volatility?.peIV },
+        oi:     { ce: data.oi?.totalCE, pe: data.oi?.totalPE, pcr: data.oi?.pcr },
+        greeks: data.atmGreeks,
+        expiries: data.expiries ?? [],
+        expiry:   data.expiry   ?? expiry,
+      };
+
+      setSnap((prev) => ({ ...prev, ...newSnap }));
+
+      setPremHistory((prev) => [...prev, {
+        time:     t,
+        straddle: s.straddlePrice,
+        strangle: s.stranglePrice ?? s.straddlePrice,
+      }].slice(-120));
+
+      setLastRefresh(t);
+      setLoading(false);
+      setError(null);
+
+      // ── NEW: check breakeven breach on every tick ─────────────────────────
+      const activeStrat = stratType === "straddle" ? newSnap.straddle : newSnap.strangle;
+      checkBreakevenBreach(data.spotPrice, activeStrat);
+    });
+
+    fetchPayoff();
+    return () => socket.off("options-intelligence");
+  }, [socket, symbol, fetchPayoff, stratType, checkBreakevenBreach, expiry]);
+
+  // Re-fetch payoff when params change
+  useEffect(() => { fetchPayoff(); }, [fetchPayoff]);
+
+  // Reset breach flags when symbol/strategy changes
+  useEffect(() => {
+    alertedRef.current = { upper: false, lower: false };
+    setAlertMsg(null);
+  }, [symbol, stratType, side]);
 
   const activeStrat = snap ? (stratType === "straddle" ? snap.straddle : snap.strangle) : null;
+
+  // ── NEW: sigma cone bounds ─────────────────────────────────────────────────
+  const sigmaBounds = snap ? getSigmaBounds(snap.spotPrice, snap.iv?.atm, snap.expiry || expiry) : null;
+
+  // ── NEW: premium as % of spot ─────────────────────────────────────────────
+  const premiumPct = snap && snap.spotPrice && activeStrat?.combined
+    ? ((activeStrat.combined / snap.spotPrice) * 100).toFixed(2)
+    : null;
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
@@ -258,23 +373,30 @@ export default function StraddlePage({ socket }) {
                 padding:20px 22px; animation:fadeIn .4s ease; }
         .section-title { font-size:13px; font-weight:600; color:${COLOR.muted};
                          text-transform:uppercase; letter-spacing:.07em; margin-bottom:14px; }
+        .icon-btn { cursor:pointer; background:rgba(30,41,59,0.8); border:1px solid ${COLOR.border};
+                    border-radius:8px; padding:7px 14px; font-size:12px; font-weight:600;
+                    color:${COLOR.muted}; transition:all .2s; display:flex; align-items:center; gap:6px; }
+        .icon-btn:hover { border-color:${COLOR.accent}; color:${COLOR.accent}; }
       `}</style>
 
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22, flexWrap: "wrap", gap: 12 }}>
+      {/* ── Header ────────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+        marginBottom: 22, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: "-0.03em" }}>
             <span style={{ color: COLOR.accent }}>Straddle</span> &amp; Strangle
           </h1>
           <div style={{ fontSize: 12, color: COLOR.muted, marginTop: 3 }}>
-            Live combined premium · Auto ATM · Payoff diagram · Greeks
+            Live combined premium · Auto ATM · Payoff + σ cone · Greeks · Alerts
           </div>
         </div>
 
         {/* Controls */}
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           {/* Symbol */}
-          <select value={symbol} onChange={(e) => { setSymbol(e.target.value); setExpiry(""); setPremHistory([]); }}>
+          <select value={symbol} onChange={(e) => {
+            setSymbol(e.target.value); setExpiry(""); setPremHistory([]);
+          }}>
             {SYMBOLS.map((s) => <option key={s}>{s}</option>)}
           </select>
 
@@ -285,7 +407,7 @@ export default function StraddlePage({ socket }) {
             </select>
           )}
 
-          {/* Strategy type tabs */}
+          {/* Strategy tabs */}
           <div style={{ display: "flex", gap: 4, background: "rgba(15,23,42,.8)", padding: 3, borderRadius: 10 }}>
             {["straddle", "strangle"].map((t) => (
               <button key={t} className={`strat-tab ${stratType === t ? "active" : ""}`}
@@ -295,7 +417,7 @@ export default function StraddlePage({ socket }) {
             ))}
           </div>
 
-          {/* OTM steps (strangle only) */}
+          {/* OTM steps */}
           {stratType === "strangle" && (
             <select value={strangleStep} onChange={(e) => setStrangleStep(+e.target.value)}>
               {[1, 2, 3].map((n) => <option key={n} value={n}>{n} step OTM</option>)}
@@ -317,8 +439,26 @@ export default function StraddlePage({ socket }) {
               Sell
             </button>
           </div>
+
+          {/* ── NEW: Alert bell + CSV export ──────────────────────────────── */}
+          <button className="icon-btn"
+            onClick={requestNotifPermission}
+            title={notifPermission === "granted" ? "Alerts enabled" : "Enable breakeven alerts"}
+            style={{ borderColor: notifPermission === "granted" ? COLOR.green : COLOR.border,
+                     color: notifPermission === "granted" ? COLOR.green : COLOR.muted }}>
+            🔔 {notifPermission === "granted" ? "Alerts ON" : "Enable Alerts"}
+          </button>
+
+          <button className="icon-btn"
+            onClick={() => exportCSV(symbol, expiry, premHistory)}
+            title="Export premium history as CSV">
+            ⬇ CSV
+          </button>
         </div>
       </div>
+
+      {/* ── NEW: Alert banner ────────────────────────────────────────────────── */}
+      <AlertBanner message={alertMsg} onDismiss={() => setAlertMsg(null)} />
 
       {/* ── Error ─────────────────────────────────────────────────────────── */}
       {error && (
@@ -329,41 +469,71 @@ export default function StraddlePage({ socket }) {
       )}
 
       {loading && !snap && (
-        <div style={{ textAlign: "center", padding: 60, color: COLOR.muted }}>Loading option chain data…</div>
+        <div style={{ textAlign: "center", padding: 60, color: COLOR.muted }}>
+          Loading option chain data…
+        </div>
       )}
 
       {snap && (
         <>
-          {/* ── Top stat cards ─────────────────────────────────────────── */}
+          {/* ── Top stat cards ──────────────────────────────────────────── */}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
-            <StatCard label="Spot Price" value={`₹${fmt(snap.spotPrice)}`} pulse />
-            <StatCard label="ATM Strike" value={fmt(snap.atmStrike)} />
+            <StatCard label="Spot Price"   value={`₹${fmt(snap.spotPrice)}`} pulse />
+            <StatCard label="ATM Strike"   value={fmt(snap.atmStrike)} />
             <StatCard
               label={`${stratType === "straddle" ? "Straddle" : "Strangle"} Premium`}
               value={`₹${fmt(activeStrat?.combined)}`}
               color={COLOR.accent}
             />
+            {/* ── NEW: Premium as % of spot ─────────────────────────────── */}
             <StatCard
-              label="Upper BE"
-              value={`₹${fmt(activeStrat?.upperBreakeven)}`}
-              color={COLOR.green}
+              label="Premium % of Spot"
+              value={premiumPct ? `${premiumPct}%` : "—"}
+              sub="straddle cost vs index"
+              color={COLOR.strangle}
             />
-            <StatCard
-              label="Lower BE"
-              value={`₹${fmt(activeStrat?.lowerBreakeven)}`}
-              color={COLOR.red}
-            />
-            <StatCard label="ATM IV" value={fmtPct(snap.iv?.atm)} color={COLOR.strangle} />
-            <StatCard label="PCR" value={snap.oi?.pcr ?? "—"}
+            <StatCard label="Upper BE" value={`₹${fmt(activeStrat?.upperBreakeven)}`} color={COLOR.green} />
+            <StatCard label="Lower BE" value={`₹${fmt(activeStrat?.lowerBreakeven)}`} color={COLOR.red} />
+            <StatCard label="ATM IV"   value={fmtPct(snap.iv?.atm)} color={COLOR.strangle} />
+            <StatCard label="PCR"      value={snap.oi?.pcr ?? "—"}
               color={+snap.oi?.pcr > 1 ? COLOR.green : COLOR.red} />
-            <StatCard label="Last Update" value={lastRefresh} sub="auto-refresh 5s" />
+            <StatCard label="Last Update" value={lastRefresh} sub="live via WS" />
           </div>
 
-          {/* ── Strike pills ───────────────────────────────────────────── */}
+          {/* ── NEW: Sigma cone info bar ──────────────────────────────────── */}
+          {sigmaBounds && (
+            <div style={{
+              background: "rgba(56,189,248,0.06)", border: "1px solid rgba(56,189,248,0.2)",
+              borderRadius: 10, padding: "10px 18px", marginBottom: 16,
+              display: "flex", gap: 28, flexWrap: "wrap", alignItems: "center",
+            }}>
+              <span style={{ fontSize: 12, color: COLOR.accent, fontWeight: 600 }}>
+                σ Expected Move
+              </span>
+              <span style={{ fontSize: 12, color: COLOR.muted }}>
+                1σ range:&nbsp;
+                <span style={{ color: COLOR.text, fontFamily: "monospace" }}>
+                  ₹{fmt(sigmaBounds.lower1)} – ₹{fmt(sigmaBounds.upper1)}
+                </span>
+                &nbsp;(±₹{fmt(sigmaBounds.sigma)})
+              </span>
+              <span style={{ fontSize: 12, color: COLOR.muted }}>
+                2σ range:&nbsp;
+                <span style={{ color: COLOR.text, fontFamily: "monospace" }}>
+                  ₹{fmt(sigmaBounds.lower2)} – ₹{fmt(sigmaBounds.upper2)}
+                </span>
+              </span>
+              <span style={{ fontSize: 11, color: COLOR.muted }}>
+                Based on IV {fmtPct(snap.iv?.atm)} · DTE {Math.round(getDTE(snap.expiry || expiry))}d
+              </span>
+            </div>
+          )}
+
+          {/* ── Strike pills ──────────────────────────────────────────────── */}
           <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
             {stratType === "straddle" ? (
               <>
-                <div style={{ ...pillStyle("#22c55e"), }}>
+                <div style={pillStyle("#22c55e")}>
                   CE {fmt(snap.straddle.callStrike)} @ ₹{fmt(snap.straddle.callPremium)}
                 </div>
                 <div style={pillStyle("#ef4444")}>
@@ -380,18 +550,14 @@ export default function StraddlePage({ socket }) {
                 </div>
               </>
             )}
-            <div style={pillStyle(COLOR.accent)}>
-              OI CE: {fmt(snap.oi?.ce, 0)}
-            </div>
-            <div style={pillStyle(COLOR.strangle)}>
-              OI PE: {fmt(snap.oi?.pe, 0)}
-            </div>
+            <div style={pillStyle(COLOR.accent)}>OI CE: {fmt(snap.oi?.ce, 0)}</div>
+            <div style={pillStyle(COLOR.strangle)}>OI PE: {fmt(snap.oi?.pe, 0)}</div>
           </div>
 
-          {/* ── Greeks ─────────────────────────────────────────────────── */}
+          {/* ── Greeks ────────────────────────────────────────────────────── */}
           <GreeksRow greeks={snap.greeks} />
 
-          {/* ── Two charts side by side ────────────────────────────────── */}
+          {/* ── Two charts side by side ───────────────────────────────────── */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}>
 
             {/* Live Premium Chart */}
@@ -399,18 +565,18 @@ export default function StraddlePage({ socket }) {
               <div className="section-title">Live Combined Premium — {symbol}</div>
               {premHistory.length < 2 ? (
                 <div style={{ color: COLOR.muted, fontSize: 13, padding: "20px 0" }}>
-                  Collecting data… (refreshes every 5s)
+                  Collecting data… waiting for socket ticks
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height={260}>
                   <AreaChart data={premHistory} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                     <defs>
                       <linearGradient id="gStraddle" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={COLOR.straddle} stopOpacity={0.25} />
+                        <stop offset="5%"  stopColor={COLOR.straddle} stopOpacity={0.25} />
                         <stop offset="95%" stopColor={COLOR.straddle} stopOpacity={0} />
                       </linearGradient>
                       <linearGradient id="gStrangle" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={COLOR.strangle} stopOpacity={0.2} />
+                        <stop offset="5%"  stopColor={COLOR.strangle} stopOpacity={0.2} />
                         <stop offset="95%" stopColor={COLOR.strangle} stopOpacity={0} />
                       </linearGradient>
                     </defs>
@@ -429,18 +595,26 @@ export default function StraddlePage({ socket }) {
               )}
             </div>
 
-            {/* Payoff Chart */}
+            {/* Payoff Chart — NOW WITH SIGMA CONE */}
             <div className="card">
               <div className="section-title">
                 Payoff at Expiry — {side === "buy" ? "Long" : "Short"}{" "}
                 {stratType.charAt(0).toUpperCase() + stratType.slice(1)}
+                {sigmaBounds && (
+                  <span style={{ marginLeft: 10, fontSize: 11, color: COLOR.accent,
+                    fontWeight: 400, textTransform: "none" }}>
+                    · σ cone shown
+                  </span>
+                )}
               </div>
               {!payoff ? (
-                <div style={{ color: COLOR.muted, fontSize: 13, padding: "20px 0" }}>Loading payoff…</div>
+                <div style={{ color: COLOR.muted, fontSize: 13, padding: "20px 0" }}>
+                  Loading payoff…
+                </div>
               ) : (
                 <>
                   {/* Breakeven badges */}
-                  <div style={{ display: "flex", gap: 8, marginBottom: 10, fontSize: 12 }}>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10, fontSize: 12, flexWrap: "wrap" }}>
                     <span style={{ background: "rgba(34,197,94,.12)", color: COLOR.green,
                       borderRadius: 6, padding: "3px 10px", border: `1px solid rgba(34,197,94,.25)` }}>
                       Upper BE: ₹{fmt(payoff.upperBreakeven)}
@@ -461,16 +635,24 @@ export default function StraddlePage({ socket }) {
                         Max Loss: ₹{fmt(payoff.maxLoss)}
                       </span>
                     )}
+                    {/* ── NEW: sigma range badge ──────────────────────────── */}
+                    {sigmaBounds && (
+                      <span style={{ background: "rgba(56,189,248,.08)", color: COLOR.accent,
+                        borderRadius: 6, padding: "3px 10px", border: `1px solid rgba(56,189,248,.25)` }}>
+                        1σ ±₹{fmt(sigmaBounds.sigma)}
+                      </span>
+                    )}
                   </div>
+
                   <ResponsiveContainer width="100%" height={220}>
                     <AreaChart data={payoff.points} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                       <defs>
                         <linearGradient id="gPLPos" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={COLOR.green} stopOpacity={0.25} />
+                          <stop offset="5%"  stopColor={COLOR.green} stopOpacity={0.25} />
                           <stop offset="95%" stopColor={COLOR.green} stopOpacity={0} />
                         </linearGradient>
                         <linearGradient id="gPLNeg" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={COLOR.red} stopOpacity={0.25} />
+                          <stop offset="5%"  stopColor={COLOR.red} stopOpacity={0.25} />
                           <stop offset="95%" stopColor={COLOR.red} stopOpacity={0} />
                         </linearGradient>
                       </defs>
@@ -480,6 +662,24 @@ export default function StraddlePage({ socket }) {
                       <YAxis tick={{ fill: COLOR.muted, fontSize: 10 }} width={60}
                         tickFormatter={(v) => `₹${v}`} />
                       <Tooltip content={<PayoffTooltip />} />
+
+                      {/* ── NEW: 2σ cone (outer, lighter) ────────────────── */}
+                      {sigmaBounds && (
+                        <ReferenceArea
+                          x1={sigmaBounds.lower2} x2={sigmaBounds.upper2}
+                          fill={COLOR.cone2} fillOpacity={1}
+                          label={{ value: "2σ", fill: COLOR.accent, fontSize: 10, position: "insideTopLeft" }}
+                        />
+                      )}
+                      {/* ── NEW: 1σ cone (inner, stronger) ──────────────── */}
+                      {sigmaBounds && (
+                        <ReferenceArea
+                          x1={sigmaBounds.lower1} x2={sigmaBounds.upper1}
+                          fill={COLOR.cone1} fillOpacity={1}
+                          label={{ value: "1σ", fill: COLOR.accent, fontSize: 10, position: "insideTopRight" }}
+                        />
+                      )}
+
                       <ReferenceLine y={0} stroke={COLOR.breakeven} strokeDasharray="4 4" />
                       <ReferenceLine x={snap.spotPrice}
                         stroke={COLOR.spot} strokeDasharray="3 3"
@@ -503,28 +703,22 @@ export default function StraddlePage({ socket }) {
             </div>
           </div>
 
-          {/* ── IV + OI info bar ───────────────────────────────────────── */}
+          {/* ── IV + OI info bar ──────────────────────────────────────────── */}
           <div className="card" style={{ marginTop: 16 }}>
             <div className="section-title">Implied Volatility &amp; Open Interest</div>
             <div style={{ display: "flex", gap: 40, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: 12, color: COLOR.muted }}>CE IV</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: COLOR.straddle, fontFamily: "monospace" }}>
-                  {fmtPct(snap.iv?.ce)}
+              {[
+                { label: "CE IV",  value: fmtPct(snap.iv?.ce),  color: COLOR.straddle },
+                { label: "PE IV",  value: fmtPct(snap.iv?.pe),  color: COLOR.strangle },
+                { label: "ATM IV", value: fmtPct(snap.iv?.atm), color: COLOR.accent   },
+              ].map(({ label, value, color }) => (
+                <div key={label}>
+                  <div style={{ fontSize: 12, color: COLOR.muted }}>{label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color, fontFamily: "monospace" }}>
+                    {value}
+                  </div>
                 </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: COLOR.muted }}>PE IV</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: COLOR.strangle, fontFamily: "monospace" }}>
-                  {fmtPct(snap.iv?.pe)}
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: COLOR.muted }}>ATM IV</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: COLOR.accent, fontFamily: "monospace" }}>
-                  {fmtPct(snap.iv?.atm)}
-                </div>
-              </div>
+              ))}
               <div style={{ width: 1, background: COLOR.border }} />
               <div>
                 <div style={{ fontSize: 12, color: COLOR.muted }}>CE OI</div>
@@ -555,22 +749,35 @@ export default function StraddlePage({ socket }) {
                 </div>
                 <div style={{ fontSize: 11, color: COLOR.muted }}>expected range</div>
               </div>
+              {/* ── NEW: premium % repeated in IV bar for quick reference ── */}
+              <div>
+                <div style={{ fontSize: 12, color: COLOR.muted }}>Premium % Spot</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: COLOR.strangle, fontFamily: "monospace" }}>
+                  {premiumPct ? `${premiumPct}%` : "—"}
+                </div>
+                <div style={{ fontSize: 11, color: COLOR.muted }}>normalised cost</div>
+              </div>
             </div>
           </div>
 
-          {/* ── Buyer vs Seller guide ──────────────────────────────────── */}
+          {/* ── Buyer vs Seller guide ─────────────────────────────────────── */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 16 }}>
             <div className="card" style={{ borderColor: "rgba(0,229,160,.2)" }}>
               <div style={{ color: COLOR.buy, fontWeight: 700, marginBottom: 10, fontSize: 14 }}>
                 🟢 Option Buyer View (Long {stratType})
               </div>
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: COLOR.text, lineHeight: 1.9 }}>
-                <li>Pay premium: <strong>₹{fmt(activeStrat?.combined)}</strong></li>
+                <li>Pay premium: <strong>₹{fmt(activeStrat?.combined)}</strong>
+                  {premiumPct && <span style={{ color: COLOR.muted }}> ({premiumPct}% of spot)</span>}</li>
                 <li>Profit if spot moves beyond breakevens</li>
                 <li>Upper target: <strong>₹{fmt(activeStrat?.upperBreakeven)}</strong></li>
                 <li>Lower target: <strong>₹{fmt(activeStrat?.lowerBreakeven)}</strong></li>
+                {sigmaBounds && (
+                  <li style={{ color: COLOR.accent }}>
+                    Market pricing ±₹{fmt(sigmaBounds.sigma)} move (1σ) by expiry
+                  </li>
+                )}
                 <li>Max loss limited to premium paid</li>
-                <li>Best entry: before high-impact events (budget, RBI)</li>
                 <li style={{ color: COLOR.muted }}>
                   {+snap.iv?.atm > 20
                     ? "⚠ High IV — premium expensive, buyer caution"
@@ -583,12 +790,17 @@ export default function StraddlePage({ socket }) {
                 🔴 Option Seller View (Short {stratType})
               </div>
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: COLOR.text, lineHeight: 1.9 }}>
-                <li>Collect premium: <strong>₹{fmt(activeStrat?.combined)}</strong></li>
+                <li>Collect premium: <strong>₹{fmt(activeStrat?.combined)}</strong>
+                  {premiumPct && <span style={{ color: COLOR.muted }}> ({premiumPct}% of spot)</span>}</li>
                 <li>Profit if spot stays between breakevens</li>
                 <li>Range: ₹{fmt(activeStrat?.lowerBreakeven)} – ₹{fmt(activeStrat?.upperBreakeven)}</li>
+                {sigmaBounds && (
+                  <li style={{ color: COLOR.accent }}>
+                    1σ zone: ₹{fmt(sigmaBounds.lower1)} – ₹{fmt(sigmaBounds.upper1)} (safe if spot stays here)
+                  </li>
+                )}
                 <li>Theta works in your favor (time decay)</li>
                 <li>Unlimited risk if spot breaks out sharply</li>
-                <li>Best entry: sideways/range-bound market</li>
                 <li style={{ color: COLOR.muted }}>
                   {+snap.iv?.atm > 20
                     ? "✅ High IV — premium rich, good time to sell"
@@ -596,6 +808,33 @@ export default function StraddlePage({ socket }) {
                 </li>
               </ul>
             </div>
+          </div>
+
+          {/* ── NEW: Alert status footer ──────────────────────────────────── */}
+          <div style={{ marginTop: 14, padding: "10px 16px",
+            background: "rgba(15,23,42,0.6)", borderRadius: 10,
+            border: `1px solid ${COLOR.border}`, fontSize: 12, color: COLOR.muted,
+            display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
+            <span>
+              🔔 Alerts:{" "}
+              <span style={{ color: notifPermission === "granted" ? COLOR.green : COLOR.muted }}>
+                {notifPermission === "granted"
+                  ? "Enabled — will notify if spot crosses breakeven"
+                  : notifPermission === "denied"
+                    ? "Blocked by browser — allow in site settings"
+                    : "Click 'Enable Alerts' above to activate"}
+              </span>
+            </span>
+            <span>
+              📥 CSV: {premHistory.length} ticks recorded
+              {premHistory.length > 0 && (
+                <button onClick={() => exportCSV(symbol, expiry, premHistory)}
+                  style={{ marginLeft: 8, background: "none", border: "none",
+                    color: COLOR.accent, cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>
+                  Export now
+                </button>
+              )}
+            </span>
           </div>
         </>
       )}
