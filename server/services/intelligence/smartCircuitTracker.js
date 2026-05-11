@@ -219,11 +219,11 @@ async function scanCircuits(symbols) {
   console.log(`📡 SmartCircuit broadcasting: ${sortedWatchlist.length} watchlist stocks, ${alerts.length} alerts`);
 
   if (ioRef) {
-    ioRef.emit("circuit-watchlist", sortedWatchlist);
+    ioRef.to("alerts").emit("circuit-watchlist", sortedWatchlist);
     watchlistCbs.forEach(cb => { try { cb(sortedWatchlist); } catch {} });
 
     if (alerts.length > 0) {
-      ioRef.emit("circuit-alerts", alerts);
+      ioRef.to("alerts").emit("circuit-alerts", alerts);
       alertCbs.forEach(cb => { try { cb(alerts); } catch {} });
       console.log(`🔔 SmartCircuit: ${alerts.length} new alert(s) emitted`);
     }
@@ -254,16 +254,6 @@ function startSmartCircuitTracker(io, tokenGetterFn, instrumentGetterFn) {
   ioRef            = io;
   tokenGetter      = tokenGetterFn;
   instrumentGetter = instrumentGetterFn;
-
-  // Send cached state to newly connected clients
-  io.on("connection", (socket) => {
-    const recent = alertLog.slice(0, 20);
-    if (recent.length > 0) { try { const b = ws.encodeJSON("circuit-alerts", recent); socket.emit("binary", b); } catch(_){} socket.emit("circuit-alerts", recent); }
-    const wl = Array.from(watchlist.values())
-      .filter(e => e.score >= 0)
-      .sort((a, b) => b.score - a.score);
-    if (wl.length > 0) { try { const b = ws.encodeJSON("circuit-watchlist", wl); socket.emit("binary", b); } catch(_){} socket.emit("circuit-watchlist", wl); }
-  });
 
   // Poll every 3 min during market hours
   pollTimer = setInterval(() => {

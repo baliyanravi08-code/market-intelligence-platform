@@ -271,12 +271,22 @@ export default function StraddlePage({ socket }) {
 
   // ── Socket handler (replaces REST polling) ────────────────────────────────
   useEffect(() => {
-  if (!socket) return;
+    if (!socket) return;
 
-  socket.emit("join:intel");
-  socket.on("connect", () => socket.emit("join:intel"));
+    socket.emit("join:intel");
+    socket.on("connect", () => socket.emit("join:intel"));
 
-  socket.on("options-intelligence", (data) => {
+    // One-time seed so page doesn't wait up to 60s for first socket event
+    fetch(`/api/straddle/snapshot?symbol=${symbol}`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data || data.error) return;
+        setSnap(prev => prev || data);
+        setLoading(false);
+      })
+      .catch(() => {});
+
+    socket.on("options-intelligence", (data) => {
       if (data?.symbol !== symbol) return;
       const s = data?.structure;
       if (!s) return;
