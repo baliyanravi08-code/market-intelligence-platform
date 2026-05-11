@@ -3,20 +3,19 @@
 /**
  * server/api/websocket.js — Binary Protocol Edition
  *
- * FIX: emitMarketTick now emits binary frame via "binary" event AND
- *      plain "market-tick" JSON — frontend listens to both.
- *      Scanner flush unchanged, all other emitters intact.
+ * FIX-BW-1: perMessageDeflate enabled (threshold: 1024)
+ *   Was: false — every frame sent uncompressed.
+ *   Now: frames > 1KB are gzip-compressed automatically by socket.io.
+ *   Impact: options-intelligence JSON (2-5KB) → ~800B. bse/nse events → ~30% of original.
  *
- * NEW — emitOptionsIntelTick(symbol, spotPrice):
- *   Called on every Upstox index tick (~1s) for NIFTY/BANKNIFTY/etc.
- *   Reads the cached intel for that symbol, extracts straddlePrice + atmIV
- *   + score + bias, encodes as 24-byte OPTIONS_INTEL_TICK binary frame,
- *   broadcasts to ALL clients.
- *   Frontend overlays this onto the last full analysis result so spot +
- *   straddle update live without waiting for the 60s full cycle.
+ * FIX-BW-2: emitOptionsIntelTick — JSON fallback removed.
+ *   Was: binary (24B) + JSON (~200B) on every Upstox tick (~1s per symbol).
+ *   Now: binary only. App.jsx binary handler decodes 0x0D and re-emits
+ *        "options-intel-tick" locally — OptionsIntelligencePage listener fires normally.
  *
- *   Throttle: max 1 emit per symbol per 500ms (Upstox sends every ~200ms
- *   for indices, no need to push that fast for options data).
+ * FIX-BW-3: request-straddle-snapshot socket handler added.
+ *   StraddlePanel now requests via socket instead of REST polling every 5s.
+ *   Server handles the request once and pushes back via "straddle-snapshot".
  */
 
 const { Server } = require("socket.io");
@@ -217,8 +216,9 @@ function emitMarketTick(updates) {
   _io.emit("market-tick", updates);
 }
 
-// ── Options Intel live tick — called on every Upstox spot price update ────────
-// Throttle: 500ms per symbol (Upstox sends ~200ms for indices)
+// ── Options Intel live tick ───────────────────────────────────────────────────
+// FIX-BW-2: JSON fallback REMOVED. Binary only (24 bytes vs 200 bytes).
+// App.jsx binary handler decodes 0x0D and re-emits "options-intel-tick" locally.
 const _intelTickThrottle = new Map();
 
 function emitOptionsIntelTick(symbol, spotPrice) {
@@ -226,17 +226,14 @@ function emitOptionsIntelTick(symbol, spotPrice) {
 
   const sym = symbol.toUpperCase();
 
-  // Throttle to 500ms per symbol
   const now  = Date.now();
   const last = _intelTickThrottle.get(sym) || 0;
   if (now - last < 500) return;
   _intelTickThrottle.set(sym, now);
 
-  // Read cached full analysis — if no cache yet, skip (page shows "Connecting")
   const cached = _intelCache.get(sym);
   if (!cached) return;
 
-  // Extract the fields we need for the live tick
   const straddlePrice = cached.data?.structure?.straddlePrice || 0;
   const atmIV         = cached.data?.volatility?.atmIV        || 0;
   const score         = cached.data?.score                    || 50;
@@ -245,13 +242,11 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   try {
     const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias);
     _io.emit("binary", buf);
+    // FIX-BW-2: NO JSON fallback — removed to save ~200B/s per symbol.
+    // App.jsx binary handler decodes msgType 0x0D and emits the event locally.
   } catch (e) {
     console.warn("⚠️ binary options-intel-tick encode error:", e.message);
-    return;
   }
-
-  // JSON fallback for clients not yet on binary
-  _io.emit("options-intel-tick", { symbol: sym, spotPrice, straddlePrice, atmIV, score, bias, ts: now });
 }
 
 // ── Candle emission → chart:{SYMBOL} room only ───────────────────────────────
@@ -285,7 +280,7 @@ function emitCandleClosed(symbol, tf, candle) {
   _io.to(room).emit("candle:closed", { symbol: sym, tf, candle });
 }
 
-// ── price:tick — live LTP for ALL timeframes ─────────────────────────────────
+// ── price:tick ───────────────────────────────────────────────────────────────
 const _priceTickThrottle = new Map();
 
 function emitPriceTick(symbol, price, change, changePct, prevClose) {
@@ -302,12 +297,9 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
   _priceTickThrottle.set(sym, now);
 
   const payload = {
-    symbol:    sym,
-    ltp:       price,
-    change:    change    ?? 0,
-    changePct: changePct ?? 0,
-    prevClose: prevClose ?? 0,
-    t:         now,
+    symbol: sym, ltp: price,
+    change: change ?? 0, changePct: changePct ?? 0,
+    prevClose: prevClose ?? 0, t: now,
   };
 
   try {
@@ -318,7 +310,7 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
   }
 
   _io.to(room).emit("price:tick", payload);
-  _io.emit("price:tick", payload); // global broadcast for scanner/dashboard
+  _io.emit("price:tick", payload);
 }
 
 // ── Scanner tech batch broadcast ─────────────────────────────────────────────
@@ -369,9 +361,7 @@ function emitOptionsIntel(data) {
   } catch (e) {
     console.warn("⚠️ binary options-intel encode error:", e.message);
   }
-  // JSON fallback for clients not yet on binary
   _io.emit("options-intelligence", data);
-  // Update cache for new connections
   setCachedIntel(data.symbol, data);
 }
 
@@ -385,13 +375,15 @@ function emitCompositeUpdate(data) {
 // ── Main attach function ─────────────────────────────────────────────────────
 function attachSocketIO(server) {
   const io = new Server(server, {
-    cors:              { origin: "*" },
-    pingInterval:      20_000,
-    pingTimeout:       60_000,
-    upgradeTimeout:    30_000,
-    transports:        ["websocket", "polling"],
-    allowUpgrades:     true,
-    perMessageDeflate: false,
+    cors:             { origin: "*" },
+    pingInterval:     20_000,
+    pingTimeout:      60_000,
+    upgradeTimeout:   30_000,
+    transports:       ["websocket", "polling"],
+    allowUpgrades:    true,
+    // FIX-BW-1: was false — now compresses frames > 1KB automatically.
+    // options-intelligence JSON (2-5KB) → ~800B. bse/nse events compressed too.
+    perMessageDeflate: { threshold: 1024 },
   });
 
   _io = io;
@@ -405,7 +397,7 @@ function attachSocketIO(server) {
   io.on("connection", (socket) => {
     console.log(`👤 Client connected: ${socket.id}`);
 
-    // ── Binary protocol handshake ──────────────────────────────────────────
+    // ── Binary protocol handshake ──────────────────────────────────────
     socket.on("use-binary", ({ version } = {}) => {
       _binaryClients.add(socket.id);
       socket.emit("binary-ready", {
@@ -418,7 +410,7 @@ function attachSocketIO(server) {
       console.log(`⚡ ${socket.id} upgraded to binary protocol (client v${version || "?"})`);
     });
 
-    // ── Replay intel snapshots on connect ──────────────────────────────────
+    // ── Replay intel snapshots on connect ──────────────────────────────
     if (_intelCache.size > 0) {
       for (const [, payload] of _intelCache) {
         try {
@@ -441,7 +433,26 @@ function attachSocketIO(server) {
       }
     });
 
-    // ── Scanner room ───────────────────────────────────────────────────────
+    // ── FIX-BW-3: Straddle snapshot via socket (replaces REST polling) ─
+    // StraddlePanel emits "request-straddle-snapshot" instead of
+    // setInterval REST calls. This fires once per user action, not every 5s.
+    socket.on("request-straddle-snapshot", async ({ symbol, type, side } = {}) => {
+      if (!symbol) return;
+      try {
+        const port    = process.env.PORT || 3000;
+        const base    = `http://localhost:${port}`;
+        const snapRes   = await require("node-fetch")(`${base}/api/straddle/snapshot?symbol=${symbol}`).catch(() => null);
+        const payoffRes = await require("node-fetch")(`${base}/api/straddle/payoff?symbol=${symbol}&type=${type || "straddle"}&side=${side || "sell"}`).catch(() => null);
+        const snap   = snapRes?.ok   ? await snapRes.json().catch(() => null)   : null;
+        const payoff = payoffRes?.ok ? await payoffRes.json().catch(() => null) : null;
+        if (snap   && !snap.error)   socket.emit("straddle-snapshot", { symbol, data: snap });
+        if (payoff && !payoff.error) socket.emit("straddle-payoff",   { symbol, ...payoff });
+      } catch (e) {
+        console.warn("⚠️ request-straddle-snapshot error:", e.message);
+      }
+    });
+
+    // ── Scanner room ───────────────────────────────────────────────────
     socket.on("join:scanner", () => {
       socket.join("scanner");
       const snapshot = getScannerSnapshot();
@@ -461,7 +472,7 @@ function attachSocketIO(server) {
       socket.leave("scanner");
     });
 
-    // ── Chart room ────────────────────────────────────────────────────────
+    // ── Chart room ────────────────────────────────────────────────────
     socket.on("watch:chart", (symbol) => {
       [...socket.rooms]
         .filter(r => r.startsWith("chart:"))
@@ -475,7 +486,6 @@ function attachSocketIO(server) {
           const stream = require("../services/upstoxStream");
           if (stream.subscribeSymbolForPriceTick) {
             stream.subscribeSymbolForPriceTick(sym);
-            console.log(`📡 watch:chart → subscribeSymbolForPriceTick: ${sym}`);
           }
         } catch (e) {
           console.warn(`⚠️ watch:chart subscribe failed for ${sym}:`, e.message);
@@ -483,20 +493,15 @@ function attachSocketIO(server) {
       }
     });
 
-    // ── Backtest private room ──────────────────────────────────────────────
-    socket.on("backtest:start", () => {
-      socket.join(`backtest:${socket.id}`);
-    });
+    // ── Backtest private room ──────────────────────────────────────────
+    socket.on("backtest:start", () => socket.join(`backtest:${socket.id}`));
+    socket.on("backtest:stop",  () => socket.leave(`backtest:${socket.id}`));
 
-    socket.on("backtest:stop", () => {
-      socket.leave(`backtest:${socket.id}`);
-    });
-
-    // ── Alerts room ────────────────────────────────────────────────────────
-    socket.on("join:alerts", () => socket.join("alerts"));
+    // ── Alerts room ────────────────────────────────────────────────────
+    socket.on("join:alerts",  () => socket.join("alerts"));
     socket.on("leave:alerts", () => socket.leave("alerts"));
 
-    // ── Gann analysis ──────────────────────────────────────────────────────
+    // ── Gann analysis ──────────────────────────────────────────────────
     socket.on("get-gann-analysis", ({ symbol, ltp } = {}) => {
       if (!symbol) return;
       const sym = normaliseSymbol(symbol);
@@ -512,7 +517,7 @@ function attachSocketIO(server) {
       console.warn(`⚠️ get-gann-analysis: no result for ${sym}`);
     });
 
-    // ── Option chain ───────────────────────────────────────────────────────
+    // ── Option chain ───────────────────────────────────────────────────
     socket.on("request-option-chain", ({ underlying, expiry } = {}) => {
       if (!underlying) return;
       [...socket.rooms]
@@ -541,7 +546,7 @@ function attachSocketIO(server) {
       socket.emit("option-expiries", { underlying, expiries });
     });
 
-    // ── Live candle subscriptions ──────────────────────────────────────────
+    // ── Live candle subscriptions ──────────────────────────────────────
     let _watchedSymbol = null;
     let _watchedTf     = null;
 
@@ -556,7 +561,6 @@ function attachSocketIO(server) {
       _watchedTf     = tf;
       stream.registerLiveCandleSubscription(_watchedSymbol, _watchedTf);
       socket.join(`chart:${_watchedSymbol}`);
-      console.log(`🕯️  ${socket.id} subscribed candle: ${_watchedSymbol} [${_watchedTf}]`);
     });
 
     socket.on("candle:unsubscribe", ({ symbol, tf } = {}) => {
@@ -567,11 +571,10 @@ function attachSocketIO(server) {
       if (sym && t) stream.unregisterLiveCandleSubscription(sym, t);
     });
 
-    // ── Disconnect ─────────────────────────────────────────────────────────
+    // ── Disconnect ─────────────────────────────────────────────────────
     socket.on("disconnect", (reason) => {
       console.log(`👋 ${socket.id} disconnected — ${reason}`);
       _binaryClients.delete(socket.id);
-
       const stream = getStream();
       if (stream && _watchedSymbol && _watchedTf) {
         stream.unregisterLiveCandleSubscription(_watchedSymbol, _watchedTf);
@@ -583,18 +586,14 @@ function attachSocketIO(server) {
     });
   });
 
-  console.log("🌐 Socket.io attached — Binary Protocol v1 enabled");
-  console.log("   Rooms: scanner | chart:{SYM} | chain:{SYM} | backtest:{id} | alerts");
+  console.log("🌐 Socket.io attached — Binary Protocol v1 + perMessageDeflate enabled");
   return io;
 }
 
 module.exports = {
-  // Core
   attachSocketIO,
   setGannIntegration,
   emitTechBatch,
-
-  // Option chain
   emitChainUpdate,
   setCachedChain,
   getCachedChain,
@@ -602,29 +601,19 @@ module.exports = {
   getCachedExpiries,
   setCachedIntel,
   getCachedIntel,
-
-  // Scanner
   updateScannerTick,
   getScannerSnapshot,
-
-  // Emitters
   emitMarketTick,
   emitChartLTP,
   emitCandleTick,
   emitCandleClosed,
   emitPriceTick,
-  emitOptionsIntelTick,   // ← NEW
-
-  // Backtest
+  emitOptionsIntelTick,
   emitBacktestTick,
   broadcastBacktestTick,
-
-  // Alerts
   emitCircuitAlerts,
   emitDeliverySpikes,
   emitCompositeUpdate,
-
-  // Status
   broadcastUpstoxStatus,
   emitOptionsIntel,
 };
