@@ -1045,7 +1045,9 @@ export default function App() {
   const [currentPage, setCurrentPageRaw] = useState(() => {
     try {
       const saved = localStorage.getItem("mi-current-page");
-      return saved && VALID_PAGES.has(saved) ? saved : "dashboard";
+// Don't restore straddle on cold load — needs socket to be ready first
+if (saved === "straddle") return "dashboard";
+return saved && VALID_PAGES.has(saved) ? saved : "dashboard";
     } catch { return "dashboard"; }
   });
 

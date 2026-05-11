@@ -255,18 +255,19 @@ export default function StraddlePage({ socket }) {
 
   // ── Fetch payoff ─────────────────────────────────────────────────────────
   const fetchPayoff = useCallback(async () => {
-    try {
-      const expiryQ = expiry ? `&expiry=${expiry}` : "";
-      const r = await fetch(
-        `/api/straddle/payoff?symbol=${symbol}${expiryQ}&type=${stratType}&side=${side}&steps=${strangleStep}`
-      );
-      if (!r.ok) throw new Error(await r.text());
-      const data = await r.json();
-      setPayoff(data);
-    } catch (e) {
-      console.error("Payoff fetch error:", e);
-    }
-  }, [symbol, expiry, stratType, side, strangleStep]);
+  try {
+    const expiryQ = expiry ? `&expiry=${expiry}` : "";
+    const r = await fetch(
+      `/api/straddle/payoff?symbol=${symbol}${expiryQ}&type=${stratType}&side=${side}&steps=${strangleStep}`
+    );
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data?.error) return;
+    setPayoff(data);
+  } catch (e) {
+    console.warn("Payoff fetch error:", e.message);
+  }
+}, [symbol, expiry, stratType, side, strangleStep]);
 
   // ── Socket handler (replaces REST polling) ────────────────────────────────
   useEffect(() => {
