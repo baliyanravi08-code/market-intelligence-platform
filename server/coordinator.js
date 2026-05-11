@@ -14,6 +14,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const cron = require("node-cron");
 const { writeDailyIV } = require("./services/intelligence/ivHistoryWriter");
 const { startGannIntegration }   = require("./services/intelligence/gannIntegration");
 const gannIntegration            = require("./services/intelligence/gannIntegration");
@@ -124,7 +125,6 @@ function persistOrderBook(orderData) {
 
 function persistSector(sectorData) {
   if (!sectorData) return;
-  // Also ingest into live sectorEngine
   try { ingestFilingSignal(sectorData); } catch {}
   stored.sectors = [sectorData, ...stored.sectors.filter(s => s.sector !== sectorData.sector)].slice(0, 20);
   saveToDisk();
@@ -141,8 +141,6 @@ function persistMegaOrder(order) {
   stored.megaOrders = [order, ...stored.megaOrders.filter(o => o.company !== order.company)].slice(0, 20);
   saveToDisk();
 }
-
-// Removed: persistGuidance, persistCredibility — those engines are deleted
 
 function persistDeliverySpike(spikes) {
   if (!spikes || spikes.length === 0) return;
@@ -171,7 +169,6 @@ function persistCircuitWatchlist(watchlist) {
 
 function handleSmartMoneyEvent(event) {
   if (!event?.company) return;
-  // Pass to sectorEngine as a filing signal
   try {
     ingestFilingSignal({ company: event.company, title: event.title || "", _orderInfo: null, type: "SMART_MONEY" });
   } catch {}
@@ -196,7 +193,6 @@ function sendStoredToClient(socket) {
     socket.emit("circuit-watchlist", stored.circuitWatchlist);
   }
 
-  // Send live sector snapshot
   try {
     const snapshot = getSectorSnapshot();
     if (snapshot.length > 0) socket.emit("sector-snapshot", snapshot);
@@ -246,7 +242,6 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   // ── 5. Socket handlers ────────────────────────────────────────────────────
   io.on("connection", (socket) => {
     sendStoredToClient(socket);
-    // Legacy: clients that still ask for composite scores get empty array
     socket.on("get-composite-scores", () => {
       socket.emit("composite-scores", []);
     });
@@ -262,8 +257,8 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
   onDeliverySpike((spikes) => {
     persistDeliverySpike(spikes);
   });
+
   // ── 8. IV History Writer — fires at 15:31 IST (10:01 UTC) Mon–Fri ────────
-  const cron = require("node-cron");
   cron.schedule("1 10 * * 1-5", () => {
     console.log("[Coordinator] Market close — recording daily IV");
     writeDailyIV();
