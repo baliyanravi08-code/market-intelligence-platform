@@ -2,6 +2,7 @@
 
 const axios = require("axios");
 const ws = require("../../api/websocket");
+const bp = require("../../api/binaryProtocol");
 const analyzeAnnouncement = require("../analyzers/announcementAnalyzer");
 const { updateRadar, getRadar } = require("../intelligence/radarEngine");
 const { orderBookEngine } = require("../intelligence/orderBookEngine");
@@ -352,7 +353,7 @@ async function processItem(item) {
       .then(doc => {
         if (doc) {
           persistGuidance(doc);
-          if (ioRef) { const b = ws.encodeJSON("guidance_update", doc); ioRef.emit("binary", b); ioRef.emit("guidance_update", doc); }
+          if (ioRef) { const b = bp.encodeJSON("guidance_update", doc); ioRef.emit("binary", b); ioRef.emit("guidance_update", doc); }
         }
       })
       .catch(() => {});
@@ -370,8 +371,8 @@ async function processItem(item) {
   const radar = getRadar();
   persistRadar(radar);
 
-  if (ioRef) { const b = ws.encodeJSON("bse_events", [signalWithTs]); ioRef.emit("binary", b); ioRef.emit("bse_events", [signalWithTs]); }
-  if (ioRef) { const b = ws.encodeJSON("radar_update", radar); ioRef.emit("binary", b); ioRef.emit("radar_update", radar); }
+  if (ioRef) { const b = bp.encodeJSON("bse_events", [signalWithTs]); ioRef.emit("binary", b); ioRef.emit("bse_events", [signalWithTs]); }
+  if (ioRef) { const b = bp.encodeJSON("radar_update", radar); ioRef.emit("binary", b); ioRef.emit("radar_update", radar); }
 
   if (signalWithTs.type === "ORDER_ALERT") {
     const enrichedSignal = { ...signalWithTs, _orderInfo: signal._orderInfo };
@@ -401,7 +402,7 @@ async function processItem(item) {
 
     if (orderData) {
       persistOrderBook(orderData);
-      if (ioRef) { const b = ws.encodeJSON("order_book_update", orderData); ioRef.emit("binary", b); ioRef.emit("order_book_update", orderData); }
+      if (ioRef) { const b = bp.encodeJSON("order_book_update", orderData); ioRef.emit("binary", b); ioRef.emit("order_book_update", orderData); }
 
       if (orderData.isMegaOrder || orderData.isMcapAlert || orderData.isFrequencyAlert) {
         const megaPayload = {
@@ -422,7 +423,7 @@ async function processItem(item) {
           receivedAt:     signalWithTs.savedAt || Date.now()
         };
         persistMegaOrder(megaPayload);
-        if (ioRef) { const b = ws.encodeJSON("mega_order_alert", megaPayload); ioRef.emit("binary", b); ioRef.emit("mega_order_alert", megaPayload); }
+        if (ioRef) { const b = bp.encodeJSON("mega_order_alert", megaPayload); ioRef.emit("binary", b); ioRef.emit("mega_order_alert", megaPayload); }
       }
     }
 
@@ -431,9 +432,9 @@ async function processItem(item) {
     if (sectorResult) {
       persistSector(sectorResult);
       if (ioRef) {
-        const b1 = ws.encodeJSON("sector_alerts", [sectorResult]); ioRef.emit("binary", b1); ioRef.emit("sector_alerts", [sectorResult]);
+        const b1 = bp.encodeJSON("sector_alerts", [sectorResult]); ioRef.emit("binary", b1); ioRef.emit("sector_alerts", [sectorResult]);
         if (sectorResult.isBoom) {
-          const b2 = ws.encodeJSON("sector_boom", sectorResult); ioRef.emit("binary", b2); ioRef.emit("sector_boom", sectorResult);
+          const b2 = bp.encodeJSON("sector_boom", sectorResult); ioRef.emit("binary", b2); ioRef.emit("sector_boom", sectorResult);
         }
       }
     }
