@@ -421,10 +421,16 @@ function attachSocketIO(server) {
       try {
         const port    = process.env.PORT || 3000;
         const base    = `http://localhost:${port}`;
-        const snapRes   = await require("node-fetch")(`${base}/api/straddle/snapshot?symbol=${symbol}`).catch(() => null);
-        const payoffRes = await require("node-fetch")(`${base}/api/straddle/payoff?symbol=${symbol}&type=${type || "straddle"}&side=${side || "sell"}`).catch(() => null);
-        const snap   = snapRes?.ok   ? await snapRes.json().catch(() => null)   : null;
-        const payoff = payoffRes?.ok ? await payoffRes.json().catch(() => null) : null;
+        const fetchLocal = (url) => new Promise((resolve) => {
+          const http = require("http");
+          http.get(url, (res) => {
+            let d = "";
+            res.on("data", c => d += c);
+            res.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+          }).on("error", () => resolve(null));
+        });
+        const snap   = await fetchLocal(`http://localhost:${process.env.PORT || 3000}/api/straddle/snapshot?symbol=${symbol}`);
+        const payoff = await fetchLocal(`http://localhost:${process.env.PORT || 3000}/api/straddle/payoff?symbol=${symbol}&type=${type || "straddle"}&side=${side || "sell"}`);
         if (snap   && !snap.error)   socket.emit("straddle-snapshot", { symbol, data: snap });
         if (payoff && !payoff.error) socket.emit("straddle-payoff",   { symbol, ...payoff });
       } catch (e) {
