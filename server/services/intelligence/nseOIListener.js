@@ -623,7 +623,7 @@ async function pollChains() {
         cache[u.name].updatedAt      = Date.now();
 
         if (ioRef) {
-          ioRef.emit("option-chain-update", { underlying: u.name, expiry, data: processed });
+          ioRef.to(`chain:${u.name}`).emit("option-chain-update", { underlying: u.name, expiry, data: processed });
         }
 
         try {
@@ -718,18 +718,7 @@ function startNSEOIListener(io, tGetter) {
   maybeResetSession();
 
   io.on("connection", socket => {
-    for (const [name, data] of Object.entries(cache)) {
-      const age = Date.now() - (data.updatedAt || 0);
-      if (age > CACHE_MAX_AGE_MS) continue;
-
-      if (data.expiries?.length) {
-        socket.emit("option-expiries", { underlying: name, expiries: data.expiries });
-      }
-      for (const [expiry, chain] of Object.entries(data.chains || {})) {
-        socket.emit("option-chain-update", { underlying: name, expiry, data: chain });
-      }
-    }
-
+    // Chain data sent only when client joins chain room via request-option-chain
     socket.on("request-option-chain", ({ underlying, expiry }) => {
       const chain = getChain(underlying, expiry);
       if (chain) socket.emit("option-chain-update", { underlying, expiry, data: chain });

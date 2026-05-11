@@ -176,29 +176,31 @@ function handleSmartMoneyEvent(event) {
 
 // ── Send stored state to newly connected client ───────────────────────────────
 function sendStoredToClient(socket) {
-  if (stored.orderBook.length > 0) {
+  // Feed data only — always needed on connect
+  if (stored.orderBook.length > 0)
     stored.orderBook.forEach(o => socket.emit("order_book_update", o));
-  }
-  if (stored.sectors.length > 0)       socket.emit("sector_alerts",     stored.sectors);
-  if (stored.opportunities.length > 0) stored.opportunities.forEach(o => socket.emit("opportunity_alert", o));
-  if (stored.megaOrders.length > 0)    stored.megaOrders.forEach(o => socket.emit("mega_order_alert", o));
-
-  if (stored.deliverySpikes.length > 0) {
-    socket.emit("delivery-spikes", stored.deliverySpikes);
-  }
-  if (stored.circuitAlerts.length > 0) {
-    socket.emit("circuit-alerts", stored.circuitAlerts);
-  }
-  if (stored.circuitWatchlist.length > 0) {
-    socket.emit("circuit-watchlist", stored.circuitWatchlist);
-  }
-
+  if (stored.sectors.length > 0)
+    socket.emit("sector_alerts", stored.sectors);
+  if (stored.opportunities.length > 0)
+    stored.opportunities.forEach(o => socket.emit("opportunity_alert", o));
+  if (stored.megaOrders.length > 0)
+    stored.megaOrders.forEach(o => socket.emit("mega_order_alert", o));
   try {
     const snapshot = getSectorSnapshot();
     if (snapshot.length > 0) socket.emit("sector-snapshot", snapshot);
   } catch {}
+  // Circuit + delivery NOT sent here — only sent when client joins "alerts" room
 }
 
+// Called only when client joins "alerts" room (SmartCircuitPage opens)
+function sendAlertsToClient(socket) {
+  if (stored.deliverySpikes.length > 0)
+    socket.emit("delivery-spikes", stored.deliverySpikes);
+  if (stored.circuitAlerts.length > 0)
+    socket.emit("circuit-alerts", stored.circuitAlerts);
+  if (stored.circuitWatchlist.length > 0)
+    socket.emit("circuit-watchlist", stored.circuitWatchlist);
+}
 function getStored() { return stored; }
 
 // ── Main coordinator ──────────────────────────────────────────────────────────
@@ -247,10 +249,6 @@ function startCoordinator(io, tokenGetter, instrumentMapGetter) {
     });
   });
 
-  // ── 6. Heartbeat ─────────────────────────────────────────────────────────
-  setInterval(() => {
-    io.emit("system_event", { type: "heartbeat", time: new Date().toISOString() });
-  }, 30_000);
 
   // ── 7. Delivery analyzer ─────────────────────────────────────────────────
   startDeliveryAnalyzer(io);
@@ -279,6 +277,7 @@ module.exports = {
   persistCircuitAlerts,
   persistCircuitWatchlist,
   sendStoredToClient,
+  sendAlertsToClient,
   handleSmartMoneyEvent,
   getStored,
 };

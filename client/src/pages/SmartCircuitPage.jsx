@@ -163,7 +163,13 @@ export default function SmartCircuitPage({ socket }) {
 
     setConnected(socket.connected);
 
-    socket.on("connect",    () => setConnected(true));
+    // Join alerts room — server sends circuit + delivery data only to this room
+    socket.emit("join:alerts");
+
+    socket.on("connect", () => {
+      setConnected(true);
+      socket.emit("join:alerts"); // rejoin on reconnect
+    });
     socket.on("disconnect", () => setConnected(false));
 
     socket.on("circuit-watchlist", (data) => {
@@ -184,6 +190,14 @@ export default function SmartCircuitPage({ socket }) {
       });
     });
 
+    return () => {
+      socket.emit("leave:alerts"); // leave room when page closes
+      socket.off("circuit-watchlist");
+      socket.off("circuit-alerts");
+      socket.off("connect");
+      socket.off("disconnect");
+    };
+  }, [socket]);
     return () => {
       socket.off("circuit-watchlist");
       socket.off("circuit-alerts");

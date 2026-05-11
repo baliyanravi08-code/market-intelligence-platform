@@ -241,9 +241,8 @@ function emitOptionsIntelTick(symbol, spotPrice) {
 
   try {
     const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias);
-    _io.emit("binary", buf);
-    // FIX-BW-2: NO JSON fallback — removed to save ~200B/s per symbol.
-    // App.jsx binary handler decodes msgType 0x0D and emits the event locally.
+    _io.to("intel").emit("binary", buf);
+    // Only intel room clients get live tick — saves bandwidth for all other pages
   } catch (e) {
     console.warn("⚠️ binary options-intel-tick encode error:", e.message);
   }
@@ -357,14 +356,13 @@ function emitOptionsIntel(data) {
   if (!_io || !data?.symbol) return;
   try {
     const buf = bp.encodeOptionsIntel(data);
-    _io.emit("binary", buf);
+    _io.to("intel").emit("binary", buf);
   } catch (e) {
     console.warn("⚠️ binary options-intel encode error:", e.message);
   }
-  _io.emit("options-intelligence", data);
+  _io.to("intel").emit("options-intelligence", data);
   setCachedIntel(data.symbol, data);
 }
-
 function emitCompositeUpdate(data) {
   if (!_io || !data) return;
   const buf = bp.encodeJSON("composite-update", data);
@@ -410,28 +408,7 @@ function attachSocketIO(server) {
       console.log(`⚡ ${socket.id} upgraded to binary protocol (client v${version || "?"})`);
     });
 
-    // ── Replay intel snapshots on connect ──────────────────────────────
-    if (_intelCache.size > 0) {
-      for (const [, payload] of _intelCache) {
-        try {
-          const buf = bp.encodeOptionsIntel(payload);
-          socket.emit("binary", buf);
-        } catch (_) {}
-        socket.emit("options-intelligence", payload);
-      }
-    }
-
     socket.on("ping", () => socket.emit("pong"));
-
-    socket.on("request-intel-snapshot", () => {
-      for (const [, payload] of _intelCache) {
-        try {
-          const buf = bp.encodeOptionsIntel(payload);
-          socket.emit("binary", buf);
-        } catch (_) {}
-        socket.emit("options-intelligence", payload);
-      }
-    });
 
     // ── FIX-BW-3: Straddle snapshot via socket (replaces REST polling) ─
     // StraddlePanel emits "request-straddle-snapshot" instead of
@@ -497,8 +474,32 @@ function attachSocketIO(server) {
     socket.on("backtest:start", () => socket.join(`backtest:${socket.id}`));
     socket.on("backtest:stop",  () => socket.leave(`backtest:${socket.id}`));
 
+    // ── Intel room — only OI Intel page clients ────────────────────────
+    socket.on("join:intel", () => {
+      socket.join("intel");
+      for (const [, payload] of _intelCache) {
+        try {
+          const buf = bp.encodeOptionsIntel(payload);
+          socket.emit("binary", buf);
+        } catch (_) {}
+        socket.emit("options-intelligence", payload);
+      }
+      console.log(`📐 ${socket.id} joined intel room`);
+    });
+
+    socket.on("leave:intel", () => {
+      socket.leave("intel");
+      console.log(`📐 ${socket.id} left intel room`);
+    });
+
     // ── Alerts room ────────────────────────────────────────────────────
-    socket.on("join:alerts",  () => socket.join("alerts"));
+    socket.on("join:alerts", () => {
+      socket.join("alerts");
+      try {
+        const { sendAlertsToClient } = require("../coordinator");
+        sendAlertsToClient(socket);
+      } catch (_) {}
+    });
     socket.on("leave:alerts", () => socket.leave("alerts"));
 
     // ── Gann analysis ──────────────────────────────────────────────────

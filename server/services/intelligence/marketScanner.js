@@ -1197,21 +1197,8 @@ function startHeapMonitor() {
 
 function registerScannerHandlers(io) {
   io.on("connection", socket => {
-    if (scanCache && scanCache.updatedAt > 0) {
-      socket.emit("scanner-update", buildPayload(scanCache));
-    }
-
-    const cachedEntries = [];
-    for (const [key, data] of techCache.entries()) {
-      if (key.endsWith(":1day")) cachedEntries.push({ key, data });
-    }
-    if (cachedEntries.length > 0) {
-      const CHUNK = 20;
-      for (let i = 0; i < cachedEntries.length; i += CHUNK) {
-        const chunk = cachedEntries.slice(i, i + CHUNK);
-        setTimeout(() => socket.emit("scanner-tech-batch", chunk), i * 50);
-      }
-    }
+    // Nothing sent on connect — client must join scanner room first
+    // Data sent only in join:scanner handler in websocket.js
 
     socket.on("get-technicals", async ({ symbol } = {}) => {
       if (!symbol) return;
@@ -1236,6 +1223,8 @@ function registerScannerHandlers(io) {
     });
   });
 }
+
+function startMarketScanner(io) {
 
 function startMarketScanner(io) {
   ioRef = io;
