@@ -103,8 +103,8 @@ function setCachedExpiries(underlying, expiries) {
   _expiriesCache.set(underlying, expiries);
   if (_io) {
     const buf = bp.encodeJSON("option-expiries", { underlying, expiries });
-    _io.emit("binary", buf);
-    _io.emit("option-expiries", { underlying, expiries });
+    _io.to(`chain:${underlying}`).emit("binary", buf);
+    _io.to(`chain:${underlying}`).emit("option-expiries", { underlying, expiries });
   }
 }
 
@@ -213,7 +213,7 @@ function emitMarketTick(updates) {
     console.warn("⚠️ binary market-tick encode error:", e.message);
   }
 
-  _io.emit("market-tick", updates);
+
 }
 
 // ── Options Intel live tick ───────────────────────────────────────────────────
@@ -309,13 +309,13 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
   }
 
   _io.to(room).emit("price:tick", payload);
-  _io.emit("price:tick", payload);
+  
 }
 
 // ── Scanner tech batch broadcast ─────────────────────────────────────────────
 function emitTechBatch(batch) {
   if (!_io || !batch?.length) return;
-  _io.emit("scanner-tech-batch", batch);
+  _io.to("scanner").emit("scanner-tech-batch", batch);
 }
 
 // ── Backtest tick delivery ───────────────────────────────────────────────────
