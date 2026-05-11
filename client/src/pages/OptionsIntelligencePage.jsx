@@ -885,51 +885,71 @@ function StraddlePanel({ d, spot, activeSymbol }) {
 }
 
 export default function OptionsIntelligencePage({ socket }) {
-  const [data,setData]               = useState({});
+  const [data,         setData]         = useState({});
   const [weekendCache, setWeekendCache] = useState({});
-  const [gannMap,setGannMap]         = useState({});
-  const [liveAlerts,setLiveAlerts]   = useState([]);
-  const [activeSymbol,setActiveSymbol] = useState(null);
-  const [symbolList,setSymbolList]   = useState([]);
-  const [lastUpdated,setLastUpdated] = useState(null);
-  const [tick,setTick]               = useState(0);
+  const [gannMap,      setGannMap]      = useState({});
+  const [liveAlerts,   setLiveAlerts]   = useState([]);
+  const [activeSymbol, setActiveSymbol] = useState(null);
+  const [symbolList,   setSymbolList]   = useState([]);
+  const [lastUpdated,  setLastUpdated]  = useState(null);
+  const [tick,         setTick]         = useState(0);
 
-  useEffect(() => { const t = setInterval(() => setTick(n => n+1), 1000); return () => clearInterval(t); }, []);
-  useEffect(() => { if (!socket) return; socket.emit("request-intel-snapshot"); }, [socket]);
-  // Weekend cache loader
-useEffect(() => {
-  if (isMarketOpen()) return;
-  const syms = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
-  syms.forEach(async sym => {
-    try {
-      const r = await fetch(`/api/straddle/snapshot?symbol=${sym}`);
-      if (!r.ok) return;
-      const snap = await r.json();
-      if (snap?.error) return;
-      // Build a minimal d-shaped object from cache
-      const fakePayload = {
-        symbol: sym,
-        spotPrice: snap.spotPrice,
-        spot: snap.spotPrice,
-        structure: { straddlePrice: snap.straddle?.combined, atmStrike: snap.atmStrike },
-        oi: { pcr: snap.oi?.pcr, maxPain: null, unusualOI: [], unusualOITailRisk: [] },
-        volatility: { atmIV: snap.iv?.atm },
-        gex: {}, atmGreeks: {}, dealerExposures: {}, strategy: [], score: null, bias: "NEUTRAL",
-      };
-      setWeekendCache(prev => ({ ...prev, [sym]: fakePayload }));
-      setSymbolList(prev => prev.includes(sym) ? prev : [...prev, sym]);
-      setActiveSymbol(prev => prev || sym);
-    } catch (_) {}
-  });
-}, []);
+  // ── Clock tick for live age display ──────────────────────────────────────
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n+1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
+  // ── Request snapshot when socket connects ─────────────────────────────────
+  useEffect(() => {
+    if (!socket) return;
+    socket.emit("request-intel-snapshot");
+  }, [socket]);
+
+  // ── Weekend / after-hours REST cache — only if no live socket data ────────
+  // Waits 3 seconds to give socket a chance to deliver live data first.
+  // If market is open, skip entirely.
+  useEffect(() => {
+    if (isMarketOpen()) return;
+    const timer = setTimeout(async () => {
+      // Bail if live socket data already arrived
+      if (Object.keys(data).length > 0) return;
+      const syms = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
+      for (const sym of syms) {
+        try {
+          const r = await fetch(`/api/straddle/snapshot?symbol=${sym}`);
+          if (!r.ok) continue;
+          const snap = await r.json();
+          if (!snap || snap.error) continue;
+          const fakePayload = {
+            symbol:    sym,
+            spotPrice: snap.spotPrice,
+            spot:      snap.spotPrice,
+            structure: { straddlePrice: snap.straddle?.combined, atmStrike: snap.atmStrike },
+            oi:        { pcr: snap.oi?.pcr, maxPain: null, unusualOI: [], unusualOITailRisk: [] },
+            volatility:{ atmIV: snap.iv?.atm },
+            gex: {}, atmGreeks: {}, dealerExposures: {}, strategy: [], score: null, bias: "NEUTRAL",
+          };
+          setWeekendCache(prev => ({ ...prev, [sym]: fakePayload }));
+          setSymbolList(prev => prev.includes(sym) ? prev : [...prev, sym]);
+          setActiveSymbol(prev => prev || sym);
+        } catch (_) {}
+      }
+    }, 3000);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  // ── Gann request helper ───────────────────────────────────────────────────
   const requestGann = useCallback((sym, ltp) => {
     if (!socket || !sym) return;
     socket.emit("get-gann-analysis", { symbol: toGannSym(sym), ltp });
   }, [socket]);
 
+  // ── Socket event listeners ────────────────────────────────────────────────
   useEffect(() => {
     if (!socket) return;
+
     const onIntel = (payload) => {
       if (!payload) return;
       const sym = payload.symbol || "UNKNOWN";
@@ -941,10 +961,12 @@ useEffect(() => {
       setData(prev => ({ ...prev, [sym]: payload }));
       setLastUpdated(Date.now());
     };
+
     const onGann = (analysis) => {
       if (!analysis?.symbol) return;
       setGannMap(prev => ({ ...prev, [analysis.symbol.toUpperCase()]: analysis }));
     };
+
     const onGannAlert = (alert) => {
       if (!alert?.symbol) return;
       (alert.alerts || []).forEach(a => {
@@ -956,14 +978,17 @@ useEffect(() => {
         return { ...prev, [alert.symbol.toUpperCase()]: { ...ex, alerts: [...(alert.alerts||[]), ...(ex.alerts||[]).filter(a => a.priority !== "HIGH")] } };
       });
     };
+
     const onMarketAlert = (alert) => {
       if (!alert) return;
       setLiveAlerts(prev => [{ ...alert, ts: Date.now() }, ...prev].slice(0, 30));
     };
+
     socket.on("options-intelligence", onIntel);
     socket.on("gann-analysis",        onGann);
     socket.on("gann-alert",           onGannAlert);
     socket.on("market-alert",         onMarketAlert);
+
     return () => {
       socket.off("options-intelligence", onIntel);
       socket.off("gann-analysis",        onGann);
@@ -972,12 +997,14 @@ useEffect(() => {
     };
   }, [socket, requestGann]);
 
+  // ── Symbol change handler ─────────────────────────────────────────────────
   const handleSymbolChange = (sym) => {
     setActiveSymbol(sym);
     const payload = data[sym], d = payload?.data || payload || {};
     requestGann(sym, d?.ltp || d?.spot || d?.spotPrice || null);
   };
 
+  // ── Derived state ─────────────────────────────────────────────────────────
   const current   = data[activeSymbol] || weekendCache[activeSymbol] || null;
   const d         = current?.data || current || null;
   const score     = d?.score ?? null;
@@ -1038,11 +1065,28 @@ useEffect(() => {
   const hv60Display   = hv60 != null ? (hv60 < 3 ? (hv60*100).toFixed(1) : Number(hv60).toFixed(1)) + "%" : "—";
   const vrpDisplay    = vrp  != null ? `${vrp > 0 ? "+" : ""}${fmt2(vrp)}%` : "—";
 
+  // ── FIX: Socket null guard — prevents black screen when socket not ready ──
+  if (!socket) {
+    return (
+      <div style={{
+        display: "flex", flexDirection: "column", alignItems: "center",
+        justifyContent: "center", height: "100%", background: "#020d1c", gap: 12,
+      }}>
+        <div style={{ fontSize: 28, opacity: 0.15 }}>⚡</div>
+        <div style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 12, color: "#5a90a8" }}>
+          ◌ Connecting to socket…
+        </div>
+      </div>
+    );
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <>
       <style>{`@keyframes alertPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`}</style>
       <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"#020d1c", overflow:"hidden" }}>
 
+        {/* ── Top symbol / alert bar ── */}
         <div style={{ display:"flex", alignItems:"center", gap:9, padding:"6px 14px", borderBottom:"1px solid #1c3a58", flexShrink:0, background:"#060f1c", minHeight:42 }}>
           <span style={{ fontFamily:"IBM Plex Mono,monospace", fontSize:12, fontWeight:700, color:"#00cfff", letterSpacing:1, flexShrink:0 }}>⚡ OPTIONS INTEL</span>
           <div style={{ display:"flex", gap:4, overflowX:"auto", flexShrink:0 }}>
@@ -1068,6 +1112,7 @@ useEffect(() => {
         {!d ? <EmptyState symbol={activeSymbol} /> : (
           <div style={{ flex:1, display:"flex", flexDirection:"column", padding:9, gap:9, overflow:"hidden", minHeight:0 }}>
 
+            {/* ── Score / summary bar ── */}
             <div style={{ flexShrink:0, background:band?.bg||"#060f1c", border:`1px solid ${band?.color||"#1c3a58"}44`, borderRadius:6, padding:"9px 15px" }}>
               <div style={{ display:"flex", alignItems:"center", gap:13 }}>
                 <div style={{ display:"flex", flexDirection:"column", alignItems:"center", minWidth:56, flexShrink:0 }}>
@@ -1109,6 +1154,7 @@ useEffect(() => {
               <TradeDecision spot={spot} callWall={gex.callWall} putWall={gex.putWall} gammaFlip={gex.gammaFlip} regime={gex.regime} pcr={oi.pcr} skew25={skew25} />
             </div>
 
+            {/* ── Four panels ── */}
             <div style={{ flex:1, display:"flex", gap:9, minHeight:0 }}>
               <GEXPanel gex={gex} dealerExposures={dealerExp} />
               <OIPanel oi={oi} nearATMSignals={nearATMSignals} tailRiskSignals={tailRiskSignals} spot={spot} activeSymbol={activeSymbol} />
