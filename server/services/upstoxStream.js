@@ -6,6 +6,20 @@
  * FIX: Removed 0.05 dedup gate on index ticks — every Upstox tick now
  *      flows directly to emitMarketTick → binary frame → frontend blink.
  *      No polling, no timers, pure live WebSocket push.
+ *
+ * NEW — Options Intel live tick:
+ *   On every index tick (NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY/SENSEX),
+ *   calls ws.emitOptionsIntelTick(symbol, spotPrice).
+ *   This reads the cached analysis for that symbol, encodes a 24-byte
+ *   OPTIONS_INTEL_TICK binary frame, and broadcasts to all clients.
+ *   Result: OptionsIntelligencePage spot + straddle price updates live
+ *   at ~1s instead of waiting 60s for the next full analysis cycle.
+ *
+ *   Symbol mapping:  "NIFTY 50"   → "NIFTY"
+ *                    "BANK NIFTY" → "BANKNIFTY"
+ *                    "SENSEX"     → "SENSEX"
+ *   (FINNIFTY and MIDCPNIFTY come via REST poll, not Upstox index stream,
+ *    so they update every 60s as before — no change there.)
  */
 
 let UpstoxClient = null;
@@ -48,6 +62,14 @@ const INDEX_INSTRUMENTS = ["NSE_INDEX|Nifty 50", "BSE_INDEX|SENSEX", "NSE_INDEX|
 const NAME_MAP          = { "NSE_INDEX|Nifty 50": "NIFTY 50", "BSE_INDEX|SENSEX": "SENSEX", "NSE_INDEX|Nifty Bank": "BANK NIFTY" };
 const GANN_SYMBOL_MAP   = { "NIFTY 50": "NIFTY", "BANK NIFTY": "BANKNIFTY", "SENSEX": "SENSEX" };
 
+// NEW: Map from Upstox index name → Options Intel symbol key
+// Only the symbols that actually have intel cache entries get a live tick.
+const INTEL_SYMBOL_MAP  = {
+  "NIFTY 50":   "NIFTY",
+  "BANK NIFTY": "BANKNIFTY",
+  "SENSEX":     "SENSEX",
+};
+
 const optionInstruments   = new Set();
 const stockInstruments    = new Set();
 const stockInstrumentKeys = new Set();
@@ -69,8 +91,6 @@ function setInstrumentMapForStream(map) {
 
 function symbolToInstrKey(symbol) {
   const sym = symbol.toUpperCase().trim();
-  // ✅ FIX: use real ISIN key from instrument map (e.g. NSE_EQ|INE748A01016)
-  // instead of symbol-only key (NSE_EQ|CRAFTSMAN) which Upstox silently ignores
   return _instrMap[sym] || `NSE_EQ|${sym}`;
 }
 
@@ -131,7 +151,8 @@ function subscribeSymbolForPriceTick(symbol) {
     pendingSubscriptions.add(instrKey);
     console.log(`📡 price:tick queued (streamer not ready): ${sym}`);
   }
-  }
+}
+
 // ── Lazy-load websocket module ────────────────────────────────────────────────
 let _ws = null;
 function getWS() {
@@ -238,8 +259,8 @@ function parseAndEmit(raw) {
 
       // ── Index tick ────────────────────────────────────────────────────────
       if (name) {
-  console.log("IDX:", name, JSON.stringify(feed).substring(0, 200));
-  const ltpc = ff?.indexFF?.ltpc || ff?.marketFF?.ltpc || feed?.ltpc || null;
+        console.log("IDX:", name, JSON.stringify(feed).substring(0, 200));
+        const ltpc = ff?.indexFF?.ltpc || ff?.marketFF?.ltpc || feed?.ltpc || null;
         if (ltpc) {
           const price = parseFloat(ltpc.ltp || 0);
           if (price) {
@@ -248,9 +269,6 @@ function parseAndEmit(raw) {
             const pct  = prev > 0 ? parseFloat(((diff / prev) * 100).toFixed(2)) : 0;
             const up   = diff >= 0;
 
-            // ✅ FIX: NO dedup gate — every single Upstox tick goes straight through
-            // Previously: if (Math.abs(price - lastEmitted) >= 0.05) { ... }
-            // That gate was silently swallowing ticks → frontend never updated
             updates.push({
               name,
               price: price.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
@@ -262,6 +280,18 @@ function parseAndEmit(raw) {
             });
 
             if (typeof ltpTickHandler === "function") ltpTickHandler(GANN_SYMBOL_MAP[name] || name, price);
+
+            // ── NEW: Options Intel live tick ──────────────────────────────
+            // Map the Upstox index name to the intel symbol key and push
+            // a lightweight 24-byte tick so the frontend updates spot +
+            // straddle price live without waiting for the 60s full cycle.
+            const intelSym = INTEL_SYMBOL_MAP[name];
+            if (intelSym) {
+              const ws = getWS();
+              if (ws?.emitOptionsIntelTick) {
+                ws.emitOptionsIntelTick(intelSym, price);
+              }
+            }
           }
         }
         continue;
@@ -306,7 +336,6 @@ function parseAndEmit(raw) {
               }
             }
 
-            // ✅ FIX: Feed every equity tick to scanner — no gate, no delay
             const scanner = getScanner();
             if (scanner && typeof scanner.applyLiveTick === "function") {
               scanner.applyLiveTick({ symbol, price, changePct, change, prevClose });
@@ -334,6 +363,7 @@ function parseAndEmit(raw) {
 
   } catch (e) { console.log("❌ parseAndEmit error:", e.message); }
 }
+
 // ── Streamer lifecycle ────────────────────────────────────────────────────────
 function patchStreamerInternals(streamerInstance) {
   setImmediate(() => {

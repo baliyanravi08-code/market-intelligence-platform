@@ -6,6 +6,17 @@
  * FIX: emitMarketTick now emits binary frame via "binary" event AND
  *      plain "market-tick" JSON — frontend listens to both.
  *      Scanner flush unchanged, all other emitters intact.
+ *
+ * NEW — emitOptionsIntelTick(symbol, spotPrice):
+ *   Called on every Upstox index tick (~1s) for NIFTY/BANKNIFTY/etc.
+ *   Reads the cached intel for that symbol, extracts straddlePrice + atmIV
+ *   + score + bias, encodes as 24-byte OPTIONS_INTEL_TICK binary frame,
+ *   broadcasts to ALL clients.
+ *   Frontend overlays this onto the last full analysis result so spot +
+ *   straddle update live without waiting for the 60s full cycle.
+ *
+ *   Throttle: max 1 emit per symbol per 500ms (Upstox sends every ~200ms
+ *   for indices, no need to push that fast for options data).
  */
 
 const { Server } = require("socket.io");
@@ -193,14 +204,9 @@ function emitChartLTP(symbol, price) {
 }
 
 // ── Market tick broadcast ────────────────────────────────────────────────────
-// ✅ FIX: emits binary frame to ALL clients via "binary" event
-//         AND plain "market-tick" JSON as fallback.
-//         Frontend App.jsx listens to "binary" → decodes with bp.MSG.MARKET_TICK
-//         AND listens to "market-tick" as fallback — both paths trigger blink.
 function emitMarketTick(updates) {
   if (!_io || !updates?.length) return;
 
-  // Binary path — compact, fast
   try {
     const buf = bp.encodeMarketTick(updates);
     _io.emit("binary", buf);
@@ -208,8 +214,44 @@ function emitMarketTick(updates) {
     console.warn("⚠️ binary market-tick encode error:", e.message);
   }
 
-  // JSON fallback — for clients that haven't completed binary handshake yet
   _io.emit("market-tick", updates);
+}
+
+// ── Options Intel live tick — called on every Upstox spot price update ────────
+// Throttle: 500ms per symbol (Upstox sends ~200ms for indices)
+const _intelTickThrottle = new Map();
+
+function emitOptionsIntelTick(symbol, spotPrice) {
+  if (!_io || !symbol || !spotPrice) return;
+
+  const sym = symbol.toUpperCase();
+
+  // Throttle to 500ms per symbol
+  const now  = Date.now();
+  const last = _intelTickThrottle.get(sym) || 0;
+  if (now - last < 500) return;
+  _intelTickThrottle.set(sym, now);
+
+  // Read cached full analysis — if no cache yet, skip (page shows "Connecting")
+  const cached = _intelCache.get(sym);
+  if (!cached) return;
+
+  // Extract the fields we need for the live tick
+  const straddlePrice = cached.data?.structure?.straddlePrice || 0;
+  const atmIV         = cached.data?.volatility?.atmIV        || 0;
+  const score         = cached.data?.score                    || 50;
+  const bias          = cached.data?.bias                     || "NEUTRAL";
+
+  try {
+    const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias);
+    _io.emit("binary", buf);
+  } catch (e) {
+    console.warn("⚠️ binary options-intel-tick encode error:", e.message);
+    return;
+  }
+
+  // JSON fallback for clients not yet on binary
+  _io.emit("options-intel-tick", { symbol: sym, spotPrice, straddlePrice, atmIV, score, bias, ts: now });
 }
 
 // ── Candle emission → chart:{SYMBOL} room only ───────────────────────────────
@@ -276,8 +318,9 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
   }
 
   _io.to(room).emit("price:tick", payload);
-_io.emit("price:tick", payload); // global broadcast for scanner/dashboard
+  _io.emit("price:tick", payload); // global broadcast for scanner/dashboard
 }
+
 // ── Scanner tech batch broadcast ─────────────────────────────────────────────
 function emitTechBatch(batch) {
   if (!_io || !batch?.length) return;
@@ -317,6 +360,7 @@ function emitDeliverySpikes(spikes) {
   _io.to("alerts").emit("binary", buf);
   _io.to("alerts").emit("delivery-spikes", spikes);
 }
+
 function emitOptionsIntel(data) {
   if (!_io || !data?.symbol) return;
   try {
@@ -374,28 +418,28 @@ function attachSocketIO(server) {
       console.log(`⚡ ${socket.id} upgraded to binary protocol (client v${version || "?"})`);
     });
 
-    // ── Replay intel snapshots ─────────────────────────────────────────────
-if (_intelCache.size > 0) {
-  for (const [, payload] of _intelCache) {
-    try {
-      const buf = bp.encodeOptionsIntel(payload);
-      socket.emit("binary", buf);
-    } catch (_) {}
-    socket.emit("options-intelligence", payload);
-  }
-}
+    // ── Replay intel snapshots on connect ──────────────────────────────────
+    if (_intelCache.size > 0) {
+      for (const [, payload] of _intelCache) {
+        try {
+          const buf = bp.encodeOptionsIntel(payload);
+          socket.emit("binary", buf);
+        } catch (_) {}
+        socket.emit("options-intelligence", payload);
+      }
+    }
 
     socket.on("ping", () => socket.emit("pong"));
 
     socket.on("request-intel-snapshot", () => {
-  for (const [, payload] of _intelCache) {
-    try {
-      const buf = bp.encodeOptionsIntel(payload);
-      socket.emit("binary", buf);
-    } catch (_) {}
-    socket.emit("options-intelligence", payload);
-  }
-});
+      for (const [, payload] of _intelCache) {
+        try {
+          const buf = bp.encodeOptionsIntel(payload);
+          socket.emit("binary", buf);
+        } catch (_) {}
+        socket.emit("options-intelligence", payload);
+      }
+    });
 
     // ── Scanner room ───────────────────────────────────────────────────────
     socket.on("join:scanner", () => {
@@ -418,26 +462,26 @@ if (_intelCache.size > 0) {
     });
 
     // ── Chart room ────────────────────────────────────────────────────────
-socket.on("watch:chart", (symbol) => {
-  [...socket.rooms]
-    .filter(r => r.startsWith("chart:"))
-    .forEach(r => socket.leave(r));
+    socket.on("watch:chart", (symbol) => {
+      [...socket.rooms]
+        .filter(r => r.startsWith("chart:"))
+        .forEach(r => socket.leave(r));
 
-  if (symbol && symbol.trim()) {
-    const sym = symbol.toUpperCase().trim();
-    socket.join(`chart:${sym}`);
-    console.log(`📈 ${socket.id} watching chart: ${sym}`);
-    try {
-      const stream = require("../services/upstoxStream");
-      if (stream.subscribeSymbolForPriceTick) {
-        stream.subscribeSymbolForPriceTick(sym);
-        console.log(`📡 watch:chart → subscribeSymbolForPriceTick: ${sym}`);
+      if (symbol && symbol.trim()) {
+        const sym = symbol.toUpperCase().trim();
+        socket.join(`chart:${sym}`);
+        console.log(`📈 ${socket.id} watching chart: ${sym}`);
+        try {
+          const stream = require("../services/upstoxStream");
+          if (stream.subscribeSymbolForPriceTick) {
+            stream.subscribeSymbolForPriceTick(sym);
+            console.log(`📡 watch:chart → subscribeSymbolForPriceTick: ${sym}`);
+          }
+        } catch (e) {
+          console.warn(`⚠️ watch:chart subscribe failed for ${sym}:`, e.message);
+        }
       }
-    } catch (e) {
-      console.warn(`⚠️ watch:chart subscribe failed for ${sym}:`, e.message);
-    }
-  }
-});
+    });
 
     // ── Backtest private room ──────────────────────────────────────────────
     socket.on("backtest:start", () => {
@@ -569,6 +613,7 @@ module.exports = {
   emitCandleTick,
   emitCandleClosed,
   emitPriceTick,
+  emitOptionsIntelTick,   // ← NEW
 
   // Backtest
   emitBacktestTick,

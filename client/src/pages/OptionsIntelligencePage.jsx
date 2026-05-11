@@ -1,4 +1,7 @@
 // OptionsIntelligencePage.jsx
+// LIVE TICK: spot + straddle + atmIV + score + bias update at ~1s via
+// options-intel-tick (binary 0x0D / JSON fallback), overlaid on top of
+// the last full 60s analysis result.
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import GannBadge from "../components/GannBadge";
@@ -96,6 +99,23 @@ const ALERT_ICONS = {
   CALL_WALL: "●", OI_SURGE: "▲", REGIME_CHANGE: "◆", GANN_ANGLE: "◤",
   TIME_CYCLE: "◷", CARDINAL_CROSS: "✕", SQUARE_OF_NINE: "#",
 };
+
+// ── Live tick dot — pulses green when a fresh tick arrived in last 3s ─────────
+function LiveDot({ active }) {
+  if (!active) return null;
+  return (
+    <span style={{
+      display: "inline-block",
+      width: 6, height: 6,
+      borderRadius: "50%",
+      background: "#00ff9d",
+      marginLeft: 5,
+      verticalAlign: "middle",
+      animation: "livePulse 1s ease-in-out infinite",
+      flexShrink: 0,
+    }} title="Live tick" />
+  );
+}
 
 function MarketClosedBanner({ lastUpdated }) {
   const open = isMarketOpen();
@@ -702,7 +722,7 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
   );
 }
 
-function StraddlePanel({ d, spot, activeSymbol }) {
+function StraddlePanel({ d, spot, activeSymbol, liveStraddlePrice }) {
   const [snapData,   setSnapData]   = useState(null);
   const [payoffData, setPayoffData] = useState(null);
   const [history,    setHistory]    = useState([]);
@@ -734,7 +754,8 @@ function StraddlePanel({ d, spot, activeSymbol }) {
     return () => clearInterval(timerRef.current);
   }, [fetchAll]);
 
-  const socketStraddlePrice = d?.structure?.straddlePrice ?? null;
+  // ── Live tick overrides REST snapshot straddle price ──────────────────────
+  const socketStraddlePrice = liveStraddlePrice ?? d?.structure?.straddlePrice ?? null;
   const atmIVRaw            = d?.volatility?.atmIV ?? d?.volatility?.iv ?? null;
   const atmIV               = typeof atmIVRaw === "number" ? atmIVRaw : parseFloat(atmIVRaw) || null;
   const pcr                 = d?.oi?.pcr ?? null;
@@ -884,6 +905,10 @@ function StraddlePanel({ d, spot, activeSymbol }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN PAGE COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════
+
 export default function OptionsIntelligencePage({ socket }) {
   const [data,         setData]         = useState({});
   const [weekendCache, setWeekendCache] = useState({});
@@ -894,9 +919,15 @@ export default function OptionsIntelligencePage({ socket }) {
   const [lastUpdated,  setLastUpdated]  = useState(null);
   const [tick,         setTick]         = useState(0);
 
-  // ── Clock tick for live age display ──────────────────────────────────────
+  // ── Live tick state: { NIFTY: { spotPrice, straddlePrice, atmIV, score, bias, ts }, ... }
+  // Updated at ~1s from binary options-intel-tick frames.
+  // Only used if the tick arrived in the last 5 seconds (TICK_STALE_MS).
+  const [liveTicks, setLiveTicks] = useState({});
+  const TICK_STALE_MS = 5000;
+
+  // ── Clock tick for age display and stale-tick detection ──────────────────
   useEffect(() => {
-    const t = setInterval(() => setTick(n => n+1), 1000);
+    const t = setInterval(() => setTick(n => n + 1), 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -906,13 +937,10 @@ export default function OptionsIntelligencePage({ socket }) {
     socket.emit("request-intel-snapshot");
   }, [socket]);
 
-  // ── Weekend / after-hours REST cache — only if no live socket data ────────
-  // Waits 3 seconds to give socket a chance to deliver live data first.
-  // If market is open, skip entirely.
+  // ── Weekend / after-hours REST cache ─────────────────────────────────────
   useEffect(() => {
     if (isMarketOpen()) return;
     const timer = setTimeout(async () => {
-      // Bail if live socket data already arrived
       if (Object.keys(data).length > 0) return;
       const syms = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
       for (const sym of syms) {
@@ -946,7 +974,7 @@ export default function OptionsIntelligencePage({ socket }) {
     socket.emit("get-gann-analysis", { symbol: toGannSym(sym), ltp });
   }, [socket]);
 
-  // ── Socket event listeners ────────────────────────────────────────────────
+  // ── Socket event listeners — full analysis + Gann + alerts ───────────────
   useEffect(() => {
     if (!socket) return;
 
@@ -984,16 +1012,26 @@ export default function OptionsIntelligencePage({ socket }) {
       setLiveAlerts(prev => [{ ...alert, ts: Date.now() }, ...prev].slice(0, 30));
     };
 
-    socket.on("options-intelligence", onIntel);
-    socket.on("gann-analysis",        onGann);
-    socket.on("gann-alert",           onGannAlert);
-    socket.on("market-alert",         onMarketAlert);
+    // ── NEW: live tick listener (~1s binary/JSON) ─────────────────────────
+    // Receives: { symbol, spotPrice, straddlePrice, atmIV, score, bias, ts }
+    // Updates only the fast-moving fields; full analysis stays from onIntel.
+    const onLiveTick = (tick) => {
+      if (!tick?.symbol || !tick?.spotPrice) return;
+      setLiveTicks(prev => ({ ...prev, [tick.symbol]: { ...tick, ts: tick.ts || Date.now() } }));
+    };
+
+    socket.on("options-intelligence",  onIntel);
+    socket.on("gann-analysis",         onGann);
+    socket.on("gann-alert",            onGannAlert);
+    socket.on("market-alert",          onMarketAlert);
+    socket.on("options-intel-tick",    onLiveTick);   // ← NEW
 
     return () => {
-      socket.off("options-intelligence", onIntel);
-      socket.off("gann-analysis",        onGann);
-      socket.off("gann-alert",           onGannAlert);
-      socket.off("market-alert",         onMarketAlert);
+      socket.off("options-intelligence",  onIntel);
+      socket.off("gann-analysis",         onGann);
+      socket.off("gann-alert",            onGannAlert);
+      socket.off("market-alert",          onMarketAlert);
+      socket.off("options-intel-tick",    onLiveTick);  // ← NEW
     };
   }, [socket, requestGann]);
 
@@ -1004,11 +1042,25 @@ export default function OptionsIntelligencePage({ socket }) {
     requestGann(sym, d?.ltp || d?.spot || d?.spotPrice || null);
   };
 
-  // ── Derived state ─────────────────────────────────────────────────────────
+  // ── Derived state — full analysis ─────────────────────────────────────────
   const current   = data[activeSymbol] || weekendCache[activeSymbol] || null;
   const d         = current?.data || current || null;
-  const score     = d?.score ?? null;
-  const bias      = d?.bias ?? "NEUTRAL";
+
+  // ── Live tick overlay ─────────────────────────────────────────────────────
+  // If a fresh tick arrived for the active symbol in the last 5s, use its
+  // values for spot / straddle / atmIV / score / bias.
+  // Falls back to full analysis data when no tick (off-hours, stream down).
+  const rawTick     = liveTicks[activeSymbol] || null;
+  const tickFresh   = rawTick && (Date.now() - rawTick.ts) < TICK_STALE_MS;
+  const liveSpot    = tickFresh ? rawTick.spotPrice     : null;
+  const liveStraddle= tickFresh ? rawTick.straddlePrice : null;
+  const liveAtmIV   = tickFresh ? rawTick.atmIV         : null;
+  const liveScore   = tickFresh ? rawTick.score         : null;
+  const liveBias    = tickFresh ? rawTick.bias          : null;
+
+  // Final values — live tick wins when fresh, analysis is fallback
+  const score     = liveScore   ?? d?.score ?? null;
+  const bias      = liveBias    ?? d?.bias  ?? "NEUTRAL";
   const band      = score != null ? ScoreBand(score) : null;
   const vol       = d?.volatility      || {};
   const greeks    = d?.atmGreeks       || {};
@@ -1017,6 +1069,9 @@ export default function OptionsIntelligencePage({ socket }) {
   const oi        = d?.oi              || {};
   const structure = d?.structure       || {};
   const strategy  = d?.strategy        || [];
+
+  // spot: live tick first, then analysis, then structure
+  const spot = liveSpot ?? d?.spot ?? d?.spotPrice ?? d?.ltp ?? structure?.spot ?? null;
 
   const gannData = activeSymbol
     ? (gannMap[toGannSym(activeSymbol)] || gannMap[activeSymbol] || gannMap[activeSymbol?.toUpperCase()] || null)
@@ -1033,8 +1088,6 @@ export default function OptionsIntelligencePage({ socket }) {
     };
   }
 
-  const spot = d?.spot || d?.spotPrice || d?.ltp || structure?.spot || null;
-
   const oiNear    = oi.unusualOI || [];
   const oiTail    = oi.unusualOITailRisk || [];
   const hasDedicatedFields = oiNear.length > 0 || oiTail.length > 0;
@@ -1049,7 +1102,9 @@ export default function OptionsIntelligencePage({ socket }) {
     tailRiskSignals = allUnusual.filter(u => !nearSet.has(`${u.strike}-${u.type}`));
   }
 
-  const atmIV    = normaliseIV(vol.atmIV ?? vol.iv ?? vol.atm_iv ?? vol.atmIv ?? vol.ATM_IV ?? null);
+  // atmIV: live tick first (already normalised in pct), then vol object
+  const atmIV    = liveAtmIV != null ? liveAtmIV
+                 : normaliseIV(vol.atmIV ?? vol.iv ?? vol.atm_iv ?? vol.atmIv ?? vol.ATM_IV ?? null);
   const hv20     = vol.hv20 ?? vol.hv_20 ?? vol.HV20 ?? vol.Hv20 ?? null;
   const hv60     = vol.hv60 ?? vol.hv_60 ?? vol.HV60 ?? vol.Hv60 ?? null;
   const vrp      = vol.vrp  ?? vol.vRp   ?? vol.VRP  ?? null;
@@ -1065,17 +1120,12 @@ export default function OptionsIntelligencePage({ socket }) {
   const hv60Display   = hv60 != null ? (hv60 < 3 ? (hv60*100).toFixed(1) : Number(hv60).toFixed(1)) + "%" : "—";
   const vrpDisplay    = vrp  != null ? `${vrp > 0 ? "+" : ""}${fmt2(vrp)}%` : "—";
 
-  // ── FIX: Socket null guard — prevents black screen when socket not ready ──
+  // ── Socket null guard ─────────────────────────────────────────────────────
   if (!socket) {
     return (
-      <div style={{
-        display: "flex", flexDirection: "column", alignItems: "center",
-        justifyContent: "center", height: "100%", background: "#020d1c", gap: 12,
-      }}>
-        <div style={{ fontSize: 28, opacity: 0.15 }}>⚡</div>
-        <div style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 12, color: "#5a90a8" }}>
-          ◌ Connecting to socket…
-        </div>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", background:"#020d1c", gap:12 }}>
+        <div style={{ fontSize:28, opacity:0.15 }}>⚡</div>
+        <div style={{ fontFamily:"IBM Plex Mono,monospace", fontSize:12, color:"#5a90a8" }}>◌ Connecting to socket…</div>
       </div>
     );
   }
@@ -1083,7 +1133,10 @@ export default function OptionsIntelligencePage({ socket }) {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <>
-      <style>{`@keyframes alertPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`}</style>
+      <style>{`
+        @keyframes alertPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+        @keyframes livePulse  { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.35;transform:scale(0.65)} }
+      `}</style>
       <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"#020d1c", overflow:"hidden" }}>
 
         {/* ── Top symbol / alert bar ── */}
@@ -1100,6 +1153,8 @@ export default function OptionsIntelligencePage({ socket }) {
           </div>
           <div style={{ width:1, height:20, background:"#1c3a58", flexShrink:0 }} />
           {d && <AlertStrip alerts={liveAlerts} />}
+          {/* Live dot — shows when fresh ticks are arriving for the active symbol */}
+          <LiveDot active={tickFresh} />
           {ageSec != null && (
             <span style={{ fontSize:10, fontFamily:"IBM Plex Mono,monospace", color: ageSec > 120 ? "#ffd54f" : "#a0b8cc", flexShrink:0 }}>
               ↻ {ageSec < 60 ? `${ageSec}s` : `${Math.round(ageSec/60)}m`}
@@ -1133,7 +1188,12 @@ export default function OptionsIntelligencePage({ socket }) {
                 </div>
                 <VDivider />
                 <div style={{ display:"flex", gap:11, alignItems:"flex-start", flex:1, overflowX:"auto", flexWrap:"nowrap" }}>
-                  {spot && <HStat label="Spot" value={`₹${fmtInt(spot)}`} sub={gex.callWall&&gex.putWall?`${Math.max(0,Math.min(100,Math.round(((spot-gex.putWall)/(gex.callWall-gex.putWall))*100)))}% range`:""} color="#e8f2ff" />}
+                  {spot && (
+                    <div style={{ display:"flex", alignItems:"flex-start", gap:2 }}>
+                      <HStat label="Spot" value={`₹${fmtInt(spot)}`} sub={gex.callWall&&gex.putWall?`${Math.max(0,Math.min(100,Math.round(((spot-gex.putWall)/(gex.callWall-gex.putWall))*100)))}% range`:""} color="#e8f2ff" />
+                      <LiveDot active={tickFresh} />
+                    </div>
+                  )}
                   <HStat label="Exp Move" value={structure.expectedMoveAbs ? `±${fmt2(structure.expectedMoveAbs)}` : "—"} sub="1σ" color="#4fc3f7" />
                   <HStat label="Evt Risk" value={structure.eventRiskScore != null ? Math.round(structure.eventRiskScore) : "0"} sub="0–100" color={structure.eventRiskScore > 60 ? "#ef5350" : structure.eventRiskScore > 0 ? "#ffd54f" : "#5a90a8"} />
                   <VDivider />
@@ -1160,7 +1220,7 @@ export default function OptionsIntelligencePage({ socket }) {
               <OIPanel oi={oi} nearATMSignals={nearATMSignals} tailRiskSignals={tailRiskSignals} spot={spot} activeSymbol={activeSymbol} />
               <GannPanel gann={gannData} />
               <MarketStructurePanel structure={structure} gannData={gannData} gannBadgeMap={gannBadgeMap} activeSymbol={activeSymbol} spot={spot} callWall={gex.callWall} putWall={gex.putWall} gammaFlip={gex.gammaFlip} maxPain={oi.maxPain} pcr={oi.pcr} skew25={skew25} />
-              <StraddlePanel d={d} spot={spot} activeSymbol={activeSymbol} />
+              <StraddlePanel d={d} spot={spot} activeSymbol={activeSymbol} liveStraddlePrice={liveStraddle} />
             </div>
 
           </div>
