@@ -240,11 +240,14 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   const bias          = cached.data?.bias                     || "NEUTRAL";
 
   try {
-    const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias);
-    _io.to("intel").emit("binary", buf);
-    // Only intel room clients get live tick — saves bandwidth for all other pages
+    if (bp.encodeOptionsIntelTick) {
+      const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias);
+      _io.to("intel").emit("binary", buf);
+    } else {
+      _io.to("intel").emit("options-intel-tick", { symbol: sym, spotPrice, straddlePrice, atmIV, score, bias });
+    }
   } catch (e) {
-    console.warn("⚠️ binary options-intel-tick encode error:", e.message);
+    // silent
   }
 }
 
