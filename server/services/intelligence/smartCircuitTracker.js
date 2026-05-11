@@ -77,9 +77,12 @@ function todayIST() {
 
 function calcCircuitInfo(quote) {
   const ltp   = quote.last_price || 0;
-  const upper = quote.upper_circuit_limit || quote.ohlc?.high || 0;
-  const lower = quote.lower_circuit_limit || quote.ohlc?.low  || 0;
-  if (!ltp || !upper || !lower) return null;
+  const upper = quote.upper_circuit_limit || 0;
+  const lower = quote.lower_circuit_limit || 0;
+  if (!ltp || !upper || !lower) {
+    if (ltp && !upper) console.log(`⚠️ Circuit: ${quote.symbol || '?'} ltp=${ltp} but no circuit limits — keys: ${Object.keys(quote).join(',')}`);
+    return null;
+  }
 
   const distUpper = ((upper - ltp) / ltp) * 100;
   const distLower = ((ltp - lower) / ltp) * 100;
