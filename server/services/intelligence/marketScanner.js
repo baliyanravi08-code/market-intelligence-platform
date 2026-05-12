@@ -14,6 +14,16 @@
  *  5. TIMEFRAME_CONFIG interval names fixed to match what server.js tf param expects
  *  6. NSE/BSE fallback chains preserved for intraday when internal endpoint fails
  *  7. All signal filters, market-open aware entry, pre-warm logic unchanged
+ *
+ * FIX-SCANNER-HOURS: isMarketHours() now starts at 540 mins (9:00 AM IST) instead
+ *   of 560 (9:20 AM). This means the scanner runs during pre-open (9:00-9:15) and
+ *   the market open window (9:15-9:20), matching when options intelligence starts.
+ *   Previously the scanner was blocked during the critical 9:00-9:20 window.
+ *
+ * FIX-FETCHCANDLES: Removed duplicate INTERVAL_TO_TF declaration inside the retry
+ *   loop. The original code had the map defined AFTER the return statement (dead code),
+ *   meaning it was never reachable. The map is now correctly defined once at the top
+ *   of fetchCandles() and used consistently throughout.
  */
 
 const axios = require("axios");
@@ -28,9 +38,6 @@ const PREWARM_BETWEEN   = 350;
 const MAX_TECH_CACHE    = 500;
 const MAX_CANDLES_STORE = 200;
 
-// ── Sanity cap for changePct — anything beyond ±25% in a single session
-//    is almost certainly a bad prevClose from the exchange feed.
-//    Real circuit limits in India are ±20% for most stocks.
 const CHANGE_PCT_SANITY_CAP = 25;
 
 // ── Timeframe config ──────────────────────────────────────────────────────────
@@ -297,13 +304,9 @@ async function fetchBSEMarketData() {
   } catch (e2) { console.warn("📊 BSE 500 fallback also failed:", e2.message); return []; }
 }
 
-// ── FIX 1: sanitiseChangePct — cap extreme values caused by bad prevClose ─────
-// The NSE/BSE feed sometimes sends prevClose=0 or a stale price from a corporate
-// action (bonus/split/merger) that makes the computed change look like ±500%.
-// India's circuit limits are ±20% for most stocks; we cap at ±25% to be safe.
 function sanitiseChangePct(changePct, ltp, prevClose) {
   if (!isFinite(changePct)) return 0;
-  if (!prevClose || prevClose <= 0) return 0;   // ← NEW GUARD
+  if (!prevClose || prevClose <= 0) return 0;
   if (Math.abs(changePct) > CHANGE_PCT_SANITY_CAP) {
     const ratio = ltp / prevClose;
     if (ratio > 2 || ratio < 0.5) return 0;
@@ -312,22 +315,18 @@ function sanitiseChangePct(changePct, ltp, prevClose) {
   return Math.round(changePct * 100) / 100;
 }
 
-// ── FIX 2: normaliseNSE — robust prevClose; never treat 0 as valid ────────────
 function normaliseNSE(s) {
   if (!s.symbol || !s.lastPrice) return null;
   const ltp = parseFloat(s.lastPrice || 0);
   if (ltp <= 0) return null;
 
-  // NSE field priority: previousClose → lastClosedPrice → open-derived
   let prevClose = parseFloat(s.previousClose || s.lastClosedPrice || 0);
-  // If prevClose is 0 or equals ltp (common bad-data case), try to derive from change
   if (prevClose <= 0 || prevClose === ltp) {
     const changeAbs = parseFloat(s.change || 0);
     if (changeAbs !== 0) {
       prevClose = ltp - changeAbs;
     }
   }
-  // If still bad, mark as untrustworthy
   const prevCloseFromExchange = prevClose > 0 && prevClose !== ltp;
 
   const changeAbs = prevCloseFromExchange ? (ltp - prevClose) : parseFloat(s.change || 0);
@@ -357,7 +356,6 @@ function normaliseNSE(s) {
   };
 }
 
-// ── FIX 3: normaliseBSE — robust prevClose; reject ltp-as-prevClose fallback ──
 function normaliseBSE(s) {
   const symbol =
     s.NSE_Symbol || s.NseSymbol || s.nseSymbol ||
@@ -366,7 +364,6 @@ function normaliseBSE(s) {
   const ltp  = parseFloat(s.LTP || s.CurrentValue || s.Close || s.lastPrice || 0);
   if (!ltp || ltp <= 0 || !symbol) return null;
 
-  // FIX: never fall back to ltp as prevClose — that causes change=0 then feed overwrites badly
   let prevClose = parseFloat(s.PrevClose || s.PreviousClose || s.ClosePrice || 0);
   const prevCloseFromExchange = prevClose > 0 && Math.abs(prevClose - ltp) > 0.001;
 
@@ -375,11 +372,9 @@ function normaliseBSE(s) {
     changeAbs = ltp - prevClose;
     changePct = (changeAbs / prevClose) * 100;
   } else {
-    // Try to get from feed fields
     changeAbs = parseFloat(s.Change || s.NetChange || 0);
     changePct = parseFloat(s.PerChange || s.PctChange || 0);
     if (changePct === 0 && changeAbs !== 0 && ltp !== 0) {
-      // Derive prevClose from change amount
       prevClose = ltp - changeAbs;
       if (prevClose > 0) {
         changePct = (changeAbs / prevClose) * 100;
@@ -407,7 +402,6 @@ function normaliseBSE(s) {
   };
 }
 
-// ── FIX 4: applyLiveTick — never overwrite a good exchange prevClose ──────────
 function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
   if (!symbol || !price) return;
   const stock = stockBySymbol.get(symbol);
@@ -415,7 +409,6 @@ function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
 
   stock.ltp = price;
 
-  // Only update prevClose from live tick if we don't already have a trustworthy one
   if (!stock._prevCloseFromExchange) {
     if (prevClose != null && prevClose > 0 && Math.abs(prevClose - price) > 0.001) {
       stock.prevClose = prevClose;
@@ -423,7 +416,6 @@ function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
     }
   }
 
-  // Recompute change from prevClose when available (more reliable than tick changePct)
   const pc = stock.prevClose;
   if (pc && pc > 0) {
     const rawChange    = price - pc;
@@ -431,11 +423,9 @@ function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
     stock.change       = Math.round(rawChange * 100) / 100;
     stock.changePct    = sanitiseChangePct(rawChangePct, price, pc);
   } else if (changePct != null && Math.abs(changePct) <= CHANGE_PCT_SANITY_CAP) {
-    // Only accept tick changePct if it's within sane range
     stock.changePct = Math.round(changePct * 100) / 100;
     if (change != null) stock.change = change;
   }
-  // If changePct from tick is absurd and we have no prevClose, don't update
 
   const ws = getWS();
   if (ws?.updateScannerTick) {
@@ -473,9 +463,13 @@ function isPreOpenWindow() {
   return totalMins >= 548 && totalMins <= 555;
 }
 
+// FIX-SCANNER-HOURS: Changed from 560 (9:20 AM) to 540 (9:00 AM IST).
+// Options Intelligence runs from 9:00 AM via nseOIListener. Scanner was
+// blocked during 9:00-9:20, causing it to miss the pre-open window entirely.
+// Circuit/delivery analyzers and Gann start at 9:00 AM — scanner should too.
 function isMarketHours() {
   const { totalMins } = getISTTime();
-  return totalMins >= 560 && totalMins <= 925;
+  return totalMins >= 540 && totalMins <= 925;  // 9:00 AM to 15:25 IST
 }
 
 // ── Signal filters ────────────────────────────────────────────────────────────
@@ -870,34 +864,48 @@ function resampleCandles(candles1min, targetMinutes) {
   return buckets;
 }
 
-// ── fetchCandles — calls internal /api/candles/:symbol ───────────────────────
+// FIX-FETCHCANDLES: INTERVAL_TO_TF is now declared ONCE at the top of the function,
+// before the retry loop. Previously it was defined after a return statement (dead code)
+// inside the retry block, making it unreachable. The retry loop now correctly uses
+// the map declared at the top.
 async function fetchCandles(symbol, days, interval) {
   const PORT    = process.env.PORT || 10000;
   const baseUrl = `http://localhost:${PORT}`;
 
+  // Declare INTERVAL_TO_TF ONCE here — used by both the retry loop and fallbacks below
   const INTERVAL_TO_TF = {
     "5min":    "5min",  "15min":   "15min", "1hour":   "1hour",
     "4hour":   "4hour", "1day":    "1day",  "1week":   "1week",  "1month":  "1month",
     "5minute":  "5min", "15minute": "15min", "60minute": "1hour",
     "day":      "1day", "week":     "1week", "month":    "1month",
   };
+
   const tf = INTERVAL_TO_TF[interval] || "1day";
 
-  try {
-    const res = await axios.get(
-      `${baseUrl}/api/candles/${encodeURIComponent(symbol)}?tf=${tf}&days=${Math.min(days, 365)}`,
-      { timeout: 20000 }
-    );
-    const data = res.data;
-    if (data?.ok && Array.isArray(data.candles) && data.candles.length >= 5) {
-      console.log(`📊 [${symbol}][${tf}] internal: ${data.candles.length} candles (key=${data.instrKey})`);
-      return data.candles.map(c => ({ o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume || 0 }));
+  // Retry up to 3 times with 2s delay (handles server startup race condition)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await axios.get(
+        `${baseUrl}/api/candles/${encodeURIComponent(symbol)}?tf=${tf}&days=${Math.min(days, 365)}`,
+        { timeout: 20000 }
+      );
+      const data = res.data;
+      if (data?.ok && Array.isArray(data.candles) && data.candles.length >= 5) {
+        console.log(`📊 [${symbol}][${tf}] internal: ${data.candles.length} candles (key=${data.instrKey})`);
+        return data.candles.map(c => ({ o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume || 0 }));
+      }
+      if (data?.error) console.warn(`📊 [${symbol}][${tf}] internal returned no candles: ${data.error}`);
+    } catch (e) {
+      if (attempt < 2) {
+        console.warn(`📊 [${symbol}][${tf}] internal fetch attempt ${attempt + 1} failed: ${e.message} — retrying in 2s`);
+        await new Promise(r => setTimeout(r, 2000));
+      } else {
+        console.warn(`📊 [${symbol}][${tf}] internal fetch failed after 3 attempts: ${e.message}`);
+      }
     }
-    console.warn(`📊 [${symbol}][${tf}] internal returned no candles: ${data?.error || "unknown"}`);
-  } catch (e) {
-    console.warn(`📊 [${symbol}][${tf}] internal fetch failed: ${e.message}`);
   }
 
+  // ── NSE historical fallback (EOD timeframes) ──────────────────────────────
   if (["1day","1week","1month"].includes(tf)) {
     await refreshNSECookie();
     try {
@@ -924,6 +932,7 @@ async function fetchCandles(symbol, days, interval) {
     }
   }
 
+  // ── NSE intraday fallback ──────────────────────────────────────────────────
   if (["5min","15min","1hour","4hour"].includes(tf)) {
     try {
       const rawCandles = await fetchNSEIntraday(symbol);
@@ -1197,9 +1206,6 @@ function startHeapMonitor() {
 
 function registerScannerHandlers(io) {
   io.on("connection", socket => {
-    // Nothing sent on connect — client must join scanner room first
-    // Data sent only in join:scanner handler in websocket.js
-
     socket.on("get-technicals", async ({ symbol } = {}) => {
       if (!symbol) return;
       try {

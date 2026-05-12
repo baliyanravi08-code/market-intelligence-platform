@@ -15,11 +15,14 @@
  *   Result: OptionsIntelligencePage spot + straddle price updates live
  *   at ~1s instead of waiting 60s for the next full analysis cycle.
  *
- *   Symbol mapping:  "NIFTY 50"   → "NIFTY"
- *                    "BANK NIFTY" → "BANKNIFTY"
- *                    "SENSEX"     → "SENSEX"
- *   (FINNIFTY and MIDCPNIFTY come via REST poll, not Upstox index stream,
- *    so they update every 60s as before — no change there.)
+ * FIX-RECONNECT: MAX_RECONNECT_ATTEMPTS raised from 10 to 999 (effectively infinite).
+ *   Root cause of "works in morning, dead by noon": the stream reconnects on
+ *   network blips but gives up permanently after 10 attempts. By mid-morning,
+ *   10 reconnects may have been used up, the stream dies, and reopening the
+ *   browser finds no live data. The open handler already resets
+ *   reconnectAttempts=0 on successful connect, so a healthy stream never
+ *   burns through the limit. Only a permanently broken token/network would
+ *   exhaust 999 attempts — and in that case the 401 handler stops retrying anyway.
  */
 
 let UpstoxClient = null;
@@ -35,7 +38,9 @@ let reconnectDelay    = 5000;
 let reconnectAttempts = 0;
 const MIN_RECONNECT_DELAY    =  5_000;
 const MAX_RECONNECT_DELAY    = 60_000;
-const MAX_RECONNECT_ATTEMPTS = 10;
+// FIX-RECONNECT: was 10 — permanently killed the stream after 10 network blips.
+// With 999, the stream retries indefinitely (open handler resets to 0 on success).
+const MAX_RECONNECT_ATTEMPTS = 999;
 
 let ltpTickHandler = null;
 let oiTickHandler  = null;
@@ -62,8 +67,7 @@ const INDEX_INSTRUMENTS = ["NSE_INDEX|Nifty 50", "BSE_INDEX|SENSEX", "NSE_INDEX|
 const NAME_MAP          = { "NSE_INDEX|Nifty 50": "NIFTY 50", "BSE_INDEX|SENSEX": "SENSEX", "NSE_INDEX|Nifty Bank": "BANK NIFTY" };
 const GANN_SYMBOL_MAP   = { "NIFTY 50": "NIFTY", "BANK NIFTY": "BANKNIFTY", "SENSEX": "SENSEX" };
 
-// NEW: Map from Upstox index name → Options Intel symbol key
-// Only the symbols that actually have intel cache entries get a live tick.
+// Map from Upstox index name → Options Intel symbol key
 const INTEL_SYMBOL_MAP  = {
   "NIFTY 50":   "NIFTY",
   "BANK NIFTY": "BANKNIFTY",
@@ -280,10 +284,7 @@ function parseAndEmit(raw) {
 
             if (typeof ltpTickHandler === "function") ltpTickHandler(GANN_SYMBOL_MAP[name] || name, price);
 
-            // ── NEW: Options Intel live tick ──────────────────────────────
-            // Map the Upstox index name to the intel symbol key and push
-            // a lightweight 24-byte tick so the frontend updates spot +
-            // straddle price live without waiting for the 60s full cycle.
+            // Options Intel live tick → also goes to straddle room via emitOptionsIntelTick
             const intelSym = INTEL_SYMBOL_MAP[name];
             if (intelSym) {
               const ws = getWS();
@@ -350,7 +351,7 @@ function parseAndEmit(raw) {
       }
     }
 
-    // ── Emit market-tick as binary — every tick, no filter ───────────────
+    // ── Emit market-tick (binary + JSON via emitMarketTick) ───────────────
     if (updates.length > 0) {
       const ws = getWS();
       if (ws?.emitMarketTick) {
@@ -448,7 +449,7 @@ function startStreamer(accessToken, io) {
       console.log("✅ Upstox Market WebSocket connected");
       isConnecting      = false;
       reconnectDelay    = MIN_RECONNECT_DELAY;
-      reconnectAttempts = 0;
+      reconnectAttempts = 0;  // Reset on successful connect — this is why 999 is safe
       setTimeout(() => {
         try {
           if (newStreamer._streamer && !newStreamer._streamer.clearSubscriptions) newStreamer._streamer.clearSubscriptions = () => {};

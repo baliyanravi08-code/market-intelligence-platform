@@ -16,6 +16,18 @@
  * FIX-BW-3: request-straddle-snapshot socket handler added.
  *   StraddlePanel now requests via socket instead of REST polling every 5s.
  *   Server handles the request once and pushes back via "straddle-snapshot".
+ *
+ * FIX-TICKER: emitMarketTick now also emits JSON "market-tick" event.
+ *   App.jsx listens on BOTH "binary" and "market-tick". Previously only binary
+ *   was emitted — if binary decode fails for any reason (ArrayBuffer issue,
+ *   decode error), tickerLastOk never updates → STALE after 30s.
+ *   The JSON emit costs ~40 bytes per tick and is the guaranteed fallback.
+ *
+ * FIX-STRADDLE: emitOptionsIntelTick now also emits to "straddle" room.
+ *   StraddlePage shows "Collecting data... waiting for socket ticks" because
+ *   it never joins the "intel" room and emitOptionsIntelTick only broadcasts
+ *   to "intel". Added join:straddle / leave:straddle handlers and a
+ *   straddle-room broadcast in emitOptionsIntelTick.
  */
 
 const { Server } = require("socket.io");
@@ -203,6 +215,10 @@ function emitChartLTP(symbol, price) {
 }
 
 // ── Market tick broadcast ────────────────────────────────────────────────────
+// FIX-TICKER: Added _io.emit("market-tick", updates) JSON fallback.
+// App.jsx listens on BOTH "binary" (0x01 frame) and "market-tick" (JSON).
+// If binary decode fails for any reason, the JSON path still updates
+// tickerLastOk, preventing the "STALE" marker from appearing.
 function emitMarketTick(updates) {
   if (!_io || !updates?.length) return;
 
@@ -213,12 +229,16 @@ function emitMarketTick(updates) {
     console.warn("⚠️ binary market-tick encode error:", e.message);
   }
 
-
+  // JSON fallback — guarantees ticker updates on ALL pages regardless of
+  // binary decode status. App.jsx handles this in its sock.on("market-tick") handler.
+  _io.emit("market-tick", updates);
 }
 
 // ── Options Intel live tick ───────────────────────────────────────────────────
-// FIX-BW-2: JSON fallback REMOVED. Binary only (24 bytes vs 200 bytes).
-// App.jsx binary handler decodes 0x0D and re-emits "options-intel-tick" locally.
+// FIX-STRADDLE: Now also emits "options-intel-tick" JSON to "straddle" room.
+// StraddlePage joins "straddle" room via join:straddle socket event and
+// listens for "options-intel-tick" to get live spot + straddle price updates.
+// Previously it only emitted to "intel" room which StraddlePage never joins.
 const _intelTickThrottle = new Map();
 
 function emitOptionsIntelTick(symbol, spotPrice) {
@@ -249,6 +269,12 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   } catch (e) {
     // silent
   }
+
+  // FIX-STRADDLE: emit to straddle room so StraddlePage gets live spot price
+  // and straddle premium updates without waiting for the 60s full intel cycle.
+  _io.to("straddle").emit("options-intel-tick", {
+    symbol: sym, spotPrice, straddlePrice, atmIV, score, bias,
+  });
 }
 
 // ── Candle emission → chart:{SYMBOL} room only ───────────────────────────────
@@ -312,7 +338,6 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
   }
 
   _io.to(room).emit("price:tick", payload);
-  
 }
 
 // ── Scanner tech batch broadcast ─────────────────────────────────────────────
@@ -366,6 +391,7 @@ function emitOptionsIntel(data) {
   _io.to("intel").emit("options-intelligence", data);
   setCachedIntel(data.symbol, data);
 }
+
 function emitCompositeUpdate(data) {
   if (!_io || !data) return;
   const buf = bp.encodeJSON("composite-update", data);
@@ -382,8 +408,6 @@ function attachSocketIO(server) {
     upgradeTimeout:   30_000,
     transports:       ["websocket", "polling"],
     allowUpgrades:    true,
-    // FIX-BW-1: was false — now compresses frames > 1KB automatically.
-    // options-intelligence JSON (2-5KB) → ~800B. bse/nse events compressed too.
     perMessageDeflate: { threshold: 1024 },
   });
 
@@ -414,13 +438,9 @@ function attachSocketIO(server) {
     socket.on("ping", () => socket.emit("pong"));
 
     // ── FIX-BW-3: Straddle snapshot via socket (replaces REST polling) ─
-    // StraddlePanel emits "request-straddle-snapshot" instead of
-    // setInterval REST calls. This fires once per user action, not every 5s.
     socket.on("request-straddle-snapshot", async ({ symbol, type, side } = {}) => {
       if (!symbol) return;
       try {
-        const port    = process.env.PORT || 3000;
-        const base    = `http://localhost:${port}`;
         const fetchLocal = (url) => new Promise((resolve) => {
           const http = require("http");
           http.get(url, (res) => {
@@ -499,6 +519,30 @@ function attachSocketIO(server) {
     socket.on("leave:intel", () => {
       socket.leave("intel");
       console.log(`📐 ${socket.id} left intel room`);
+    });
+
+    // ── FIX-STRADDLE: Straddle room — live spot + straddle price ticks ─
+    // StraddlePage emits "join:straddle" on mount. Server adds it to the
+    // "straddle" room. emitOptionsIntelTick then broadcasts "options-intel-tick"
+    // JSON to this room on every Upstox index tick (~1s), so StraddlePage
+    // gets live spot price without needing to join the full "intel" room.
+    socket.on("join:straddle", () => {
+      socket.join("straddle");
+      // Send any cached intel immediately so the page doesn't wait 60s for next cycle
+      for (const [sym, payload] of _intelCache) {
+        const straddlePrice = payload.data?.structure?.straddlePrice || 0;
+        const atmIV         = payload.data?.volatility?.atmIV        || 0;
+        const score         = payload.data?.score                    || 50;
+        const bias          = payload.data?.bias                     || "NEUTRAL";
+        const spotPrice     = payload.data?.spot                     || 0;
+        socket.emit("options-intel-tick", { symbol: sym, spotPrice, straddlePrice, atmIV, score, bias });
+      }
+      console.log(`📊 ${socket.id} joined straddle room`);
+    });
+
+    socket.on("leave:straddle", () => {
+      socket.leave("straddle");
+      console.log(`📊 ${socket.id} left straddle room`);
     });
 
     // ── Alerts room ────────────────────────────────────────────────────
