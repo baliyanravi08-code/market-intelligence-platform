@@ -457,7 +457,7 @@ function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) 
         const cls    = isUp ? "up" : isDown ? "down" : "flat";
         const isDash = m.price === "—";
         return (
-          <div className="ticker-item ticker-clickable" key={`idx-${i}`} style={isDash ? { opacity: 0.4 } : {}} onClick={() => !isDash && onTickerClick(m)} title={`Click to view ${m.name} chart`}>
+          <div className="ticker-item ticker-clickable" key={`idx-${i}`} style={isDash || tickerStale ? { opacity: 0.35, filter: "grayscale(0.6)" } : {}} onClick={() => !isDash && onTickerClick(m)} title={`Click to view ${m.name} chart`}>
             <span className="ticker-name">{m.name}</span>
             {/* key={m._ts} forces React to remount span on every tick → CSS animation retriggers → blink works */}
             <span key={`${m.name}-${m._ts}`} className="ticker-price blink">{m.raw > 0 ? m.price : "—"}</span>
@@ -472,7 +472,8 @@ function TickerBar({ indices, assets, dataSource, tickerStale, onTickerClick }) 
         const cls    = isUp ? "up" : isDown ? "down" : "flat";
         const isDash = !a.price || a.price === "—" || a.price === "$0.0000";
         return (
-          <div className={`ticker-item secondary${isDash ? "" : " ticker-clickable"}`} key={`asset-${i}`} style={isDash ? { opacity: 0.4, cursor: "default" } : { cursor: "pointer" }} onClick={() => !isDash && onTickerClick(a)} title={isDash ? `${a.name} — loading...` : `Click to view ${a.name} chart`}>
+          <div className={`ticker-item secondary${isDash ? "" : " ticker-clickable"}`} key={`asset-${i}`} style={isDash || tickerStale ? { opacity: 0.35, cursor: "default", filter: "grayscale(0.6)" } : { cursor: "pointer" }} onClick={() => !isDash && !tickerStale && onTickerClick(a)}
+          title={isDash ? `${a.name} — loading...` : `Click to view ${a.name} chart`}>
             <span className={`ticker-asset-icon ${a.type}`}>{a.icon}</span>
             <span className="ticker-name">{a.name}</span>
             <span key={a._ts || a.price} className={`ticker-price${a._ts ? " blink" : ""}`}>{isDash ? "—" : a.price}</span>

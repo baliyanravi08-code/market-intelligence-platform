@@ -555,7 +555,18 @@ function attachSocketIO(server) {
     const { sendAlertsToClient } = require("../coordinator");
     sendAlertsToClient(socket);
   } catch (_) {}
-  // Hydrate circuit data immediately so SmartCircuitPage doesn't wait 30s
+  // Hydrate from smartCircuitTracker (what SmartCircuitPage uses)
+  try {
+    const sct = require("../services/intelligence/smartCircuitTracker");
+    const watchlist = sct.getCircuitWatchlist();
+    const alerts    = sct.getRecentAlerts();
+    if (watchlist?.length) socket.emit("circuit-watchlist", watchlist);
+    if (alerts?.length)    socket.emit("circuit-alerts",    alerts);
+    console.log(`🔔 join:alerts hydration: ${watchlist.length} stocks, ${alerts.length} alerts`);
+  } catch (e) {
+    console.warn("⚠️ join:alerts hydration failed:", e.message);
+  }
+  // Also hydrate from circuitWatcher if available (secondary source)
   try {
     const cw = require("../services/intelligence/circuitWatcher");
     const watchlist = cw.getLastWatchlist();
