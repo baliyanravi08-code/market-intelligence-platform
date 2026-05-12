@@ -530,11 +530,14 @@ function attachSocketIO(server) {
       socket.join("straddle");
       // Send any cached intel immediately so the page doesn't wait 60s for next cycle
       for (const [sym, payload] of _intelCache) {
-        const straddlePrice = payload.data?.structure?.straddlePrice || 0;
-        const atmIV         = payload.data?.volatility?.atmIV        || 0;
-        const score         = payload.data?.score                    || 50;
-        const bias          = payload.data?.bias                     || "NEUTRAL";
-        const spotPrice     = payload.data?.spot                     || 0;
+        const d2            = payload.data || payload;
+        const straddlePrice = d2?.structure?.straddlePrice || 0;
+        const atmIV         = d2?.volatility?.atmIV        || 0;
+        const score         = d2?.score                    || 50;
+        const bias          = d2?.bias                     || "NEUTRAL";
+        const spotPrice     = d2?.spot || d2?.spotPrice    || 0;
+        const intelPayload  = payload;
+        socket.emit("options-intelligence", intelPayload);
         socket.emit("options-intel-tick", { symbol: sym, spotPrice, straddlePrice, atmIV, score, bias });
       }
       console.log(`📊 ${socket.id} joined straddle room`);
@@ -547,12 +550,20 @@ function attachSocketIO(server) {
 
     // ── Alerts room ────────────────────────────────────────────────────
     socket.on("join:alerts", () => {
-      socket.join("alerts");
-      try {
-        const { sendAlertsToClient } = require("../coordinator");
-        sendAlertsToClient(socket);
-      } catch (_) {}
-    });
+  socket.join("alerts");
+  try {
+    const { sendAlertsToClient } = require("../coordinator");
+    sendAlertsToClient(socket);
+  } catch (_) {}
+  // Hydrate circuit data immediately so SmartCircuitPage doesn't wait 30s
+  try {
+    const cw = require("../services/intelligence/circuitWatcher");
+    const watchlist = cw.getLastWatchlist();
+    const alerts    = cw.getLastAlerts();
+    if (watchlist?.length) socket.emit("circuit-watchlist", watchlist);
+    if (alerts?.length)    socket.emit("circuit-alerts",    alerts);
+  } catch (_) {}
+});
     socket.on("leave:alerts", () => socket.leave("alerts"));
 
     // ── Gann analysis ──────────────────────────────────────────────────

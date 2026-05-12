@@ -274,7 +274,11 @@ export default function StraddlePage({ socket }) {
     if (!socket) return;
 
     socket.emit("join:intel");
-    socket.on("connect", () => socket.emit("join:intel"));
+socket.emit("join:straddle");
+socket.on("connect", () => {
+  socket.emit("join:intel");
+  socket.emit("join:straddle");
+});
 
     // One-time seed so page doesn't wait up to 60s for first socket event
     fetch(`/api/straddle/snapshot?symbol=${symbol}`)
@@ -340,6 +344,7 @@ export default function StraddlePage({ socket }) {
     fetchPayoff();
     return () => {
       socket.emit("leave:intel");
+      socket.emit("leave:straddle");
       socket.off("connect");
       socket.off("options-intelligence");
     };

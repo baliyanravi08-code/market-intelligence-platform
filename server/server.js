@@ -9,6 +9,7 @@ const path    = require("path");
 const fs      = require("fs");
 const axios   = require("axios");
 const cors    = require("cors");
+const { startCircuitWatcher } = require("./services/intelligence/circuitWatcher");
 
 // ── WEEKEND GUARD — computed once at startup ──────────────────────────────────
 const DAY_OF_WEEK = new Date().getDay(); // 0=Sun, 6=Sat
@@ -712,6 +713,7 @@ async function startApp() {
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
     setScannerInstrumentMap(instrumentMap);
     startMarketScanner(io);
+    startCircuitWatcher(io, () => upstoxAccessToken, () => instrumentMap);
   } else {
     console.log("💤 Weekend: skipping NSE/BSE listeners and OI — saving ~150MB");
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
