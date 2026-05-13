@@ -324,33 +324,41 @@ const s = result?.structure;
 if (!s) return;
 
 const t = now();
-      const newSnap = {
-        spotPrice: data.ltp ?? null,
-        atmStrike: s.atmStrike,
-        straddle: {
-          combined:       s.straddlePrice,
-          callStrike:     s.atmStrike,
-          putStrike:      s.atmStrike,
-          callPremium:    s.callLTP,
-          putPremium:     s.putLTP,
-          upperBreakeven: s.atmStrike + s.straddlePrice,
-          lowerBreakeven: s.atmStrike - s.straddlePrice,
-        },
-        strangle: {
-          combined:       s.stranglePrice ?? s.straddlePrice,
-          callStrike:     s.strangleCallStrike ?? s.atmStrike,
-          putStrike:      s.stranglePutStrike  ?? s.atmStrike,
-          callPremium:    s.strangleCallLTP    ?? s.callLTP,
-          putPremium:     s.stranglePutLTP     ?? s.putLTP,
-          upperBreakeven: (s.strangleCallStrike ?? s.atmStrike) + (s.stranglePrice ?? s.straddlePrice),
-          lowerBreakeven: (s.stranglePutStrike  ?? s.atmStrike) - (s.stranglePrice ?? s.straddlePrice),
-        },
-        iv:     { atm: result.volatility?.atmIV, ce: result.volatility?.ceIV, pe: result.volatility?.peIV },
-        oi:     { ce: result.oi?.totalCE, pe: result.oi?.totalPE, pcr: result.oi?.pcr },
-        greeks: result.atmGreeks,
-        expiries: result.expiries ?? [],
-        expiry:   result.expiry   ?? expiryRef.current,
-      };
+const newSnap = {
+  spotPrice: data.ltp ?? null,
+  atmStrike: result.atmStrike,
+  straddle: {
+    combined:       s.straddlePrice,
+    callStrike:     result.atmStrike,
+    putStrike:      result.atmStrike,
+    callPremium:    s.straddlePrice / 2,
+    putPremium:     s.straddlePrice / 2,
+    upperBreakeven: result.atmStrike + s.straddlePrice,
+    lowerBreakeven: result.atmStrike - s.straddlePrice,
+  },
+  strangle: {
+    combined:       s.straddlePrice,
+    callStrike:     result.atmStrike,
+    putStrike:      result.atmStrike,
+    callPremium:    s.straddlePrice / 2,
+    putPremium:     s.straddlePrice / 2,
+    upperBreakeven: result.atmStrike + s.straddlePrice,
+    lowerBreakeven: result.atmStrike - s.straddlePrice,
+  },
+  iv: {
+    atm: result.volatility?.atmIV,
+    ce:  result.volSurface?.iv25call,
+    pe:  result.volSurface?.iv25put,
+  },
+  oi: {
+    ce:  result.oi?.totalCallOI,
+    pe:  result.oi?.totalPutOI,
+    pcr: result.oi?.pcr,
+  },
+  greeks:   result.atmGreeks,
+  expiries: result.expiries ?? [],
+  expiry:   result.expiryDate ?? expiryRef.current,
+};
 
       setSnap((prev) => ({ ...prev, ...newSnap }));
 
