@@ -14,7 +14,7 @@ const TF_CHART_OPTIONS = [
 ];
 
 const CHART_COLORS = {
-  bg:    "transparent",        // ← KEY FIX: was "#060a10" — caused black flash
+  bg:    "transparent",
   grid:  "#0d1f35",
   text:  "#3a6a9f",
   up:    "#4ade80",
@@ -145,7 +145,6 @@ function StockChart({ symbol, defaultTf, socket }) {
     };
   }, [socket, symbol, tf, flashBlink]);
 
-  // ── Draw ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -154,7 +153,6 @@ function StockChart({ symbol, defaultTf, socket }) {
     const W   = canvas.width;
     const H   = canvas.height;
 
-    // KEY FIX: if no candles, clear to transparent — don't paint black
     if (!candles.length) {
       ctx.clearRect(0, 0, W, H);
       return;
@@ -167,7 +165,6 @@ function StockChart({ symbol, defaultTf, socket }) {
     const priceH = chartH - volH - 8;
 
     ctx.clearRect(0, 0, W, H);
-    // Draw a very subtle dark background (not pure black)
     ctx.fillStyle = "rgba(6,10,16,0.85)";
     ctx.fillRect(0, 0, W, H);
 
@@ -212,7 +209,6 @@ function StockChart({ symbol, defaultTf, socket }) {
       ctx.fillRect(x - candleW / 2, vTop, candleW, PAD.top + priceH + 8 + volH - vTop);
     });
 
-    // Live price line
     const ltp = data[data.length - 1].close;
     const ly  = px(ltp);
     if (ly > 0 && ly < PAD.top + priceH) {
@@ -258,7 +254,6 @@ function StockChart({ symbol, defaultTf, socket }) {
 
   return (
     <div style={{ background: "#0a0f16", border: "1px solid #1e2a3a", borderRadius: 8, overflow: "hidden" }}>
-      {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", borderBottom: "1px solid #0d1f35" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ color: "#60a5fa", fontFamily: "monospace", fontWeight: 800, fontSize: 12 }}>{symbol}</span>
@@ -289,7 +284,6 @@ function StockChart({ symbol, defaultTf, socket }) {
         </div>
       </div>
 
-      {/* Crosshair OHLCV bar */}
       {crosshair && (
         <div style={{ display: "flex", gap: 12, padding: "3px 10px", background: "#0d1520", fontFamily: "monospace", fontSize: 10, color: "#94a3b8" }}>
           <span>O: <b style={{ color: "#f0f6ff" }}>{crosshair.candle.open.toFixed(2)}</b></span>
@@ -303,13 +297,12 @@ function StockChart({ symbol, defaultTf, socket }) {
         </div>
       )}
 
-      {/* Canvas container — KEY FIX: background transparent, not dark */}
       <div style={{ position: "relative", background: "transparent", minHeight: 120 }}>
         {loading && (
           <div style={{
             position: "absolute", inset: 0, display: "flex", alignItems: "center",
             justifyContent: "center",
-            background: "rgba(10,15,22,0.65)",  // ← was solid #060a10cc = pure black
+            background: "rgba(10,15,22,0.65)",
             zIndex: 5, borderRadius: "0 0 8px 8px"
           }}>
             <span style={{ color: "#60a5fa", fontFamily: "monospace", fontSize: 12 }}>
@@ -514,7 +507,53 @@ function McapBadge({ bucket, label }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SKELETON LOADER — replaces black screen while tech panel loads
+// PATCH 2 — PremarketBanner component
+// Shown during 9:00–9:15 AM IST. Shows indicative label or "no trades yet".
+// ─────────────────────────────────────────────────────────────────────────────
+function PremarketBanner({ isPremarket, gainersCount, losersCount }) {
+  if (!isPremarket) return null;
+  return (
+    <div style={{
+      background: "linear-gradient(90deg, #1a1000, #0a0a00)",
+      border: "1px solid #f59e0b44",
+      borderRadius: 8,
+      padding: "10px 16px",
+      marginBottom: 14,
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      flexWrap: "wrap",
+    }}>
+      <span style={{ fontSize: 18 }}>⏸</span>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 800, color: "#f59e0b", fontFamily: "monospace" }}>
+          PRE-MARKET SESSION (9:00–9:15 AM IST)
+        </div>
+        <div style={{ fontSize: 11, color: "#78716c", marginTop: 2 }}>
+          {gainersCount === 0 && losersCount === 0
+            ? "No trades yet — gainers & losers will populate once market opens at 9:15 AM"
+            : `${gainersCount} indicative gainers · ${losersCount} indicative losers (pre-open prices, may change)`}
+        </div>
+      </div>
+      <div style={{
+        marginLeft: "auto",
+        fontSize: 10,
+        color: "#f59e0b",
+        background: "#1a0f00",
+        border: "1px solid #f59e0b33",
+        borderRadius: 4,
+        padding: "3px 10px",
+        fontFamily: "monospace",
+        fontWeight: 700,
+      }}>
+        Market opens 9:15 AM IST
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SKELETON LOADER
 // ─────────────────────────────────────────────────────────────────────────────
 function TechSkeleton() {
   return (
@@ -526,7 +565,6 @@ function TechSkeleton() {
           100% { opacity: 0.25; }
         }
       `}</style>
-      {/* Signal card skeleton */}
       <div style={{ background: T.bgItem, border: `1px solid ${T.border}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
         <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
           <div style={{ width: 56, height: 56, borderRadius: "50%", background: "#1a2030", animation: "techShimmer 1.4s ease-in-out infinite" }} />
@@ -541,7 +579,6 @@ function TechSkeleton() {
           ))}
         </div>
       </div>
-      {/* Rows skeleton */}
       {["Momentum", "Trend", "Volatility"].map((section, si) => (
         <div key={section} style={{ background: T.bgItem, border: `1px solid ${T.border}`, borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
           <div style={{ height: 10, width: 80, background: "#1a2030", borderRadius: 3, marginBottom: 12, animation: `techShimmer 1.4s ease-in-out ${si*0.15}s infinite` }} />
@@ -641,7 +678,7 @@ function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TECH PANEL — full fix: slide-in, skeleton, abort controller
+// TECH PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeChange, onClose, socket }) {
   if (!symbol) return null;
@@ -691,7 +728,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
 
   return (
     <>
-      {/* Dim overlay behind panel */}
       <div
         onClick={onClose}
         style={{
@@ -699,17 +735,14 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
           zIndex: 99, backdropFilter: "blur(1px)",
         }}
       />
-
-      {/* Panel */}
       <div style={{
         position: "fixed", right: 0, top: 0,
         width: 420, height: "100vh",
-        background: T.bgCard,                        // ← #0d1117, NOT black
+        background: T.bgCard,
         borderLeft: `1px solid ${T.border}`,
         overflowY: "auto", zIndex: 100,
         padding: "16px 14px",
         boxShadow: "-12px 0 48px rgba(0,0,0,0.7)",
-        // KEY FIX: slide in from right — user sees animation not black snap
         animation: "techPanelSlideIn 0.2s cubic-bezier(0.16,1,0.3,1)",
         scrollbarWidth: "thin",
         scrollbarColor: `${T.border} transparent`,
@@ -721,7 +754,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
           }
         `}</style>
 
-        {/* Panel header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, color: T.textPri, letterSpacing: "0.5px" }}>{symbol}</div>
@@ -746,7 +778,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
           </div>
         </div>
 
-        {/* TF selector */}
         <div style={{ display: "flex", gap: 2, background: "#080d14", padding: 3, borderRadius: 7, border: `1px solid ${T.border}`, marginBottom: 12 }}>
           {TIMEFRAMES.map(tf => (
             <button type="button" key={tf.id} onClick={e => { e.preventDefault(); onTimeframeChange(tf.id); }} style={{
@@ -759,15 +790,12 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
           ))}
         </div>
 
-        {/* Chart — always shown, no black flash */}
         <div style={{ marginBottom: 12 }}>
           <StockChart symbol={symbol} defaultTf={timeframe} socket={socket} />
         </div>
 
-        {/* Loading skeleton — replaces spinner/black void */}
         {loading && <TechSkeleton />}
 
-        {/* No data state */}
         {!loading && !tech && (
           <div style={{ textAlign: "center", padding: "40px 0", color: T.textSec }}>
             <div style={{ fontSize: 28, marginBottom: 8, opacity: 0.4 }}>📭</div>
@@ -776,10 +804,8 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
           </div>
         )}
 
-        {/* Tech data */}
         {!loading && tech && (
           <>
-            {/* Signal card */}
             <div style={{ background: sigBg, border: `1px solid ${tech.signal?.includes("BUY") ? "#4ade8044" : tech.signal?.includes("SELL") ? "#f8717144" : "#fbbf2444"}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
               <div style={{ fontSize: 10, color: T.textSec, fontWeight: 700, letterSpacing: "0.8px", marginBottom: 10 }}>LIVE SIGNAL · {timeframe.toUpperCase()}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -827,7 +853,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
               )}
             </div>
 
-            {/* Momentum */}
             <Card title="Momentum">
               <div style={{ marginBottom: 10 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
@@ -857,7 +882,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
               )}
             </Card>
 
-            {/* Trend */}
             <Card title="Trend">
               {tech.macd && (
                 <div style={{ marginBottom: 10 }}>
@@ -895,7 +919,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
               )}
             </Card>
 
-            {/* Volatility */}
             <Card title="Volatility">
               {tech.bollingerBands && (
                 <div style={{ marginBottom: 10 }}>
@@ -922,7 +945,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
               )}
             </Card>
 
-            {/* Volume */}
             <Card title="Volume">
               {tech.obv && <Row label="OBV Trend" value={tech.obv} color={(tech.obv || "").includes("Rising") ? T.green : T.red} />}
               {tech.vwap != null && (
@@ -935,7 +957,6 @@ function TechPanel({ symbol, tech, loading, timeframe, livePrice, onTimeframeCha
               )}
             </Card>
 
-            {/* MA Summary */}
             <Card title="Moving Average Summary">
               {tech.maSummary && (
                 <>
@@ -1049,7 +1070,7 @@ function BreadthBar({ advancing, declining, unchanged, total }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BACKTEST helpers (unchanged from original)
+// BACKTEST helpers
 // ─────────────────────────────────────────────────────────────────────────────
 const BT_KEY = "mscanner_backtest_v2";
 function btLoad() { try { return JSON.parse(localStorage.getItem(BT_KEY) || "{}"); } catch { return {}; } }
@@ -1111,7 +1132,6 @@ function computeAnalytics(db) {
   return { overallAcc, resolved: resolved.length, wins: wins.length, total: allSignals.length, pending: allSignals.filter(s => !s.outcome).length, bySignal, rsiBuckets, byMacd, byScore, dailyTrend, avgPL, bestTrade: pls.length > 0 ? Math.max(...pls).toFixed(2) : null, worstTrade: pls.length > 0 ? Math.min(...pls).toFixed(2) : null };
 }
 
-// BacktestPanel is unchanged from original — omitted for brevity, paste your existing one here
 function BacktestPanel({ onClose, techCacheRef }) {
   const [db, setDb]                       = useState(btLoad);
   const [activeDate, setActiveDate]       = useState(todayKey());
@@ -1245,12 +1265,12 @@ function BacktestPanel({ onClose, techCacheRef }) {
             )}
             {btTab === "analytics" && (
               <div style={{ padding: 20 }}>
-                <div style={{ fontSize: 13, color: T.textSec, textAlign: "center", padding: "40px 0" }}>Analytics view — paste your full analytics JSX here from original</div>
+                <div style={{ fontSize: 13, color: T.textSec, textAlign: "center", padding: "40px 0" }}>Analytics view</div>
               </div>
             )}
             {btTab === "trend" && (
               <div style={{ padding: 20 }}>
-                <div style={{ fontSize: 13, color: T.textSec, textAlign: "center", padding: "40px 0" }}>Trend view — paste your full trend JSX here from original</div>
+                <div style={{ fontSize: 13, color: T.textSec, textAlign: "center", padding: "40px 0" }}>Trend view</div>
               </div>
             )}
           </div>
@@ -1289,13 +1309,15 @@ function ScannerBody() {
   const [livePriceMap, setLivePriceMap] = useState({});
   const [techVersion,  setTechVersion]  = useState(0);
 
+  // ── PATCH 1: isPremarket state ────────────────────────────────────────────
+  const [isPremarket,  setIsPremarket]  = useState(false);
+
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
   const activeTFRef    = useRef("1day");
   const tableRef       = useRef(null);
   const autoCapFired   = useRef(false);
   const stockMapRef    = useRef(new Map());
-  // KEY FIX: AbortController ref to cancel stale fetch on rapid clicks
   const abortRef       = useRef(null);
 
   useEffect(() => { activeTFRef.current = activeTF; }, [activeTF]);
@@ -1341,17 +1363,20 @@ function ScannerBody() {
     setUpdatedAt(new Date());
   }, []);
 
-  // REST fallback
+  // ── PATCH 1: REST fallback — updated to handle isPremarket + allStocks ────
   useEffect(() => {
     const timer = setTimeout(async () => {
       if (stockMapRef.current.size > 0) return;
       try {
         const res = await fetch("/api/scanner");
         const d   = await res.json();
-        if (d.error && !d.weekend) return;
+        if (d.error && !d.weekend && !d.isPremarket) return;
+        setIsPremarket(d.isPremarket || false);
+        // Use allStocks if available (faster than reconstructing from gainers/losers)
+        const allSrc = d.allStocks?.length ? d.allStocks
+          : [...(d.gainers||[]), ...(d.losers||[]), ...Object.values(d.byMcap||{}).flat()];
         const map = new Map(); const seen = new Set();
-        [...(d.gainers||[]), ...(d.losers||[]), ...Object.values(d.byMcap||{}).flat()]
-          .forEach(s => { if (s?.symbol && !seen.has(s.symbol)) { seen.add(s.symbol); map.set(s.symbol, s); } });
+        allSrc.forEach(s => { if (s?.symbol && !seen.has(s.symbol)) { seen.add(s.symbol); map.set(s.symbol, s); } });
         if (map.size > 0) { stockMapRef.current = map; rebuildDataFromMap(map); }
       } catch {}
     }, 4000);
@@ -1400,10 +1425,15 @@ function ScannerBody() {
       diffs.forEach(d => { const stock = d.s !== undefined ? expandDiffStock(d) : d; if (stock.symbol) stockMapRef.current.set(stock.symbol, stock); });
       rebuildDataFromMap(stockMapRef.current);
     });
+
+    // ── PATCH 1: scanner-update handler — now sets isPremarket ───────────────
     socket.on("scanner-update", d => {
-      setData(d); setUpdatedAt(new Date(d.updatedAt));
+      setData(d);
+      setUpdatedAt(new Date(d.updatedAt));
+      setIsPremarket(d.isPremarket || false);   // ← PATCH: track premarket flag
       if (d.allStocks) { const map = new Map(); d.allStocks.forEach(s => map.set(s.symbol, s)); stockMapRef.current = map; }
     });
+
     socket.on("scanner-tech-batch", (batch) => {
       if (!Array.isArray(batch) || !batch.length) return;
       const priceUpdates = {}; let hasNew = false;
@@ -1433,23 +1463,20 @@ function ScannerBody() {
     };
   }, [rebuildDataFromMap]);
 
-  // KEY FIX: handleSelect with AbortController — cancels stale fetches on rapid clicks
   const handleSelect = useCallback(async (symbol, timeframe) => {
     const tf  = timeframe || activeTFRef.current || "1day";
     const key = `${symbol}:${tf}`;
     selectedSymRef.current = symbol;
     setSelectedSym(symbol);
-    setTech(null);           // ← clear stale data immediately so skeleton shows
+    setTech(null);
     getSocket().emit("watch:chart", symbol);
 
-    // Return cached immediately — no loading flash at all
     if (techCacheRef.current[key]) {
       setTech(techCacheRef.current[key]);
       setTechLoading(false);
       return;
     }
 
-    // Cancel any previous in-flight request
     if (abortRef.current) { abortRef.current.abort(); }
     const controller   = new AbortController();
     abortRef.current   = controller;
@@ -1468,7 +1495,7 @@ function ScannerBody() {
         if (selectedSymRef.current === symbol) setTechLoading(false);
       }
     } catch (e) {
-      if (e.name === "AbortError") return;   // cancelled — do nothing
+      if (e.name === "AbortError") return;
       if (selectedSymRef.current === symbol) setTechLoading(false);
     }
   }, []);
@@ -1565,13 +1592,35 @@ function ScannerBody() {
         </div>
       )}
 
-      {/* Main content — shifts left when panel open */}
+      {/* Main content */}
       <div style={{ padding: "16px 20px 40px", paddingRight: selectedSym ? "434px" : "20px", transition: "padding-right 0.2s ease" }}>
+
+        {/* ── PATCH 2: PremarketBanner — above GainLossCard row ─────────────── */}
+        <PremarketBanner
+          isPremarket={isPremarket}
+          gainersCount={liveRankedGainers.length}
+          losersCount={liveRankedLosers.length}
+        />
 
         {data && (
           <div style={{ display: "flex", gap: 12, marginBottom: 18 }}>
-            <GainLossCard title="TOP GAINERS" stocks={liveRankedGainers} onSelect={sym => handleSelect(sym)} accent={T.green} onViewAll={() => handleViewAll("gainers")} livePriceMap={livePriceMap} />
-            <GainLossCard title="TOP LOSERS"  stocks={liveRankedLosers}  onSelect={sym => handleSelect(sym)} accent={T.red}   onViewAll={() => handleViewAll("losers")}  livePriceMap={livePriceMap} />
+            {/* ── PATCH 2: Title changes to "PRE-OPEN" during premarket ───── */}
+            <GainLossCard
+              title={isPremarket ? "PRE-OPEN GAINERS (indicative)" : "TOP GAINERS"}
+              stocks={liveRankedGainers}
+              onSelect={sym => handleSelect(sym)}
+              accent={T.green}
+              onViewAll={() => handleViewAll("gainers")}
+              livePriceMap={livePriceMap}
+            />
+            <GainLossCard
+              title={isPremarket ? "PRE-OPEN LOSERS (indicative)" : "TOP LOSERS"}
+              stocks={liveRankedLosers}
+              onSelect={sym => handleSelect(sym)}
+              accent={T.red}
+              onViewAll={() => handleViewAll("losers")}
+              livePriceMap={livePriceMap}
+            />
           </div>
         )}
 
@@ -1648,7 +1697,6 @@ function ScannerBody() {
         )}
       </div>
 
-      {/* TechPanel — only mounts when symbol selected, animated slide-in */}
       {selectedSym && (
         <TechPanel
           symbol={selectedSym}

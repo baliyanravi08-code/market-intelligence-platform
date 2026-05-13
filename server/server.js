@@ -9,7 +9,8 @@ const path    = require("path");
 const fs      = require("fs");
 const axios   = require("axios");
 const cors    = require("cors");
-const { startCircuitWatcher } = require("./services/intelligence/circuitWatcher");
+// PATCH 1: REMOVED duplicate startCircuitWatcher import — it's started inside startCoordinator via smartCircuitTracker
+// const { startCircuitWatcher } = require("./services/intelligence/circuitWatcher");
 
 // ── WEEKEND GUARD — computed once at startup ──────────────────────────────────
 const DAY_OF_WEEK = new Date().getDay(); // 0=Sun, 6=Sat
@@ -194,7 +195,6 @@ async function loadInstrumentMaster(retryCount = 0) {
   const map = {};
 
   // ── 3. Upstox v2 instruments CSV endpoint (most reliable, no auth needed) ─
-  // This is the official public download endpoint Upstox provides
   try {
     console.log("📥 Downloading instrument master from Upstox CSV...");
     const res = await axios.get(
@@ -217,7 +217,6 @@ async function loadInstrumentMaster(retryCount = 0) {
       const decompressed = zlib.gunzipSync(Buffer.from(res.data));
       jsonData = JSON.parse(decompressed.toString("utf8"));
     } catch (_) {
-      // axios may have already decompressed
       jsonData = JSON.parse(Buffer.from(res.data).toString("utf8"));
     }
     const instruments = Array.isArray(jsonData) ? jsonData : [];
@@ -237,12 +236,11 @@ async function loadInstrumentMaster(retryCount = 0) {
     console.warn(`⚠️ complete.json.gz failed: ${e.response?.status || e.message}`);
   }
 
-  // ── 4. Upstox API fallback (uses token, correct v2 endpoint) ─────────────
+  // ── 4. Upstox API fallback ─────────────────────────────────────────────────
   if (Object.keys(map).length < 1000) {
     console.log("📥 Trying Upstox API instrument download...");
     for (const exchange of ["NSE", "BSE"]) {
       try {
-        // Correct Upstox v2 endpoint for instruments
         const res = await axios.get(
           `https://api.upstox.com/v2/market-quote/instruments/${exchange}`,
           {
@@ -378,9 +376,6 @@ function _pushMapToGann(map) {
   } catch (e) {
     console.warn("⚠️ Could not push instrument map to Gann fetcher:", e.message);
   }
-  // ✅ FIX: push ISIN map to upstoxStream so live candle/price subscriptions
-  // use real ISIN keys (e.g. NSE_EQ|INE748A01016) instead of symbol-only keys
-  // (e.g. NSE_EQ|CRAFTSMAN) which Upstox silently ignores on the WebSocket stream
   try {
     require("./services/upstoxStream").setInstrumentMapForStream(map);
   } catch (e) {
@@ -390,7 +385,6 @@ function _pushMapToGann(map) {
 
 function getInstrumentMap() { return instrumentMap; }
 
-// ── getInstrumentKeyFull — also caches disk hits into RAM ────────────────────
 function getInstrumentKeyFull(symbol) {
   if (instrumentMap[symbol]) return instrumentMap[symbol];
   try {
@@ -409,17 +403,14 @@ function getInstrumentKeyFull(symbol) {
   return null;
 }
 
-// ── isISINKey ─────────────────────────────────────────────────────────────────
 function isISINKey(instrKey, symbol) {
   if (!instrKey) return false;
   const suffix = instrKey.split("|")[1] || "";
-  // Accept ISIN-format keys (e.g. INE123A01234) OR pure BSE numeric codes (e.g. 543066)
   const isIsin    = /^[A-Z]{2}[A-Z0-9]{10}$/.test(suffix) && suffix !== symbol;
-  const isBseNum  = /^\d{6}$/.test(suffix); // BSE scrip codes are 6 digits
+  const isBseNum  = /^\d{6}$/.test(suffix);
   return isIsin || isBseNum;
 }
 
-// ── resolveInstrumentKey ──────────────────────────────────────────────────────
 async function resolveInstrumentKey(symbol) {
   const sym = symbol.toUpperCase().trim();
 
@@ -510,7 +501,6 @@ async function resolveInstrumentKey(symbol) {
   return null;
 }
 
-// ── _getDiskKeyOnly ───────────────────────────────────────────────────────────
 function _getDiskKeyOnly(symbol) {
   try {
     if (fs.existsSync(INSTRUMENT_FILE)) {
@@ -521,25 +511,21 @@ function _getDiskKeyOnly(symbol) {
   return null;
 }
 
-// ── resolveInstrumentKeyForEOD ────────────────────────────────────────────────
 async function resolveInstrumentKeyForEOD(symbol) {
   const sym = symbol.toUpperCase().trim();
 
-  // Return any valid key from RAM — ISIN, BSE numeric, or symbol-only
   const ramKey = instrumentMap[sym];
   if (ramKey) {
     console.log(`📍 [EOD resolve] ${sym} → RAM: ${ramKey}`);
     return ramKey;
   }
 
-  // Check full disk map
   const diskKey = getInstrumentKeyFull(sym);
   if (diskKey) {
     console.log(`📍 [EOD resolve] ${sym} → disk: ${diskKey}`);
     return diskKey;
   }
 
-  // Live search — prefer ISIN keys but accept any match
   if (upstoxAccessToken) {
     try {
       console.log(`🔍 [EOD resolve] ${sym} → live search...`);
@@ -565,10 +551,9 @@ async function resolveInstrumentKeyForEOD(symbol) {
     }
   }
 
-  // Final fallback — try generic resolve
   return await resolveInstrumentKey(sym);
 }
-// ── Last valid trading day helper ─────────────────────────────────────────────
+
 function getLastTradingDay() {
   const d = new Date();
   d.setDate(d.getDate() - 1);
@@ -578,7 +563,6 @@ function getLastTradingDay() {
   return d;
 }
 
-// ── Token helpers ─────────────────────────────────────────────────────────────
 async function validateTokenLive(token) {
   try {
     const r = await axios.get("https://api.upstox.com/v2/user/profile", {
@@ -705,6 +689,8 @@ async function startApp() {
     console.log("⚠️ No valid token at startup — visit /auth/upstox to connect");
   }
 
+  // PATCH 2: Fixed weekday block — removed startCircuitWatcher() call
+  // NOTE: smartCircuitTracker is started inside startCoordinator — no need to call separately
   if (!IS_WEEKEND) {
     console.log("📡 Weekday: starting all market services...");
     startNSEOIListener(io, () => upstoxAccessToken);
@@ -713,12 +699,18 @@ async function startApp() {
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
     setScannerInstrumentMap(instrumentMap);
     startMarketScanner(io);
-    startCircuitWatcher(io, () => upstoxAccessToken, () => instrumentMap);
+    // NOTE: smartCircuitTracker is started inside startCoordinator — no need to call separately
   } else {
+    // PATCH 3: Fixed weekend block — clean comment, same startMarketScanner logic
     console.log("💤 Weekend: skipping NSE/BSE listeners and OI — saving ~150MB");
     startCoordinator(io, () => upstoxAccessToken, () => instrumentMap);
-    setScannerInstrumentMap(instrumentMap);
-    startMarketScanner(io);
+    // On weekends, startMarketScanner is still called so it's ready for Monday.
+    // The smart scheduler inside marketScanner.js will wait until Monday 9:00 AM IST.
+    setTimeout(() => {
+      setScannerInstrumentMap(instrumentMap);
+      startMarketScanner(io);
+      console.log(`✅ MarketScanner started (weekend mode) — will activate Monday 9:00 AM IST`);
+    }, 5000);
 
     try {
       const { getAllCached, getExpiries } = require("./services/intelligence/nseOIListener");
@@ -993,12 +985,12 @@ app.get("/api/debug/candles", async (req, res) => {
 // ── /api/test-circuit ─────────────────────────────────────────────────────────
 app.get("/api/test-circuit", async (req, res) => {
   app.get("/api/debug/circuit", (req, res) => {
-  const { getCircuitWatchlist, getRecentAlerts } = require("./services/intelligence/smartCircuitTracker");
-  res.json({
-    watchlist: getCircuitWatchlist(),
-    alerts: getRecentAlerts(10),
+    const { getCircuitWatchlist, getRecentAlerts } = require("./services/intelligence/smartCircuitTracker");
+    res.json({
+      watchlist: getCircuitWatchlist(),
+      alerts: getRecentAlerts(10),
+    });
   });
-});
   const symbol = req.query.symbol || "RELIANCE";
   const ikey   = getInstrumentKeyFull(symbol);
   if (!ikey) return res.json({ error: `Symbol ${symbol} not in instrument map`, mapSize: Object.keys(instrumentMap).length });
@@ -1015,17 +1007,6 @@ app.get("/api/test-circuit", async (req, res) => {
 });
 
 // ── /api/candles/:symbol ──────────────────────────────────────────────────────
-// FIXED: Correct Upstox v3 URL format confirmed from official docs:
-//   Historical:  /v3/historical-candle/{key}/{unit}/{interval}/{to_date}/{from_date}
-//   Intraday:    /v3/historical-candle/intraday/{key}/{unit}/{interval}
-//
-// Units and intervals:
-//   minutes/1   minutes/5   minutes/15  minutes/30
-//   hours/1     hours/4
-//   days/1      weeks/1     months/1
-//
-// OLD BROKEN values: "day", "week", "month" (missing plural + interval segment)
-// OLD BROKEN: 1hour used minutes/60, 4hour used minutes/240 (should be hours/1, hours/4)
 app.get("/api/candles/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const tf     = req.query.tf || "1day";
@@ -1035,18 +1016,16 @@ app.get("/api/candles/:symbol", async (req, res) => {
     return res.json({ ok: false, error: "No token — visit /auth/upstox", symbol });
   }
 
-  // ── v3 API timeframe config ───────────────────────────────────────────────
-  // unit + interval matches official Upstox v3 docs exactly
   const TF_MAP_V3 = {
     "1min":   { unit: "minutes", interval: 1,  eod: false },
     "5min":   { unit: "minutes", interval: 5,  eod: false },
     "15min":  { unit: "minutes", interval: 15, eod: false },
     "30min":  { unit: "minutes", interval: 30, eod: false },
-    "1hour":  { unit: "hours",   interval: 1,  eod: false },  // was minutes/60 — FIXED
-    "4hour":  { unit: "hours",   interval: 4,  eod: false },  // was minutes/240 — FIXED
-    "1day":   { unit: "days",    interval: 1,  eod: true  },  // was "day" — FIXED
-    "1week":  { unit: "weeks",   interval: 1,  eod: true  },  // was "week" — FIXED
-    "1month": { unit: "months",  interval: 1,  eod: true  },  // was "month" — FIXED
+    "1hour":  { unit: "hours",   interval: 1,  eod: false },
+    "4hour":  { unit: "hours",   interval: 4,  eod: false },
+    "1day":   { unit: "days",    interval: 1,  eod: true  },
+    "1week":  { unit: "weeks",   interval: 1,  eod: true  },
+    "1month": { unit: "months",  interval: 1,  eod: true  },
   };
 
   const tfCfg      = TF_MAP_V3[tf] || TF_MAP_V3["1day"];
@@ -1054,7 +1033,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
   const fmt        = d => d.toISOString().split("T")[0];
   const headers    = { Authorization: "Bearer " + upstoxAccessToken, Accept: "application/json" };
 
-  // ── Resolve instrument key ────────────────────────────────────────────────
   const instrKey = isIntraday
     ? await resolveInstrumentKey(symbol)
     : await resolveInstrumentKeyForEOD(symbol);
@@ -1070,16 +1048,12 @@ app.get("/api/candles/:symbol", async (req, res) => {
 
   const encodedKey = encodeURIComponent(instrKey);
 
-  // ── URL builders ──────────────────────────────────────────────────────────
-  // Both historical and intraday use the same unit/interval pattern
   const buildHistUrl = (enc, toDate, fromDate) =>
     `https://api.upstox.com/v3/historical-candle/${enc}/${tfCfg.unit}/${tfCfg.interval}/${fmt(toDate)}/${fmt(fromDate)}`;
 
   const buildIntradayUrl = (enc) =>
     `https://api.upstox.com/v3/historical-candle/intraday/${enc}/${tfCfg.unit}/${tfCfg.interval}`;
 
-  // v3 candle format: [timestamp, open, high, low, close, volume, oi]
-  // v3 returns newest-first — reverse for chronological order
   const parseCandles = (raw) =>
     (raw || [])
       .map(c => ({
@@ -1092,7 +1066,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
       }))
       .reverse();
 
-  // ── Helper: fetch EOD candles with a given instrument key ─────────────────
   async function fetchEODCandles(iKey, toDate, fromDate) {
     const enc = encodeURIComponent(iKey);
     const url = buildHistUrl(enc, toDate, fromDate);
@@ -1105,7 +1078,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
     let allCandles = [];
 
     if (isIntraday) {
-      // ── Step 1: Today's live intraday candles ─────────────────────────────
       try {
         const url = buildIntradayUrl(encodedKey);
         console.log(`🔍 [candles] intraday today → ${url}`);
@@ -1117,7 +1089,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
         console.warn(`⚠️ v3 intraday [${symbol}/${tf}]: HTTP ${e.response?.status} —`, e.response?.data?.message || e.message);
       }
 
-      // ── Step 2: Historical intraday candles (yesterday and back) ──────────
       const toDate   = new Date();
       toDate.setDate(toDate.getDate() - 1);
       const fromDate = new Date();
@@ -1135,14 +1106,12 @@ app.get("/api/candles/:symbol", async (req, res) => {
       }
 
     } else {
-      // ── EOD candles (1D / 1W / 1M) ───────────────────────────────────────
       const toDate   = getLastTradingDay();
       const fromDate = new Date(toDate);
       fromDate.setDate(fromDate.getDate() - Math.min(days, 365));
 
       console.log(`📅 [candles] EOD [${symbol}/${tf}] instrKey=${instrKey} toDate=${fmt(toDate)}`);
 
-      // ATTEMPT 1: Resolved ISIN key
       try {
         allCandles = await fetchEODCandles(instrKey, toDate, fromDate);
         console.log(`✅ v3 EOD attempt-1 [${symbol}/${tf}]: ${allCandles.length} candles (key=${instrKey})`);
@@ -1151,7 +1120,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
         allCandles = [];
       }
 
-      // ATTEMPT 2: NSE symbol-only key
       if (allCandles.length === 0) {
         const nseSymKey = `NSE_EQ|${symbol}`;
         if (nseSymKey !== instrKey) {
@@ -1162,8 +1130,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
               allCandles = c2;
               instrumentMap[symbol] = nseSymKey;
               console.log(`✅ v3 EOD attempt-2 [${symbol}/${tf}]: ${c2.length} candles`);
-            } else {
-              console.warn(`⚠️ v3 EOD attempt-2 [${symbol}/${tf}]: 0 candles`);
             }
           } catch (e2) {
             console.warn(`⚠️ v3 EOD attempt-2 [${symbol}/${tf}]: HTTP ${e2.response?.status} — ${e2.response?.data?.message || e2.message}`);
@@ -1171,7 +1137,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
         }
       }
 
-      // ATTEMPT 3: BSE symbol-only key
       if (allCandles.length === 0) {
         const bseSymKey = `BSE_EQ|${symbol}`;
         if (bseSymKey !== instrKey) {
@@ -1182,8 +1147,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
               allCandles = c3;
               instrumentMap[symbol] = bseSymKey;
               console.log(`✅ v3 EOD attempt-3 [${symbol}/${tf}]: ${c3.length} candles`);
-            } else {
-              console.warn(`⚠️ v3 EOD attempt-3 [${symbol}/${tf}]: 0 candles`);
             }
           } catch (e3) {
             console.warn(`⚠️ v3 EOD attempt-3 [${symbol}/${tf}]: HTTP ${e3.response?.status} — ${e3.response?.data?.message || e3.message}`);
@@ -1191,7 +1154,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
         }
       }
 
-      // ATTEMPT 4: Live Upstox search → fresh ISIN key
       if (allCandles.length === 0 && upstoxAccessToken) {
         console.log(`🔍 [candles] attempt-4 live search: ${symbol}`);
         try {
@@ -1214,65 +1176,57 @@ app.get("/api/candles/:symbol", async (req, res) => {
               if (c4.length > 0) {
                 allCandles = c4;
                 console.log(`✅ v3 EOD attempt-4 [${symbol}/${tf}]: ${c4.length} candles`);
-              } else {
-                console.warn(`⚠️ v3 EOD attempt-4 [${symbol}/${tf}]: 0 candles`);
               }
             } catch (e4) {
               console.error(`❌ v3 EOD attempt-4 [${symbol}/${tf}]: HTTP ${e4.response?.status} — ${e4.response?.data?.message || e4.message}`);
             }
-          } else if (match?.instrument_key === instrKey) {
-            console.warn(`⚠️ [candles] live search returned same key: ${instrKey}`);
-          } else {
-            console.warn(`⚠️ [candles] live search no match for ${symbol}`);
           }
         } catch (eSearch) {
           console.warn(`⚠️ [candles] live search failed:`, eSearch.message);
         }
       }
 
-      // For 1D: append live today candle using intraday 1min data
       if (tf === "1day") {
-  try {
-    // ✅ Declare IST vars FIRST — used by both todayCandle.time and the comparison below
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const nowIST        = new Date(Date.now() + IST_OFFSET_MS);
+        try {
+          const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+          const nowIST        = new Date(Date.now() + IST_OFFSET_MS);
 
-    const todayUrl = `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/1`;
-    const r2       = await axios.get(todayUrl, { headers, timeout: 10_000 });
-    const ticks    = r2.data?.data?.candles || [];
+          const todayUrl = `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/minutes/1`;
+          const r2       = await axios.get(todayUrl, { headers, timeout: 10_000 });
+          const ticks    = r2.data?.data?.candles || [];
 
-    if (ticks.length) {
-      const todayCandle = {
-        // ✅ Uses nowIST — now safe because it's declared above
-        time:   new Date(nowIST.toISOString().split("T")[0] + "T00:00:00.000+05:30").getTime(),
-        open:   ticks[ticks.length - 1][1],
-        high:   Math.max(...ticks.map(c => c[2])),
-        low:    Math.min(...ticks.map(c => c[3])),
-        close:  ticks[0][4],
-        volume: ticks.reduce((a, c) => a + c[5], 0),
-      };
+          if (ticks.length) {
+            const todayCandle = {
+              time:   new Date(nowIST.toISOString().split("T")[0] + "T00:00:00.000+05:30").getTime(),
+              open:   ticks[ticks.length - 1][1],
+              high:   Math.max(...ticks.map(c => c[2])),
+              low:    Math.min(...ticks.map(c => c[3])),
+              close:  ticks[0][4],
+              volume: ticks.reduce((a, c) => a + c[5], 0),
+            };
 
-      const todayStr = nowIST.toISOString().split("T")[0];
-      const lastHist = allCandles[allCandles.length - 1];
-      const lastStr  = lastHist
-        ? new Date(lastHist.time + IST_OFFSET_MS).toISOString().split("T")[0]
-        : "";
+            const todayStr = nowIST.toISOString().split("T")[0];
+            const lastHist = allCandles[allCandles.length - 1];
+            const lastStr  = lastHist
+              ? new Date(lastHist.time + IST_OFFSET_MS).toISOString().split("T")[0]
+              : "";
 
-      if (todayStr !== lastStr) {
-        allCandles.push(todayCandle);
-        console.log(`✅ v3 today-candle appended [${symbol}]: close=${todayCandle.close}`);
-      } else {
-        lastHist.high   = Math.max(lastHist.high, todayCandle.high);
-        lastHist.low    = Math.min(lastHist.low,  todayCandle.low);
-        lastHist.close  = todayCandle.close;
-        lastHist.volume = todayCandle.volume;
-        console.log(`✅ v3 today-candle updated [${symbol}]: close=${todayCandle.close}`);
+            if (todayStr !== lastStr) {
+              allCandles.push(todayCandle);
+              console.log(`✅ v3 today-candle appended [${symbol}]: close=${todayCandle.close}`);
+            } else {
+              lastHist.high   = Math.max(lastHist.high, todayCandle.high);
+              lastHist.low    = Math.min(lastHist.low,  todayCandle.low);
+              lastHist.close  = todayCandle.close;
+              lastHist.volume = todayCandle.volume;
+              console.log(`✅ v3 today-candle updated [${symbol}]: close=${todayCandle.close}`);
+            }
+          }
+        } catch (e) {
+          console.warn(`⚠️ v3 today-candle [${symbol}]: ${e.response?.status || e.message}`);
+        }
       }
     }
-  } catch (e) {
-    console.warn(`⚠️ v3 today-candle [${symbol}]: ${e.response?.status || e.message}`);
-  }
-      }}
 
     if (!allCandles.length) {
       return res.json({
@@ -1292,7 +1246,6 @@ app.get("/api/candles/:symbol", async (req, res) => {
       });
     }
 
-    // Deduplicate by timestamp
     const seen = new Set();
     allCandles = allCandles.filter(c => {
       if (seen.has(c.time)) return false;
@@ -1601,20 +1554,21 @@ async function searchBSE(q) {
   return [];
 }
 
-// ── /api/scanner ──────────────────────────────────────────────────────────────
+// ── /api/scanner — PATCH 4: returns isPremarket + allStocks ──────────────────
 app.get("/api/scanner", (req, res) => {
   const d = getScannerData();
-  if (IS_WEEKEND && (!d || !d.updatedAt)) {
-    return res.json({ error: "No cached data available yet", weekend: true });
+  if (!d || (!d.updatedAt && !d.isPremarket)) {
+    return res.json({ error: "Scanner not yet ready", weekend: IS_WEEKEND });
   }
-  if (!d.updatedAt) return res.json({ error: "Scanner not yet ready" });
   res.json({
-    gainers:  d.gainers  || [],
-    losers:   d.losers   || [],
-    byMcap:   d.byMcap   || {},
-    bySector: d.bySector || [],
-    market: { advancing: d.advancing || 0, declining: d.declining || 0, unchanged: d.unchanged || 0, total: d.totalCount || 0 },
-    updatedAt: d.updatedAt,
+    gainers:    d.gainers  || [],
+    losers:     d.losers   || [],
+    byMcap:     d.byMcap   || {},
+    bySector:   d.bySector || [],
+    allStocks:  (d.allStocks || []).slice(0, 600),
+    market:     { advancing: d.advancing || 0, declining: d.declining || 0, unchanged: d.unchanged || 0, total: d.totalCount || 0 },
+    updatedAt:  d.updatedAt,
+    isPremarket: d.isPremarket || false,
   });
 });
 
@@ -1703,7 +1657,6 @@ app.get("/api/admin/backfill", async (req, res) => {
   } catch (e) { log("FATAL: " + e.message); res.end(); }
 });
 
-// ── SPA fallback ──────────────────────────────────────────────────────────────
 // ── /api/admin/reload-instruments ────────────────────────────────────────────
 app.get("/api/admin/reload-instruments", async (req, res) => {
   if ((req.query.token || "") !== (process.env.ADMIN_SECRET || "backfill2026"))
@@ -1716,6 +1669,8 @@ app.get("/api/admin/reload-instruments", async (req, res) => {
   res.write(`✅ Done: ${Object.keys(instrumentMap).length} symbols loaded\n`);
   res.end();
 });
+
+// ── SPA fallback ──────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   if (req.method !== "GET") return next();
   if (req.path.startsWith("/api") || req.path.startsWith("/auth")) return next();

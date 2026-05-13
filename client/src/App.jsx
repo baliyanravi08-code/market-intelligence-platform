@@ -1245,11 +1245,19 @@ return saved && VALID_PAGES.has(saved) ? saved : "dashboard";
 
   // ── Stale detection — mark stale if no tick for 30s ──────────────────────
   useEffect(() => {
-    const t = setInterval(() => {
-      if (tickerLastOk && Date.now() - tickerLastOk > 30000) setTickerStale(true);
-    }, 5000);
-    return () => clearInterval(t);
-  }, [tickerLastOk]);
+  const t = setInterval(() => {
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const day  = now.getDay();
+    const isMarketHours = day >= 1 && day <= 5 && mins >= 9 * 60 + 15 && mins < 15 * 60 + 30;
+    if (isMarketHours && tickerLastOk && Date.now() - tickerLastOk > 30000) {
+      setTickerStale(true);
+    } else if (!isMarketHours) {
+      setTickerStale(false);
+    }
+  }, 5000);
+  return () => clearInterval(t);
+}, [tickerLastOk]);
 
   const btcWsRef    = useRef(null);
   const btcReconRef = useRef(null);
