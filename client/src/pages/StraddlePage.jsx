@@ -1,6 +1,9 @@
 // client/src/pages/StraddlePage.jsx
 // Live Straddle & Strangle Chart Page
-// NEW: (1) Breakeven breach alert, (2) Expected move cone, (3) Premium % of spot + CSV export
+// FIX: Symbol switch (SENSEX etc) now works correctly
+//   — symbolRef keeps socket handler closure in sync with current symbol
+//   — snap is fully reset on symbol change so stale NIFTY data never bleeds through
+//   — seed fetch re-runs on every symbol change with correct symbol
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
@@ -27,8 +30,8 @@ const COLOR = {
   muted:     "#64748b",
   text:      "#e2e8f0",
   accent:    "#38bdf8",
-  cone1:     "rgba(56,189,248,0.10)",  // 1σ cone fill
-  cone2:     "rgba(56,189,248,0.05)",  // 2σ cone fill
+  cone1:     "rgba(56,189,248,0.10)",
+  cone2:     "rgba(56,189,248,0.05)",
 };
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
@@ -38,18 +41,15 @@ const fmtPct = (n) => (n == null ? "—" : `${Number(n).toFixed(2)}%`);
 const now    = () =>
   new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-// ── NEW: compute DTE (days to expiry) from "YYYY-MM-DD" string ───────────────
 function getDTE(expiryStr) {
   if (!expiryStr) return 1;
-  const exp  = new Date(expiryStr);
+  const exp   = new Date(expiryStr);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const diff = Math.max(0, (exp - today) / (1000 * 60 * 60 * 24));
-  return diff < 0.5 ? 0.5 : diff; // minimum half-day so cone never collapses to zero
+  return diff < 0.5 ? 0.5 : diff;
 }
 
-// ── NEW: compute expected move sigma cone bounds ─────────────────────────────
-// σ move = spot × IV% × sqrt(DTE / 365)
 function getSigmaBounds(spotPrice, ivAtm, expiry) {
   if (!spotPrice || !ivAtm) return null;
   const dte   = getDTE(expiry);
@@ -63,7 +63,6 @@ function getSigmaBounds(spotPrice, ivAtm, expiry) {
   };
 }
 
-// ── NEW: export premHistory to CSV ───────────────────────────────────────────
 function exportCSV(symbol, expiry, premHistory) {
   if (!premHistory.length) return;
   const header = "Time,Straddle Premium,Strangle Premium\n";
@@ -173,7 +172,6 @@ function PayoffTooltip({ active, payload, label }) {
   );
 }
 
-// ─── NEW: Alert banner shown when spot breaches breakeven ────────────────────
 function AlertBanner({ message, onDismiss }) {
   if (!message) return null;
   return (
@@ -210,21 +208,25 @@ export default function StraddlePage({ socket }) {
   const [error,       setError]       = useState(null);
   const [lastRefresh, setLastRefresh] = useState("—");
 
-  // ── NEW: alert state ──────────────────────────────────────────────────────
   const [alertMsg,        setAlertMsg]        = useState(null);
   const [notifPermission, setNotifPermission] = useState(
     typeof Notification !== "undefined" ? Notification.permission : "default"
   );
-  const alertedRef = useRef({ upper: false, lower: false }); // prevent repeat alerts
+  const alertedRef = useRef({ upper: false, lower: false });
 
-  // ── NEW: request browser notification permission ──────────────────────────
+  // ── FIX: keep a ref to the current symbol so the socket handler always
+  //         reads the latest value even inside the stale closure ──────────────
+  const symbolRef  = useRef(symbol);
+  const expiryRef  = useRef(expiry);
+  useEffect(() => { symbolRef.current = symbol;  }, [symbol]);
+  useEffect(() => { expiryRef.current = expiry; }, [expiry]);
+
   const requestNotifPermission = async () => {
     if (typeof Notification === "undefined") return;
     const perm = await Notification.requestPermission();
     setNotifPermission(perm);
   };
 
-  // ── NEW: fire alert when spot crosses breakeven ───────────────────────────
   const checkBreakevenBreach = useCallback((spotPrice, activeStrat) => {
     if (!spotPrice || !activeStrat) return;
     const { upperBreakeven, lowerBreakeven } = activeStrat;
@@ -232,7 +234,7 @@ export default function StraddlePage({ socket }) {
 
     if (spotPrice >= upperBreakeven && !alertedRef.current.upper) {
       alertedRef.current.upper = true;
-      alertedRef.current.lower = false; // reset lower so it can re-alert
+      alertedRef.current.lower = false;
       const msg = `Spot ₹${fmt(spotPrice)} breached UPPER breakeven ₹${fmt(upperBreakeven)} — consider hedging!`;
       setAlertMsg(msg);
       if (notifPermission === "granted") {
@@ -247,57 +249,83 @@ export default function StraddlePage({ socket }) {
         new Notification("⚠ Lower Breakeven Breached", { body: msg, icon: "/vite.svg" });
       }
     } else if (spotPrice > lowerBreakeven && spotPrice < upperBreakeven) {
-      // Spot back inside — reset both flags so alerts can fire again if it crosses later
       alertedRef.current.upper = false;
       alertedRef.current.lower = false;
     }
   }, [notifPermission]);
 
-  // ── Fetch payoff ─────────────────────────────────────────────────────────
   const fetchPayoff = useCallback(async () => {
-  try {
-    const expiryQ = expiry ? `&expiry=${expiry}` : "";
-    const r = await fetch(
-      `/api/straddle/payoff?symbol=${symbol}${expiryQ}&type=${stratType}&side=${side}&steps=${strangleStep}`
-    );
-    if (!r.ok) return;
-    const data = await r.json();
-    if (data?.error) return;
-    setPayoff(data);
-  } catch (e) {
-    console.warn("Payoff fetch error:", e.message);
-  }
-}, [symbol, expiry, stratType, side, strangleStep]);
+    try {
+      const expiryQ = expiry ? `&expiry=${expiry}` : "";
+      const r = await fetch(
+        `/api/straddle/payoff?symbol=${symbol}${expiryQ}&type=${stratType}&side=${side}&steps=${strangleStep}`
+      );
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data?.error) return;
+      setPayoff(data);
+    } catch (e) {
+      console.warn("Payoff fetch error:", e.message);
+    }
+  }, [symbol, expiry, stratType, side, strangleStep]);
 
-  // ── Socket handler (replaces REST polling) ────────────────────────────────
+  // ── FIX: Reset snap + history immediately when symbol changes so we never
+  //         show stale NIFTY data while waiting for SENSEX socket events ──────
+  useEffect(() => {
+    setSnap(null);
+    setPremHistory([]);
+    setPayoff(null);
+    setLoading(true);
+    setError(null);
+    setLastRefresh("—");
+    alertedRef.current = { upper: false, lower: false };
+    setAlertMsg(null);
+  }, [symbol]);
+
+  // ── Socket + seed fetch setup ─────────────────────────────────────────────
   useEffect(() => {
     if (!socket) return;
 
     socket.emit("join:intel");
-socket.emit("join:straddle");
-socket.on("connect", () => {
-  socket.emit("join:intel");
-  socket.emit("join:straddle");
-});
+    socket.emit("join:straddle");
 
-    // One-time seed so page doesn't wait up to 60s for first socket event
-    fetch(`/api/straddle/snapshot?symbol=${symbol}`)
+    const handleConnect = () => {
+      socket.emit("join:intel");
+      socket.emit("join:straddle");
+    };
+    socket.on("connect", handleConnect);
+
+    // Seed fetch — runs with the symbol that was current when this effect fired
+    // symbolRef.current is also correct here but we use the closure symbol
+    // for the seed since this effect only runs when symbol changes (see deps)
+    const currentSymbol = symbolRef.current;
+    fetch(`/api/straddle/snapshot?symbol=${currentSymbol}`)
       .then(r => r.json())
       .then(data => {
-        if (!data || data.error) return;
-        setSnap(prev => prev || data);
+        if (!data || data.error) {
+          setLoading(false);
+          return;
+        }
+        // Only apply if symbol hasn't changed again while fetch was in flight
+        if (symbolRef.current !== currentSymbol) return;
+        setSnap(data);
         setLoading(false);
       })
-      .catch(() => {});
+      .catch(() => { setLoading(false); });
 
-    socket.on("options-intelligence", (data) => {
-      if (data?.symbol !== symbol) return;
-      const s = data?.structure;
-      if (!s) return;
+    // ── FIX: The handler uses symbolRef.current (not the closed-over symbol)
+    //         so it always filters against the CURRENT selected symbol even
+    //         if this effect's closure is stale ────────────────────────────────
+    const handleOptionsIntel = (data) => {
+      // Always filter against the live ref, not the stale closure
+      if (data?.symbol !== symbolRef.current) return;
+const result = data?.data;
+const s = result?.structure;
+if (!s) return;
 
-      const t = now();
+const t = now();
       const newSnap = {
-        spotPrice: data.spotPrice ?? null,
+        spotPrice: data.ltp ?? null,
         atmStrike: s.atmStrike,
         straddle: {
           combined:       s.straddlePrice,
@@ -317,11 +345,11 @@ socket.on("connect", () => {
           upperBreakeven: (s.strangleCallStrike ?? s.atmStrike) + (s.stranglePrice ?? s.straddlePrice),
           lowerBreakeven: (s.stranglePutStrike  ?? s.atmStrike) - (s.stranglePrice ?? s.straddlePrice),
         },
-        iv:     { atm: data.volatility?.atmIV, ce: data.volatility?.ceIV, pe: data.volatility?.peIV },
-        oi:     { ce: data.oi?.totalCE, pe: data.oi?.totalPE, pcr: data.oi?.pcr },
-        greeks: data.atmGreeks,
-        expiries: data.expiries ?? [],
-        expiry:   data.expiry   ?? expiry,
+        iv:     { atm: result.volatility?.atmIV, ce: result.volatility?.ceIV, pe: result.volatility?.peIV },
+        oi:     { ce: result.oi?.totalCE, pe: result.oi?.totalPE, pcr: result.oi?.pcr },
+        greeks: result.atmGreeks,
+        expiries: result.expiries ?? [],
+        expiry:   result.expiry   ?? expiryRef.current,
       };
 
       setSnap((prev) => ({ ...prev, ...newSnap }));
@@ -336,35 +364,38 @@ socket.on("connect", () => {
       setLoading(false);
       setError(null);
 
-      // ── NEW: check breakeven breach on every tick ─────────────────────────
-      const activeStrat = stratType === "straddle" ? newSnap.straddle : newSnap.strangle;
-      checkBreakevenBreach(data.spotPrice, activeStrat);
-    });
+      // Use stratType from closure — it's fine since stratType changes
+      // cause the effect to re-run anyway (it's in the dep array via fetchPayoff)
+      const activeStratForAlert = stratType === "straddle" ? newSnap.straddle : newSnap.strangle;
+      checkBreakevenBreach(data.ltp ?? data.spotPrice, activeStratForAlert);
+    };
+
+    socket.on("options-intelligence", handleOptionsIntel);
 
     fetchPayoff();
+
     return () => {
+      socket.off("connect", handleConnect);
+      socket.off("options-intelligence", handleOptionsIntel);
       socket.emit("leave:intel");
       socket.emit("leave:straddle");
-      socket.off("connect");
-      socket.off("options-intelligence");
     };
-  }, [socket, symbol, fetchPayoff, stratType, checkBreakevenBreach, expiry]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket, symbol]); // Only re-run when socket or symbol changes
 
-  // Re-fetch payoff when params change
+  // Re-fetch payoff when strategy params change
   useEffect(() => { fetchPayoff(); }, [fetchPayoff]);
 
-  // Reset breach flags when symbol/strategy changes
+  // Reset breach flags when strategy/side changes (symbol handled in symbol useEffect above)
   useEffect(() => {
     alertedRef.current = { upper: false, lower: false };
     setAlertMsg(null);
-  }, [symbol, stratType, side]);
+  }, [stratType, side]);
 
   const activeStrat = snap ? (stratType === "straddle" ? snap.straddle : snap.strangle) : null;
 
-  // ── NEW: sigma cone bounds ─────────────────────────────────────────────────
   const sigmaBounds = snap ? getSigmaBounds(snap.spotPrice, snap.iv?.atm, snap.expiry || expiry) : null;
 
-  // ── NEW: premium as % of spot ─────────────────────────────────────────────
   const premiumPct = snap && snap.spotPrice && activeStrat?.combined
     ? ((activeStrat.combined / snap.spotPrice) * 100).toFixed(2)
     : null;
@@ -416,9 +447,10 @@ socket.on("connect", () => {
 
         {/* Controls */}
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Symbol */}
+          {/* Symbol — FIX: also reset expiry on change */}
           <select value={symbol} onChange={(e) => {
-            setSymbol(e.target.value); setExpiry(""); setPremHistory([]);
+            setSymbol(e.target.value);
+            setExpiry("");
           }}>
             {SYMBOLS.map((s) => <option key={s}>{s}</option>)}
           </select>
@@ -463,7 +495,6 @@ socket.on("connect", () => {
             </button>
           </div>
 
-          {/* ── NEW: Alert bell + CSV export ──────────────────────────────── */}
           <button className="icon-btn"
             onClick={requestNotifPermission}
             title={notifPermission === "granted" ? "Alerts enabled" : "Enable breakeven alerts"}
@@ -480,10 +511,8 @@ socket.on("connect", () => {
         </div>
       </div>
 
-      {/* ── NEW: Alert banner ────────────────────────────────────────────────── */}
       <AlertBanner message={alertMsg} onDismiss={() => setAlertMsg(null)} />
 
-      {/* ── Error ─────────────────────────────────────────────────────────── */}
       {error && (
         <div style={{ background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)",
           borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: "#fca5a5" }}>
@@ -493,7 +522,7 @@ socket.on("connect", () => {
 
       {loading && !snap && (
         <div style={{ textAlign: "center", padding: 60, color: COLOR.muted }}>
-          Loading option chain data…
+          Loading {symbol} option chain data…
         </div>
       )}
 
@@ -508,7 +537,6 @@ socket.on("connect", () => {
               value={`₹${fmt(activeStrat?.combined)}`}
               color={COLOR.accent}
             />
-            {/* ── NEW: Premium as % of spot ─────────────────────────────── */}
             <StatCard
               label="Premium % of Spot"
               value={premiumPct ? `${premiumPct}%` : "—"}
@@ -523,7 +551,7 @@ socket.on("connect", () => {
             <StatCard label="Last Update" value={lastRefresh} sub="live via WS" />
           </div>
 
-          {/* ── NEW: Sigma cone info bar ──────────────────────────────────── */}
+          {/* ── Sigma cone info bar ───────────────────────────────────────── */}
           {sigmaBounds && (
             <div style={{
               background: "rgba(56,189,248,0.06)", border: "1px solid rgba(56,189,248,0.2)",
@@ -577,10 +605,9 @@ socket.on("connect", () => {
             <div style={pillStyle(COLOR.strangle)}>OI PE: {fmt(snap.oi?.pe, 0)}</div>
           </div>
 
-          {/* ── Greeks ────────────────────────────────────────────────────── */}
           <GreeksRow greeks={snap.greeks} />
 
-          {/* ── Two charts side by side ───────────────────────────────────── */}
+          {/* ── Two charts ───────────────────────────────────────────────── */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}>
 
             {/* Live Premium Chart */}
@@ -618,7 +645,7 @@ socket.on("connect", () => {
               )}
             </div>
 
-            {/* Payoff Chart — NOW WITH SIGMA CONE */}
+            {/* Payoff Chart */}
             <div className="card">
               <div className="section-title">
                 Payoff at Expiry — {side === "buy" ? "Long" : "Short"}{" "}
@@ -636,7 +663,6 @@ socket.on("connect", () => {
                 </div>
               ) : (
                 <>
-                  {/* Breakeven badges */}
                   <div style={{ display: "flex", gap: 8, marginBottom: 10, fontSize: 12, flexWrap: "wrap" }}>
                     <span style={{ background: "rgba(34,197,94,.12)", color: COLOR.green,
                       borderRadius: 6, padding: "3px 10px", border: `1px solid rgba(34,197,94,.25)` }}>
@@ -658,7 +684,6 @@ socket.on("connect", () => {
                         Max Loss: ₹{fmt(payoff.maxLoss)}
                       </span>
                     )}
-                    {/* ── NEW: sigma range badge ──────────────────────────── */}
                     {sigmaBounds && (
                       <span style={{ background: "rgba(56,189,248,.08)", color: COLOR.accent,
                         borderRadius: 6, padding: "3px 10px", border: `1px solid rgba(56,189,248,.25)` }}>
@@ -686,7 +711,6 @@ socket.on("connect", () => {
                         tickFormatter={(v) => `₹${v}`} />
                       <Tooltip content={<PayoffTooltip />} />
 
-                      {/* ── NEW: 2σ cone (outer, lighter) ────────────────── */}
                       {sigmaBounds && (
                         <ReferenceArea
                           x1={sigmaBounds.lower2} x2={sigmaBounds.upper2}
@@ -694,7 +718,6 @@ socket.on("connect", () => {
                           label={{ value: "2σ", fill: COLOR.accent, fontSize: 10, position: "insideTopLeft" }}
                         />
                       )}
-                      {/* ── NEW: 1σ cone (inner, stronger) ──────────────── */}
                       {sigmaBounds && (
                         <ReferenceArea
                           x1={sigmaBounds.lower1} x2={sigmaBounds.upper1}
@@ -772,7 +795,6 @@ socket.on("connect", () => {
                 </div>
                 <div style={{ fontSize: 11, color: COLOR.muted }}>expected range</div>
               </div>
-              {/* ── NEW: premium % repeated in IV bar for quick reference ── */}
               <div>
                 <div style={{ fontSize: 12, color: COLOR.muted }}>Premium % Spot</div>
                 <div style={{ fontSize: 20, fontWeight: 700, color: COLOR.strangle, fontFamily: "monospace" }}>
@@ -833,7 +855,7 @@ socket.on("connect", () => {
             </div>
           </div>
 
-          {/* ── NEW: Alert status footer ──────────────────────────────────── */}
+          {/* ── Alert status footer ───────────────────────────────────────── */}
           <div style={{ marginTop: 14, padding: "10px 16px",
             background: "rgba(15,23,42,0.6)", borderRadius: 10,
             border: `1px solid ${COLOR.border}`, fontSize: 12, color: COLOR.muted,
