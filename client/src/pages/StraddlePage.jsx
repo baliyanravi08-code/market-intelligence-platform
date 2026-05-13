@@ -356,11 +356,16 @@ const newSnap = {
     pcr: result.oi?.pcr,
   },
   greeks:   result.atmGreeks,
-  expiries: result.expiries ?? [],
-  expiry:   result.expiryDate ?? expiryRef.current,
+expiries: undefined,   // never overwrite — snapshot owns expiries
+expiry:   result.expiryDate ?? expiryRef.current,
 };
 
-      setSnap((prev) => ({ ...prev, ...newSnap }));
+      setSnap((prev) => ({
+  ...prev,
+  ...newSnap,
+  expiries: prev?.expiries ?? [],   // never let socket wipe expiries
+  strangle: prev?.strangle ?? newSnap.strangle,  // keep snapshot strangle
+}));
 
       setPremHistory((prev) => [...prev, {
         time:     t,
