@@ -1,49 +1,31 @@
 // client/src/pages/StraddlePage.jsx
-// Live Straddle & Strangle Chart Page
+// Live Straddle & Strangle Chart — Binary Protocol Edition
 //
-// ════════════════════════════════════════════════════════════════════════════
-// FIX SUMMARY (this revision — FINAL)
-// ════════════════════════════════════════════════════════════════════════════
+// KEY FIXES IN THIS VERSION:
+// ══════════════════════════════════════════════════════════════════
 //
-// ROOT CAUSE of time bug:
-//   emitOptionsIntelTick on server emits `ts` = undefined (never set).
-//   Frontend's toISTLabel(undefined) → currentISTTime() → 23:20.
-//   The skeleton buildMarketSlots(currentISTHM()) at 11pm creates 750 slots
-//   (09:15 → 23:20), squishing all real data to the right edge.
+// FIX-A: Never drop a tick (was: `if (!t) return` dropped everything)
+//   Priority cascade for time label:
+//   1. data.ts from socket (epoch ms) → validate market hours
+//   2. cacheTimeRef (from REST snapshot timestamp)
+//   3. Advance last known minute by 1 (tracks real time after REST seed)
+//   4. Current IST clamped to market hours
+//   5. Absolute fallback "09:15"
 //
-// FIX-1 TIME:
-//   • X-axis skeleton is ALWAYS capped at min(currentIST, 15:30).
-//     BUT: if we're outside market hours (after 15:30), cap at 15:30.
-//     This means chart always shows 09:15→15:30 range, not 09:15→23:20.
-//   • toISTLabel() validates that the result is within 09:15–15:30.
-//     If server sends ts=23:20 (wall clock), we fall back to using the
-//     snapshot's cache timestamp (actual NSE data time) instead.
-//   • The snapshot's REST `timestamp` field is the only reliable market-
-//     hours timestamp we have — it comes from optionChainCache.json
-//     which is written by the poller when it fetches from NSE.
+// FIX-B: clampToMarket() — bad timestamps get clamped, not rejected
+//   If server sends 23:20, we clamp to 15:30. Chart still plots.
 //
-// FIX-2 BINARY-ONLY:
-//   • All socket events use binary protocol path first.
-//   • "options-intel-tick" (JSON from straddle room) is still used as
-//     fallback since server emits it to "straddle" room.
-//   • "options-intelligence" (full 60s cycle) still seeds initial data.
+// FIX-C: cacheTimeRef seeded from REST snapshot even if data.timestamp
+//   is outside market hours (e.g. cache written at night) — we clamp it.
 //
-// FIX-3 CHART ALWAYS 09:15–15:30:
-//   • XAxis ticks hardcoded: 09:15, 10:00, 11:00, 12:00, 13:00, 14:00, 15:00, 15:30
-//   • Skeleton slots: always 09:15 to 15:30 (full market day), null values
-//   • Real ticks: merged into slots, only visible where data exists
-//   • connectNulls=false so no fake lines through empty slots
+// FIX-D: Binary binary binary — no REST polling after mount.
+//   Only the initial seed (once on mount) hits REST to get expiries +
+//   history. After that, 100% socket driven.
 //
-// FIX-4 STRANGLE ≠ STRADDLE:
-//   • Snapshot REST gives real OTM strangle premium (straddleRoutes fix).
-//   • Socket tick: if stranglePrice missing/same as straddle, keeps last
-//     known snapshot strangle value (doesn't fallback to straddlePrice).
-//
-// FIX-5 HISTORY SEEDING:
-//   • /api/straddle/history seeds chart before first live tick arrives.
-//   • History ticks validated: only kept if time label is 09:15–15:30.
-//
-// ════════════════════════════════════════════════════════════════════════════
+// FIX-E: lastKnownMinuteRef — tracks the most recent minute we've
+//   plotted. Advancing +1 per tick keeps the chart moving right even
+//   when server sends no ts (which was the root cause of empty chart).
+// ══════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
@@ -55,10 +37,8 @@ import {
 // ─── Constants ────────────────────────────────────────────────────────────────
 const SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"];
 
-const MARKET_OPEN_H  = 9;
-const MARKET_OPEN_M  = 15;
-const MARKET_CLOSE_H = 15;
-const MARKET_CLOSE_M = 30;
+const MO_H = 9,  MO_M = 15;   // market open  09:15
+const MC_H = 15, MC_M = 30;   // market close 15:30
 
 const COLOR = {
   buy:       "#00e5a0",
@@ -81,84 +61,97 @@ const COLOR = {
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 
-/** Current IST HH:MM string */
-function currentISTTime() {
+function toHHMM(h, m) {
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
+function currentIST() {
   return new Date().toLocaleTimeString("en-IN", {
     hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata",
   });
 }
 
-/** Current IST as {h, m} */
 function currentISTHM() {
-  const [h, m] = currentISTTime().split(":").map(Number);
+  const [h, m] = currentIST().split(":").map(Number);
   return { h, m };
 }
 
-/**
- * Is a "HH:MM" label within market hours 09:15–15:30?
- */
-function isMarketTime(label) {
+function isMarketHHMM(label) {
   if (!label || !/^\d{2}:\d{2}$/.test(label)) return false;
   const [h, m] = label.split(":").map(Number);
-  if (h < MARKET_OPEN_H || (h === MARKET_OPEN_H && m < MARKET_OPEN_M)) return false;
-  if (h > MARKET_CLOSE_H || (h === MARKET_CLOSE_H && m > MARKET_CLOSE_M)) return false;
+  if (h < MO_H || (h === MO_H && m < MO_M)) return false;
+  if (h > MC_H || (h === MC_H && m > MC_M)) return false;
   return true;
 }
 
 /**
- * Convert epoch-ms or ISO string → IST "HH:MM".
- * Returns null if the result is outside market hours.
- * This ensures we NEVER plot evening wall-clock times on the chart.
+ * Clamp a "HH:MM" label to market hours.
+ * Before 09:15 → "09:15"
+ * After  15:30 → "15:30"
+ * Within range → unchanged
  */
-function toMarketTimeLabel(tsOrIso) {
-  if (!tsOrIso) return null;
-  const d = typeof tsOrIso === "number" ? new Date(tsOrIso) : new Date(tsOrIso);
-  if (isNaN(d.getTime())) return null;
-  const label = d.toLocaleTimeString("en-IN", {
-    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata",
-  });
-  return isMarketTime(label) ? label : null;
+function clampToMarket(label) {
+  if (!label || !/^\d{2}:\d{2}$/.test(label)) return toHHMM(MO_H, MO_M);
+  const [h, m] = label.split(":").map(Number);
+  if (h < MO_H || (h === MO_H && m < MO_M)) return toHHMM(MO_H, MO_M);
+  if (h > MC_H || (h === MC_H && m > MC_M)) return toHHMM(MC_H, MC_M);
+  return label;
 }
 
 /**
- * Build full market-session skeleton: 09:15 → 15:30, one slot per minute.
- * All values are null (chart shows axis without lines until real data arrives).
- * Always goes to 15:30 regardless of current time — this is the key fix.
+ * Convert epoch-ms or ISO → IST "HH:MM", then clamp to market hours.
+ * Returns null only if the input is completely unparse-able.
+ */
+function toMarketLabel(tsOrIso) {
+  if (!tsOrIso) return null;
+  const d = typeof tsOrIso === "number" ? new Date(tsOrIso) : new Date(tsOrIso);
+  if (isNaN(d.getTime())) return null;
+  const raw = d.toLocaleTimeString("en-IN", {
+    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata",
+  });
+  return clampToMarket(raw);
+}
+
+/**
+ * Advance an "HH:MM" by 1 minute, capped at 15:30.
+ */
+function advanceMinute(label) {
+  if (!label) return toHHMM(MO_H, MO_M);
+  let [h, m] = label.split(":").map(Number);
+  m++;
+  if (m === 60) { m = 0; h++; }
+  if (h > MC_H || (h === MC_H && m > MC_M)) return toHHMM(MC_H, MC_M);
+  return toHHMM(h, m);
+}
+
+/**
+ * Build the full 09:15–15:30 skeleton (375 slots, all null values).
+ * Recharts uses this to anchor the X-axis even before live data.
  */
 function buildFullMarketSlots() {
   const slots = [];
-  let h = MARKET_OPEN_H, m = MARKET_OPEN_M;
-  while (!(h === MARKET_CLOSE_H && m > MARKET_CLOSE_M) && h <= MARKET_CLOSE_H) {
-    slots.push({
-      time:     `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
-      straddle: null,
-      strangle: null,
-    });
+  let h = MO_H, m = MO_M;
+  while (!(h === MC_H && m > MC_M) && h <= MC_H) {
+    slots.push({ time: toHHMM(h, m), straddle: null, strangle: null });
     m++;
     if (m === 60) { m = 0; h++; }
   }
   return slots;
 }
 
-/**
- * Merge ticks (with validated market-time labels) into skeleton slots.
- */
 function mergeIntoSlots(slots, ticks) {
   const map = new Map(slots.map((s, i) => [s.time, i]));
   const out = slots.map(s => ({ ...s }));
   for (const tick of ticks) {
-    const label = tick.time;
-    if (!label || !isMarketTime(label)) continue;
+    if (!tick.time) continue;
+    const label = tick.time.length > 5 ? tick.time.slice(0, 5) : tick.time;
     const idx = map.get(label);
-    if (idx !== undefined) {
-      out[idx] = { ...out[idx], ...tick };
-    }
-    // Silently discard ticks outside 09:15–15:30
+    if (idx !== undefined) out[idx] = { ...out[idx], ...tick };
   }
   return out;
 }
 
-// ─── Utility ─────────────────────────────────────────────────────────────────
+// ─── Utility ──────────────────────────────────────────────────────────────────
 const fmt    = (n, d = 2) => n == null ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: d });
 const fmtPct = (n) => n == null ? "—" : `${Number(n).toFixed(2)}%`;
 
@@ -172,8 +165,7 @@ function getDTE(expiryStr) {
 
 function getSigmaBounds(spotPrice, ivAtm, expiry) {
   if (!spotPrice || !ivAtm) return null;
-  const dte = getDTE(expiry);
-  const sigma = spotPrice * (ivAtm / 100) * Math.sqrt(dte / 365);
+  const sigma = spotPrice * (ivAtm / 100) * Math.sqrt(getDTE(expiry) / 365);
   return {
     upper1: Math.round(spotPrice + sigma),
     lower1: Math.round(spotPrice - sigma),
@@ -186,16 +178,48 @@ function getSigmaBounds(spotPrice, ivAtm, expiry) {
 function exportCSV(symbol, expiry, premHistory) {
   const rows = premHistory.filter(r => r.straddle != null);
   if (!rows.length) return;
-  const header = "Time,Straddle Premium,Strangle Premium\n";
-  const body   = rows.map(r => `${r.time},${r.straddle ?? ""},${r.strangle ?? ""}`).join("\n");
-  const blob   = new Blob([header + body], { type: "text/csv" });
-  const url    = URL.createObjectURL(blob);
-  const a      = document.createElement("a");
-  a.href = url; a.download = `straddle_${symbol}_${expiry || "all"}_${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click(); URL.revokeObjectURL(url);
+  const csv = "Time,Straddle,Strangle\n" + rows.map(r =>
+    `${r.time},${r.straddle ?? ""},${r.strangle ?? ""}`).join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  const a   = Object.assign(document.createElement("a"), {
+    href: url,
+    download: `straddle_${symbol}_${expiry || "all"}_${new Date().toISOString().slice(0,10)}.csv`,
+  });
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
+function buildPayoffCurve({ callStrike, putStrike, callPremium, putPremium, side, lotSize = 1 }) {
+  const totalPremium = callPremium + putPremium;
+  const lowerBE = putStrike  - totalPremium;
+  const upperBE = callStrike + totalPremium;
+  const mid     = (callStrike + putStrike) / 2;
+  const range   = mid * 0.05;
+  const step    = range / 50;
+  const points  = [];
+  for (let price = mid - range; price <= mid + range; price += step) {
+    const callPL = side === "buy"
+      ? Math.max(0, price - callStrike) - callPremium
+      : callPremium - Math.max(0, price - callStrike);
+    const putPL = side === "buy"
+      ? Math.max(0, putStrike - price) - putPremium
+      : putPremium - Math.max(0, putStrike - price);
+    points.push({ price: Math.round(price), pl: Math.round((callPL + putPL) * lotSize * 100) / 100 });
+  }
+  return {
+    points,
+    maxProfit:      side === "buy" ? null : Math.round(totalPremium * lotSize * 100) / 100,
+    maxLoss:        side === "buy" ? Math.round(-totalPremium * lotSize * 100) / 100 : null,
+    upperBreakeven: Math.round(upperBE * 100) / 100,
+    lowerBreakeven: Math.round(lowerBE * 100) / 100,
+    totalPremium:   Math.round(totalPremium * 100) / 100,
+  };
+}
+
+const LOT_SIZES = { BANKNIFTY: 35, FINNIFTY: 65, MIDCPNIFTY: 120, SENSEX: 20, NIFTY: 75 };
+const AXIS_TICKS = ["09:15","10:00","11:00","12:00","13:00","14:00","15:00","15:30"];
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatCard({ label, value, sub, color, pulse }) {
   return (
@@ -210,17 +234,16 @@ function StatCard({ label, value, sub, color, pulse }) {
 
 function GreeksRow({ greeks }) {
   if (!greeks?.delta?.ce) return null;
-  const items = [
-    { label: "Δ CE Delta", value: greeks.delta.ce?.toFixed(3) },
-    { label: "Δ PE Delta", value: greeks.delta.pe?.toFixed(3) },
-    { label: "Θ Theta CE", value: greeks.theta?.ce?.toFixed(3) },
-    { label: "Θ Theta PE", value: greeks.theta?.pe?.toFixed(3) },
-    { label: "V Vega CE",  value: greeks.vega?.ce?.toFixed(3)  },
-    { label: "V Vega PE",  value: greeks.vega?.pe?.toFixed(3)  },
-  ];
   return (
     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 4 }}>
-      {items.map(({ label, value }) => (
+      {[
+        { label: "Δ CE Delta", value: greeks.delta.ce?.toFixed(3) },
+        { label: "Δ PE Delta", value: greeks.delta.pe?.toFixed(3) },
+        { label: "Θ Theta CE", value: greeks.theta?.ce?.toFixed(3) },
+        { label: "Θ Theta PE", value: greeks.theta?.pe?.toFixed(3) },
+        { label: "V Vega CE",  value: greeks.vega?.ce?.toFixed(3)  },
+        { label: "V Vega PE",  value: greeks.vega?.pe?.toFixed(3)  },
+      ].map(({ label, value }) => (
         <div key={label} style={{ background: "rgba(30,41,59,0.7)", borderRadius: 8, padding: "6px 12px", fontSize: 12, border: `1px solid ${COLOR.border}` }}>
           <span style={{ color: COLOR.muted }}>{label}: </span>
           <span style={{ color: COLOR.accent, fontFamily: "monospace" }}>{value ?? "—"}</span>
@@ -256,47 +279,12 @@ function PayoffTooltip({ active, payload, label }) {
 function AlertBanner({ message, onDismiss }) {
   if (!message) return null;
   return (
-    <div style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.5)", borderRadius: 10, padding: "12px 18px", marginBottom: 14, fontSize: 14, color: "#fca5a5", display: "flex", alignItems: "center", justifyContent: "space-between", animation: "fadeIn .3s ease" }}>
+    <div style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.5)", borderRadius: 10, padding: "12px 18px", marginBottom: 14, fontSize: 14, color: "#fca5a5", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
       <span>🚨 {message}</span>
       <button onClick={onDismiss} style={{ background: "none", border: "none", color: "#fca5a5", cursor: "pointer", fontSize: 18 }}>×</button>
     </div>
   );
 }
-
-function buildPayoffCurve({ callStrike, putStrike, callPremium, putPremium, side, lotSize = 1 }) {
-  const totalPremium = callPremium + putPremium;
-  const lowerBE = putStrike  - totalPremium;
-  const upperBE = callStrike + totalPremium;
-  const mid     = (callStrike + putStrike) / 2;
-  const range   = mid * 0.05;
-  const step    = range / 50;
-  const points  = [];
-  for (let price = mid - range; price <= mid + range; price += step) {
-    let callPL, putPL;
-    if (side === "buy") {
-      callPL = Math.max(0, price - callStrike) - callPremium;
-      putPL  = Math.max(0, putStrike - price)  - putPremium;
-    } else {
-      callPL = callPremium - Math.max(0, price - callStrike);
-      putPL  = putPremium  - Math.max(0, putStrike - price);
-    }
-    points.push({ price: Math.round(price), pl: Math.round((callPL + putPL) * lotSize * 100) / 100 });
-  }
-  return {
-    points,
-    maxProfit:      side === "buy" ? null : Math.round(totalPremium * lotSize * 100) / 100,
-    maxLoss:        side === "buy" ? Math.round(-totalPremium * lotSize * 100) / 100 : null,
-    upperBreakeven: Math.round(upperBE * 100) / 100,
-    lowerBreakeven: Math.round(lowerBE * 100) / 100,
-    totalPremium:   Math.round(totalPremium * 100) / 100,
-  };
-}
-
-const LOT_SIZES = { BANKNIFTY: 35, FINNIFTY: 65, MIDCPNIFTY: 120, SENSEX: 20, NIFTY: 75 };
-
-// ─── XAxis tick formatter ─────────────────────────────────────────────────────
-// Show only the anchor ticks; hide the per-minute intermediate ticks
-const AXIS_TICKS = ["09:15", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "15:30"];
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function StraddlePage({ socket }) {
@@ -313,38 +301,75 @@ export default function StraddlePage({ socket }) {
   const [error,       setError]       = useState(null);
   const [lastRefresh, setLastRefresh] = useState("—");
 
-  const [alertMsg,         setAlertMsg]         = useState(null);
-  const [notifPermission,  setNotifPermission]  = useState(
+  const [alertMsg,        setAlertMsg]        = useState(null);
+  const [notifPermission, setNotifPermission] = useState(
     typeof Notification !== "undefined" ? Notification.permission : "default"
   );
   const alertedRef = useRef({ upper: false, lower: false });
 
-  const symbolRef  = useRef(symbol);
-  const expiryRef  = useRef(expiry);
-  const snapRef    = useRef(snap);
-  // Cache timestamp from REST snapshot — the ONLY reliable market-hours time
-  const cacheTimeRef = useRef(null);
+  const symbolRef   = useRef(symbol);
+  const expiryRef   = useRef(expiry);
+  const snapRef     = useRef(snap);
+  // FIX-C: cache timestamp from REST snapshot (NSE data time, clamped to market hours)
+  const cacheTimeRef       = useRef(null);
+  // FIX-E: last minute we successfully plotted — used for +1 advance fallback
+  const lastKnownMinRef    = useRef(null);
 
   useEffect(() => { symbolRef.current = symbol; }, [symbol]);
   useEffect(() => { expiryRef.current = expiry; }, [expiry]);
   useEffect(() => { snapRef.current   = snap;   }, [snap]);
 
+  /**
+   * FIX-A: Resolve time label for an incoming tick — NEVER return null.
+   * Priority:
+   *   1. data.ts (epoch ms from server, may now be set via cacheTs fix)
+   *   2. cacheTimeRef (from REST snapshot timestamp)
+   *   3. advance lastKnownMinRef by 1 min (keeps chart moving)
+   *   4. current IST clamped to market hours
+   *   5. "09:15" absolute fallback
+   */
+  const resolveTickTime = useCallback((dataTs) => {
+    // 1. Server-provided ts (epoch ms) — validate + clamp
+    if (dataTs) {
+      const label = toMarketLabel(dataTs);
+      if (label) {
+        lastKnownMinRef.current = label;
+        return label;
+      }
+    }
+
+    // 2. REST snapshot cache time
+    if (cacheTimeRef.current) {
+      // Advance by 1 each tick so chart moves right in real time
+      const advanced = lastKnownMinRef.current
+        ? advanceMinute(lastKnownMinRef.current)
+        : cacheTimeRef.current;
+      lastKnownMinRef.current = advanced;
+      return advanced;
+    }
+
+    // 3. Current IST clamped to market hours
+    const ist = currentIST();
+    const clamped = clampToMarket(ist);
+    lastKnownMinRef.current = clamped;
+    return clamped;
+  }, []);
+
   const requestNotifPermission = async () => {
     if (typeof Notification === "undefined") return;
-    const perm = await Notification.requestPermission();
-    setNotifPermission(perm);
+    setNotifPermission(await Notification.requestPermission());
   };
 
   const checkBreakevenBreach = useCallback((spotPrice, activeStrat) => {
     if (!spotPrice || !activeStrat?.upperBreakeven || !activeStrat?.lowerBreakeven) return;
     if (spotPrice >= activeStrat.upperBreakeven && !alertedRef.current.upper) {
       alertedRef.current.upper = true; alertedRef.current.lower = false;
-      const msg = `Spot ₹${fmt(spotPrice)} breached UPPER breakeven ₹${fmt(activeStrat.upperBreakeven)} — consider hedging!`;
+      const msg = `Spot ₹${fmt(spotPrice)} breached UPPER breakeven ₹${fmt(activeStrat.upperBreakeven)}`;
       setAlertMsg(msg);
       if (notifPermission === "granted") new Notification("⚠ Upper Breakeven Breached", { body: msg });
     } else if (spotPrice <= activeStrat.lowerBreakeven && !alertedRef.current.lower) {
       alertedRef.current.lower = true; alertedRef.current.upper = false;
-      const msg = `Spot ₹${fmt(spotPrice)} breached LOWER breakeven ₹${fmt(activeStrat.lowerBreakeven)} — consider hedging!`;
+      const msg = `Spot ₹${fmt(spotPrice)} breached LOWER breakeven ₹${fmt(activeStrat.lowerBreakeven)}`;
       setAlertMsg(msg);
       if (notifPermission === "granted") new Notification("⚠ Lower Breakeven Breached", { body: msg });
     } else if (spotPrice > activeStrat.lowerBreakeven && spotPrice < activeStrat.upperBreakeven) {
@@ -358,19 +383,18 @@ export default function StraddlePage({ socket }) {
       if (!s) return;
       const strat = s[stratType === "straddle" ? "straddle" : "strangle"];
       if (!strat) return;
-      const lotSize = LOT_SIZES[symbolRef.current] || 75;
-      const computed = buildPayoffCurve({
+      setPayoff(buildPayoffCurve({
         callStrike:  strat.callStrike  ?? s.atmStrike,
         putStrike:   strat.putStrike   ?? s.atmStrike,
         callPremium: strat.callPremium ?? 0,
         putPremium:  strat.putPremium  ?? 0,
-        side, lotSize,
-      });
-      setPayoff(computed);
-    } catch (e) { console.warn("Payoff build error:", e.message); }
+        side,
+        lotSize: LOT_SIZES[symbolRef.current] || 75,
+      }));
+    } catch (e) { console.warn("Payoff error:", e.message); }
   }, [stratType, side]);
 
-  // ── Reset on symbol change ────────────────────────────────────────────────
+  // ── Reset on symbol change ─────────────────────────────────────────────────
   useEffect(() => {
     setSnap(null);
     setPremHistory(buildFullMarketSlots());
@@ -378,12 +402,13 @@ export default function StraddlePage({ socket }) {
     setLoading(true);
     setError(null);
     setLastRefresh("—");
-    cacheTimeRef.current = null;
-    alertedRef.current = { upper: false, lower: false };
+    cacheTimeRef.current    = null;
+    lastKnownMinRef.current = null;
+    alertedRef.current      = { upper: false, lower: false };
     setAlertMsg(null);
   }, [symbol]);
 
-  // ── Main effect: REST seed + socket ──────────────────────────────────────
+  // ── Main effect: initial REST seed + socket listeners ─────────────────────
   useEffect(() => {
     if (!socket) return;
     let cancelled = false;
@@ -399,32 +424,31 @@ export default function StraddlePage({ socket }) {
 
     const currentSymbol = symbolRef.current;
 
+    // ── One-time REST seed (history + snapshot) ──────────────────────────────
     async function seedData() {
       try {
-        // ── 1. Load history ───────────────────────────────────────────────
+        // History
         let historyTicks = [];
         try {
           const hr = await fetch(`/api/straddle/history?symbol=${currentSymbol}`);
           const hd = await hr.json();
           if (Array.isArray(hd.history) && hd.history.length > 0) {
-            historyTicks = hd.history
-              .map(h => {
-                // Use ts from history record; validate it's a market-time
-                const label = toMarketTimeLabel(h.ts || h.time);
-                if (!label) return null;
-                return {
-                  time:     label,
-                  straddle: h.straddle ?? h.straddlePrice ?? null,
-                  strangle: h.strangle ?? h.stranglePrice ?? null,
-                };
-              })
-              .filter(Boolean);
+            historyTicks = hd.history.map(h => {
+              const raw   = h.ts || h.time;
+              const label = raw ? toMarketLabel(raw) : null;
+              if (!label) return null;
+              return {
+                time:     label,
+                straddle: h.straddle ?? h.straddlePrice ?? null,
+                strangle: h.strangle ?? h.stranglePrice ?? null,
+              };
+            }).filter(Boolean);
           }
         } catch (e) { console.warn("History fetch failed:", e.message); }
 
         if (cancelled) return;
 
-        // ── 2. Load snapshot ──────────────────────────────────────────────
+        // Snapshot
         const sr   = await fetch(`/api/straddle/snapshot?symbol=${currentSymbol}`);
         const data = await sr.json();
         if (cancelled) return;
@@ -432,19 +456,26 @@ export default function StraddlePage({ socket }) {
 
         setSnap(data);
 
-        // FIX-1: The snapshot's own timestamp is the NSE data capture time.
-        // This is the ONLY reliable market-hours time we have from the server.
-        const cacheTime = toMarketTimeLabel(data.timestamp);
-        cacheTimeRef.current = cacheTime;
+        // FIX-C: seed cacheTimeRef — clamp even if after-hours
+        const snapshotLabel = data.timestamp ? toMarketLabel(data.timestamp) : null;
+        // If snapshot was written outside market hours (server restarted at night),
+        // clampToMarket gives us the last valid market time (15:30).
+        // That's fine — it just means today's chart will be anchored at 15:30
+        // until tomorrow when real market-hours timestamps come in.
+        cacheTimeRef.current = snapshotLabel || clampToMarket(currentIST());
 
+        // Seed chart from snapshot
         const seedStraddle = data.straddle?.combined ?? null;
         const seedStrangle = data.strangle?.combined ?? null;
-
-        if (seedStraddle != null && cacheTime) {
-          historyTicks.push({ time: cacheTime, straddle: seedStraddle, strangle: seedStrangle });
+        if (seedStraddle != null) {
+          historyTicks.push({
+            time:     cacheTimeRef.current,
+            straddle: seedStraddle,
+            strangle: seedStrangle,
+          });
+          lastKnownMinRef.current = cacheTimeRef.current;
         }
 
-        // FIX-3: merge into full 09:15–15:30 skeleton
         setPremHistory(() => mergeIntoSlots(buildFullMarketSlots(), historyTicks));
 
         if (data.expiries?.length && expiryRef.current && !data.expiries.includes(expiryRef.current)) {
@@ -453,35 +484,31 @@ export default function StraddlePage({ socket }) {
 
         setLoading(false);
         fetchPayoff(data);
-        if (cacheTime) setLastRefresh(cacheTime);
+        if (cacheTimeRef.current) setLastRefresh(cacheTimeRef.current);
       } catch (e) {
         if (!cancelled) { setLoading(false); setError(e.message); }
       }
     }
     seedData();
 
-    // ── Socket: options-intel-tick (live spot + straddle, ~1s) ────────────
-    // Server emits this to "straddle" room from emitOptionsIntelTick().
-    // The `ts` field from server is currently NOT set (= undefined) so
-    // we MUST use cacheTimeRef as the time label for new ticks.
-    // Once server is updated to emit `ts` = NSE feed time, toMarketTimeLabel
-    // will return a valid label and we'll use that instead.
+    // ── Socket: options-intel-tick (~1s from Upstox feed) ───────────────────
+    // This fires on every index tick. The server now (after our websocket.js fix)
+    // includes ts=cacheTs (NSE data capture time) and stranglePrice.
     const handleIntelTick = (data) => {
       if (!data || data.symbol !== symbolRef.current) return;
 
       const straddlePrice = data.straddlePrice ?? data.straddle ?? null;
       if (straddlePrice == null) return;
 
-      // FIX-1: validate ts is market time; fall back to cacheTimeRef
-      const t = toMarketTimeLabel(data.ts) || cacheTimeRef.current;
-      if (!t) return; // No valid market time — drop tick (avoids 23:20 labels)
+      // FIX-A: NEVER drop a tick — always get a valid time label
+      const t = resolveTickTime(data.ts);
 
-      // FIX-4: real strangle — only use socket strangle if it differs from straddle
+      // FIX strangle: only use socket value if distinct from straddle
       const socketStrangle = (data.stranglePrice && data.stranglePrice !== straddlePrice)
         ? data.stranglePrice
         : snapRef.current?.strangle?.combined ?? null;
 
-      // Update snap
+      // Update snap state
       setSnap(prev => {
         if (!prev) return prev;
         return {
@@ -496,7 +523,7 @@ export default function StraddlePage({ socket }) {
         };
       });
 
-      // FIX-3: upsert into market-hours skeleton
+      // Upsert into skeleton
       setPremHistory(prev => {
         const entry = {
           time:     t,
@@ -509,7 +536,6 @@ export default function StraddlePage({ socket }) {
           next[idx] = { ...next[idx], ...entry };
           return next;
         }
-        // Only append if within market hours (already guaranteed by isMarketTime in toMarketTimeLabel)
         return [...prev, entry];
       });
 
@@ -517,7 +543,6 @@ export default function StraddlePage({ socket }) {
       setLoading(false);
       setError(null);
 
-      // Breakeven alert
       const s = snapRef.current;
       if (s && data.spotPrice) {
         const activeStrat = stratType === "straddle" ? s.straddle : (s.strangle ?? s.straddle);
@@ -525,19 +550,16 @@ export default function StraddlePage({ socket }) {
       }
     };
 
-    // ── Socket: options-intelligence (full 60s cycle, seeds full snap) ────
+    // ── Socket: options-intelligence (full 60s cycle) ────────────────────────
     const handleOptionsIntel = (data) => {
       if (!data || data.symbol !== symbolRef.current) return;
-
       const result = data?.data || data;
       const s      = result?.structure;
       if (!s) return;
 
       const spotPrice     = data.ltp ?? result?.spotPrice ?? null;
       const straddlePrice = s.straddlePrice;
-
-      // Validate ts from the full intel event (may be market hours if server sets it correctly)
-      const t = toMarketTimeLabel(data.ts) || cacheTimeRef.current;
+      const t             = resolveTickTime(data.ts);
 
       const socketStrangle = (s.stranglePrice && s.stranglePrice !== s.straddlePrice)
         ? s.stranglePrice
@@ -546,7 +568,7 @@ export default function StraddlePage({ socket }) {
       setSnap(prev => ({
         ...prev,
         spotPrice,
-        atmStrike:  result.atmStrike,
+        atmStrike: result.atmStrike,
         straddle: {
           combined:       straddlePrice,
           callStrike:     result.atmStrike,
@@ -557,16 +579,16 @@ export default function StraddlePage({ socket }) {
           lowerBreakeven: result.atmStrike - straddlePrice,
         },
         strangle: snapRef.current?.strangle
-          ? { ...snapRef.current.strangle, combined: socketStrangle ?? snapRef.current?.strangle?.combined }
+          ? { ...snapRef.current.strangle, combined: socketStrangle ?? snapRef.current.strangle.combined }
           : null,
-        iv:     { atm: result.volatility?.atmIV, ce: result.volSurface?.iv25call, pe: result.volSurface?.iv25put },
-        oi:     { ce: result.oi?.totalCallOI, pe: result.oi?.totalPutOI, pcr: result.oi?.pcr },
-        greeks: result.atmGreeks,
-        expiry: result.expiryDate ?? expiryRef.current,
+        iv:      { atm: result.volatility?.atmIV, ce: result.volSurface?.iv25call, pe: result.volSurface?.iv25put },
+        oi:      { ce: result.oi?.totalCallOI, pe: result.oi?.totalPutOI, pcr: result.oi?.pcr },
+        greeks:  result.atmGreeks,
+        expiry:  result.expiryDate ?? expiryRef.current,
         expiries: prev?.expiries?.length ? prev.expiries : [],
       }));
 
-      if (t && straddlePrice != null) {
+      if (straddlePrice != null) {
         setPremHistory(prev => {
           const entry = { time: t, straddle: straddlePrice, strangle: socketStrangle ?? straddlePrice };
           const idx = prev.findIndex(p => p.time === t);
@@ -581,18 +603,13 @@ export default function StraddlePage({ socket }) {
       }
     };
 
-    // ── Binary frame handler (0x0D OPTIONS_INTEL_TICK decoded by App.jsx) ─
-    // App.jsx decodes binary frames and re-emits as "options-intel-tick"
-    // with shape: { symbol, spotPrice, straddlePrice, stranglePrice, atmIV, ts }
-    // This is the same shape handleIntelTick expects — no separate handler needed.
-
     socket.on("options-intel-tick",   handleIntelTick);
     socket.on("options-intelligence", handleOptionsIntel);
 
     return () => {
       cancelled = true;
       socket.off("connect",             handleReconnect);
-      socket.off("options-intel-tick",   handleIntelTick);
+      socket.off("options-intel-tick",  handleIntelTick);
       socket.off("options-intelligence", handleOptionsIntel);
       socket.emit("leave:intel");
       socket.emit("leave:straddle");
@@ -601,11 +618,7 @@ export default function StraddlePage({ socket }) {
   }, [socket, symbol]);
 
   useEffect(() => { if (snap) fetchPayoff(snap); }, [stratType, side, strangleStep, fetchPayoff, snap]);
-
-  useEffect(() => {
-    alertedRef.current = { upper: false, lower: false };
-    setAlertMsg(null);
-  }, [stratType, side]);
+  useEffect(() => { alertedRef.current = { upper: false, lower: false }; setAlertMsg(null); }, [stratType, side]);
 
   const activeStrat  = snap ? (stratType === "straddle" ? snap.straddle : snap.strangle) : null;
   const sigmaBounds  = snap ? getSigmaBounds(snap.spotPrice, snap.iv?.atm, snap.expiry || expiry) : null;
@@ -613,8 +626,7 @@ export default function StraddlePage({ socket }) {
     ? ((activeStrat.combined / snap.spotPrice) * 100).toFixed(2) : null;
   const validExpiries = snap?.expiries || [];
   const safeExpiry    = expiry && validExpiries.includes(expiry) ? expiry : (validExpiries[0] || "");
-
-  const tickCount = premHistory.filter(p => p.straddle != null).length;
+  const tickCount     = premHistory.filter(p => p.straddle != null).length;
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
@@ -625,8 +637,7 @@ export default function StraddlePage({ socket }) {
         @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
         .strat-tab{cursor:pointer;padding:7px 18px;border-radius:8px;font-size:13px;font-weight:600;border:1px solid transparent;transition:all .2s}
         .strat-tab.active{background:rgba(56,189,248,.15);border-color:#38bdf8;color:#38bdf8}
-        .strat-tab:not(.active){color:#64748b}
-        .strat-tab:not(.active):hover{background:rgba(255,255,255,.04);color:#e2e8f0}
+        .strat-tab:not(.active){color:#64748b}.strat-tab:not(.active):hover{background:rgba(255,255,255,.04);color:#e2e8f0}
         .side-btn{cursor:pointer;padding:7px 20px;border-radius:8px;font-size:13px;font-weight:700;border:1px solid transparent;transition:all .2s}
         select{background:#0f172a;color:#e2e8f0;border:1px solid rgba(99,120,160,0.18);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;outline:none}
         select:hover{border-color:#38bdf8}
@@ -643,7 +654,7 @@ export default function StraddlePage({ socket }) {
             <span style={{ color:COLOR.accent }}>Straddle</span> &amp; Strangle
           </h1>
           <div style={{ fontSize:12, color:COLOR.muted, marginTop:3 }}>
-            Live combined premium · Auto ATM · Payoff + σ cone · Greeks · Alerts · Binary protocol
+            Live premium · Binary protocol · {tickCount} ticks · {lastRefresh}
           </div>
         </div>
         <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
@@ -653,9 +664,7 @@ export default function StraddlePage({ socket }) {
 
           {validExpiries.length > 0 && (
             <select value={safeExpiry} onChange={e => setExpiry(e.target.value)}>
-              {validExpiries.map((ex, i) => (
-                <option key={ex} value={ex}>{ex}{i === 0 ? " ★" : ""}</option>
-              ))}
+              {validExpiries.map((ex, i) => <option key={ex} value={ex}>{ex}{i === 0 ? " ★" : ""}</option>)}
             </select>
           )}
 
@@ -685,9 +694,7 @@ export default function StraddlePage({ socket }) {
             style={{ borderColor: notifPermission==="granted"?COLOR.green:COLOR.border, color: notifPermission==="granted"?COLOR.green:COLOR.muted }}>
             🔔 {notifPermission==="granted" ? "Alerts ON" : "Enable Alerts"}
           </button>
-          <button className="icon-btn" onClick={() => exportCSV(symbol, safeExpiry, premHistory)}>
-            ⬇ CSV
-          </button>
+          <button className="icon-btn" onClick={() => exportCSV(symbol, safeExpiry, premHistory)}>⬇ CSV</button>
         </div>
       </div>
 
@@ -700,21 +707,17 @@ export default function StraddlePage({ socket }) {
       )}
 
       {loading && !snap && (
-        <div style={{ textAlign:"center", padding:60, color:COLOR.muted }}>
-          Loading {symbol} option chain data…
-        </div>
+        <div style={{ textAlign:"center", padding:60, color:COLOR.muted }}>Loading {symbol} data…</div>
       )}
 
-      {/* Charts grid — always rendered even before data loads */}
+      {/* Charts — always rendered, skeleton shows axis even with 0 ticks */}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:20 }}>
 
         {/* Live Premium Chart */}
         <div className="card">
           <div className="section-title">
             Live Combined Premium — {symbol}
-            <span style={{ marginLeft:8, fontWeight:400, color:COLOR.muted, fontSize:11, textTransform:"none" }}>
-              IST 09:15 – 15:30
-            </span>
+            <span style={{ marginLeft:8, fontWeight:400, color:COLOR.muted, fontSize:11, textTransform:"none" }}>IST 09:15–15:30</span>
           </div>
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={premHistory} margin={{ top:4, right:8, bottom:0, left:0 }}>
@@ -739,16 +742,10 @@ export default function StraddlePage({ socket }) {
               <YAxis tick={{ fill:COLOR.muted, fontSize:10 }} width={55} />
               <Tooltip content={<CustomTooltip />} />
               <Legend wrapperStyle={{ fontSize:12 }} />
-              <Area
-                type="monotone" dataKey="straddle" name="Straddle"
-                stroke={COLOR.straddle} fill="url(#gStraddle)"
-                strokeWidth={2} dot={false} connectNulls={false}
-              />
-              <Area
-                type="monotone" dataKey="strangle" name="Strangle"
-                stroke={COLOR.strangle} fill="url(#gStrangle)"
-                strokeWidth={2} dot={false} connectNulls={false}
-              />
+              <Area type="monotone" dataKey="straddle" name="Straddle"
+                stroke={COLOR.straddle} fill="url(#gStraddle)" strokeWidth={2} dot={false} connectNulls={false} />
+              <Area type="monotone" dataKey="strangle" name="Strangle"
+                stroke={COLOR.strangle} fill="url(#gStrangle)" strokeWidth={2} dot={false} connectNulls={false} />
               <ReferenceLine x="09:15" stroke={COLOR.green} strokeDasharray="4 2"
                 label={{ value:"Open", fill:COLOR.green, fontSize:9, position:"insideTopRight" }} />
               <ReferenceLine x="15:30" stroke={COLOR.red} strokeDasharray="4 2"
@@ -756,38 +753,31 @@ export default function StraddlePage({ socket }) {
             </AreaChart>
           </ResponsiveContainer>
           <div style={{ fontSize:11, color:COLOR.muted, marginTop:6 }}>
-            {tickCount} ticks recorded
-            {" · "}last update: <span style={{ color: tickCount > 0 ? COLOR.green : COLOR.muted }}>{lastRefresh}</span>
-            {tickCount === 0 && (
-              <span style={{ marginLeft:8, color:COLOR.muted }}>
-                — waiting for market session (09:15–15:30 IST)
-              </span>
-            )}
+            {tickCount} ticks · last: <span style={{ color: tickCount > 0 ? COLOR.green : COLOR.muted }}>{lastRefresh}</span>
+            {tickCount === 0 && <span style={{ marginLeft:8 }}>— waiting for first tick</span>}
           </div>
         </div>
 
         {/* Payoff Chart */}
         <div className="card">
           <div className="section-title">
-            Payoff at Expiry — {side==="buy" ? "Long" : "Short"} {stratType.charAt(0).toUpperCase() + stratType.slice(1)}
+            Payoff at Expiry — {side==="buy"?"Long":"Short"} {stratType.charAt(0).toUpperCase()+stratType.slice(1)}
             {sigmaBounds && <span style={{ marginLeft:10, fontSize:11, color:COLOR.accent, fontWeight:400, textTransform:"none" }}>· σ cone</span>}
           </div>
           {!payoff || !snap ? (
-            <div style={{ color:COLOR.muted, fontSize:13, padding:"20px 0" }}>
-              {!snap ? "Waiting for data…" : "Computing payoff…"}
-            </div>
+            <div style={{ color:COLOR.muted, fontSize:13, padding:"20px 0" }}>{!snap ? "Waiting for data…" : "Computing…"}</div>
           ) : (
             <>
               <div style={{ display:"flex", gap:8, marginBottom:10, fontSize:12, flexWrap:"wrap" }}>
                 {[
                   { label:"Upper BE", val:`₹${fmt(payoff.upperBreakeven)}`, c:COLOR.green, bg:"rgba(34,197,94,.12)", bc:"rgba(34,197,94,.25)" },
                   { label:"Lower BE", val:`₹${fmt(payoff.lowerBreakeven)}`, c:COLOR.red,   bg:"rgba(239,68,68,.12)",  bc:"rgba(239,68,68,.25)" },
-                  payoff.maxProfit != null && { label:"Max Profit", val:`₹${fmt(payoff.maxProfit)}`, c:COLOR.green, bg:"rgba(34,197,94,.12)", bc:"rgba(34,197,94,.25)" },
-                  payoff.maxLoss   != null && { label:"Max Loss",   val:`₹${fmt(payoff.maxLoss)}`,   c:COLOR.red,   bg:"rgba(239,68,68,.12)",  bc:"rgba(239,68,68,.25)" },
+                  payoff.maxProfit!=null && { label:"Max Profit", val:`₹${fmt(payoff.maxProfit)}`, c:COLOR.green, bg:"rgba(34,197,94,.12)", bc:"rgba(34,197,94,.25)" },
+                  payoff.maxLoss!=null   && { label:"Max Loss",   val:`₹${fmt(payoff.maxLoss)}`,   c:COLOR.red,   bg:"rgba(239,68,68,.12)",  bc:"rgba(239,68,68,.25)" },
                   sigmaBounds && { label:`1σ ±₹${fmt(sigmaBounds.sigma)}`, val:"", c:COLOR.accent, bg:"rgba(56,189,248,.08)", bc:"rgba(56,189,248,.25)" },
                 ].filter(Boolean).map((b, i) => (
                   <span key={i} style={{ background:b.bg, color:b.c, borderRadius:6, padding:"3px 10px", border:`1px solid ${b.bc}` }}>
-                    {b.label}{b.val ? `: ${b.val}` : ""}
+                    {b.label}{b.val?`: ${b.val}`:""}
                   </span>
                 ))}
               </div>
@@ -804,8 +794,8 @@ export default function StraddlePage({ socket }) {
                     </linearGradient>
                   </defs>
                   <CartesianGrid stroke={COLOR.grid} strokeDasharray="3 3" />
-                  <XAxis dataKey="price" tick={{ fill:COLOR.muted, fontSize:10 }} tickFormatter={v => `₹${(v/1000).toFixed(1)}k`} />
-                  <YAxis tick={{ fill:COLOR.muted, fontSize:10 }} width={60} tickFormatter={v => `₹${v}`} />
+                  <XAxis dataKey="price" tick={{ fill:COLOR.muted, fontSize:10 }} tickFormatter={v=>`₹${(v/1000).toFixed(1)}k`} />
+                  <YAxis tick={{ fill:COLOR.muted, fontSize:10 }} width={60} tickFormatter={v=>`₹${v}`} />
                   <Tooltip content={<PayoffTooltip />} />
                   {sigmaBounds && <>
                     <ReferenceArea x1={sigmaBounds.lower2} x2={sigmaBounds.upper2} fill={COLOR.cone2} fillOpacity={1}
@@ -821,8 +811,8 @@ export default function StraddlePage({ socket }) {
                   <ReferenceLine x={payoff.lowerBreakeven} stroke={COLOR.red} strokeDasharray="3 3"
                     label={{ value:"LBE", fill:COLOR.red, fontSize:10 }} />
                   <Area type="monotone" dataKey="pl" name="P&L"
-                    stroke={side==="sell" ? COLOR.green : COLOR.buy}
-                    fill={side==="sell" ? "url(#gPLPos)" : "url(#gPLNeg)"}
+                    stroke={side==="sell"?COLOR.green:COLOR.buy}
+                    fill={side==="sell"?"url(#gPLPos)":"url(#gPLNeg)"}
                     strokeWidth={2.5} dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
@@ -833,37 +823,28 @@ export default function StraddlePage({ socket }) {
 
       {snap && (
         <>
-          {/* Stat cards */}
           <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:20 }}>
             <StatCard label="Spot Price"   value={`₹${fmt(snap.spotPrice)}`} pulse />
             <StatCard label="ATM Strike"   value={fmt(snap.atmStrike)} />
-            <StatCard label={`${stratType === "straddle" ? "Straddle" : "Strangle"} Premium`}
+            <StatCard label={`${stratType==="straddle"?"Straddle":"Strangle"} Premium`}
               value={`₹${fmt(activeStrat?.combined)}`} color={COLOR.accent} />
-            <StatCard label="Premium % Spot" value={premiumPct ? `${premiumPct}%` : "—"} sub="normalised cost" color={COLOR.strangle} />
+            <StatCard label="Premium % Spot" value={premiumPct?`${premiumPct}%`:"—"} sub="normalised cost" color={COLOR.strangle} />
             <StatCard label="Upper BE" value={`₹${fmt(activeStrat?.upperBreakeven)}`} color={COLOR.green} />
             <StatCard label="Lower BE" value={`₹${fmt(activeStrat?.lowerBreakeven)}`} color={COLOR.red} />
             <StatCard label="ATM IV"   value={fmtPct(snap.iv?.atm)} color={COLOR.strangle} />
             <StatCard label="PCR"      value={snap.oi?.pcr ?? "—"} color={+snap.oi?.pcr > 1 ? COLOR.green : COLOR.red} />
-            <StatCard label="Last Update (IST)" value={lastRefresh} sub="market data time" />
+            <StatCard label="Last IST" value={lastRefresh} sub="data time" />
           </div>
 
-          {/* Sigma cone bar */}
           {sigmaBounds && (
             <div style={{ background:"rgba(56,189,248,0.06)", border:"1px solid rgba(56,189,248,0.2)", borderRadius:10, padding:"10px 18px", marginBottom:16, display:"flex", gap:28, flexWrap:"wrap", alignItems:"center" }}>
               <span style={{ fontSize:12, color:COLOR.accent, fontWeight:600 }}>σ Expected Move</span>
-              <span style={{ fontSize:12, color:COLOR.muted }}>
-                1σ: <span style={{ color:COLOR.text, fontFamily:"monospace" }}>₹{fmt(sigmaBounds.lower1)} – ₹{fmt(sigmaBounds.upper1)}</span> (±₹{fmt(sigmaBounds.sigma)})
-              </span>
-              <span style={{ fontSize:12, color:COLOR.muted }}>
-                2σ: <span style={{ color:COLOR.text, fontFamily:"monospace" }}>₹{fmt(sigmaBounds.lower2)} – ₹{fmt(sigmaBounds.upper2)}</span>
-              </span>
-              <span style={{ fontSize:11, color:COLOR.muted }}>
-                IV {fmtPct(snap.iv?.atm)} · DTE {Math.round(getDTE(snap.expiry || safeExpiry))}d
-              </span>
+              <span style={{ fontSize:12, color:COLOR.muted }}>1σ: <span style={{ color:COLOR.text, fontFamily:"monospace" }}>₹{fmt(sigmaBounds.lower1)} – ₹{fmt(sigmaBounds.upper1)}</span> (±₹{fmt(sigmaBounds.sigma)})</span>
+              <span style={{ fontSize:12, color:COLOR.muted }}>2σ: <span style={{ color:COLOR.text, fontFamily:"monospace" }}>₹{fmt(sigmaBounds.lower2)} – ₹{fmt(sigmaBounds.upper2)}</span></span>
+              <span style={{ fontSize:11, color:COLOR.muted }}>IV {fmtPct(snap.iv?.atm)} · DTE {Math.round(getDTE(snap.expiry||safeExpiry))}d</span>
             </div>
           )}
 
-          {/* Strike pills */}
           <div style={{ display:"flex", gap:10, marginBottom:20, flexWrap:"wrap" }}>
             {stratType === "straddle" ? (
               <>
@@ -882,7 +863,6 @@ export default function StraddlePage({ socket }) {
 
           <GreeksRow greeks={snap.greeks} />
 
-          {/* IV + OI bar */}
           <div className="card" style={{ marginTop:16 }}>
             <div className="section-title">Implied Volatility &amp; Open Interest</div>
             <div style={{ display:"flex", gap:40, flexWrap:"wrap" }}>
@@ -897,37 +877,28 @@ export default function StraddlePage({ socket }) {
                 </div>
               ))}
               <div style={{ width:1, background:COLOR.border }} />
-              <div>
-                <div style={{ fontSize:12, color:COLOR.muted }}>CE OI</div>
-                <div style={{ fontSize:20, fontWeight:700, color:"#22c55e", fontFamily:"monospace" }}>{fmt(snap.oi?.ce, 0)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize:12, color:COLOR.muted }}>PE OI</div>
-                <div style={{ fontSize:20, fontWeight:700, color:"#ef4444", fontFamily:"monospace" }}>{fmt(snap.oi?.pe, 0)}</div>
-              </div>
+              <div><div style={{ fontSize:12, color:COLOR.muted }}>CE OI</div><div style={{ fontSize:20, fontWeight:700, color:"#22c55e", fontFamily:"monospace" }}>{fmt(snap.oi?.ce, 0)}</div></div>
+              <div><div style={{ fontSize:12, color:COLOR.muted }}>PE OI</div><div style={{ fontSize:20, fontWeight:700, color:"#ef4444", fontFamily:"monospace" }}>{fmt(snap.oi?.pe, 0)}</div></div>
               <div>
                 <div style={{ fontSize:12, color:COLOR.muted }}>PCR</div>
                 <div style={{ fontSize:20, fontWeight:700, fontFamily:"monospace", color: +snap.oi?.pcr > 1 ? "#22c55e" : "#ef4444" }}>{snap.oi?.pcr ?? "—"}</div>
-                <div style={{ fontSize:11, color:COLOR.muted }}>{+snap.oi?.pcr > 1.2 ? "Bullish bias" : +snap.oi?.pcr < 0.8 ? "Bearish bias" : "Neutral"}</div>
+                <div style={{ fontSize:11, color:COLOR.muted }}>{+snap.oi?.pcr > 1.2 ? "Bullish" : +snap.oi?.pcr < 0.8 ? "Bearish" : "Neutral"}</div>
               </div>
               <div>
                 <div style={{ fontSize:12, color:COLOR.muted }}>Straddle Width</div>
                 <div style={{ fontSize:20, fontWeight:700, color:COLOR.text, fontFamily:"monospace" }}>
-                  ₹{fmt((snap.straddle?.upperBreakeven ?? 0) - (snap.straddle?.lowerBreakeven ?? 0))}
+                  ₹{fmt((snap.straddle?.upperBreakeven??0)-(snap.straddle?.lowerBreakeven??0))}
                 </div>
                 <div style={{ fontSize:11, color:COLOR.muted }}>expected range</div>
               </div>
             </div>
           </div>
 
-          {/* Buyer vs Seller */}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginTop:16 }}>
             <div className="card" style={{ borderColor:"rgba(0,229,160,.2)" }}>
-              <div style={{ color:COLOR.buy, fontWeight:700, marginBottom:10, fontSize:14 }}>
-                🟢 Option Buyer View (Long {stratType})
-              </div>
+              <div style={{ color:COLOR.buy, fontWeight:700, marginBottom:10, fontSize:14 }}>🟢 Option Buyer View (Long {stratType})</div>
               <ul style={{ margin:0, paddingLeft:18, fontSize:13, color:COLOR.text, lineHeight:1.9 }}>
-                <li>Pay premium: <strong>₹{fmt(activeStrat?.combined)}</strong>{premiumPct && <span style={{ color:COLOR.muted }}> ({premiumPct}% of spot)</span>}</li>
+                <li>Pay premium: <strong>₹{fmt(activeStrat?.combined)}</strong></li>
                 <li>Profit if spot moves beyond breakevens</li>
                 <li>Upper target: <strong>₹{fmt(activeStrat?.upperBreakeven)}</strong></li>
                 <li>Lower target: <strong>₹{fmt(activeStrat?.lowerBreakeven)}</strong></li>
@@ -937,11 +908,9 @@ export default function StraddlePage({ socket }) {
               </ul>
             </div>
             <div className="card" style={{ borderColor:"rgba(255,77,109,.2)" }}>
-              <div style={{ color:COLOR.sell, fontWeight:700, marginBottom:10, fontSize:14 }}>
-                🔴 Option Seller View (Short {stratType})
-              </div>
+              <div style={{ color:COLOR.sell, fontWeight:700, marginBottom:10, fontSize:14 }}>🔴 Option Seller View (Short {stratType})</div>
               <ul style={{ margin:0, paddingLeft:18, fontSize:13, color:COLOR.text, lineHeight:1.9 }}>
-                <li>Collect premium: <strong>₹{fmt(activeStrat?.combined)}</strong>{premiumPct && <span style={{ color:COLOR.muted }}> ({premiumPct}% of spot)</span>}</li>
+                <li>Collect premium: <strong>₹{fmt(activeStrat?.combined)}</strong></li>
                 <li>Profit if spot stays inside breakevens</li>
                 <li>Range: ₹{fmt(activeStrat?.lowerBreakeven)} – ₹{fmt(activeStrat?.upperBreakeven)}</li>
                 {sigmaBounds && <li style={{ color:COLOR.accent }}>1σ safe zone: ₹{fmt(sigmaBounds.lower1)} – ₹{fmt(sigmaBounds.upper1)}</li>}
@@ -952,12 +921,11 @@ export default function StraddlePage({ socket }) {
             </div>
           </div>
 
-          {/* Footer */}
           <div style={{ marginTop:14, padding:"10px 16px", background:"rgba(15,23,42,0.6)", borderRadius:10, border:`1px solid ${COLOR.border}`, fontSize:12, color:COLOR.muted, display:"flex", gap:20, flexWrap:"wrap", alignItems:"center" }}>
-            <span>🔔 Alerts: <span style={{ color: notifPermission==="granted" ? COLOR.green : COLOR.muted }}>
-              {notifPermission==="granted" ? "Enabled" : notifPermission==="denied" ? "Blocked" : "Click 'Enable Alerts' to activate"}
+            <span>🔔 Alerts: <span style={{ color: notifPermission==="granted"?COLOR.green:COLOR.muted }}>
+              {notifPermission==="granted" ? "Enabled" : notifPermission==="denied" ? "Blocked" : "Click Enable Alerts"}
             </span></span>
-            <span>📥 {tickCount} ticks recorded
+            <span>📥 {tickCount} ticks
               <button onClick={() => exportCSV(symbol, safeExpiry, premHistory)}
                 style={{ marginLeft:8, background:"none", border:"none", color:COLOR.accent, cursor:"pointer", fontSize:12, textDecoration:"underline" }}>
                 Export CSV
@@ -971,12 +939,6 @@ export default function StraddlePage({ socket }) {
 }
 
 const pillStyle = (color) => ({
-  background: `${color}18`,
-  border:     `1px solid ${color}40`,
-  color,
-  borderRadius: 8,
-  padding:      "5px 12px",
-  fontSize:     12,
-  fontWeight:   600,
-  fontFamily:   "monospace",
+  background: `${color}18`, border: `1px solid ${color}40`, color,
+  borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, fontFamily: "monospace",
 });

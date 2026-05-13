@@ -6,10 +6,22 @@
  * FIX 1: writeHeader writes 5 bytes (1 type + 4 length uint32)
  * FIX 2: encodeScannerSnapshot uses uint32 for table length
  * FIX 3: all decoders start at off=5 to match header size
- * FIX 4: encodeOptionsIntelTick added (MSG 0x0D) — was called in websocket.js
- *        but never existed here, causing a silent crash + no straddle live ticks.
- *        24-byte frame: symbol(var) + spotPrice(4) + straddlePrice(4) +
- *        atmIV(4) + score(1) + biasLen(1) + bias(var) = ~40 bytes vs ~200B JSON
+ * FIX 4: encodeOptionsIntelTick added (MSG 0x0D)
+ *
+ * FIX 5 (NEW): OPTIONS_INTEL_TICK (0x0D) frame now includes stranglePrice + ts.
+ *   Was: symbol + spotPrice + straddlePrice + atmIV + score + bias  (~40B)
+ *   Now: symbol + spotPrice + straddlePrice + stranglePrice + atmIV + score + bias + tsSec (~44B)
+ *
+ *   stranglePrice: uint32 (/100) — real OTM strangle premium, distinct from straddle.
+ *   tsSec:         int32 — Unix epoch seconds from NSE cache timestamp.
+ *                  0 = not available. Frontend multiplies by 1000 for Date constructor.
+ *                  Lets the chart plot at the correct IST market-hours position.
+ *
+ * BACKWARD COMPATIBILITY:
+ *   Old decoder (4 bytes shorter) will read garbage for the last 8 bytes —
+ *   but since you control both ends, deploy both files together. The decoder
+ *   below checks buf.length before reading optional fields so it degrades
+ *   gracefully if only the encoder is updated first.
  */
 
 const MSG = {
@@ -25,7 +37,7 @@ const MSG = {
   UPSTOX_STATUS:       0x0A,
   OPTIONS_INTEL:       0x0B,
   GANN_ANALYSIS:       0x0C,
-  OPTIONS_INTEL_TICK:  0x0D,   // FIX 4: live spot+straddle tick, ~40B vs ~200B JSON
+  OPTIONS_INTEL_TICK:  0x0D,   // live spot+straddle+strangle tick, ~44B vs ~220B JSON
   JSON_FALLBACK:       0xFF,
 };
 
@@ -137,7 +149,6 @@ function encodeScannerDiff(stocks) {
 }
 
 // ── SCANNER SNAPSHOT ──────────────────────────────────────────────────────────
-// table length = uint32 (was uint16 — overflow at 500+ stocks)
 function encodeScannerSnapshot(stocks) {
   buildSymbolTable(stocks);
 
@@ -212,36 +223,51 @@ function encodeOptionsIntel(data) {
   return buf;
 }
 
-// ── OPTIONS INTEL TICK (live spot update, ~1s, ~40B) ─────────────────────────
-// FIX 4: This function was called in websocket.js emitOptionsIntelTick but
-// did not exist here — caused a silent crash, no live ticks reached StraddlePage.
+// ── OPTIONS INTEL TICK (live spot+straddle update, ~1s, ~44B) ────────────────
+//
+// FIX 5: Frame now includes stranglePrice (uint32) and tsSec (int32).
 //
 // Frame layout (after 5-byte header):
 //   1B  symLen
 //   NB  symbol (ascii)
-//   4B  spotPrice    (uint32, /100)
+//   4B  spotPrice     (uint32, /100)
 //   4B  straddlePrice (uint32, /100)
-//   4B  atmIV        (uint32, /100)
-//   1B  score        (uint8, 0-100)
+//   4B  stranglePrice (uint32, /100)  ← NEW (was missing, straddle=strangle bug)
+//   4B  atmIV         (uint32, /100)
+//   1B  score         (uint8, 0-100)
 //   1B  biasLen
-//   NB  bias         (ascii, e.g. "BULLISH")
+//   NB  bias          (ascii, e.g. "BULLISH", max 12 chars)
+//   4B  tsSec         (int32, Unix epoch seconds, 0=unavailable) ← NEW (chart X axis)
 //
-// Total: ~40B vs ~200B JSON = ~80% bandwidth saving on every 1s tick
-function encodeOptionsIntelTick(symbol, spotPrice, straddlePrice, atmIV, score, bias) {
-  const symBuf  = Buffer.from((symbol || "NIFTY"), "ascii");
+// Total for NIFTY: 5 + 1+5 + 4+4+4+4 + 1+1+7 + 4 = ~44B vs ~220B JSON = 80% saving
+function encodeOptionsIntelTick(symbol, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, ts) {
+  const symBuf  = Buffer.from((symbol || "NIFTY").slice(0, 20), "ascii");
   const biasBuf = Buffer.from((bias   || "NEUTRAL").slice(0, 12), "ascii");
-  const len     = 1 + symBuf.length + 4 + 4 + 4 + 1 + 1 + biasBuf.length;
-  const buf     = Buffer.allocUnsafe(5 + len);
+
+  const len = 1 + symBuf.length + 4 + 4 + 4 + 4 + 1 + 1 + biasBuf.length + 4;
+  const buf = Buffer.allocUnsafe(5 + len);
   let off = writeHeader(buf, 0, MSG.OPTIONS_INTEL_TICK, len);
 
   buf.writeUInt8(symBuf.length, off); off++;
   symBuf.copy(buf, off); off += symBuf.length;
-  buf.writeUInt32BE(priceToUint32(spotPrice    || 0), off); off += 4;
+
+  buf.writeUInt32BE(priceToUint32(spotPrice     || 0), off); off += 4;
   buf.writeUInt32BE(priceToUint32(straddlePrice || 0), off); off += 4;
-  buf.writeUInt32BE(priceToUint32(atmIV        || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(stranglePrice || 0), off); off += 4;  // NEW
+  buf.writeUInt32BE(priceToUint32(atmIV         || 0), off); off += 4;
+
   buf.writeUInt8(Math.max(0, Math.min(100, Math.round(score || 50))), off); off++;
   buf.writeUInt8(biasBuf.length, off); off++;
-  biasBuf.copy(buf, off);
+  biasBuf.copy(buf, off); off += biasBuf.length;
+
+  // tsSec: Unix epoch seconds from NSE cache timestamp.
+  // Frontend: new Date(tsSec * 1000) → IST "HH:MM" → chart X label.
+  // 0 means "not available" → frontend uses its bestTimeRef fallback.
+  const tsSec = ts
+    ? (typeof ts === "number" ? Math.floor(ts / 1000) : Math.floor(new Date(ts).getTime() / 1000))
+    : 0;
+  buf.writeInt32BE(tsSec > 0 ? tsSec : 0, off);
+
   return buf;
 }
 
@@ -366,19 +392,37 @@ function decode(buffer) {
       };
     }
 
-    // FIX 4: decode OPTIONS_INTEL_TICK frames (0x0D)
+    // FIX 5: decode OPTIONS_INTEL_TICK (0x0D) with stranglePrice + ts
     case MSG.OPTIONS_INTEL_TICK: {
       const symLen        = buf.readUInt8(off); off++;
       const symbol        = buf.slice(off, off + symLen).toString("ascii"); off += symLen;
       const spotPrice     = buf.readUInt32BE(off) / 100; off += 4;
       const straddlePrice = buf.readUInt32BE(off) / 100; off += 4;
-      const atmIV         = buf.readUInt32BE(off) / 100; off += 4;
-      const score         = buf.readUInt8(off); off++;
-      const biasLen       = buf.readUInt8(off); off++;
-      const bias          = buf.slice(off, off + biasLen).toString("ascii");
+
+      // FIX 5: read stranglePrice (NEW field — check length for backward compat)
+      let stranglePrice = 0;
+      if (off + 4 <= buf.length) {
+        stranglePrice = buf.readUInt32BE(off) / 100; off += 4;
+      }
+
+      const atmIV   = off + 4 <= buf.length ? buf.readUInt32BE(off) / 100 : 0; off += 4;
+      const score   = off + 1 <= buf.length ? buf.readUInt8(off) : 50; off++;
+      const biasLen = off + 1 <= buf.length ? buf.readUInt8(off) : 0; off++;
+      const bias    = biasLen > 0 && off + biasLen <= buf.length
+        ? buf.slice(off, off + biasLen).toString("ascii")
+        : "NEUTRAL";
+      off += biasLen;
+
+      // FIX 5: read tsSec (NEW field)
+      let ts = null;
+      if (off + 4 <= buf.length) {
+        const tsSec = buf.readInt32BE(off);
+        if (tsSec > 0) ts = tsSec * 1000; // convert to epoch ms
+      }
+
       return {
         type: "options-intel-tick",
-        data: { symbol, spotPrice, straddlePrice, atmIV, score, bias },
+        data: { symbol, spotPrice, straddlePrice, stranglePrice, atmIV, score, bias, ts },
       };
     }
 
@@ -412,7 +456,7 @@ module.exports = {
   encodeCandle,
   encodeJSON,
   encodeOptionsIntel,
-  encodeOptionsIntelTick,   // FIX 4: export the new function
+  encodeOptionsIntelTick,
   decode,
   buildSymbolTable,
   getSymbolIndex,
