@@ -10,7 +10,7 @@ const fs      = require("fs");
 const path    = require("path");
 
 const CACHE_PATH   = path.join(__dirname, "../data/optionChainCache.json");
-const HISTORY_PATH = path.join(__dirname, "../data/ivHistory.json"); // NEW
+const HISTORY_PATH = path.join(__dirname, "../data/ivHistory.json");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -20,11 +20,30 @@ function readCache() {
   } catch { return null; }
 }
 
-// NEW: read IV history
 function readIVHistory() {
   try {
     return JSON.parse(fs.readFileSync(HISTORY_PATH, "utf8"));
   } catch { return {}; }
+}
+
+// FIX: centralised symbol normalisation used by ALL routes
+// Handles any casing/alias that clients or the cache might use
+const SYMBOL_ALIASES = {
+  MIDCAPNIFTY:  "MIDCPNIFTY",
+  MIDCAP:       "MIDCPNIFTY",
+  BANKNIFTY50:  "BANKNIFTY",
+};
+
+function resolveSymbol(raw) {
+  const upper = (raw || "").toUpperCase();
+  return SYMBOL_ALIASES[upper] || upper;
+}
+
+// FIX: look up chainData using the resolved symbol with graceful fallback
+function getChainData(cache, rawSymbol) {
+  if (!cache) return null;
+  const sym = resolveSymbol(rawSymbol);
+  return cache[sym] || cache[rawSymbol] || null;
 }
 
 function findATMStrike(strikes, spotPrice) {
@@ -68,12 +87,25 @@ function buildPayoffCurve({ callStrike, putStrike, callPremium, putPremium, type
 
   return {
     points,
-    maxProfit:       side === "buy" ? null : Math.round(totalPremium * lotSize * 100) / 100,
-    maxLoss:         side === "buy" ? Math.round(-totalPremium * lotSize * 100) / 100 : null,
-    upperBreakeven:  Math.round(upperBE * 100) / 100,
-    lowerBreakeven:  Math.round(lowerBE * 100) / 100,
-    totalPremium:    Math.round(totalPremium * 100) / 100,
+    maxProfit:      side === "buy" ? null : Math.round(totalPremium * lotSize * 100) / 100,
+    maxLoss:        side === "buy" ? Math.round(-totalPremium * lotSize * 100) / 100 : null,
+    upperBreakeven: Math.round(upperBE * 100) / 100,
+    lowerBreakeven: Math.round(lowerBE * 100) / 100,
+    totalPremium:   Math.round(totalPremium * 100) / 100,
   };
+}
+
+// FIX: centralised lot-size map so snapshot, payoff, and iv-rank all agree
+const LOT_SIZES = {
+  BANKNIFTY:  35,
+  FINNIFTY:   65,
+  MIDCPNIFTY: 120,
+  SENSEX:     20,
+  NIFTY:      75,
+};
+
+function getLotSize(symbol) {
+  return LOT_SIZES[resolveSymbol(symbol)] || 75;
 }
 
 // ─── GET /api/straddle/snapshot ───────────────────────────────────────────────
@@ -84,8 +116,13 @@ router.get("/snapshot", (req, res) => {
     const cache = readCache();
     if (!cache) return res.status(503).json({ error: "Option chain cache not available" });
 
-    const chainData = cache[symbol] || cache;
-    if (!chainData) return res.status(404).json({ error: `No data for symbol: ${symbol}` });
+    // FIX: use helper so MIDCAPNIFTY, midcpnifty etc all resolve correctly
+    const chainData = getChainData(cache, symbol);
+    if (!chainData) {
+      // Debug helper — log available keys so misconfigured symbols are easy to spot
+      console.warn(`[snapshot] No data for symbol="${symbol}". Available keys: ${Object.keys(cache).join(", ")}`);
+      return res.status(404).json({ error: `No data for symbol: ${symbol}` });
+    }
 
     const spotPrice  = chainData.spotPrice || chainData.underlyingValue || 0;
     const expiryList = chainData.expiries  || Object.keys(chainData.chains || {});
@@ -112,8 +149,8 @@ router.get("/snapshot", (req, res) => {
     const { callStrike: scStrike, putStrike: spStrike } = getStrangleStrikes(strikes, atmStrike, 1);
     const scRow = strikesArr.find(s => s.strike === scStrike) || {};
     const spRow = strikesArr.find(s => s.strike === spStrike) || {};
-    const scePrice       = scRow?.ce?.ltp ?? 0;
-    const spePrice       = spRow?.pe?.ltp ?? 0;
+    const scePrice        = scRow?.ce?.ltp ?? 0;
+    const spePrice        = spRow?.pe?.ltp ?? 0;
     const stranglePremium = scePrice + spePrice;
 
     const ceOI = atmRow?.ce?.oi ?? 0;
@@ -121,7 +158,10 @@ router.get("/snapshot", (req, res) => {
     const pcr  = peOI && ceOI ? (peOI / ceOI).toFixed(2) : (chainExpiry?.pcr ?? null);
 
     res.json({
-      symbol, expiry: targetExpiry, spotPrice: spotPrice2, atmStrike,
+      symbol: resolveSymbol(symbol),   // FIX: always return the canonical symbol
+      expiry: targetExpiry,
+      spotPrice: spotPrice2,
+      atmStrike,
       timestamp: new Date().toISOString(),
       straddle: {
         callStrike: atmStrike, putStrike: atmStrike,
@@ -141,7 +181,7 @@ router.get("/snapshot", (req, res) => {
         theta: { ce: atmRow?.ce?.theta ?? null, pe: atmRow?.pe?.theta ?? null },
         vega:  { ce: atmRow?.ce?.vega  ?? null, pe: atmRow?.pe?.vega  ?? null },
       },
-      oi:      { ce: ceOI, pe: peOI, pcr },
+      oi:       { ce: ceOI, pe: peOI, pcr },
       expiries: expiryList,
     });
   } catch (err) {
@@ -158,12 +198,18 @@ router.get("/payoff", (req, res) => {
     const cache = readCache();
     if (!cache) return res.status(503).json({ error: "Option chain cache not available" });
 
-    const chainData  = cache[symbol] || cache;
+    // FIX: payoff was missing the symbolMap — MIDCPNIFTY returned 404 here too
+    const chainData = getChainData(cache, symbol);
+    if (!chainData) {
+      console.warn(`[payoff] No data for symbol="${symbol}". Available keys: ${Object.keys(cache).join(", ")}`);
+      return res.status(404).json({ error: `No data for symbol: ${symbol}` });
+    }
+
     const spotPrice  = chainData.spotPrice || chainData.underlyingValue || 0;
     const expiryList = chainData.expiries  || Object.keys(chainData.chains || {});
-    const targetExpiry  = expiry || expiryList[0];
-    const chainExpiry   = chainData.chains?.[targetExpiry];
-    const strikesArr    = chainExpiry?.strikes || [];
+    const targetExpiry = expiry || expiryList[0];
+    const chainExpiry  = chainData.chains?.[targetExpiry];
+    const strikesArr   = chainExpiry?.strikes || [];
 
     if (!strikesArr.length) return res.status(404).json({ error: "No strikes found" });
 
@@ -185,19 +231,17 @@ router.get("/payoff", (req, res) => {
       putPremium  = strikesArr.find(s => s.strike === ps)?.pe?.ltp ?? 0;
     }
 
-    const lotSize = symbol === "BANKNIFTY"  ? 35
-                  : symbol === "FINNIFTY"   ? 65
-                  : symbol === "MIDCPNIFTY" ? 120
-                  : symbol === "SENSEX"     ? 20
-                  : 75;
+    // FIX: use shared getLotSize() so lot sizes are consistent everywhere
+    const lotSize = getLotSize(symbol);
 
-    const payoff = buildPayoffCurve({ callStrike, putStrike, callPremium, putPremium, type, side, lotSize });
+    const payoffData = buildPayoffCurve({ callStrike, putStrike, callPremium, putPremium, type, side, lotSize });
 
     res.json({
-      symbol, expiry: targetExpiry, type, side,
+      symbol: resolveSymbol(symbol),
+      expiry: targetExpiry, type, side,
       atmStrike, spotPrice: spotPrice2, lotSize,
       callStrike, putStrike, callPremium, putPremium,
-      ...payoff,
+      ...payoffData,
     });
   } catch (err) {
     console.error("[straddleRoutes] /payoff error:", err);
@@ -213,27 +257,20 @@ router.get("/history", (req, res) => {
     const liveBookPath = path.join(__dirname, "../data/liveOrderBook.json");
     if (fs.existsSync(liveBookPath)) {
       const raw     = JSON.parse(fs.readFileSync(liveBookPath, "utf8"));
-      const history = raw[symbol]?.straddleHistory || [];
-      return res.json({ symbol, history });
+      // FIX: resolve symbol alias so MIDCAPNIFTY history lookup also works
+      const key     = resolveSymbol(symbol);
+      const history = raw[key]?.straddleHistory || raw[symbol]?.straddleHistory || [];
+      return res.json({ symbol: key, history });
     }
-    res.json({ symbol, history: [] });
+    res.json({ symbol: resolveSymbol(symbol), history: [] });
   } catch (err) {
     console.error("[straddleRoutes] /history error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// ─── NEW: GET /api/straddle/iv-rank ──────────────────────────────────────────
-/**
- * Returns IV Rank, IV Percentile, current IV, and full history for charting.
- *
- * IV Rank      = (currentIV - 52wLow) / (52wHigh - 52wLow) × 100
- * IV Percentile = % of days in the last 252 trading days where IV was BELOW current IV
- *
- * Query params:
- *   symbol  — NIFTY | BANKNIFTY | etc  (default: NIFTY)
- *   days    — lookback window in days   (default: 252 = ~1 trading year)
- */
+// ─── GET /api/straddle/iv-rank ────────────────────────────────────────────────
+
 router.get("/iv-rank", (req, res) => {
   try {
     const { symbol = "NIFTY", days = 252 } = req.query;
@@ -243,8 +280,9 @@ router.get("/iv-rank", (req, res) => {
     const cache = readCache();
     let currentIV = null;
 
-    if (cache && cache[symbol]) {
-      const chainData  = cache[symbol];
+    // FIX: use getChainData() so MIDCPNIFTY resolves here too
+    const chainData = getChainData(cache, symbol);
+    if (chainData) {
       const spotPrice  = chainData.spotPrice || chainData.underlyingValue || 0;
       const expiryList = chainData.expiries  || Object.keys(chainData.chains || {});
       const nearExpiry = expiryList[0];
@@ -264,10 +302,11 @@ router.get("/iv-rank", (req, res) => {
     }
 
     // ── 2. Load history ───────────────────────────────────────────────────
-    const allHistory  = readIVHistory();
-    const symbolHist  = allHistory[symbol] || [];
+    const allHistory = readIVHistory();
+    // FIX: resolve alias so history lookup is consistent
+    const symKey     = resolveSymbol(symbol);
+    const symbolHist = allHistory[symKey] || allHistory[symbol] || [];
 
-    // Take the last `lookback` entries
     const window = symbolHist
       .sort((a, b) => a.date.localeCompare(b.date))
       .slice(-lookback);
@@ -283,23 +322,21 @@ router.get("/iv-rank", (req, res) => {
       high52w = Math.max(...ivValues);
       low52w  = Math.min(...ivValues);
 
-      // Use live IV if available, otherwise use the most recent historical entry
       const refIV = currentIV ?? window[window.length - 1].iv;
 
       if (high52w !== low52w) {
         ivRank = +((refIV - low52w) / (high52w - low52w) * 100).toFixed(1);
         ivRank = Math.min(100, Math.max(0, ivRank));
       } else {
-        ivRank = 50; // only one unique value — rank is indeterminate
+        ivRank = 50;
       }
 
-      // IV Percentile: % of days where IV was below current
       const belowCount = ivValues.filter(v => v < refIV).length;
       ivPercentile     = +((belowCount / ivValues.length) * 100).toFixed(1);
     }
 
     // ── 4. Interpretation signal ──────────────────────────────────────────
-    let signal = "neutral";
+    let signal     = "neutral";
     let signalText = "Insufficient data";
 
     if (ivRank !== null) {
@@ -315,21 +352,18 @@ router.get("/iv-rank", (req, res) => {
       }
     }
 
-    // ── 5. Respond ────────────────────────────────────────────────────────
     res.json({
-      symbol,
+      symbol: symKey,
       currentIV,
       ivRank,
       ivPercentile,
       high52w,
       low52w,
-      dataPoints:  window.length,
+      dataPoints:   window.length,
       lookbackDays: lookback,
       signal,
       signalText,
-      // Full history array for the chart (date + iv pairs)
       history: window,
-      // Also include today's entry if live IV differs from last recorded
       note: window.length < 30
         ? `Only ${window.length} days of data so far. IV Rank becomes meaningful after 30+ days and reliable after 90+ days.`
         : null,

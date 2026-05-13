@@ -214,12 +214,13 @@ export default function StraddlePage({ socket }) {
   );
   const alertedRef = useRef({ upper: false, lower: false });
 
-  // ── FIX: keep a ref to the current symbol so the socket handler always
-  //         reads the latest value even inside the stale closure ──────────────
+  // ── keep refs in sync with current values so socket handlers are never stale
   const symbolRef  = useRef(symbol);
   const expiryRef  = useRef(expiry);
-  useEffect(() => { symbolRef.current = symbol;  }, [symbol]);
-  useEffect(() => { expiryRef.current = expiry; }, [expiry]);
+  const snapRef    = useRef(snap);
+  useEffect(() => { symbolRef.current  = symbol;  }, [symbol]);
+  useEffect(() => { expiryRef.current  = expiry;  }, [expiry]);
+  useEffect(() => { snapRef.current    = snap;    }, [snap]);
 
   const requestNotifPermission = async () => {
     if (typeof Notification === "undefined") return;
@@ -254,9 +255,11 @@ export default function StraddlePage({ socket }) {
     }
   }, [notifPermission]);
 
+  // FIX: always use snap.expiry as fallback so payoff uses the same expiry as displayed data
   const fetchPayoff = useCallback(async () => {
     try {
-      const expiryQ = expiry ? `&expiry=${expiry}` : "";
+      const activeExpiry = expiry || snapRef.current?.expiry || "";
+      const expiryQ = activeExpiry ? `&expiry=${activeExpiry}` : "";
       const r = await fetch(
         `/api/straddle/payoff?symbol=${symbol}${expiryQ}&type=${stratType}&side=${side}&steps=${strangleStep}`
       );
@@ -269,8 +272,7 @@ export default function StraddlePage({ socket }) {
     }
   }, [symbol, expiry, stratType, side, strangleStep]);
 
-  // ── FIX: Reset snap + history immediately when symbol changes so we never
-  //         show stale NIFTY data while waiting for SENSEX socket events ──────
+  // ── Reset snap + history immediately when symbol changes ──────────────────
   useEffect(() => {
     setSnap(null);
     setPremHistory([]);
@@ -295,77 +297,69 @@ export default function StraddlePage({ socket }) {
     };
     socket.on("connect", handleConnect);
 
-    // Seed fetch — runs with the symbol that was current when this effect fired
-    // symbolRef.current is also correct here but we use the closure symbol
-    // for the seed since this effect only runs when symbol changes (see deps)
     const currentSymbol = symbolRef.current;
     fetch(`/api/straddle/snapshot?symbol=${currentSymbol}`)
       .then(r => r.json())
       .then(data => {
-        if (!data || data.error) {
-          setLoading(false);
-          return;
-        }
-        // Only apply if symbol hasn't changed again while fetch was in flight
+        if (!data || data.error) { setLoading(false); return; }
         if (symbolRef.current !== currentSymbol) return;
         setSnap(data);
         setLoading(false);
       })
       .catch(() => { setLoading(false); });
 
-    // ── FIX: The handler uses symbolRef.current (not the closed-over symbol)
-    //         so it always filters against the CURRENT selected symbol even
-    //         if this effect's closure is stale ────────────────────────────────
     const handleOptionsIntel = (data) => {
-      // Always filter against the live ref, not the stale closure
       if (data?.symbol !== symbolRef.current) return;
-const result = data?.data;
-const s = result?.structure;
-if (!s) return;
 
-const t = now();
-const newSnap = {
-  spotPrice: data.ltp ?? null,
-  atmStrike: result.atmStrike,
-  straddle: {
-    combined:       s.straddlePrice,
-    callStrike:     result.atmStrike,
-    putStrike:      result.atmStrike,
-    callPremium:    s.straddlePrice / 2,
-    putPremium:     s.straddlePrice / 2,
-    upperBreakeven: result.atmStrike + s.straddlePrice,
-    lowerBreakeven: result.atmStrike - s.straddlePrice,
-  },
-  strangle: {
-    combined:       s.straddlePrice,
-    callStrike:     result.atmStrike,
-    putStrike:      result.atmStrike,
-    callPremium:    s.straddlePrice / 2,
-    putPremium:     s.straddlePrice / 2,
-    upperBreakeven: result.atmStrike + s.straddlePrice,
-    lowerBreakeven: result.atmStrike - s.straddlePrice,
-  },
-  iv: {
-    atm: result.volatility?.atmIV,
-    ce:  result.volSurface?.iv25call,
-    pe:  result.volSurface?.iv25put,
-  },
-  oi: {
-    ce:  result.oi?.totalCallOI,
-    pe:  result.oi?.totalPutOI,
-    pcr: result.oi?.pcr,
-  },
-  greeks:   result.atmGreeks,
-expiries: undefined,   // never overwrite — snapshot owns expiries
-expiry:   result.expiryDate ?? expiryRef.current,
-};
+      const result = data?.data;
+      const s = result?.structure;
+      if (!s) return;
+
+      const spotPrice = data.ltp ?? null;   // FIX: payload shape is { symbol, data, ltp, ts }
+      const t = now();
+
+      const newSnap = {
+        spotPrice,
+        atmStrike: result.atmStrike,
+        straddle: {
+          combined:       s.straddlePrice,
+          callStrike:     result.atmStrike,
+          putStrike:      result.atmStrike,
+          // FIX: split straddle premium evenly — engine doesn't return individual leg LTPs
+          callPremium:    s.straddlePrice / 2,
+          putPremium:     s.straddlePrice / 2,
+          upperBreakeven: result.atmStrike + s.straddlePrice,
+          lowerBreakeven: result.atmStrike - s.straddlePrice,
+        },
+        // FIX: strangle — socket engine has no OTM legs, keep snapshot strangle strikes/premiums
+        //      but update the combined price and breakevens if ATM moved
+        strangle: null,  // will be merged below — never overwrite from socket
+        iv: {
+          atm: result.volatility?.atmIV,
+          // FIX: volSurface fields — engine returns iv25call / iv25put, not ceIV / peIV
+          ce:  result.volSurface?.iv25call,
+          pe:  result.volSurface?.iv25put,
+        },
+        oi: {
+          // FIX: engine returns totalCallOI / totalPutOI, not totalCE / totalPE
+          ce:  result.oi?.totalCallOI,
+          pe:  result.oi?.totalPutOI,
+          pcr: result.oi?.pcr,
+        },
+        greeks: result.atmGreeks,
+        // FIX: never carry expiries from socket — engine result has none, snapshot owns them
+        expiry: result.expiryDate ?? expiryRef.current,
+      };
 
       setSnap((prev) => ({
-  ...prev,
-  ...newSnap,
-  expiries: prev?.expiries ?? [],   // never let socket wipe expiries
-  strangle: prev?.strangle ?? newSnap.strangle,  // keep snapshot strangle
-}));
+        ...prev,
+        ...newSnap,
+        // FIX: never wipe expiry list — snapshot owns it
+        expiries: prev?.expiries?.length ? prev.expiries : [],
+        // FIX: keep snapshot strangle (has real OTM strikes/premiums from cache)
+        //      socket never has better strangle data than the snapshot
+        strangle: prev?.strangle ?? newSnap.straddle,
+      }));
 
       setPremHistory((prev) => [...prev, {
         time:     t,
@@ -377,10 +371,9 @@ expiry:   result.expiryDate ?? expiryRef.current,
       setLoading(false);
       setError(null);
 
-      // Use stratType from closure — it's fine since stratType changes
-      // cause the effect to re-run anyway (it's in the dep array via fetchPayoff)
-      const activeStratForAlert = stratType === "straddle" ? newSnap.straddle : newSnap.strangle;
-      checkBreakevenBreach(data.ltp ?? data.spotPrice, activeStratForAlert);
+      // FIX: use spotPrice local var — data.spotPrice doesn't exist on the payload
+      const activeStratForAlert = stratType === "straddle" ? newSnap.straddle : (snapRef.current?.strangle ?? newSnap.straddle);
+      checkBreakevenBreach(spotPrice, activeStratForAlert);
     };
 
     socket.on("options-intelligence", handleOptionsIntel);
@@ -394,12 +387,12 @@ expiry:   result.expiryDate ?? expiryRef.current,
       socket.emit("leave:straddle");
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket, symbol]); // Only re-run when socket or symbol changes
+  }, [socket, symbol]);
 
-  // Re-fetch payoff when strategy params change
+  // Re-fetch payoff when strategy params or expiry changes
   useEffect(() => { fetchPayoff(); }, [fetchPayoff]);
 
-  // Reset breach flags when strategy/side changes (symbol handled in symbol useEffect above)
+  // Reset breach flags when strategy/side changes
   useEffect(() => {
     alertedRef.current = { upper: false, lower: false };
     setAlertMsg(null);
@@ -407,7 +400,9 @@ expiry:   result.expiryDate ?? expiryRef.current,
 
   const activeStrat = snap ? (stratType === "straddle" ? snap.straddle : snap.strangle) : null;
 
-  const sigmaBounds = snap ? getSigmaBounds(snap.spotPrice, snap.iv?.atm, snap.expiry || expiry) : null;
+  const sigmaBounds = snap
+    ? getSigmaBounds(snap.spotPrice, snap.iv?.atm, snap.expiry || expiry)
+    : null;
 
   const premiumPct = snap && snap.spotPrice && activeStrat?.combined
     ? ((activeStrat.combined / snap.spotPrice) * 100).toFixed(2)
@@ -460,7 +455,7 @@ expiry:   result.expiryDate ?? expiryRef.current,
 
         {/* Controls */}
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Symbol — FIX: also reset expiry on change */}
+          {/* Symbol — also reset expiry on change */}
           <select value={symbol} onChange={(e) => {
             setSymbol(e.target.value);
             setExpiry("");
@@ -607,10 +602,10 @@ expiry:   result.expiryDate ?? expiryRef.current,
             ) : (
               <>
                 <div style={pillStyle("#22c55e")}>
-                  CE {fmt(snap.strangle.callStrike)} @ ₹{fmt(snap.strangle.callPremium)}
+                  CE {fmt(snap.strangle?.callStrike)} @ ₹{fmt(snap.strangle?.callPremium)}
                 </div>
                 <div style={pillStyle("#ef4444")}>
-                  PE {fmt(snap.strangle.putStrike)} @ ₹{fmt(snap.strangle.putPremium)}
+                  PE {fmt(snap.strangle?.putStrike)} @ ₹{fmt(snap.strangle?.putPremium)}
                 </div>
               </>
             )}
@@ -804,7 +799,7 @@ expiry:   result.expiryDate ?? expiryRef.current,
               <div>
                 <div style={{ fontSize: 12, color: COLOR.muted }}>Straddle Width</div>
                 <div style={{ fontSize: 20, fontWeight: 700, color: COLOR.text, fontFamily: "monospace" }}>
-                  ₹{fmt(snap.straddle.upperBreakeven - snap.straddle.lowerBreakeven)}
+                  ₹{fmt(snap.straddle?.upperBreakeven - snap.straddle?.lowerBreakeven)}
                 </div>
                 <div style={{ fontSize: 11, color: COLOR.muted }}>expected range</div>
               </div>
