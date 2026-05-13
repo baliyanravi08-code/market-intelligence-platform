@@ -3,25 +3,30 @@
 /**
  * server/api/binaryProtocol.js
  *
- * FIX 1: writeHeader now writes 5 bytes (1 type + 4 length uint32, was 3 bytes uint16)
- * FIX 2: encodeScannerSnapshot uses uint32 for table length (was uint16 — overflows 500+ stocks)
- * FIX 3: all decoders start at off=5 to match new header size
+ * FIX 1: writeHeader writes 5 bytes (1 type + 4 length uint32)
+ * FIX 2: encodeScannerSnapshot uses uint32 for table length
+ * FIX 3: all decoders start at off=5 to match header size
+ * FIX 4: encodeOptionsIntelTick added (MSG 0x0D) — was called in websocket.js
+ *        but never existed here, causing a silent crash + no straddle live ticks.
+ *        24-byte frame: symbol(var) + spotPrice(4) + straddlePrice(4) +
+ *        atmIV(4) + score(1) + biasLen(1) + bias(var) = ~40 bytes vs ~200B JSON
  */
 
 const MSG = {
-  MARKET_TICK:      0x01,
-  LTP_TICK:         0x02,
-  SCANNER_DIFF:     0x03,
-  SCANNER_SNAPSHOT: 0x04,
-  CANDLE_TICK:      0x05,
-  CANDLE_CLOSED:    0x06,
-  CIRCUIT_ALERT:    0x07,
-  COMPOSITE_UPDATE: 0x08,
-  SYSTEM_EVENT:     0x09,
-  UPSTOX_STATUS:    0x0A,
-  OPTIONS_INTEL:    0x0B,
-  GANN_ANALYSIS:    0x0C,
-  JSON_FALLBACK:    0xFF,
+  MARKET_TICK:         0x01,
+  LTP_TICK:            0x02,
+  SCANNER_DIFF:        0x03,
+  SCANNER_SNAPSHOT:    0x04,
+  CANDLE_TICK:         0x05,
+  CANDLE_CLOSED:       0x06,
+  CIRCUIT_ALERT:       0x07,
+  COMPOSITE_UPDATE:    0x08,
+  SYSTEM_EVENT:        0x09,
+  UPSTOX_STATUS:       0x0A,
+  OPTIONS_INTEL:       0x0B,
+  GANN_ANALYSIS:       0x0C,
+  OPTIONS_INTEL_TICK:  0x0D,   // FIX 4: live spot+straddle tick, ~40B vs ~200B JSON
+  JSON_FALLBACK:       0xFF,
 };
 
 const INDEX_ID = {
@@ -66,7 +71,7 @@ function changeToInt32(change) {
   return Math.round((change || 0) * 100);
 }
 
-// ✅ FIX: header = 1 byte type + 4 bytes uint32 length = 5 bytes total (was 3)
+// 1 byte type + 4 bytes uint32 length = 5 bytes total
 function writeHeader(buf, offset, msgType, payloadLen) {
   buf.writeUInt8(msgType, offset);
   buf.writeUInt32BE(payloadLen, offset + 1);
@@ -132,7 +137,7 @@ function encodeScannerDiff(stocks) {
 }
 
 // ── SCANNER SNAPSHOT ──────────────────────────────────────────────────────────
-// ✅ FIX: table length now uint32 (was uint16 — max 65535, but 500 stocks = ~185000 bytes)
+// table length = uint32 (was uint16 — overflow at 500+ stocks)
 function encodeScannerSnapshot(stocks) {
   buildSymbolTable(stocks);
 
@@ -145,7 +150,7 @@ function encodeScannerSnapshot(stocks) {
   const buf     = Buffer.allocUnsafe(5 + payload);
   let off = writeHeader(buf, 0, MSG.SCANNER_SNAPSHOT, payload);
 
-  buf.writeUInt32BE(tableBuf.length, off); off += 4;  // ✅ was UInt16BE
+  buf.writeUInt32BE(tableBuf.length, off); off += 4;
   tableBuf.copy(buf, off); off += tableBuf.length;
   buf.writeUInt32BE(stocksBuf.length, off); off += 4;
   stocksBuf.copy(buf, off);
@@ -173,7 +178,8 @@ function encodeCandle(msgType, symbol, tf, candle) {
   buf.writeUInt32BE(Math.min(candle.volume || 0, 0xFFFFFFFF) >>> 0, off);
   return buf;
 }
-// ── OPTIONS INTEL ─────────────────────────────────────────────────────────────
+
+// ── OPTIONS INTEL (full analysis, 60s cycle) ──────────────────────────────────
 function encodeOptionsIntel(data) {
   const sym    = Buffer.from((data.symbol || "NIFTY"), "ascii");
   const expiry = Buffer.from((data.expiry  || ""), "ascii");
@@ -205,6 +211,40 @@ function encodeOptionsIntel(data) {
 
   return buf;
 }
+
+// ── OPTIONS INTEL TICK (live spot update, ~1s, ~40B) ─────────────────────────
+// FIX 4: This function was called in websocket.js emitOptionsIntelTick but
+// did not exist here — caused a silent crash, no live ticks reached StraddlePage.
+//
+// Frame layout (after 5-byte header):
+//   1B  symLen
+//   NB  symbol (ascii)
+//   4B  spotPrice    (uint32, /100)
+//   4B  straddlePrice (uint32, /100)
+//   4B  atmIV        (uint32, /100)
+//   1B  score        (uint8, 0-100)
+//   1B  biasLen
+//   NB  bias         (ascii, e.g. "BULLISH")
+//
+// Total: ~40B vs ~200B JSON = ~80% bandwidth saving on every 1s tick
+function encodeOptionsIntelTick(symbol, spotPrice, straddlePrice, atmIV, score, bias) {
+  const symBuf  = Buffer.from((symbol || "NIFTY"), "ascii");
+  const biasBuf = Buffer.from((bias   || "NEUTRAL").slice(0, 12), "ascii");
+  const len     = 1 + symBuf.length + 4 + 4 + 4 + 1 + 1 + biasBuf.length;
+  const buf     = Buffer.allocUnsafe(5 + len);
+  let off = writeHeader(buf, 0, MSG.OPTIONS_INTEL_TICK, len);
+
+  buf.writeUInt8(symBuf.length, off); off++;
+  symBuf.copy(buf, off); off += symBuf.length;
+  buf.writeUInt32BE(priceToUint32(spotPrice    || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(straddlePrice || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(atmIV        || 0), off); off += 4;
+  buf.writeUInt8(Math.max(0, Math.min(100, Math.round(score || 50))), off); off++;
+  buf.writeUInt8(biasBuf.length, off); off++;
+  biasBuf.copy(buf, off);
+  return buf;
+}
+
 // ── JSON FALLBACK ─────────────────────────────────────────────────────────────
 function encodeJSON(eventName, data) {
   const nameBuf    = Buffer.from(eventName, "ascii");
@@ -222,7 +262,7 @@ function encodeJSON(eventName, data) {
 function decode(buffer) {
   const buf     = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   const msgType = buf.readUInt8(0);
-  let off = 5; // ✅ FIX: 1 type + 4 length (was 3)
+  let off = 5; // 1 type + 4 length
 
   switch (msgType) {
     case MSG.MARKET_TICK: {
@@ -271,7 +311,7 @@ function decode(buffer) {
     }
 
     case MSG.SCANNER_SNAPSHOT: {
-      const tableLen  = buf.readUInt32BE(off); off += 4;  // ✅ was UInt16BE
+      const tableLen  = buf.readUInt32BE(off); off += 4;
       const tableJson = buf.slice(off, off + tableLen).toString("utf8"); off += tableLen;
       _symbolTable    = JSON.parse(tableJson);
       _symbolToIndex  = new Map(_symbolTable.map((s, i) => [s, i]));
@@ -298,39 +338,57 @@ function decode(buffer) {
       return { type, data: { symbol, tf, candle: { time, open, high, low, close, volume } } };
     }
 
+    case MSG.OPTIONS_INTEL: {
+      const symLen        = buf.readUInt8(off); off++;
+      const symbol        = buf.slice(off, off + symLen).toString("ascii"); off += symLen;
+      const expLen        = buf.readUInt8(off); off++;
+      const expiry        = buf.slice(off, off + expLen).toString("ascii"); off += expLen;
+      const spotPrice     = buf.readUInt32BE(off) / 100; off += 4;
+      const atmStrike     = buf.readUInt32BE(off) / 100; off += 4;
+      const straddlePrice = buf.readUInt32BE(off) / 100; off += 4;
+      const stranglePrice = buf.readUInt32BE(off) / 100; off += 4;
+      const callLTP       = buf.readUInt32BE(off) / 100; off += 4;
+      const putLTP        = buf.readUInt32BE(off) / 100; off += 4;
+      const atmIV         = buf.readUInt32BE(off) / 100; off += 4;
+      const pcr           = buf.readInt16BE(off)  / 100; off += 2;
+      const theta         = buf.readInt16BE(off)  / 100; off += 2;
+      const delta         = buf.readInt16BE(off)  / 100; off += 2;
+      const vega          = buf.readInt16BE(off)  / 100; off += 2;
+      return {
+        type: "options-intelligence",
+        data: {
+          symbol, expiry, spotPrice,
+          structure:  { atmStrike, straddlePrice, stranglePrice, callLTP, putLTP },
+          volatility: { atmIV },
+          oi:         { pcr },
+          atmGreeks:  { theta, delta, vega },
+        },
+      };
+    }
+
+    // FIX 4: decode OPTIONS_INTEL_TICK frames (0x0D)
+    case MSG.OPTIONS_INTEL_TICK: {
+      const symLen        = buf.readUInt8(off); off++;
+      const symbol        = buf.slice(off, off + symLen).toString("ascii"); off += symLen;
+      const spotPrice     = buf.readUInt32BE(off) / 100; off += 4;
+      const straddlePrice = buf.readUInt32BE(off) / 100; off += 4;
+      const atmIV         = buf.readUInt32BE(off) / 100; off += 4;
+      const score         = buf.readUInt8(off); off++;
+      const biasLen       = buf.readUInt8(off); off++;
+      const bias          = buf.slice(off, off + biasLen).toString("ascii");
+      return {
+        type: "options-intel-tick",
+        data: { symbol, spotPrice, straddlePrice, atmIV, score, bias },
+      };
+    }
+
     case MSG.JSON_FALLBACK: {
       const nameLen   = buf.readUInt8(off); off++;
       const eventName = buf.slice(off, off + nameLen).toString("ascii"); off += nameLen;
       const data      = JSON.parse(buf.slice(off).toString("utf8"));
       return { type: eventName, data };
     }
-case MSG.OPTIONS_INTEL: {
-  const symLen   = buf.readUInt8(off); off++;
-  const symbol   = buf.slice(off, off + symLen).toString("ascii"); off += symLen;
-  const expLen   = buf.readUInt8(off); off++;
-  const expiry   = buf.slice(off, off + expLen).toString("ascii"); off += expLen;
-  const spotPrice     = buf.readUInt32BE(off) / 100; off += 4;
-  const atmStrike     = buf.readUInt32BE(off) / 100; off += 4;
-  const straddlePrice = buf.readUInt32BE(off) / 100; off += 4;
-  const stranglePrice = buf.readUInt32BE(off) / 100; off += 4;
-  const callLTP       = buf.readUInt32BE(off) / 100; off += 4;
-  const putLTP        = buf.readUInt32BE(off) / 100; off += 4;
-  const atmIV         = buf.readUInt32BE(off) / 100; off += 4;
-  const pcr           = buf.readInt16BE(off)  / 100; off += 2;
-  const theta         = buf.readInt16BE(off)  / 100; off += 2;
-  const delta         = buf.readInt16BE(off)  / 100; off += 2;
-  const vega          = buf.readInt16BE(off)  / 100; off += 2;
-  return {
-    type: "options-intelligence",
-    data: {
-      symbol, expiry, spotPrice,
-      structure: { atmStrike, straddlePrice, stranglePrice, callLTP, putLTP },
-      volatility: { atmIV },
-      oi: { pcr },
-      atmGreeks: { theta, delta, vega },
-    },
-  };
-}
+
     default:
       return { type: "unknown", msgType, data: null };
   }
@@ -353,9 +411,10 @@ module.exports = {
   encodeScannerSnapshot,
   encodeCandle,
   encodeJSON,
+  encodeOptionsIntel,
+  encodeOptionsIntelTick,   // FIX 4: export the new function
   decode,
   buildSymbolTable,
   getSymbolIndex,
   stats,
-  encodeOptionsIntel,
 };

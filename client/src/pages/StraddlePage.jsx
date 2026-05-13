@@ -1,9 +1,26 @@
 // client/src/pages/StraddlePage.jsx
 // Live Straddle & Strangle Chart Page
-// FIX: Symbol switch (SENSEX etc) now works correctly
-//   — symbolRef keeps socket handler closure in sync with current symbol
-//   — snap is fully reset on symbol change so stale NIFTY data never bleeds through
-//   — seed fetch re-runs on every symbol change with correct symbol
+//
+// FIX-TIME:     Chart X-axis now shows MARKET time (from data timestamps), not wall-clock time.
+//               - isoToLabel() converts the snapshot's ISO timestamp to IST HH:MM.
+//               - now() is replaced by marketNow() which reads IST time directly.
+//               - Socket ticks carry a `ts` field (epoch ms). If present, that is converted
+//                 to IST HH:MM so chart labels always reflect when NSE data was captured,
+//                 not when the browser received the frame.
+//               - History entries use the ts from the socket payload, not Date.now().
+//
+// FIX-EXPIRY:   Expired expiries are filtered server-side (straddleRoutes.js).
+//               Frontend also guards: if selected expiry is not in the list, auto-selects [0].
+//               Expiry dropdown now shows a "(nearest)" label on the first option.
+//
+// FIX-STRANGLE: Straddle and strangle premiums were identical because the socket handler
+//               was using `s.stranglePrice ?? s.straddlePrice` but the engine only
+//               returns straddlePrice in the structure. The snapshot now correctly reads
+//               OTM strike rows, so we trust the snapshot for strangle and never
+//               overwrite it with `s.straddlePrice` as fallback when strangle is missing.
+//
+// FIX-SYMBOL:   symbolRef keeps socket handler closure in sync with current symbol.
+//               snap is fully reset on symbol change.
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
@@ -34,12 +51,45 @@ const COLOR = {
   cone2:     "rgba(56,189,248,0.05)",
 };
 
+// ─── Time helpers ─────────────────────────────────────────────────────────────
+/**
+ * Convert an epoch-ms timestamp OR ISO string to IST HH:MM.
+ * This is what we use for ALL chart labels so X-axis always shows
+ * when the NSE data was captured, not the browser's local clock.
+ */
+function toISTLabel(tsOrIso) {
+  if (!tsOrIso) return marketNow();
+  let d;
+  if (typeof tsOrIso === "number") {
+    d = new Date(tsOrIso);
+  } else {
+    try { d = new Date(tsOrIso); } catch { return marketNow(); }
+  }
+  if (isNaN(d.getTime())) return marketNow();
+  // Force IST display regardless of browser timezone
+  return d.toLocaleTimeString("en-IN", {
+    hour:     "2-digit",
+    minute:   "2-digit",
+    timeZone: "Asia/Kolkata",
+  });
+}
+
+/**
+ * Current IST time as HH:MM (used only as fallback when no timestamp is available).
+ * Named marketNow() to make it clear this is an IST clock, not local wall-clock.
+ */
+function marketNow() {
+  return new Date().toLocaleTimeString("en-IN", {
+    hour:     "2-digit",
+    minute:   "2-digit",
+    timeZone: "Asia/Kolkata",
+  });
+}
+
 // ─── Utility ─────────────────────────────────────────────────────────────────
 const fmt    = (n, d = 2) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: d });
 const fmtPct = (n) => (n == null ? "—" : `${Number(n).toFixed(2)}%`);
-const now    = () =>
-  new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 function getDTE(expiryStr) {
   if (!expiryStr) return 1;
@@ -214,7 +264,6 @@ export default function StraddlePage({ socket }) {
   );
   const alertedRef = useRef({ upper: false, lower: false });
 
-  // ── keep refs in sync with current values so socket handlers are never stale
   const symbolRef  = useRef(symbol);
   const expiryRef  = useRef(expiry);
   const snapRef    = useRef(snap);
@@ -255,7 +304,6 @@ export default function StraddlePage({ socket }) {
     }
   }, [notifPermission]);
 
-  // FIX: always use snap.expiry as fallback so payoff uses the same expiry as displayed data
   const fetchPayoff = useCallback(async () => {
     try {
       const activeExpiry = expiry || snapRef.current?.expiry || "";
@@ -272,7 +320,7 @@ export default function StraddlePage({ socket }) {
     }
   }, [symbol, expiry, stratType, side, strangleStep]);
 
-  // ── Reset snap + history immediately when symbol changes ──────────────────
+  // Reset on symbol change
   useEffect(() => {
     setSnap(null);
     setPremHistory([]);
@@ -284,7 +332,7 @@ export default function StraddlePage({ socket }) {
     setAlertMsg(null);
   }, [symbol]);
 
-  // ── Socket + seed fetch setup ─────────────────────────────────────────────
+  // Socket + seed fetch setup
   useEffect(() => {
     if (!socket) return;
 
@@ -304,6 +352,23 @@ export default function StraddlePage({ socket }) {
         if (!data || data.error) { setLoading(false); return; }
         if (symbolRef.current !== currentSymbol) return;
         setSnap(data);
+
+        // FIX-TIME: use the snapshot's own ISO timestamp for the seed chart label.
+        // This shows the NSE data capture time (e.g. "09:15") not browser time.
+        const seedTime     = toISTLabel(data.timestamp);
+        const seedStraddle = data.straddle?.combined ?? null;
+        // FIX-STRANGLE: use real strangle combined premium, not straddle value
+        const seedStrangle = data.strangle?.combined ?? null;
+
+        if (seedStraddle != null) {
+          setPremHistory([{ time: seedTime, straddle: seedStraddle, strangle: seedStrangle }]);
+        }
+
+        // FIX-EXPIRY: if previously selected expiry is no longer in filtered list, clear it
+        if (expiryRef.current && data.expiries?.length && !data.expiries.includes(expiryRef.current)) {
+          setExpiry(data.expiries[0] || "");
+        }
+
         setLoading(false);
       })
       .catch(() => { setLoading(false); });
@@ -315,8 +380,12 @@ export default function StraddlePage({ socket }) {
       const s = result?.structure;
       if (!s) return;
 
-      const spotPrice = data.ltp ?? null;   // FIX: payload shape is { symbol, data, ltp, ts }
-      const t = now();
+      const spotPrice = data.ltp ?? null;
+
+      // FIX-TIME: use the socket payload's timestamp if present, else IST now.
+      // `data.ts` is epoch ms set by the server at emit time. This ensures
+      // the chart label reflects NSE data time (09:15–15:30), not browser clock.
+      const t = data.ts ? toISTLabel(data.ts) : marketNow();
 
       const newSnap = {
         spotPrice,
@@ -325,59 +394,66 @@ export default function StraddlePage({ socket }) {
           combined:       s.straddlePrice,
           callStrike:     result.atmStrike,
           putStrike:      result.atmStrike,
-          // FIX: split straddle premium evenly — engine doesn't return individual leg LTPs
           callPremium:    s.straddlePrice / 2,
           putPremium:     s.straddlePrice / 2,
           upperBreakeven: result.atmStrike + s.straddlePrice,
           lowerBreakeven: result.atmStrike - s.straddlePrice,
         },
-        // FIX: strangle — socket engine has no OTM legs, keep snapshot strangle strikes/premiums
-        //      but update the combined price and breakevens if ATM moved
-        strangle: null,  // will be merged below — never overwrite from socket
+        strangle: null,
         iv: {
           atm: result.volatility?.atmIV,
-          // FIX: volSurface fields — engine returns iv25call / iv25put, not ceIV / peIV
           ce:  result.volSurface?.iv25call,
           pe:  result.volSurface?.iv25put,
         },
         oi: {
-          // FIX: engine returns totalCallOI / totalPutOI, not totalCE / totalPE
           ce:  result.oi?.totalCallOI,
           pe:  result.oi?.totalPutOI,
           pcr: result.oi?.pcr,
         },
         greeks: result.atmGreeks,
-        // FIX: never carry expiries from socket — engine result has none, snapshot owns them
         expiry: result.expiryDate ?? expiryRef.current,
       };
 
       setSnap((prev) => ({
         ...prev,
         ...newSnap,
-        // FIX: never wipe expiry list — snapshot owns it
         expiries: prev?.expiries?.length ? prev.expiries : [],
-        // FIX: keep snapshot strangle (has real OTM strikes/premiums from cache)
-        //      socket never has better strangle data than the snapshot
-        strangle: prev?.strangle ?? newSnap.straddle,
+        // FIX-STRANGLE: never overwrite snapshot strangle with straddle value.
+        // Socket engine doesn't provide real OTM strangle — keep snapshot's value.
+        strangle: prev?.strangle ?? null,
       }));
 
-      setPremHistory((prev) => [...prev, {
-        time:     t,
-        straddle: s.straddlePrice,
-        strangle: s.stranglePrice ?? s.straddlePrice,
-      }].slice(-120));
+      setPremHistory((prev) => {
+        // FIX-STRANGLE: for the chart, use socket's stranglePrice if it differs
+        // from straddlePrice; if engine returns same value, prefer snapshot strangle.
+        const socketStrangle  = s.stranglePrice && s.stranglePrice !== s.straddlePrice
+          ? s.stranglePrice
+          : null;
+        const latestStrangle  = socketStrangle ?? snapRef.current?.strangle?.combined ?? s.straddlePrice;
+
+        const entry = {
+          time:     t,
+          straddle: s.straddlePrice,
+          strangle: latestStrangle,
+        };
+        // Deduplicate same-minute labels — update in place
+        if (prev.length > 0 && prev[prev.length - 1].time === t) {
+          return [...prev.slice(0, -1), entry];
+        }
+        return [...prev, entry].slice(-120);
+      });
 
       setLastRefresh(t);
       setLoading(false);
       setError(null);
 
-      // FIX: use spotPrice local var — data.spotPrice doesn't exist on the payload
-      const activeStratForAlert = stratType === "straddle" ? newSnap.straddle : (snapRef.current?.strangle ?? newSnap.straddle);
+      const activeStratForAlert = stratType === "straddle"
+        ? newSnap.straddle
+        : (snapRef.current?.strangle ?? newSnap.straddle);
       checkBreakevenBreach(spotPrice, activeStratForAlert);
     };
 
     socket.on("options-intelligence", handleOptionsIntel);
-
     fetchPayoff();
 
     return () => {
@@ -389,24 +465,26 @@ export default function StraddlePage({ socket }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, symbol]);
 
-  // Re-fetch payoff when strategy params or expiry changes
   useEffect(() => { fetchPayoff(); }, [fetchPayoff]);
 
-  // Reset breach flags when strategy/side changes
   useEffect(() => {
     alertedRef.current = { upper: false, lower: false };
     setAlertMsg(null);
   }, [stratType, side]);
 
   const activeStrat = snap ? (stratType === "straddle" ? snap.straddle : snap.strangle) : null;
-
   const sigmaBounds = snap
     ? getSigmaBounds(snap.spotPrice, snap.iv?.atm, snap.expiry || expiry)
     : null;
-
   const premiumPct = snap && snap.spotPrice && activeStrat?.combined
     ? ((activeStrat.combined / snap.spotPrice) * 100).toFixed(2)
     : null;
+
+  // FIX-EXPIRY: auto-correct selected expiry if it's not in the valid list
+  const validExpiries = snap?.expiries || [];
+  const safeExpiry = expiry && validExpiries.includes(expiry)
+    ? expiry
+    : (validExpiries[0] || "");
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
@@ -453,9 +531,8 @@ export default function StraddlePage({ socket }) {
           </div>
         </div>
 
-        {/* Controls */}
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Symbol — also reset expiry on change */}
+          {/* Symbol */}
           <select value={symbol} onChange={(e) => {
             setSymbol(e.target.value);
             setExpiry("");
@@ -463,10 +540,15 @@ export default function StraddlePage({ socket }) {
             {SYMBOLS.map((s) => <option key={s}>{s}</option>)}
           </select>
 
-          {/* Expiry */}
-          {snap?.expiries?.length > 0 && (
-            <select value={expiry} onChange={(e) => setExpiry(e.target.value)}>
-              {snap.expiries.map((ex) => <option key={ex}>{ex}</option>)}
+          {/* FIX-EXPIRY: use safeExpiry so expired dates are never selected.
+              First option labelled "(nearest)" for clarity. */}
+          {validExpiries.length > 0 && (
+            <select value={safeExpiry} onChange={(e) => setExpiry(e.target.value)}>
+              {validExpiries.map((ex, i) => (
+                <option key={ex} value={ex}>
+                  {ex}{i === 0 ? " (nearest)" : ""}
+                </option>
+              ))}
             </select>
           )}
 
@@ -512,7 +594,7 @@ export default function StraddlePage({ socket }) {
           </button>
 
           <button className="icon-btn"
-            onClick={() => exportCSV(symbol, expiry, premHistory)}
+            onClick={() => exportCSV(symbol, safeExpiry, premHistory)}
             title="Export premium history as CSV">
             ⬇ CSV
           </button>
@@ -556,7 +638,8 @@ export default function StraddlePage({ socket }) {
             <StatCard label="ATM IV"   value={fmtPct(snap.iv?.atm)} color={COLOR.strangle} />
             <StatCard label="PCR"      value={snap.oi?.pcr ?? "—"}
               color={+snap.oi?.pcr > 1 ? COLOR.green : COLOR.red} />
-            <StatCard label="Last Update" value={lastRefresh} sub="live via WS" />
+            {/* FIX-TIME: Last Update now shows IST market time */}
+            <StatCard label="Last Update (IST)" value={lastRefresh} sub="live via WS" />
           </div>
 
           {/* ── Sigma cone info bar ───────────────────────────────────────── */}
@@ -583,7 +666,7 @@ export default function StraddlePage({ socket }) {
                 </span>
               </span>
               <span style={{ fontSize: 11, color: COLOR.muted }}>
-                Based on IV {fmtPct(snap.iv?.atm)} · DTE {Math.round(getDTE(snap.expiry || expiry))}d
+                Based on IV {fmtPct(snap.iv?.atm)} · DTE {Math.round(getDTE(snap.expiry || safeExpiry))}d
               </span>
             </div>
           )}
@@ -620,8 +703,14 @@ export default function StraddlePage({ socket }) {
 
             {/* Live Premium Chart */}
             <div className="card">
-              <div className="section-title">Live Combined Premium — {symbol}</div>
-              {premHistory.length < 2 ? (
+              <div className="section-title">
+                Live Combined Premium — {symbol}
+                {/* FIX-TIME: clarify the axis is IST market time */}
+                <span style={{ marginLeft: 8, fontWeight: 400, color: COLOR.muted, fontSize: 11, textTransform: "none" }}>
+                  (X-axis: IST market time)
+                </span>
+              </div>
+              {premHistory.length < 1 ? (
                 <div style={{ color: COLOR.muted, fontSize: 13, padding: "20px 0" }}>
                   Collecting data… waiting for socket ticks
                 </div>
@@ -639,8 +728,12 @@ export default function StraddlePage({ socket }) {
                       </linearGradient>
                     </defs>
                     <CartesianGrid stroke={COLOR.grid} strokeDasharray="3 3" />
-                    <XAxis dataKey="time" tick={{ fill: COLOR.muted, fontSize: 10 }}
-                      interval="preserveStartEnd" />
+                    <XAxis
+                      dataKey="time"
+                      tick={{ fill: COLOR.muted, fontSize: 10 }}
+                      interval={premHistory.length <= 2 ? 0 : "preserveStartEnd"}
+                      minTickGap={40}
+                    />
                     <YAxis tick={{ fill: COLOR.muted, fontSize: 10 }} width={55} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
@@ -881,7 +974,7 @@ export default function StraddlePage({ socket }) {
             <span>
               📥 CSV: {premHistory.length} ticks recorded
               {premHistory.length > 0 && (
-                <button onClick={() => exportCSV(symbol, expiry, premHistory)}
+                <button onClick={() => exportCSV(symbol, safeExpiry, premHistory)}
                   style={{ marginLeft: 8, background: "none", border: "none",
                     color: COLOR.accent, cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>
                   Export now
