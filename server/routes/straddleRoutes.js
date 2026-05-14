@@ -193,9 +193,14 @@ router.get("/snapshot", (req, res) => {
     const spePrice        = spRow?.pe?.ltp ?? 0;
     const stranglePremium = scePrice + spePrice;
 
-    const ceOI = atmRow?.ce?.oi ?? 0;
-    const peOI = atmRow?.pe?.oi ?? 0;
-    const pcr  = peOI && ceOI ? (peOI / ceOI).toFixed(2) : (chainExpiry?.pcr ?? null);
+    // PCR from total OI across ALL strikes — not just ATM row
+    const totalCeOI = strikesArr.reduce((sum, s) => sum + (s?.ce?.oi ?? 0), 0);
+    const totalPeOI = strikesArr.reduce((sum, s) => sum + (s?.pe?.oi ?? 0), 0);
+    const ceOI = totalCeOI || (atmRow?.ce?.oi ?? 0);
+    const peOI = totalPeOI || (atmRow?.pe?.oi ?? 0);
+    const pcr  = ceOI > 0
+      ? (peOI / ceOI).toFixed(2)
+      : (chainExpiry?.pcr ?? null);
 
     // FIX-TIMESTAMP: use cache's own timestamp if available so chart labels are accurate
     const cacheTimestamp = chainData.timestamp || chainExpiry?.timestamp || new Date().toISOString();
@@ -225,7 +230,7 @@ router.get("/snapshot", (req, res) => {
         theta: { ce: atmRow?.ce?.theta ?? null, pe: atmRow?.pe?.theta ?? null },
         vega:  { ce: atmRow?.ce?.vega  ?? null, pe: atmRow?.pe?.vega  ?? null },
       },
-      oi:       { ce: ceOI, pe: peOI, pcr },
+      oi:       { ce: totalCeOI || ceOI, pe: totalPeOI || peOI, pcr },
       // FIX-EXPIRY: only return non-expired expiries to the frontend dropdown
       expiries: expiryList,
     });

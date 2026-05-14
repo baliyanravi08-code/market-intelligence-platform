@@ -329,35 +329,28 @@ export default function StraddlePage({ socket }) {
    *   5. "09:15" absolute fallback
    */
   const resolveTickTime = useCallback((dataTs) => {
-    // 1. Server-provided ts (epoch ms) — validate + clamp
+    // 1. Server-provided ts — only use if fresh (within 5 min of real IST)
     if (dataTs) {
       const label = toMarketLabel(dataTs);
       if (label) {
-        lastKnownMinRef.current = label;
-        return label;
+        const { h: nowH, m: nowM } = currentISTHM();
+        const nowLabel = clampToMarket(toHHMM(nowH, nowM));
+        const [lh, lm] = label.split(":").map(Number);
+        const [nh, nm] = nowLabel.split(":").map(Number);
+        const diffMins = Math.abs((nh * 60 + nm) - (lh * 60 + lm));
+        if (diffMins <= 5) {
+          lastKnownMinRef.current = label;
+          return label;
+        }
+        // stale ts — fall through to real-time tracking
       }
     }
 
-    // 2. REST snapshot cache time
-    // Advance by 1 each tick so chart moves right — but NEVER past current IST.
-    // Without this cap, a stale cacheTs (e.g. written at 15:30 yesterday) causes
-    // advanceMinute() to fire on every incoming tick, producing ghost ticks.
-    if (cacheTimeRef.current) {
-      const { h: nowH, m: nowM } = currentISTHM();
-      const nowLabel  = clampToMarket(toHHMM(nowH, nowM));
-      const advanced  = lastKnownMinRef.current
-        ? advanceMinute(lastKnownMinRef.current)
-        : cacheTimeRef.current;
-      // Cap: never let the chart advance past the current real IST minute
-      const capped = advanced > nowLabel ? nowLabel : advanced;
-      lastKnownMinRef.current = capped;
-      return capped;
-    }
-    // 3. Current IST clamped to market hours
-    const ist = currentIST();
-    const clamped = clampToMarket(ist);
-    lastKnownMinRef.current = clamped;
-    return clamped;
+    // 2. Real-time tracking — always use current IST, clamped to market hours
+    const { h: nowH, m: nowM } = currentISTHM();
+    const nowLabel = clampToMarket(toHHMM(nowH, nowM));
+    lastKnownMinRef.current = nowLabel;
+    return nowLabel;
   }, []);
 
   const requestNotifPermission = async () => {
@@ -967,7 +960,6 @@ export default function StraddlePage({ socket }) {
     </div>
   );
 }
-
 const pillStyle = (color) => ({
   background: `${color}18`, border: `1px solid ${color}40`, color,
   borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, fontFamily: "monospace",
