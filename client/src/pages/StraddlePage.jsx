@@ -508,10 +508,11 @@ export default function StraddlePage({ socket }) {
       // FIX-A: NEVER drop a tick — always get a valid time label
       const t = resolveTickTime(data.ts);
 
-      // FIX strangle: only use socket value if distinct from straddle
-      const socketStrangle = (data.stranglePrice && data.stranglePrice !== straddlePrice)
+      // Use decoded stranglePrice if non-zero and distinct from straddle.
+      // After FIX 1, data.stranglePrice is now correctly decoded from binary.
+      const socketStrangle = (data.stranglePrice && data.stranglePrice > 0 && data.stranglePrice !== straddlePrice)
         ? data.stranglePrice
-        : snapRef.current?.strangle?.combined ?? null;
+        : (snapRef.current?.strangle?.combined ?? null);
 
       // Update snap state
       setSnap(prev => {
@@ -522,9 +523,13 @@ export default function StraddlePage({ socket }) {
           straddle: prev.straddle
             ? { ...prev.straddle, combined: straddlePrice }
             : prev.straddle,
-          strangle: prev.strangle && socketStrangle != null
+          strangle: prev.strangle && socketStrangle != null && socketStrangle > 0
             ? { ...prev.strangle, combined: socketStrangle }
             : prev.strangle,
+          // PCR and atmIV from 1s tick (carry forward from last full intel cycle)
+          iv: prev.iv
+            ? { ...prev.iv, atm: data.atmIV > 0 ? data.atmIV : prev.iv.atm }
+            : prev.iv,
         };
       });
 
@@ -533,7 +538,12 @@ export default function StraddlePage({ socket }) {
         const entry = {
           time:     t,
           straddle: straddlePrice,
-          strangle: socketStrangle ?? straddlePrice,
+          // Never use straddlePrice as strangle fallback in chart —
+          // they are different values. Use null so the line shows a gap
+          // rather than a wrong value, until full intel cycle fills it.
+          strangle: (socketStrangle != null && socketStrangle > 0)
+            ? socketStrangle
+            : (prev.find(p => p.time === t)?.strangle ?? null),
         };
         const idx = prev.findIndex(p => p.time === t);
         if (idx !== -1) {
@@ -541,6 +551,7 @@ export default function StraddlePage({ socket }) {
           next[idx] = { ...next[idx], ...entry };
           return next;
         }
+        // New minute — append. This is what grows the chart rightward.
         return [...prev, entry];
       });
 
@@ -562,7 +573,7 @@ export default function StraddlePage({ socket }) {
       const s      = result?.structure;
       if (!s) return;
 
-      const spotPrice     = data.ltp ?? result?.spotPrice ?? null;
+      const spotPrice     = result?.spotPrice ?? data?.spotPrice ?? null;
       const straddlePrice = s.straddlePrice;
       const t             = resolveTickTime(data.ts);
 
@@ -573,23 +584,37 @@ export default function StraddlePage({ socket }) {
       setSnap(prev => ({
         ...prev,
         spotPrice,
-        atmStrike: result.atmStrike,
+        atmStrike: result.atmStrike ?? prev?.atmStrike,
         straddle: {
+          ...(prev?.straddle || {}),
           combined:       straddlePrice,
-          callStrike:     result.atmStrike,
-          putStrike:      result.atmStrike,
-          callPremium:    s.callLTP ?? (straddlePrice / 2),
-          putPremium:     s.putLTP  ?? (straddlePrice / 2),
-          upperBreakeven: result.atmStrike + straddlePrice,
-          lowerBreakeven: result.atmStrike - straddlePrice,
+          callStrike:     result.atmStrike ?? prev?.atmStrike,
+          putStrike:      result.atmStrike ?? prev?.atmStrike,
+          callPremium:    s.callLTP ?? s.straddlePrice / 2 ?? (prev?.straddle?.callPremium || 0),
+          putPremium:     s.putLTP  ?? s.straddlePrice / 2 ?? (prev?.straddle?.putPremium  || 0),
+          upperBreakeven: (result.atmStrike ?? prev?.atmStrike ?? 0) + straddlePrice,
+          lowerBreakeven: (result.atmStrike ?? prev?.atmStrike ?? 0) - straddlePrice,
         },
         strangle: snapRef.current?.strangle
-          ? { ...snapRef.current.strangle, combined: socketStrangle ?? snapRef.current.strangle.combined }
-          : null,
-        iv:      { atm: result.volatility?.atmIV, ce: result.volSurface?.iv25call, pe: result.volSurface?.iv25put },
-        oi:      { ce: result.oi?.totalCallOI, pe: result.oi?.totalPutOI, pcr: result.oi?.pcr },
-        greeks:  result.atmGreeks,
-        expiry:  result.expiryDate ?? expiryRef.current,
+          ? {
+              ...snapRef.current.strangle,
+              combined: (socketStrangle != null && socketStrangle > 0)
+                ? socketStrangle
+                : snapRef.current.strangle.combined,
+            }
+          : prev?.strangle ?? null,
+        iv: {
+          atm: result.volatility?.atmIV ?? prev?.iv?.atm,
+          ce:  result.volSurface?.iv25call ?? prev?.iv?.ce,
+          pe:  result.volSurface?.iv25put  ?? prev?.iv?.pe,
+        },
+        oi: {
+          ce:  result.oi?.totalCallOI ?? prev?.oi?.ce,
+          pe:  result.oi?.totalPutOI  ?? prev?.oi?.pe,
+          pcr: result.oi?.pcr         ?? prev?.oi?.pcr,
+        },
+        greeks:  result.atmGreeks ?? prev?.greeks,
+        expiry:  result.expiryDate ?? expiryRef.current ?? prev?.expiry,
         expiries: prev?.expiries?.length ? prev.expiries : [],
       }));
 

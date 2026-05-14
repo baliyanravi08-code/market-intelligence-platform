@@ -72,8 +72,9 @@ const INTEL_SYMBOL_MAP  = {
   "NIFTY 50":   "NIFTY",
   "BANK NIFTY": "BANKNIFTY",
   "SENSEX":     "SENSEX",
+  // FINNIFTY and MIDCPNIFTY tick via NIFTY 50 feed — mapped separately below
+  // These are triggered from nseOIListener, not upstox index stream
 };
-
 const optionInstruments   = new Set();
 const stockInstruments    = new Set();
 const stockInstrumentKeys = new Set();
