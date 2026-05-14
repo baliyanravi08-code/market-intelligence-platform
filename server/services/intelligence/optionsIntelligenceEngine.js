@@ -465,8 +465,12 @@ function computeVolatilitySurface(chain, spot, T, r) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function computeMarketStructure({ chain, spot, T, atmIV, hv20, historicalIVs }) {
-  const atm             = chain.reduce((best, row) =>
-    Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best);
+  // Determine strike interval from chain, then snap spot to nearest strike
+  const strikes      = chain.map(r => r.strike).sort((a, b) => a - b);
+  const interval     = strikes.length > 1 ? (strikes[strikes.length - 1] - strikes[0]) / (strikes.length - 1) : 50;
+  const roundedSpot  = Math.round(spot / interval) * interval;
+  const atm          = chain.reduce((best, row) =>
+    Math.abs(row.strike - roundedSpot) < Math.abs(best.strike - roundedSpot) ? row : best);
   const straddlePrice   = (atm.callLTP || 0) + (atm.putLTP || 0);
   const expectedMoveAbs = straddlePrice * 0.84;
   const expectedMovePct = expectedMoveAbs / spot * 100;
@@ -617,8 +621,11 @@ function analyzeOptionsChain({
     return out;
   });
 
-  const atmRow = enrichedChain.reduce((best, row) =>
-    Math.abs(row.strike - spotPrice) < Math.abs(best.strike - spotPrice) ? row : best);
+  const _strikes     = enrichedChain.map(r => r.strike).sort((a, b) => a - b);
+  const _interval    = _strikes.length > 1 ? (_strikes[_strikes.length - 1] - _strikes[0]) / (_strikes.length - 1) : 50;
+  const _roundedSpot = Math.round(spotPrice / _interval) * _interval;
+  const atmRow       = enrichedChain.reduce((best, row) =>
+    Math.abs(row.strike - _roundedSpot) < Math.abs(best.strike - _roundedSpot) ? row : best);
   const atmIV  = atmRow.callIV || atmRow.putIV;
   const hv20   = historicalVolatility(closes, 20);
   const hv60   = historicalVolatility(closes, 60);

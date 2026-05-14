@@ -375,11 +375,13 @@ function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
   }
 
   const pcr      = totalCEOI > 0 ? +(totalPEOI / totalCEOI).toFixed(3) : 0;
-  const atmStrike = sorted.reduce(
-    (best, s) => Math.abs(s.strike_price - spotPrice) < Math.abs(best - spotPrice) ? s.strike_price : best,
+  // Snap spotPrice to nearest strike interval before ATM selection
+  const _interval  = sorted.length > 1 ? sorted[1].strike_price - sorted[0].strike_price : 50;
+  const _snapSpot  = Math.round(spotPrice / _interval) * _interval;
+  const atmStrike  = sorted.reduce(
+    (best, s) => Math.abs(s.strike_price - _snapSpot) < Math.abs(best - _snapSpot) ? s.strike_price : best,
     sorted[0]?.strike_price || 0
   );
-
   const below      = sorted.filter(s => s.strike_price <= spotPrice);
   const above      = sorted.filter(s => s.strike_price >= spotPrice);
   const support    = below.length ? below.reduce((b, s) => readOI(s.put_options?.market_data) > readOI(b.put_options?.market_data) ? s : b).strike_price : 0;

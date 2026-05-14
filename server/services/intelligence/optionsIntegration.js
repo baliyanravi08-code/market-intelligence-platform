@@ -246,8 +246,11 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
 
   // FIX STRADDLE-ROOT: guard both legs present at ATM before running engine.
   // Partial chain (first fast-path call from nseOIListener) often has one leg=0.
-  const atmRowCheck = chain.reduce((best, r) =>
-    Math.abs(r.strike - spotPrice) < Math.abs(best.strike - spotPrice) ? r : best,
+ const _cStrikes    = chain.map(r => r.strike).sort((a, b) => a - b);
+  const _cInterval   = _cStrikes.length > 1 ? (_cStrikes[_cStrikes.length - 1] - _cStrikes[0]) / (_cStrikes.length - 1) : 50;
+  const _cRounded    = Math.round(spotPrice / _cInterval) * _cInterval;
+  const atmRowCheck  = chain.reduce((best, r) =>
+    Math.abs(r.strike - _cRounded) < Math.abs(best.strike - _cRounded) ? r : best,
     chain[0]
   );
   if (!atmRowCheck || atmRowCheck.callLTP <= 0 || atmRowCheck.putLTP <= 0) {
