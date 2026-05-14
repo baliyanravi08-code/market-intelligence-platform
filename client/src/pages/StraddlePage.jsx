@@ -447,7 +447,12 @@ export default function StraddlePage({ socket }) {
         if (cancelled) return;
 
         // Snapshot
-        const sr   = await fetch(`/api/straddle/snapshot?symbol=${currentSymbol}`);
+        const sr = await fetch(`/api/straddle/snapshot?symbol=${currentSymbol}`);
+        if (!sr.ok) {
+          console.warn(`Snapshot 404 for ${currentSymbol} — will seed from socket`);
+          setLoading(false);
+          return;
+        }
         const data = await sr.json();
         if (cancelled) return;
         if (!data || data.error) { setLoading(false); return; }
@@ -498,6 +503,19 @@ export default function StraddlePage({ socket }) {
       const straddlePrice = data.straddlePrice ?? data.straddle ?? null;
       if (straddlePrice == null) return;
 
+      // Seed snap from socket if REST snapshot failed (404)
+      if (!snapRef.current && straddlePrice > 0) {
+        setSnap({
+          spotPrice:  data.spotPrice || 0,
+          atmStrike:  Math.round((data.spotPrice || 0) / 50) * 50,
+          straddle:   { combined: straddlePrice, callPremium: straddlePrice / 2, putPremium: straddlePrice / 2, callStrike: Math.round((data.spotPrice || 0) / 50) * 50, putStrike: Math.round((data.spotPrice || 0) / 50) * 50, upperBreakeven: (Math.round((data.spotPrice || 0) / 50) * 50) + straddlePrice, lowerBreakeven: (Math.round((data.spotPrice || 0) / 50) * 50) - straddlePrice },
+          strangle:   data.stranglePrice > 0 ? { combined: data.stranglePrice, callPremium: data.stranglePrice / 2, putPremium: data.stranglePrice / 2 } : null,
+          iv:         { atm: data.atmIV || 0, ce: 0, pe: 0 },
+          oi:         { ce: data.totalCallOI || 0, pe: data.totalPutOI || 0, pcr: data.pcr || null },
+          expiries:   [],
+        });
+        setLoading(false);
+      }
       // FIX-A: NEVER drop a tick — always get a valid time label
       const t = resolveTickTime(data.ts);
 
@@ -522,13 +540,11 @@ export default function StraddlePage({ socket }) {
             ? { ...prev.iv, atm: data.atmIV > 0 ? data.atmIV : prev.iv.atm }
             : prev.iv,
           // Live OI + PCR from 1s binary tick — no need to wait 60s
-          oi: (data.totalCallOI > 0 || data.totalPutOI > 0)
-            ? {
-                ce:  data.totalCallOI || prev.oi?.ce  || 0,
-                pe:  data.totalPutOI  || prev.oi?.pe  || 0,
-                pcr: data.pcr != null ? data.pcr : prev.oi?.pcr,
-              }
-            : prev.oi,
+          oi: {
+  ce:  data.totalCallOI > 0 ? data.totalCallOI : (prev.oi?.ce  || 0),
+  pe:  data.totalPutOI  > 0 ? data.totalPutOI  : (prev.oi?.pe  || 0),
+  pcr: data.pcr != null     ? data.pcr          : prev.oi?.pcr,
+},
         };
       });
       // Upsert into skeleton
@@ -618,7 +634,7 @@ export default function StraddlePage({ socket }) {
 
       if (straddlePrice != null) {
         setPremHistory(prev => {
-          const entry = { time: t, straddle: straddlePrice, strangle: socketStrangle ?? straddlePrice };
+          const entry = { time: t, straddle: straddlePrice, strangle: socketStrangle ?? null };
           const idx = prev.findIndex(p => p.time === t);
           if (idx !== -1) {
             const next = [...prev];

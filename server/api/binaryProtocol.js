@@ -273,7 +273,7 @@ function encodeOptionsIntelTick(symbol, spotPrice, straddlePrice, atmIV, score, 
   // Live OI fields — 1s update frequency
   buf.writeUInt32BE(Math.min(totalCallOI || 0, 0xFFFFFFFF) >>> 0, off); off += 4;
   buf.writeUInt32BE(Math.min(totalPutOI  || 0, 0xFFFFFFFF) >>> 0, off); off += 4;
-  buf.writeInt16BE(Math.round((pcr       || 0) * 100), off);
+  buf.writeInt16BE(Math.round((pcr ?? 0) * 100), off);
 
   return buf;
 }

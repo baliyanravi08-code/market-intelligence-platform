@@ -17,6 +17,11 @@ const path    = require("path");
 
 const CACHE_PATH   = path.join(__dirname, "../data/optionChainCache.json");
 const HISTORY_PATH = path.join(__dirname, "../data/ivHistory.json");
+let _ws = null;
+function getWS() {
+  if (!_ws) { try { _ws = require("../api/websocket"); } catch (_) {} }
+  return _ws;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -204,7 +209,17 @@ router.get("/snapshot", (req, res) => {
 
     // FIX-TIMESTAMP: use cache's own timestamp if available so chart labels are accurate
     const cacheTimestamp = chainData.timestamp || chainExpiry?.timestamp || new Date().toISOString();
-
+// Seed binary tick cache so live ticks use REST-computed values (not raw chain sum)
+    try {
+      getWS()?.setCachedStraddleSnap?.(resolveSymbol(symbol), {
+        straddle:  { combined: straddlePremium },
+        strangle:  { combined: stranglePremium },
+        oi:        { pcr, ce: totalCeOI, pe: totalPeOI },
+        iv:        { atm: +atmIV },
+        timestamp: cacheTimestamp,
+      });
+    } catch (_) {}
+    
     res.json({
       symbol:    resolveSymbol(symbol),
       expiry:    targetExpiry,

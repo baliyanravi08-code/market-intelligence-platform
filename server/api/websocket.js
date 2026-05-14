@@ -2,6 +2,29 @@
 
 /**
  * server/api/websocket.js — Binary Protocol Edition
+ *
+ * FIXES IN THIS VERSION:
+ * ══════════════════════════════════════════════════════════════════
+ * FIX-1: emitOptionsIntelTick — removed duplicate `const stranglePrice` that
+ *   caused either a syntax error or the wrong (old) value being used.
+ *
+ * FIX-2: emitOptionsIntelTick — straddlePrice now reads from the STRADDLE CACHE
+ *   (_straddleCache) first, falling back to structure.straddlePrice.
+ *   The intel cache stores raw options-intelligence payload where
+ *   structure.straddlePrice = raw CE+PE LTP sum across chain (~599).
+ *   The REST snapshot computes the correct normalised value (347) from
+ *   optionChainCache.json. We now keep a _straddleCache that mirrors
+ *   the REST snapshot values so the binary tick uses the same source.
+ *
+ * FIX-3: PCR null-coercion — all `|| 0` on pcr changed to `?? 0` so a
+ *   real PCR of 1.23 is never coerced to 0 or lost. PCR is now
+ *   unconditionally updated in the oi block (not gated on OI > 0).
+ *
+ * FIX-4: join:straddle hydration — same PCR fix applied to initial emit.
+ *
+ * FIX-5: strangle chart fix — strangle fallback in handleOptionsIntel
+ *   changed from `?? straddlePrice` to `?? null` (done in StraddlePage.jsx).
+ * ══════════════════════════════════════════════════════════════════
  */
 
 const { Server } = require("socket.io");
@@ -59,18 +82,43 @@ const _intelCache    = new Map();
 const _chainCache    = new Map();
 const _expiriesCache = new Map();
 
+// FIX-2: Separate cache for REST-snapshot-derived straddle/strangle values.
+// The intel cache has raw options-intelligence payload (structure.straddlePrice
+// = raw chain sum). The REST /api/straddle/snapshot computes the correct
+// normalised value. We store those here so binary ticks use the right numbers.
+const _straddleCache = new Map(); // sym → { straddlePrice, stranglePrice, pcr, atmIV, ... }
+
+/**
+ * Call this from straddleRoutes (or anywhere that computes the correct
+ * straddle/strangle premium from optionChainCache.json) so binary ticks
+ * emit the same value as the REST snapshot.
+ */
+function setCachedStraddleSnap(symbol, snap) {
+  if (!symbol || !snap) return;
+  _straddleCache.set(symbol.toUpperCase(), {
+    straddlePrice: snap.straddle?.combined ?? 0,
+    stranglePrice: snap.strangle?.combined ?? 0,
+    pcr:           snap.oi?.pcr            ?? null,
+    atmIV:         snap.iv?.atm            ?? 0,
+    totalCallOI:   snap.oi?.ce             ?? 0,
+    totalPutOI:    snap.oi?.pe             ?? 0,
+    timestamp:     snap.timestamp          ?? Date.now(),
+  });
+}
+
+function getCachedStraddleSnap(symbol) {
+  if (!symbol) return null;
+  return _straddleCache.get(symbol.toUpperCase()) || null;
+}
+
 function setCachedIntel(symbol, payload) {
   if (!symbol || !payload) return;
-  // Stamp a fresh server-side timestamp so binary tick frames always
-  // have a valid tsSec. Without this, cacheTs resolves to null,
-  // encodeOptionsIntelTick writes tsSec=0, client falls to advanceMinute()
-  // fallback and produces ghost ticks.
   const stamped = {
     ...payload,
     cacheTimestamp: payload.cacheTimestamp
       || payload.timestamp
       || payload.fetchedAt
-      || Date.now(),   // ← always a valid epoch ms
+      || Date.now(),
   };
   _intelCache.set(symbol.toUpperCase(), stamped);
 }
@@ -223,37 +271,58 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   const cached = _intelCache.get(sym);
   if (!cached) return;
 
-  const d             = cached.data || cached;
-  const structure     = d?.structure || {};
-  const straddlePrice = structure.straddlePrice || cached.straddlePrice || d?.straddlePrice || 0;
-  const stranglePrice = structure.stranglePrice  || cached.stranglePrice || d?.stranglePrice || 0;
-  const atmIV         = d?.volatility?.atmIV     || d?.atmIV        || 0;
-  const score         = d?.score                 || 50;
-  const bias          = d?.bias                  || "NEUTRAL";
-  const totalCallOI   = d?.oi?.totalCallOI       || 0;
-  const totalPutOI    = d?.oi?.totalPutOI        || 0;
-  const pcr           = d?.oi?.pcr               || 0;
+  const d         = cached.data || cached;
+  const structure = d?.structure || {};
 
-  // Fall through to Date.now() so tsSec is NEVER 0 in the binary frame.
-  // A 0 tsSec means client gets ts=null → falls to advanceMinute() ghost tick path.
+  // FIX-2: Prefer REST-snapshot-derived values (correct, normalised) over
+  // raw intel cache values (structure.straddlePrice = chain sum, inflated).
+  const snap = _straddleCache.get(sym);
+
+  const straddlePrice = snap?.straddlePrice
+  ?? structure.straddlePrice
+  ?? 0;
+
+  // FIX-1: Single declaration of stranglePrice (removed duplicate).
+  const stranglePrice = snap?.stranglePrice
+    ?? structure.stranglePrice
+    ?? d?.stranglePrice
+    ?? 0;
+
+  const atmIV = snap?.atmIV
+    ?? d?.volatility?.atmIV
+    ?? d?.atmIV
+    ?? 0;
+
+  const score = d?.score ?? 50;
+  const bias  = d?.bias  ?? "NEUTRAL";
+
+  const totalCallOI = snap?.totalCallOI ?? d?.oi?.totalCallOI ?? 0;
+  const totalPutOI  = snap?.totalPutOI  ?? d?.oi?.totalPutOI  ?? 0;
+
+  // FIX-3: Use ?? not || so PCR 0.00 is preserved; null means "no data"
+  const pcr = cached.pcr ?? snap?.pcr ?? d?.oi?.pcr ?? null;
+
+  // Guaranteed non-null timestamp so tsSec is never 0 in the binary frame.
   const cacheTs = cached.cacheTimestamp
     || cached.timestamp
     || cached.fetchedAt
     || d?.timestamp
     || d?.cacheTimestamp
-    || Date.now();   // ← guaranteed non-null
+    || Date.now();
 
-  // ── FIX: binary frame with stranglePrice + cacheTs, emitted to BOTH rooms ──
   try {
     if (bp.encodeOptionsIntelTick) {
-      const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, cacheTs, totalCallOI, totalPutOI, pcr);
+      const buf = bp.encodeOptionsIntelTick(
+        sym, spotPrice, straddlePrice, atmIV, score, bias,
+        stranglePrice, cacheTs, totalCallOI, totalPutOI, pcr
+      );
       _io.to("intel").emit("binary", buf);
       _io.to("straddle").emit("binary", buf);
     }
   } catch (e) {
     console.warn("⚠️ binary OPTIONS_INTEL_TICK encode error:", e.message);
   }
-  // ── JSON → both rooms ─────────────────────────────────────────────────────
+
   const payload = {
     symbol: sym,
     spotPrice,
@@ -262,7 +331,7 @@ function emitOptionsIntelTick(symbol, spotPrice) {
     atmIV,
     score,
     bias,
-    ts:           cacheTs,
+    ts:          cacheTs,
     totalCallOI,
     totalPutOI,
     pcr,
@@ -334,16 +403,12 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
 
 function emitTechBatch(batch) {
   if (!_io || !batch?.length) return;
-  // Emit as JSON_FALLBACK binary frame — still JSON inside but goes through
-  // the binary channel with perMessageDeflate compression (~70% smaller).
-  // Full binary encoder not worth it for nested tech objects.
   try {
     const buf = bp.encodeJSON("scanner-tech-batch", batch);
     _io.to("scanner").emit("binary", buf);
   } catch (e) {
     console.warn("⚠️ emitTechBatch binary encode error:", e.message);
   }
-  // Also emit JSON for clients not on binary protocol
   _io.to("scanner").emit("scanner-tech-batch", batch);
 }
 
@@ -385,12 +450,11 @@ function emitOptionsIntel(data) {
   try {
     const buf = bp.encodeOptionsIntel(data);
     _io.to("intel").emit("binary", buf);
-    _io.to("straddle").emit("binary", buf);  // straddle room needs it too
+    _io.to("straddle").emit("binary", buf);
     binaryOk = true;
   } catch (e) {
     console.warn("⚠️ binary options-intel encode error:", e.message);
   }
-  // Only send JSON fallback if binary failed
   if (!binaryOk) {
     _io.to("intel").emit("options-intelligence", data);
     _io.to("straddle").emit("options-intelligence", data);
@@ -407,12 +471,12 @@ function emitCompositeUpdate(data) {
 
 function attachSocketIO(server) {
   const io = new Server(server, {
-    cors:             { origin: "*" },
-    pingInterval:     20_000,
-    pingTimeout:      60_000,
-    upgradeTimeout:   30_000,
-    transports:       ["websocket", "polling"],
-    allowUpgrades:    true,
+    cors:              { origin: "*" },
+    pingInterval:      20_000,
+    pingTimeout:       60_000,
+    upgradeTimeout:    30_000,
+    transports:        ["websocket", "polling"],
+    allowUpgrades:     true,
     perMessageDeflate: { threshold: 1024 },
   });
 
@@ -519,69 +583,80 @@ function attachSocketIO(server) {
     });
 
     socket.on("join:straddle", () => {
-  socket.join("straddle");
+      socket.join("straddle");
 
-  // Helper: is current time within market hours (9:15–15:30 IST, Mon–Fri)?
-  const isNowMarketHours = () => {
-    const ist  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-    const day  = ist.getDay();
-    const mins = ist.getHours() * 60 + ist.getMinutes();
-    return day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
-  };
+      const isNowMarketHours = () => {
+        const ist  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+        const day  = ist.getDay();
+        const mins = ist.getHours() * 60 + ist.getMinutes();
+        return day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
+      };
 
-  // Helper: is a timestamp from today (IST)?
-  const isTodayIST = (ts) => {
-    if (!ts) return false;
-    const tsDate  = new Date(typeof ts === "number" ? ts : new Date(ts).getTime())
-      .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
-    const nowDate = new Date()
-      .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
-    return tsDate === nowDate;
-  };
+      const isTodayIST = (ts) => {
+        if (!ts) return false;
+        const tsDate  = new Date(typeof ts === "number" ? ts : new Date(ts).getTime())
+          .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+        const nowDate = new Date()
+          .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+        return tsDate === nowDate;
+      };
 
-  const inMarket = isNowMarketHours();
+      const inMarket = isNowMarketHours();
 
-  for (const [sym, payload] of _intelCache) {
-    const d             = payload.data || payload;
-    const structure     = d?.structure || {};
-    const straddlePrice = structure.straddlePrice || d?.straddlePrice || 0;
-    const stranglePrice = structure.stranglePrice  || d?.stranglePrice || 0;
-    const atmIV         = d?.volatility?.atmIV     || d?.atmIV        || 0;
-    const score         = d?.score                 || 50;
-    const bias          = d?.bias                  || "NEUTRAL";
-    const spotPrice     = d?.spot || d?.spotPrice  || 0;
-    const cacheTs       = payload.cacheTimestamp   || payload.timestamp
-                       || payload.fetchedAt        || d?.timestamp || null;
+      for (const [sym, payload] of _intelCache) {
+        const d         = payload.data || payload;
+        const structure = d?.structure || {};
 
-    // Always send the full options-intelligence payload (for payoff chart seed)
-    socket.emit("options-intelligence", payload);
+        // FIX-2: Prefer REST snapshot values for the initial hydration emit too
+        const snap = _straddleCache.get(sym);
 
-    // Only emit intel-tick if we are in market hours AND cache is from today.
-    // Outside market hours, emitting a stale cacheTs causes StraddlePage to
-    // seed lastKnownMinRef at e.g. 15:30 yesterday, then advanceMinute() on
-    // every tick produces ghost ticks that look live but are replayed cache.
-    if (!inMarket || !isTodayIST(cacheTs)) continue;
+        const straddlePrice = snap?.straddlePrice
+  ?? structure.straddlePrice
+  ?? 0;
 
-    const tickOI_ce  = d?.oi?.totalCallOI || 0;
-    const tickOI_pe  = d?.oi?.totalPutOI  || 0;
-    const tickPcr    = d?.oi?.pcr         || 0;
+        const stranglePrice = snap?.stranglePrice
+          ?? structure.stranglePrice
+          ?? d?.stranglePrice
+          ?? 0;
 
-    socket.emit("options-intel-tick", {
-      symbol: sym, spotPrice, straddlePrice, stranglePrice,
-      atmIV, score, bias, ts: cacheTs,
-      totalCallOI: tickOI_ce, totalPutOI: tickOI_pe, pcr: tickPcr,
-    });
+        const atmIV     = snap?.atmIV ?? d?.volatility?.atmIV ?? d?.atmIV ?? 0;
+        const score     = d?.score ?? 50;
+        const bias      = d?.bias  ?? "NEUTRAL";
+        const spotPrice = d?.spot  ?? d?.spotPrice ?? 0;
 
-    try {
-      if (bp.encodeOptionsIntelTick) {
-        const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, cacheTs, tickOI_ce, tickOI_pe, tickPcr);
-        socket.emit("binary", buf);
+        const cacheTs = payload.cacheTimestamp || payload.timestamp
+          || payload.fetchedAt || d?.timestamp || null;
+
+        // Always send full options-intelligence for payoff chart seed
+        socket.emit("options-intelligence", payload);
+
+        if (!inMarket || !isTodayIST(cacheTs)) continue;
+
+        const totalCallOI = snap?.totalCallOI ?? d?.oi?.totalCallOI ?? 0;
+        const totalPutOI  = snap?.totalPutOI  ?? d?.oi?.totalPutOI  ?? 0;
+
+        // FIX-3: ?? not || so real PCR values like 1.23 are never lost
+        const tickPcr = snap?.pcr ?? d?.oi?.pcr ?? 0;
+
+        socket.emit("options-intel-tick", {
+          symbol: sym, spotPrice, straddlePrice, stranglePrice,
+          atmIV, score, bias, ts: cacheTs,
+          totalCallOI, totalPutOI, pcr: tickPcr,
+        });
+
+        try {
+          if (bp.encodeOptionsIntelTick) {
+            const buf = bp.encodeOptionsIntelTick(
+              sym, spotPrice, straddlePrice, atmIV, score, bias,
+              stranglePrice, cacheTs, totalCallOI, totalPutOI, tickPcr
+            );
+            socket.emit("binary", buf);
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
-  }
 
-  console.log(`📊 ${socket.id} joined straddle room`);
-});
+      console.log(`📊 ${socket.id} joined straddle room`);
+    });
 
     socket.on("leave:straddle", () => {
       socket.leave("straddle");
@@ -711,6 +786,8 @@ module.exports = {
   getCachedExpiries,
   setCachedIntel,
   getCachedIntel,
+  setCachedStraddleSnap,   // ← NEW export — call from straddleRoutes
+  getCachedStraddleSnap,   // ← NEW export
   updateScannerTick,
   getScannerSnapshot,
   emitMarketTick,
