@@ -785,9 +785,13 @@ function scheduleDailyTokenCheck() {
 
 // ── Backtest API ──────────────────────────────────────────────────────────────
 app.use("/api/backtest", backtestRoutes);
-const straddleRoutes = require("./routes/straddleRoutes");
-app.use("/api/straddle", straddleRoutes);
-
+try {
+  const straddleRoutes = require("./routes/straddleRoutes");
+  app.use("/api/straddle", straddleRoutes);
+  console.log("✅ Straddle routes registered");
+} catch(e) {
+  console.error("❌ straddleRoutes failed to load:", e.message);
+}
 // ── Auth routes ───────────────────────────────────────────────────────────────
 const UPSTOX_INSTRUMENTS = {
   "NIFTY 50":   "NSE_INDEX|Nifty 50",
