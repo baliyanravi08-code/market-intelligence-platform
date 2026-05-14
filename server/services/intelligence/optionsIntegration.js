@@ -244,6 +244,20 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
   // FIX THROTTLE-1: pass chain.length so full chains bypass 55s throttle
   if (!canRun(`${symbol}_${expiryDate}`, chain.length)) return;
 
+  // FIX STRADDLE-ROOT: guard both legs present at ATM before running engine.
+  // Partial chain (first fast-path call from nseOIListener) often has one leg=0.
+  const atmRowCheck = chain.reduce((best, r) =>
+    Math.abs(r.strike - spotPrice) < Math.abs(best.strike - spotPrice) ? r : best,
+    chain[0]
+  );
+  if (!atmRowCheck || atmRowCheck.callLTP <= 0 || atmRowCheck.putLTP <= 0) {
+    console.warn(
+      `⚠️ ${symbol}: ATM strike ${atmRowCheck?.strike} missing one leg` +
+      ` (callLTP=${atmRowCheck?.callLTP}, putLTP=${atmRowCheck?.putLTP}) — skipping partial chain`
+    );
+    return;
+  }
+
   // FIX HV-1: real closes (not fake IV proxy)
   const realCloses = getIndexCloses(symbol);
 
@@ -320,13 +334,37 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
   }
 
   if (_io) {
-    const payload = { symbol, data: result, ltp: spotPrice, ts: Date.now() };
+    // Compute strangle from chain (1-step OTM) so websocket tick has correct value.
+    // Engine doesn't compute strangle — we build it here directly from the chain.
+    const sortedStrikes = chain.map(r => r.strike).sort((a, b) => a - b);
+    const atmIdx        = sortedStrikes.indexOf(atmRowCheck.strike);
+    const ceStrike      = sortedStrikes[atmIdx + 1] ?? atmRowCheck.strike;
+    const peStrike      = sortedStrikes[atmIdx - 1] ?? atmRowCheck.strike;
+    const ceRow         = chain.find(r => r.strike === ceStrike) || {};
+    const peRow         = chain.find(r => r.strike === peStrike) || {};
+    const stranglePrice = (ceRow.callLTP || 0) + (peRow.putLTP || 0);
+
+    const payload = {
+      symbol,
+      data: {
+        ...result,
+        structure: {
+          ...(result.structure || {}),
+          straddlePrice: result.structure?.straddlePrice || 0,
+          stranglePrice: stranglePrice > 0 ? stranglePrice : 0,
+        },
+      },
+      ltp:          spotPrice,
+      ts:           Date.now(),
+      straddlePrice: result.structure?.straddlePrice || 0,
+      stranglePrice: stranglePrice > 0 ? stranglePrice : 0,
+    };
 
     // FIX D: cache before emit so new clients get fresh snapshot
     try { setCachedIntel(symbol, payload); } catch (_) {}
 
     const ws = require("../../api/websocket");
-ws.emitOptionsIntel(payload);
+    ws.emitOptionsIntel(payload);
     console.log(
       `📡 options-intelligence: ${symbol}` +
       ` score=${result.score} bias=${result.bias}` +

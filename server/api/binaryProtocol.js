@@ -199,7 +199,8 @@ function encodeOptionsIntel(data) {
   const v      = data.volatility || {};
   const oi     = data.oi || {};
 
-  const len = 1 + sym.length + 1 + expiry.length + (4 * 7) + (2 * 4);
+  // Added 8 bytes for totalCallOI + totalPutOI (2 × uint32)
+  const len = 1 + sym.length + 1 + expiry.length + (4 * 9) + (2 * 4);
   const buf = Buffer.allocUnsafe(5 + len);
   let off = writeHeader(buf, 0, MSG.OPTIONS_INTEL, len);
 
@@ -208,17 +209,20 @@ function encodeOptionsIntel(data) {
   buf.writeUInt8(expiry.length, off); off++;
   expiry.copy(buf, off); off += expiry.length;
 
-  buf.writeUInt32BE(priceToUint32(data.spotPrice         || 0), off); off += 4;
-  buf.writeUInt32BE(priceToUint32(s.atmStrike            || 0), off); off += 4;
-  buf.writeUInt32BE(priceToUint32(s.straddlePrice        || 0), off); off += 4;
-  buf.writeUInt32BE(priceToUint32(s.stranglePrice        || s.straddlePrice || 0), off); off += 4;
-  buf.writeUInt32BE(priceToUint32(s.callLTP              || 0), off); off += 4;
-  buf.writeUInt32BE(priceToUint32(s.putLTP               || 0), off); off += 4;
-  buf.writeUInt32BE(priceToUint32(v.atmIV                || 0), off); off += 4;
-  buf.writeInt16BE(Math.round((oi.pcr                    || 0) * 100), off); off += 2;
-  buf.writeInt16BE(pctToInt16(g.theta                    || 0), off); off += 2;
-  buf.writeInt16BE(pctToInt16(g.delta                    || 0), off); off += 2;
-  buf.writeInt16BE(pctToInt16(g.vega                     || 0), off); off += 2;
+  buf.writeUInt32BE(priceToUint32(data.spotPrice                    || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.atmStrike                       || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.straddlePrice                   || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.stranglePrice || s.straddlePrice|| 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.callLTP                         || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(s.putLTP                          || 0), off); off += 4;
+  buf.writeUInt32BE(priceToUint32(v.atmIV                           || 0), off); off += 4;
+  // NEW: totalCallOI + totalPutOI encoded as uint32 (OI in lots, max ~42M fits)
+  buf.writeUInt32BE(Math.min(oi.totalCallOI || 0, 0xFFFFFFFF) >>> 0, off); off += 4;
+  buf.writeUInt32BE(Math.min(oi.totalPutOI  || 0, 0xFFFFFFFF) >>> 0, off); off += 4;
+  buf.writeInt16BE(Math.round((oi.pcr                               || 0) * 100), off); off += 2;
+  buf.writeInt16BE(pctToInt16(g.theta                               || 0), off); off += 2;
+  buf.writeInt16BE(pctToInt16(g.delta                               || 0), off); off += 2;
+  buf.writeInt16BE(pctToInt16(g.vega                                || 0), off); off += 2;
 
   return buf;
 }
@@ -240,11 +244,12 @@ function encodeOptionsIntel(data) {
 //   4B  tsSec         (int32, Unix epoch seconds, 0=unavailable) ← NEW (chart X axis)
 //
 // Total for NIFTY: 5 + 1+5 + 4+4+4+4 + 1+1+7 + 4 = ~44B vs ~220B JSON = 80% saving
-function encodeOptionsIntelTick(symbol, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, ts) {
+function encodeOptionsIntelTick(symbol, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, ts, totalCallOI, totalPutOI, pcr) {
   const symBuf  = Buffer.from((symbol || "NIFTY").slice(0, 20), "ascii");
   const biasBuf = Buffer.from((bias   || "NEUTRAL").slice(0, 12), "ascii");
 
-  const len = 1 + symBuf.length + 4 + 4 + 4 + 4 + 1 + 1 + biasBuf.length + 4;
+  // +10 bytes: totalCallOI(4) + totalPutOI(4) + pcr(2)
+  const len = 1 + symBuf.length + 4 + 4 + 4 + 4 + 1 + 1 + biasBuf.length + 4 + 4 + 4 + 2;
   const buf = Buffer.allocUnsafe(5 + len);
   let off = writeHeader(buf, 0, MSG.OPTIONS_INTEL_TICK, len);
 
@@ -253,20 +258,22 @@ function encodeOptionsIntelTick(symbol, spotPrice, straddlePrice, atmIV, score, 
 
   buf.writeUInt32BE(priceToUint32(spotPrice     || 0), off); off += 4;
   buf.writeUInt32BE(priceToUint32(straddlePrice || 0), off); off += 4;
-  buf.writeUInt32BE(priceToUint32(stranglePrice || 0), off); off += 4;  // NEW
+  buf.writeUInt32BE(priceToUint32(stranglePrice || 0), off); off += 4;
   buf.writeUInt32BE(priceToUint32(atmIV         || 0), off); off += 4;
 
   buf.writeUInt8(Math.max(0, Math.min(100, Math.round(score || 50))), off); off++;
   buf.writeUInt8(biasBuf.length, off); off++;
   biasBuf.copy(buf, off); off += biasBuf.length;
 
-  // tsSec: Unix epoch seconds from NSE cache timestamp.
-  // Frontend: new Date(tsSec * 1000) → IST "HH:MM" → chart X label.
-  // 0 means "not available" → frontend uses its bestTimeRef fallback.
   const tsSec = ts
     ? (typeof ts === "number" ? Math.floor(ts / 1000) : Math.floor(new Date(ts).getTime() / 1000))
     : 0;
-  buf.writeInt32BE(tsSec > 0 ? tsSec : 0, off);
+  buf.writeUInt32BE(tsSec > 0 ? tsSec : 0, off); off += 4;
+
+  // Live OI fields — 1s update frequency
+  buf.writeUInt32BE(Math.min(totalCallOI || 0, 0xFFFFFFFF) >>> 0, off); off += 4;
+  buf.writeUInt32BE(Math.min(totalPutOI  || 0, 0xFFFFFFFF) >>> 0, off); off += 4;
+  buf.writeInt16BE(Math.round((pcr       || 0) * 100), off);
 
   return buf;
 }
@@ -376,6 +383,8 @@ function decode(buffer) {
       const callLTP       = buf.readUInt32BE(off) / 100; off += 4;
       const putLTP        = buf.readUInt32BE(off) / 100; off += 4;
       const atmIV         = buf.readUInt32BE(off) / 100; off += 4;
+      const totalCallOI   = buf.readUInt32BE(off); off += 4;
+      const totalPutOI    = buf.readUInt32BE(off); off += 4;
       const pcr           = buf.readInt16BE(off)  / 100; off += 2;
       const theta         = buf.readInt16BE(off)  / 100; off += 2;
       const delta         = buf.readInt16BE(off)  / 100; off += 2;
@@ -386,7 +395,7 @@ function decode(buffer) {
           symbol, expiry, spotPrice,
           structure:  { atmStrike, straddlePrice, stranglePrice, callLTP, putLTP },
           volatility: { atmIV },
-          oi:         { pcr },
+          oi:         { pcr, totalCallOI, totalPutOI },
           atmGreeks:  { theta, delta, vega },
         },
       };
@@ -413,16 +422,20 @@ function decode(buffer) {
         : "NEUTRAL";
       off += biasLen;
 
-      // FIX 5: read tsSec (NEW field)
       let ts = null;
       if (off + 4 <= buf.length) {
-        const tsSec = buf.readInt32BE(off);
-        if (tsSec > 0) ts = tsSec * 1000; // convert to epoch ms
+        const tsSec = buf.readUInt32BE(off);
+        if (tsSec > 0) ts = tsSec * 1000;
+        off += 4;
       }
+
+      const totalCallOI = off + 4 <= buf.length ? buf.readUInt32BE(off) : 0; off += 4;
+      const totalPutOI  = off + 4 <= buf.length ? buf.readUInt32BE(off) : 0; off += 4;
+      const pcr         = off + 2 <= buf.length ? buf.readInt16BE(off) / 100 : null;
 
       return {
         type: "options-intel-tick",
-        data: { symbol, spotPrice, straddlePrice, stranglePrice, atmIV, score, bias, ts },
+        data: { symbol, spotPrice, straddlePrice, stranglePrice, atmIV, score, bias, ts, totalCallOI, totalPutOI, pcr },
       };
     }
 

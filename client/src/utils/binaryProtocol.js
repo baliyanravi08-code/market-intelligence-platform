@@ -126,18 +126,20 @@ export function decode(buffer) {
       const stranglePrice = view.getUint32(off) / 100; off += 4;
       const callLTP       = view.getUint32(off) / 100; off += 4;
       const putLTP        = view.getUint32(off) / 100; off += 4;
-      const atmIV         = view.getUint32(off) / 100; off += 4;
-      const pcr           = view.getInt16(off)  / 100; off += 2;
-      const theta         = view.getInt16(off)  / 100; off += 2;
-      const delta         = view.getInt16(off)  / 100; off += 2;
-      const vega          = view.getInt16(off)  / 100; off += 2;
+      const atmIV       = view.getUint32(off) / 100; off += 4;
+      const totalCallOI = view.getUint32(off); off += 4;
+      const totalPutOI  = view.getUint32(off); off += 4;
+      const pcr         = view.getInt16(off)  / 100; off += 2;
+      const theta       = view.getInt16(off)  / 100; off += 2;
+      const delta       = view.getInt16(off)  / 100; off += 2;
+      const vega        = view.getInt16(off)  / 100; off += 2;
       return {
         type: "options-intelligence",
         data: {
           symbol, expiry, spotPrice,
           structure:  { atmStrike, straddlePrice, stranglePrice, callLTP, putLTP },
           volatility: { atmIV },
-          oi:         { pcr },
+          oi:         { pcr, totalCallOI, totalPutOI },
           atmGreeks:  { theta, delta, vega },
         },
       };
@@ -165,13 +167,18 @@ export function decode(buffer) {
 
       let ts = null;
       if (off + 4 <= bytes.length) {
-        const tsSec = view.getInt32(off);
+        const tsSec = view.getUint32(off);
         if (tsSec > 0) ts = tsSec * 1000;
+        off += 4;
       }
+
+      const totalCallOI = off + 4 <= bytes.length ? view.getUint32(off) : 0; off += 4;
+      const totalPutOI  = off + 4 <= bytes.length ? view.getUint32(off) : 0; off += 4;
+      const pcr         = off + 2 <= bytes.length ? view.getInt16(off) / 100 : null;
 
       return {
         type: "options-intel-tick",
-        data: { symbol, spotPrice, straddlePrice, stranglePrice, atmIV, score, bias, ts },
+        data: { symbol, spotPrice, straddlePrice, stranglePrice, atmIV, score, bias, ts, totalCallOI, totalPutOI, pcr },
       };
     }
 

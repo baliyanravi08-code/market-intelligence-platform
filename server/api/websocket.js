@@ -225,11 +225,14 @@ function emitOptionsIntelTick(symbol, spotPrice) {
 
   const d             = cached.data || cached;
   const structure     = d?.structure || {};
-  const straddlePrice = structure.straddlePrice || d?.straddlePrice || 0;
-  const stranglePrice = structure.stranglePrice  || d?.stranglePrice || 0;
+  const straddlePrice = structure.straddlePrice || cached.straddlePrice || d?.straddlePrice || 0;
+  const stranglePrice = structure.stranglePrice  || cached.stranglePrice || d?.stranglePrice || 0;
   const atmIV         = d?.volatility?.atmIV     || d?.atmIV        || 0;
   const score         = d?.score                 || 50;
   const bias          = d?.bias                  || "NEUTRAL";
+  const totalCallOI   = d?.oi?.totalCallOI       || 0;
+  const totalPutOI    = d?.oi?.totalPutOI        || 0;
+  const pcr           = d?.oi?.pcr               || 0;
 
   // Fall through to Date.now() so tsSec is NEVER 0 in the binary frame.
   // A 0 tsSec means client gets ts=null → falls to advanceMinute() ghost tick path.
@@ -243,24 +246,26 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   // ── FIX: binary frame with stranglePrice + cacheTs, emitted to BOTH rooms ──
   try {
     if (bp.encodeOptionsIntelTick) {
-      const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, cacheTs);
-      _io.to("intel").emit("binary", buf);      // ← RESTORED (was commented out)
-      _io.to("straddle").emit("binary", buf);   // ← RESTORED (was commented out)
+      const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, cacheTs, totalCallOI, totalPutOI, pcr);
+      _io.to("intel").emit("binary", buf);
+      _io.to("straddle").emit("binary", buf);
     }
   } catch (e) {
     console.warn("⚠️ binary OPTIONS_INTEL_TICK encode error:", e.message);
   }
-
   // ── JSON → both rooms ─────────────────────────────────────────────────────
   const payload = {
-    symbol:        sym,
+    symbol: sym,
     spotPrice,
     straddlePrice,
     stranglePrice,
     atmIV,
     score,
     bias,
-    ts: cacheTs,
+    ts:           cacheTs,
+    totalCallOI,
+    totalPutOI,
+    pcr,
   };
   _io.to("straddle").emit("options-intel-tick", payload);
   _io.to("intel").emit("options-intel-tick", payload);
@@ -557,15 +562,19 @@ function attachSocketIO(server) {
     // every tick produces ghost ticks that look live but are replayed cache.
     if (!inMarket || !isTodayIST(cacheTs)) continue;
 
+    const tickOI_ce  = d?.oi?.totalCallOI || 0;
+    const tickOI_pe  = d?.oi?.totalPutOI  || 0;
+    const tickPcr    = d?.oi?.pcr         || 0;
+
     socket.emit("options-intel-tick", {
       symbol: sym, spotPrice, straddlePrice, stranglePrice,
-      atmIV, score, bias,
-      ts: cacheTs,
+      atmIV, score, bias, ts: cacheTs,
+      totalCallOI: tickOI_ce, totalPutOI: tickOI_pe, pcr: tickPcr,
     });
 
     try {
       if (bp.encodeOptionsIntelTick) {
-        const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, cacheTs);
+        const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, cacheTs, tickOI_ce, tickOI_pe, tickPcr);
         socket.emit("binary", buf);
       }
     } catch (_) {}

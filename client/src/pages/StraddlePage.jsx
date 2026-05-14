@@ -507,7 +507,6 @@ export default function StraddlePage({ socket }) {
         ? data.stranglePrice
         : (snapRef.current?.strangle?.combined ?? null);
 
-      // Update snap state
       setSnap(prev => {
         if (!prev) return prev;
         return {
@@ -519,13 +518,19 @@ export default function StraddlePage({ socket }) {
           strangle: prev.strangle && socketStrangle != null && socketStrangle > 0
             ? { ...prev.strangle, combined: socketStrangle }
             : prev.strangle,
-          // PCR and atmIV from 1s tick (carry forward from last full intel cycle)
           iv: prev.iv
             ? { ...prev.iv, atm: data.atmIV > 0 ? data.atmIV : prev.iv.atm }
             : prev.iv,
+          // Live OI + PCR from 1s binary tick — no need to wait 60s
+          oi: (data.totalCallOI > 0 || data.totalPutOI > 0)
+            ? {
+                ce:  data.totalCallOI || prev.oi?.ce  || 0,
+                pe:  data.totalPutOI  || prev.oi?.pe  || 0,
+                pcr: data.pcr != null ? data.pcr : prev.oi?.pcr,
+              }
+            : prev.oi,
         };
       });
-
       // Upsert into skeleton
       setPremHistory(prev => {
         const entry = {
