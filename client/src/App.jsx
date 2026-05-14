@@ -1115,7 +1115,7 @@ return saved && VALID_PAGES.has(saved) ? saved : "dashboard";
       const sock = io({ transports: ["websocket", "polling"] });
       socketRef.current = sock;
       setSocket(sock);
-
+      window._sock = sock;  // temporary debug line
       sock.on("connect", () => {
         console.log("✅ Socket connected");
         sock.emit("use-binary", { version: 1 });
