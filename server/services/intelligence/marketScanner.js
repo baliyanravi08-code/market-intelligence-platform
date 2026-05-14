@@ -1386,14 +1386,15 @@ function startMarketScanner(io) {
   registerScannerHandlers(io);
   startHeapMonitor();
 
-  // Set today's date so first run doesn't trigger spurious "new day" reset
-  _lastScanDate = getISTDateStr();
+ // Leave _lastScanDate blank so maybeResetForNewDay() inside runScanner()
+  // always compares "" !== today on first run → clears stale yesterday cache.
+  _lastScanDate = "";
 
-  // Run immediately if market hours, otherwise wait for next open
   if (shouldScanNow()) {
     console.log("📊 Market Scanner starting — market is open, running immediately");
     runScanner().then(() => scheduleNextRun());
   } else {
+    maybeResetForNewDay(); // clear stale cache immediately even outside market hours
     console.log("📊 Market Scanner starting — market closed, scheduling next open run");
     scheduleNextRun();
   }

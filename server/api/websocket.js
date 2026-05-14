@@ -61,7 +61,18 @@ const _expiriesCache = new Map();
 
 function setCachedIntel(symbol, payload) {
   if (!symbol || !payload) return;
-  _intelCache.set(symbol.toUpperCase(), payload);
+  // Stamp a fresh server-side timestamp so binary tick frames always
+  // have a valid tsSec. Without this, cacheTs resolves to null,
+  // encodeOptionsIntelTick writes tsSec=0, client falls to advanceMinute()
+  // fallback and produces ghost ticks.
+  const stamped = {
+    ...payload,
+    cacheTimestamp: payload.cacheTimestamp
+      || payload.timestamp
+      || payload.fetchedAt
+      || Date.now(),   // ← always a valid epoch ms
+  };
+  _intelCache.set(symbol.toUpperCase(), stamped);
 }
 
 function getCachedIntel(symbol) {
@@ -220,12 +231,14 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   const score         = d?.score                 || 50;
   const bias          = d?.bias                  || "NEUTRAL";
 
+  // Fall through to Date.now() so tsSec is NEVER 0 in the binary frame.
+  // A 0 tsSec means client gets ts=null → falls to advanceMinute() ghost tick path.
   const cacheTs = cached.cacheTimestamp
     || cached.timestamp
     || cached.fetchedAt
     || d?.timestamp
     || d?.cacheTimestamp
-    || null;
+    || Date.now();   // ← guaranteed non-null
 
   // ── FIX: binary frame with stranglePrice + cacheTs, emitted to BOTH rooms ──
   try {
@@ -316,6 +329,16 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
 
 function emitTechBatch(batch) {
   if (!_io || !batch?.length) return;
+  // Emit as JSON_FALLBACK binary frame — still JSON inside but goes through
+  // the binary channel with perMessageDeflate compression (~70% smaller).
+  // Full binary encoder not worth it for nested tech objects.
+  try {
+    const buf = bp.encodeJSON("scanner-tech-batch", batch);
+    _io.to("scanner").emit("binary", buf);
+  } catch (e) {
+    console.warn("⚠️ emitTechBatch binary encode error:", e.message);
+  }
+  // Also emit JSON for clients not on binary protocol
   _io.to("scanner").emit("scanner-tech-batch", batch);
 }
 
@@ -353,13 +376,20 @@ function emitDeliverySpikes(spikes) {
 
 function emitOptionsIntel(data) {
   if (!_io || !data?.symbol) return;
+  let binaryOk = false;
   try {
     const buf = bp.encodeOptionsIntel(data);
     _io.to("intel").emit("binary", buf);
+    _io.to("straddle").emit("binary", buf);  // straddle room needs it too
+    binaryOk = true;
   } catch (e) {
     console.warn("⚠️ binary options-intel encode error:", e.message);
   }
-  _io.to("intel").emit("options-intelligence", data);
+  // Only send JSON fallback if binary failed
+  if (!binaryOk) {
+    _io.to("intel").emit("options-intelligence", data);
+    _io.to("straddle").emit("options-intelligence", data);
+  }
   setCachedIntel(data.symbol, data);
 }
 
@@ -484,39 +514,65 @@ function attachSocketIO(server) {
     });
 
     socket.on("join:straddle", () => {
-      socket.join("straddle");
+  socket.join("straddle");
 
-      for (const [sym, payload] of _intelCache) {
-        const d             = payload.data || payload;
-        const structure     = d?.structure || {};
-        const straddlePrice = structure.straddlePrice || d?.straddlePrice || 0;
-        const stranglePrice = structure.stranglePrice  || d?.stranglePrice || 0;
-        const atmIV         = d?.volatility?.atmIV     || d?.atmIV        || 0;
-        const score         = d?.score                 || 50;
-        const bias          = d?.bias                  || "NEUTRAL";
-        const spotPrice     = d?.spot || d?.spotPrice  || 0;
-        const cacheTs       = payload.cacheTimestamp   || payload.timestamp
-                           || payload.fetchedAt        || d?.timestamp || null;
+  // Helper: is current time within market hours (9:15–15:30 IST, Mon–Fri)?
+  const isNowMarketHours = () => {
+    const ist  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const day  = ist.getDay();
+    const mins = ist.getHours() * 60 + ist.getMinutes();
+    return day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
+  };
 
-        socket.emit("options-intelligence", payload);
+  // Helper: is a timestamp from today (IST)?
+  const isTodayIST = (ts) => {
+    if (!ts) return false;
+    const tsDate  = new Date(typeof ts === "number" ? ts : new Date(ts).getTime())
+      .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+    const nowDate = new Date()
+      .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+    return tsDate === nowDate;
+  };
 
-        socket.emit("options-intel-tick", {
-          symbol: sym, spotPrice, straddlePrice, stranglePrice,
-          atmIV, score, bias,
-          ts: cacheTs,
-        });
+  const inMarket = isNowMarketHours();
 
-        // ── FIX: binary frame with stranglePrice + cacheTs ─────────────────
-        try {
-          if (bp.encodeOptionsIntelTick) {
-            const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, cacheTs);
-            socket.emit("binary", buf);   // ← RESTORED (was commented out)
-          }
-        } catch (_) {}
-      }
+  for (const [sym, payload] of _intelCache) {
+    const d             = payload.data || payload;
+    const structure     = d?.structure || {};
+    const straddlePrice = structure.straddlePrice || d?.straddlePrice || 0;
+    const stranglePrice = structure.stranglePrice  || d?.stranglePrice || 0;
+    const atmIV         = d?.volatility?.atmIV     || d?.atmIV        || 0;
+    const score         = d?.score                 || 50;
+    const bias          = d?.bias                  || "NEUTRAL";
+    const spotPrice     = d?.spot || d?.spotPrice  || 0;
+    const cacheTs       = payload.cacheTimestamp   || payload.timestamp
+                       || payload.fetchedAt        || d?.timestamp || null;
 
-      console.log(`📊 ${socket.id} joined straddle room`);
+    // Always send the full options-intelligence payload (for payoff chart seed)
+    socket.emit("options-intelligence", payload);
+
+    // Only emit intel-tick if we are in market hours AND cache is from today.
+    // Outside market hours, emitting a stale cacheTs causes StraddlePage to
+    // seed lastKnownMinRef at e.g. 15:30 yesterday, then advanceMinute() on
+    // every tick produces ghost ticks that look live but are replayed cache.
+    if (!inMarket || !isTodayIST(cacheTs)) continue;
+
+    socket.emit("options-intel-tick", {
+      symbol: sym, spotPrice, straddlePrice, stranglePrice,
+      atmIV, score, bias,
+      ts: cacheTs,
     });
+
+    try {
+      if (bp.encodeOptionsIntelTick) {
+        const buf = bp.encodeOptionsIntelTick(sym, spotPrice, straddlePrice, atmIV, score, bias, stranglePrice, cacheTs);
+        socket.emit("binary", buf);
+      }
+    } catch (_) {}
+  }
+
+  console.log(`📊 ${socket.id} joined straddle room`);
+});
 
     socket.on("leave:straddle", () => {
       socket.leave("straddle");

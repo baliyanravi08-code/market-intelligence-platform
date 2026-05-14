@@ -1560,6 +1560,29 @@ app.get("/api/scanner", (req, res) => {
   if (!d || (!d.updatedAt && !d.isPremarket)) {
     return res.json({ error: "Scanner not yet ready", weekend: IS_WEEKEND });
   }
+
+  // Guard: if updatedAt is from a previous calendar day (IST), return empty.
+  // Prevents the REST fallback in MarketScannerPage from hydrating the UI
+  // with yesterday's gainers/losers before today's scan completes.
+  if (d.updatedAt) {
+    const updatedDate = new Date(d.updatedAt)
+      .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+    const todayDate   = new Date()
+      .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+    if (updatedDate !== todayDate) {
+      return res.json({
+        error:      "Stale data — today's scan not yet complete",
+        weekend:    IS_WEEKEND,
+        isPremarket: true,
+        gainers:    [], losers:    [], allStocks: [],
+        byMcap:     { largecap: [], midcap: [], smallcap: [], microcap: [] },
+        bySector:   [],
+        market:     { advancing: 0, declining: 0, unchanged: 0, total: 0 },
+        updatedAt:  d.updatedAt,
+      });
+    }
+  }
+
   res.json({
     gainers:    d.gainers  || [],
     losers:     d.losers   || [],

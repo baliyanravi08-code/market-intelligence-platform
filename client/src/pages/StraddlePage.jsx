@@ -339,15 +339,20 @@ export default function StraddlePage({ socket }) {
     }
 
     // 2. REST snapshot cache time
+    // Advance by 1 each tick so chart moves right — but NEVER past current IST.
+    // Without this cap, a stale cacheTs (e.g. written at 15:30 yesterday) causes
+    // advanceMinute() to fire on every incoming tick, producing ghost ticks.
     if (cacheTimeRef.current) {
-      // Advance by 1 each tick so chart moves right in real time
-      const advanced = lastKnownMinRef.current
+      const { h: nowH, m: nowM } = currentISTHM();
+      const nowLabel  = clampToMarket(toHHMM(nowH, nowM));
+      const advanced  = lastKnownMinRef.current
         ? advanceMinute(lastKnownMinRef.current)
         : cacheTimeRef.current;
-      lastKnownMinRef.current = advanced;
-      return advanced;
+      // Cap: never let the chart advance past the current real IST minute
+      const capped = advanced > nowLabel ? nowLabel : advanced;
+      lastKnownMinRef.current = capped;
+      return capped;
     }
-
     // 3. Current IST clamped to market hours
     const ist = currentIST();
     const clamped = clampToMarket(ist);
