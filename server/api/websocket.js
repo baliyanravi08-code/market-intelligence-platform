@@ -95,13 +95,14 @@ const _straddleCache = new Map(); // sym → { straddlePrice, stranglePrice, pcr
  */
 function setCachedStraddleSnap(symbol, snap) {
   if (!symbol || !snap) return;
+  const existing = _straddleCache.get(symbol.toUpperCase()) || {};
   _straddleCache.set(symbol.toUpperCase(), {
-    straddlePrice: snap.straddle?.combined ?? 0,
-    stranglePrice: snap.strangle?.combined ?? 0,
-    pcr:           snap.oi?.pcr != null ? +(+snap.oi.pcr).toFixed(2) : null,
-    atmIV:         snap.iv?.atm            ?? 0,
-    totalCallOI:   snap.oi?.ce             ?? 0,
-    totalPutOI:    snap.oi?.pe             ?? 0,
+    straddlePrice: snap.straddle?.combined ?? existing.straddlePrice ?? 0,
+    stranglePrice: snap.strangle?.combined ?? existing.stranglePrice ?? 0,
+    pcr:           snap.oi?.pcr != null ? +(+snap.oi.pcr).toFixed(2) : existing.pcr ?? null,
+    atmIV:         snap.iv?.atm            ?? existing.atmIV ?? 0,
+    totalCallOI:   snap.oi?.ce             ?? existing.totalCallOI ?? 0,
+    totalPutOI:    snap.oi?.pe             ?? existing.totalPutOI ?? 0,
     timestamp:     snap.timestamp          ?? Date.now(),
   });
 }
@@ -545,6 +546,25 @@ function emitOptionsIntel(data) {
     _io.to("straddle").emit("options-intelligence", data);
   }
   setCachedIntel(data.symbol, data);
+
+  // ── Update _straddleCache from live 60s intel cycle ──────────────────────
+  // This is the ONLY place where straddlePrice changes live during market hours.
+  // structure.straddlePrice = ATM CE ltp + ATM PE ltp (correct, computed fresh).
+  const d = data.data || data;
+  const s = d?.structure || {};
+  if (s.straddlePrice > 0) {
+    const existing = _straddleCache.get(data.symbol.toUpperCase()) || {};
+    _straddleCache.set(data.symbol.toUpperCase(), {
+      straddlePrice: s.straddlePrice,
+      stranglePrice: s.stranglePrice || existing.stranglePrice || 0,
+      pcr:           d?.oi?.pcr != null ? +(+d.oi.pcr).toFixed(2) : existing.pcr ?? null,
+      atmIV:         d?.volatility?.atmIV ?? existing.atmIV ?? 0,
+      totalCallOI:   d?.oi?.totalCallOI   ?? existing.totalCallOI ?? 0,
+      totalPutOI:    d?.oi?.totalPutOI    ?? existing.totalPutOI  ?? 0,
+      timestamp:     d?.timestamp         ?? Date.now(),
+    });
+    console.log(`🔄 [straddleCache live] ${data.symbol}: straddle=${s.straddlePrice}`);
+  }
 }
 
 function emitCompositeUpdate(data) {
