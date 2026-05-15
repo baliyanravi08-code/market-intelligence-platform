@@ -257,6 +257,87 @@ function emitMarketTick(updates) {
 }
 
 const _intelTickThrottle = new Map();
+// ── Straddle history persistence ──────────────────────────────────────────────
+const _straddleHistory    = new Map(); // sym → [{ ts, straddle, strangle, spot, pcr }]
+const _straddleLastMinute = new Map(); // sym → "HH:MM" last written minute
+
+function _persistStraddleTick(sym, straddlePrice, stranglePrice, spotPrice, pcr, ts) {
+  if (!sym || !straddlePrice) return;
+
+  // Only write once per minute per symbol
+  const now     = new Date();
+  const istTime = now.toLocaleTimeString("en-IN", {
+    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata",
+  });
+  const lastMin = _straddleLastMinute.get(sym);
+  if (lastMin === istTime) return; // already wrote this minute
+  _straddleLastMinute.set(sym, istTime);
+
+  // Only during market hours IST 09:15–15:30
+  const [h, m] = istTime.split(":").map(Number);
+  const mins = h * 60 + m;
+  if (mins < 555 || mins > 930) return; // 09:15=555, 15:30=930
+
+  const entry = {
+    ts:       ts || Date.now(),
+    time:     istTime,
+    straddle: Math.round(straddlePrice * 100) / 100,
+    strangle: Math.round((stranglePrice || 0) * 100) / 100,
+    spot:     Math.round((spotPrice || 0) * 100) / 100,
+    pcr:      pcr != null ? +(+pcr).toFixed(2) : null,
+  };
+
+  // Keep in memory
+  if (!_straddleHistory.has(sym)) _straddleHistory.set(sym, []);
+  const history = _straddleHistory.get(sym);
+  history.push(entry);
+  // Keep max 375 entries (one per minute for full market day)
+  if (history.length > 375) history.shift();
+
+  // Write to disk every 5 minutes or on first entry
+  if (history.length === 1 || history.length % 5 === 0) {
+    _flushStraddleHistory();
+  }
+}
+
+function _flushStraddleHistory() {
+  try {
+    const fs   = require("fs");
+    const path = require("path");
+    const filePath = path.join(__dirname, "../data/liveOrderBook.json");
+
+    let existing = {};
+    try {
+      if (fs.existsSync(filePath)) {
+        existing = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      }
+    } catch (_) {}
+
+    for (const [sym, history] of _straddleHistory) {
+      if (!existing[sym]) existing[sym] = {};
+      existing[sym].straddleHistory = history;
+      existing[sym].updatedAt = Date.now();
+    }
+
+    fs.writeFileSync(filePath, JSON.stringify(existing), "utf8");
+  } catch (e) {
+    console.warn("⚠️ straddleHistory flush failed:", e.message);
+  }
+}
+
+// Reset history at start of each trading day
+function _resetStraddleHistoryIfNewDay() {
+  const now = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+  if (_straddleHistory._lastDay && _straddleHistory._lastDay !== now) {
+    _straddleHistory.clear();
+    _straddleLastMinute.clear();
+    console.log("📅 New trading day — straddle history reset");
+  }
+  _straddleHistory._lastDay = now;
+}
+
+setInterval(_resetStraddleHistoryIfNewDay, 60_000);
+setInterval(_flushStraddleHistory, 5 * 60_000); // flush every 5 min as backup
 
 function emitOptionsIntelTick(symbol, spotPrice) {
   if (!_io || !symbol || !spotPrice) return;
@@ -339,6 +420,9 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   };
   _io.to("straddle").emit("options-intel-tick", payload);
   _io.to("intel").emit("options-intel-tick", payload);
+
+  // ── Persist straddle tick to disk (1 entry per minute per symbol) ──────────
+  _persistStraddleTick(sym, straddlePrice, stranglePrice, spotPrice, pcr, cacheTs);
 }
 
 function emitCandleTick(symbol, tf, candle) {
