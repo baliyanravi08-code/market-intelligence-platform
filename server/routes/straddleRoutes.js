@@ -204,7 +204,7 @@ router.get("/snapshot", (req, res) => {
     const ceOI = totalCeOI || (atmRow?.ce?.oi ?? 0);
     const peOI = totalPeOI || (atmRow?.pe?.oi ?? 0);
     const pcr  = ceOI > 0
-      ? (peOI / ceOI).toFixed(2)
+      ? Math.round((peOI / ceOI) * 100) / 100
       : (chainExpiry?.pcr ?? null);
 
     // FIX-TIMESTAMP: use cache's own timestamp if available so chart labels are accurate
@@ -245,7 +245,7 @@ router.get("/snapshot", (req, res) => {
         theta: { ce: atmRow?.ce?.theta ?? null, pe: atmRow?.pe?.theta ?? null },
         vega:  { ce: atmRow?.ce?.vega  ?? null, pe: atmRow?.pe?.vega  ?? null },
       },
-      oi:       { ce: totalCeOI || ceOI, pe: totalPeOI || peOI, pcr },
+      oi:       { ce: totalCeOI || ceOI, pe: totalPeOI || peOI, pcr: pcr != null ? +pcr : null },
       // FIX-EXPIRY: only return non-expired expiries to the frontend dropdown
       expiries: expiryList,
     });

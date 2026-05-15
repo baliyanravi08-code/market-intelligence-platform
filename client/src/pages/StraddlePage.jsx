@@ -551,10 +551,10 @@ export default function StraddlePage({ socket }) {
             : prev.iv,
           // Live OI + PCR from 1s binary tick — no need to wait 60s
           oi: {
-  ce:  data.totalCallOI > 0 ? data.totalCallOI : (prev.oi?.ce  || 0),
-  pe:  data.totalPutOI  > 0 ? data.totalPutOI  : (prev.oi?.pe  || 0),
-  pcr: data.pcr != null     ? data.pcr          : prev.oi?.pcr,
-},
+            ce:  data.totalCallOI > 0 ? data.totalCallOI : (prev.oi?.ce || 0),
+            pe:  data.totalPutOI  > 0 ? data.totalPutOI  : (prev.oi?.pe || 0),
+            pcr: data.pcr != null ? +(+data.pcr).toFixed(2) : (prev.oi?.pcr != null ? +(+prev.oi.pcr).toFixed(2) : null),
+          },
         };
       });
       // Upsert into skeleton
@@ -886,7 +886,7 @@ export default function StraddlePage({ socket }) {
             <StatCard label="Upper BE" value={`₹${fmt(activeStrat?.upperBreakeven)}`} color={COLOR.green} />
             <StatCard label="Lower BE" value={`₹${fmt(activeStrat?.lowerBreakeven)}`} color={COLOR.red} />
             <StatCard label="ATM IV"   value={fmtPct(snap.iv?.atm)} color={COLOR.strangle} />
-            <StatCard label="PCR"      value={snap.oi?.pcr ?? "—"} color={+snap.oi?.pcr > 1 ? COLOR.green : COLOR.red} />
+            <StatCard label="PCR"      value={snap.oi?.pcr != null ? (+snap.oi.pcr).toFixed(2) : "—"} color={+snap.oi?.pcr > 1 ? COLOR.green : COLOR.red} />
             <StatCard label="Last IST" value={lastRefresh} sub="data time" />
           </div>
 
@@ -935,7 +935,7 @@ export default function StraddlePage({ socket }) {
               <div><div style={{ fontSize:12, color:COLOR.muted }}>PE OI</div><div style={{ fontSize:20, fontWeight:700, color:"#ef4444", fontFamily:"monospace" }}>{fmt(snap.oi?.pe, 0)}</div></div>
               <div>
                 <div style={{ fontSize:12, color:COLOR.muted }}>PCR</div>
-                <div style={{ fontSize:20, fontWeight:700, fontFamily:"monospace", color: +snap.oi?.pcr > 1 ? "#22c55e" : "#ef4444" }}>{snap.oi?.pcr ?? "—"}</div>
+                <div style={{ fontSize:20, fontWeight:700, fontFamily:"monospace", color: +snap.oi?.pcr > 1 ? "#22c55e" : "#ef4444" }}>{snap.oi?.pcr != null ? (+snap.oi.pcr).toFixed(2) : "—"}</div>
                 <div style={{ fontSize:11, color:COLOR.muted }}>{+snap.oi?.pcr > 1.2 ? "Bullish" : +snap.oi?.pcr < 0.8 ? "Bearish" : "Neutral"}</div>
               </div>
               <div>
