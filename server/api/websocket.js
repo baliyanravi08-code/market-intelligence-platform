@@ -482,6 +482,52 @@ function attachSocketIO(server) {
 
   _io = io;
 
+  // Seed _straddleCache from disk so first binary tick uses correct value
+  try {
+    const fs   = require("fs");
+    const path = require("path");
+    const cachePath = path.join(__dirname, "../data/optionChainCache.json");
+    if (fs.existsSync(cachePath)) {
+      const cache = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+      for (const [sym, chainData] of Object.entries(cache)) {
+        const rawExpiries = chainData.expiries || Object.keys(chainData.chains || {});
+        if (!rawExpiries.length) continue;
+        const expiry     = rawExpiries[0];
+        const chainExp   = chainData.chains?.[expiry];
+        const strikesArr = chainExp?.strikes || [];
+        if (!strikesArr.length) continue;
+        const spotPrice  = chainExp.spotPrice || chainData.spotPrice || 0;
+        const strikes    = strikesArr.map(s => s.strike).sort((a, b) => a - b);
+        const atmStrike  = chainExp.atmStrike ||
+          strikes.reduce((p, c) => Math.abs(c - spotPrice) < Math.abs(p - spotPrice) ? c : p);
+        const atmRow = strikesArr.find(s => s.strike === atmStrike);
+        if (!atmRow) continue;
+        const straddlePremium = (atmRow?.ce?.ltp ?? 0) + (atmRow?.pe?.ltp ?? 0);
+        const atmIdx    = strikes.indexOf(atmStrike);
+        const scRow     = strikesArr.find(s => s.strike === (strikes[atmIdx + 1] ?? atmStrike)) || {};
+        const spRow     = strikesArr.find(s => s.strike === (strikes[atmIdx - 1] ?? atmStrike)) || {};
+        const stranglePremium = (scRow?.ce?.ltp ?? 0) + (spRow?.pe?.ltp ?? 0);
+        const totalCeOI = strikesArr.reduce((s, r) => s + (r?.ce?.oi ?? 0), 0);
+        const totalPeOI = strikesArr.reduce((s, r) => s + (r?.pe?.oi ?? 0), 0);
+        const pcr   = totalCeOI > 0 ? (totalPeOI / totalCeOI).toFixed(2) : null;
+        const ceIV  = atmRow?.ce?.iv ?? 0;
+        const peIV  = atmRow?.pe?.iv ?? 0;
+        const atmIV = +((ceIV + peIV) / 2).toFixed(2);
+        const ts    = chainData.timestamp || chainExp?.timestamp || Date.now();
+        setCachedStraddleSnap(sym.toUpperCase(), {
+          straddle:  { combined: straddlePremium },
+          strangle:  { combined: stranglePremium },
+          oi:        { pcr, ce: totalCeOI, pe: totalPeOI },
+          iv:        { atm: atmIV },
+          timestamp: ts,
+        });
+        console.log(`✅ [straddleCache seed] ${sym}: straddle=${straddlePremium} strangle=${stranglePremium}`);
+      }
+    }
+  } catch (e) {
+    console.warn("⚠️ straddleCache disk seed failed:", e.message);
+  }
+
   subscribe("SECTOR_UPDATED", (data) => {
     io.emit("update", data);
   });

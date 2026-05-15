@@ -503,6 +503,16 @@ export default function StraddlePage({ socket }) {
       const straddlePrice = data.straddlePrice ?? data.straddle ?? null;
       if (straddlePrice == null) return;
 
+      // Reject inflated binary tick if REST snap already has correct value.
+      // Happens when _straddleCache was empty on first tick (server just started).
+      const restStraddle = snapRef.current?.straddle?.combined;
+      if (restStraddle && restStraddle > 0) {
+        const ratio = straddlePrice / restStraddle;
+        if (ratio > 1.3 || ratio < 0.7) return; // >30% deviation = stale chain sum, reject
+      }
+
+      // Seed snap from socket if REST snapshot failed (404)
+
       // Seed snap from socket if REST snapshot failed (404)
       if (!snapRef.current && straddlePrice > 0) {
         setSnap({
