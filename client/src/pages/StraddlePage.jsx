@@ -467,16 +467,19 @@ export default function StraddlePage({ socket }) {
         // until tomorrow when real market-hours timestamps come in.
         cacheTimeRef.current = snapshotLabel || clampToMarket(currentIST());
 
-        // Seed chart from snapshot
+        // Only seed chart from snapshot if history is empty (no disk entries yet).
+        // If history already has entries, don't add a duplicate REST snapshot point.
         const seedStraddle = data.straddle?.combined ?? null;
         const seedStrangle = data.strangle?.combined ?? null;
-        if (seedStraddle != null) {
+        if (seedStraddle != null && historyTicks.length === 0) {
           historyTicks.push({
             time:     cacheTimeRef.current,
             straddle: seedStraddle,
             strangle: seedStrangle,
           });
           lastKnownMinRef.current = cacheTimeRef.current;
+        } else if (historyTicks.length > 0) {
+          lastKnownMinRef.current = historyTicks[historyTicks.length - 1].time;
         }
 
         setPremHistory(() => mergeIntoSlots(buildFullMarketSlots(), historyTicks));
@@ -503,10 +506,7 @@ export default function StraddlePage({ socket }) {
       const straddlePrice = data.straddlePrice ?? data.straddle ?? null;
       if (straddlePrice == null) return;
 
-      // Reject only the very first tick if it looks like raw chain sum (>2x REST value).
-      // After REST snapshot seeds snapRef, allow normal live updates within 50% range.
-      const restStraddle = snapRef.current?.straddle?.combined;
-      if (restStraddle && restStraddle > 0 && straddlePrice > restStraddle * 1.5) return;
+      // Binary tick is now correctly seeded from disk — no guard needed.
 
       // Seed snap from socket if REST snapshot failed (404)
 
