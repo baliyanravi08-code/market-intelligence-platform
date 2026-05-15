@@ -152,7 +152,7 @@ async function saveTokenEverywhere(token, expiry) {
 }
 
 // ── Instrument master cache ───────────────────────────────────────────────────
-const MAX_INSTRUMENT_SYMBOLS = 15000; // raised from 5000 — was silently slicing off symbols
+const MAX_INSTRUMENT_SYMBOLS = 10000; // raised from 5000 — was silently slicing off symbols
 let instrumentMap = {};
 
 async function loadInstrumentMaster(retryCount = 0) {
