@@ -98,7 +98,7 @@ function setCachedStraddleSnap(symbol, snap) {
   _straddleCache.set(symbol.toUpperCase(), {
     straddlePrice: snap.straddle?.combined ?? 0,
     stranglePrice: snap.strangle?.combined ?? 0,
-    pcr:           snap.oi?.pcr            ?? null,
+    pcr:           snap.oi?.pcr != null ? +(+snap.oi.pcr).toFixed(2) : null,
     atmIV:         snap.iv?.atm            ?? 0,
     totalCallOI:   snap.oi?.ce             ?? 0,
     totalPutOI:    snap.oi?.pe             ?? 0,
@@ -300,7 +300,8 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   const totalPutOI  = snap?.totalPutOI  ?? d?.oi?.totalPutOI  ?? 0;
 
   // FIX-3: Use ?? not || so PCR 0.00 is preserved; null means "no data"
-  const pcr = cached.pcr ?? snap?.pcr ?? d?.oi?.pcr ?? null;
+  const pcrRaw = cached.pcr ?? snap?.pcr ?? d?.oi?.pcr ?? null;
+  const pcr = pcrRaw != null ? +(+pcrRaw).toFixed(2) : null;
 
   // Guaranteed non-null timestamp so tsSec is never 0 in the binary frame.
   const cacheTs = cached.cacheTimestamp

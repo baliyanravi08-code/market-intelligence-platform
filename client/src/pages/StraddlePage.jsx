@@ -503,13 +503,10 @@ export default function StraddlePage({ socket }) {
       const straddlePrice = data.straddlePrice ?? data.straddle ?? null;
       if (straddlePrice == null) return;
 
-      // Reject inflated binary tick if REST snap already has correct value.
-      // Happens when _straddleCache was empty on first tick (server just started).
+      // Reject only the very first tick if it looks like raw chain sum (>2x REST value).
+      // After REST snapshot seeds snapRef, allow normal live updates within 50% range.
       const restStraddle = snapRef.current?.straddle?.combined;
-      if (restStraddle && restStraddle > 0) {
-        const ratio = straddlePrice / restStraddle;
-        if (ratio > 1.3 || ratio < 0.7) return; // >30% deviation = stale chain sum, reject
-      }
+      if (restStraddle && restStraddle > 0 && straddlePrice > restStraddle * 1.5) return;
 
       // Seed snap from socket if REST snapshot failed (404)
 
@@ -547,13 +544,18 @@ export default function StraddlePage({ socket }) {
             ? { ...prev.strangle, combined: socketStrangle }
             : prev.strangle,
           iv: prev.iv
-            ? { ...prev.iv, atm: data.atmIV > 0 ? data.atmIV : prev.iv.atm }
+            ? {
+                ...prev.iv,
+                atm: data.atmIV > 0 ? +(+data.atmIV).toFixed(2) : prev.iv.atm,
+                ce:  data.atmIV > 0 ? prev.iv.ce : prev.iv.ce,
+                pe:  data.atmIV > 0 ? prev.iv.pe : prev.iv.pe,
+              }
             : prev.iv,
           // Live OI + PCR from 1s binary tick — no need to wait 60s
           oi: {
             ce:  data.totalCallOI > 0 ? data.totalCallOI : (prev.oi?.ce || 0),
             pe:  data.totalPutOI  > 0 ? data.totalPutOI  : (prev.oi?.pe || 0),
-            pcr: data.pcr != null ? +(+data.pcr).toFixed(2) : (prev.oi?.pcr != null ? +(+prev.oi.pcr).toFixed(2) : null),
+            pcr: data.pcr != null && +data.pcr > 0 ? +(+data.pcr).toFixed(2) : (prev.oi?.pcr != null ? +(+prev.oi.pcr).toFixed(2) : null),
           },
         };
       });
