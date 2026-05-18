@@ -547,24 +547,22 @@ function emitOptionsIntel(data) {
   }
   setCachedIntel(data.symbol, data);
 
-  // ── Update _straddleCache from live 60s intel cycle ──────────────────────
-  // This is the ONLY place where straddlePrice changes live during market hours.
-  // structure.straddlePrice = ATM CE ltp + ATM PE ltp (correct, computed fresh).
+ // Only update non-price fields from intel cycle — never overwrite
+  // straddlePrice/stranglePrice which come correctly from REST snapshot
   const d = data.data || data;
   const s = d?.structure || {};
-  if (s.straddlePrice > 0) {
-    const existing = _straddleCache.get(data.symbol.toUpperCase()) || {};
-    _straddleCache.set(data.symbol.toUpperCase(), {
-      straddlePrice: s.straddlePrice,
-      stranglePrice: s.stranglePrice || existing.stranglePrice || 0,
-      pcr:           d?.oi?.pcr != null ? +(+d.oi.pcr).toFixed(2) : existing.pcr ?? null,
-      atmIV:         d?.volatility?.atmIV ?? existing.atmIV ?? 0,
-      totalCallOI:   d?.oi?.totalCallOI   ?? existing.totalCallOI ?? 0,
-      totalPutOI:    d?.oi?.totalPutOI    ?? existing.totalPutOI  ?? 0,
-      timestamp:     d?.timestamp         ?? Date.now(),
-    });
-    console.log(`🔄 [straddleCache live] ${data.symbol}: straddle=${s.straddlePrice}`);
-  }
+  const existing = _straddleCache.get(data.symbol.toUpperCase()) || {};
+  _straddleCache.set(data.symbol.toUpperCase(), {
+    // NEVER update straddlePrice/stranglePrice from intel — REST snapshot has correct values
+    straddlePrice: existing.straddlePrice || 0,
+    stranglePrice: existing.stranglePrice || 0,
+    // Update these from intel cycle — they are not in binary tick
+    pcr:         d?.oi?.pcr != null ? +(+d.oi.pcr).toFixed(2) : existing.pcr ?? null,
+    atmIV:       d?.volatility?.atmIV ?? existing.atmIV ?? 0,
+    totalCallOI: d?.oi?.totalCallOI   ?? existing.totalCallOI ?? 0,
+    totalPutOI:  d?.oi?.totalPutOI    ?? existing.totalPutOI  ?? 0,
+    timestamp:   existing.timestamp   ?? Date.now(),
+  });
 }
 
 function emitCompositeUpdate(data) {
