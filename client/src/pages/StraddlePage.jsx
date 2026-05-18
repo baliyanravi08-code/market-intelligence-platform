@@ -504,7 +504,7 @@ export default function StraddlePage({ socket }) {
       if (!data || data.symbol !== symbolRef.current) return;
 
       const straddlePrice = data.straddlePrice ?? data.straddle ?? null;
-      if (straddlePrice == null) return;
+      if (straddlePrice == null || straddlePrice <= 0) return;
 
       // Binary tick is now correctly seeded from disk — no guard needed.
 
@@ -528,7 +528,8 @@ export default function StraddlePage({ socket }) {
 
     
       // Use socket strangle if valid, else fall back to snap (set from REST snapshot)
-      const socketStrangle = (data.stranglePrice && data.stranglePrice > 0 && data.stranglePrice !== straddlePrice)
+      // Accept strangle if > 0, regardless of whether it equals straddle
+      const socketStrangle = (data.stranglePrice && data.stranglePrice > 0)
         ? data.stranglePrice
         : (snapRef.current?.strangle?.combined > 0 ? snapRef.current.strangle.combined : null);
 
@@ -600,12 +601,13 @@ export default function StraddlePage({ socket }) {
       if (!s) return;
 
       const spotPrice     = result?.spotPrice ?? data?.spotPrice ?? null;
-      const straddlePrice = s.straddlePrice;
+      // Prefer snap (REST-derived correct value) over raw intel cache value
+      const straddlePrice = snapRef.current?.straddle?.combined ?? s.straddlePrice;
       const t             = resolveTickTime(data.ts);
 
-      const socketStrangle = (s.stranglePrice && s.stranglePrice !== s.straddlePrice)
+      const socketStrangle = (s.stranglePrice && s.stranglePrice > 0)
         ? s.stranglePrice
-        : snapRef.current?.strangle?.combined ?? null;
+        : (snapRef.current?.strangle?.combined > 0 ? snapRef.current.strangle.combined : null);
 
       setSnap(prev => ({
         ...prev,
@@ -613,13 +615,14 @@ export default function StraddlePage({ socket }) {
         atmStrike: result.atmStrike ?? prev?.atmStrike,
         straddle: {
           ...(prev?.straddle || {}),
-          combined:       straddlePrice,
+          // DO NOT update combined — binary tick (handleIntelTick) has correct value
+          // intel cache has raw inflated value — only update strike/premium metadata
           callStrike:     result.atmStrike ?? prev?.atmStrike,
           putStrike:      result.atmStrike ?? prev?.atmStrike,
-          callPremium:    s.callLTP ?? s.straddlePrice / 2 ?? (prev?.straddle?.callPremium || 0),
-          putPremium:     s.putLTP  ?? s.straddlePrice / 2 ?? (prev?.straddle?.putPremium  || 0),
-          upperBreakeven: (result.atmStrike ?? prev?.atmStrike ?? 0) + straddlePrice,
-          lowerBreakeven: (result.atmStrike ?? prev?.atmStrike ?? 0) - straddlePrice,
+          callPremium:    s.callLTP ?? (prev?.straddle?.callPremium || 0),
+          putPremium:     s.putLTP  ?? (prev?.straddle?.putPremium  || 0),
+          upperBreakeven: prev?.straddle?.upperBreakeven,
+          lowerBreakeven: prev?.straddle?.lowerBreakeven,
         },
         strangle: snapRef.current?.strangle
           ? {
@@ -644,19 +647,6 @@ export default function StraddlePage({ socket }) {
         expiries: prev?.expiries?.length ? prev.expiries : [],
       }));
 
-      if (straddlePrice != null) {
-        setPremHistory(prev => {
-          const entry = { time: t, straddle: straddlePrice, strangle: socketStrangle ?? null };
-          const idx = prev.findIndex(p => p.time === t);
-          if (idx !== -1) {
-            const next = [...prev];
-            next[idx] = { ...next[idx], ...entry };
-            return next;
-          }
-          return [...prev, entry];
-        });
-        setLastRefresh(t);
-      }
     };
 
     socket.on("options-intel-tick",   handleIntelTick);
