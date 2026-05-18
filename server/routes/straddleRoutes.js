@@ -422,4 +422,120 @@ router.get("/iv-rank", (req, res) => {
   }
 });
 
+// ── Direct function exports for websocket.js (no self-HTTP) ──────────────────
+async function getSnapshot(symbol, expiry) {
+  try {
+    const cache = readCache();
+    if (!cache) return { error: "Cache not available" };
+    const chainData = getChainData(cache, symbol);
+    if (!chainData) return { error: `No data for ${symbol}` };
+
+    const spotPrice    = chainData.spotPrice || chainData.underlyingValue || 0;
+    const rawExpiries  = chainData.expiries  || Object.keys(chainData.chains || {});
+    const expiryList   = filterExpiredExpiries(rawExpiries);
+    const targetExpiry = (expiry && expiryList.includes(expiry))
+      ? expiry : (expiryList[0] || rawExpiries[0]);
+
+    const chainExpiry = chainData.chains?.[targetExpiry];
+    const strikesArr  = chainExpiry?.strikes || [];
+    if (!strikesArr.length) return { error: "No strikes found" };
+
+    const strikes    = strikesArr.map(s => s.strike).sort((a, b) => a - b);
+    const spotPrice2 = chainExpiry.spotPrice || spotPrice;
+    const atmStrike  = chainExpiry.atmStrike || findATMStrike(strikes, spotPrice2);
+    const atmRow     = strikesArr.find(s => s.strike === atmStrike)
+                    || strikesArr[Math.floor(strikesArr.length / 2)];
+
+    const cePrice = atmRow?.ce?.ltp ?? 0;
+    const pePrice = atmRow?.pe?.ltp ?? 0;
+    const straddlePremium = cePrice + pePrice;
+    const ceIV  = atmRow?.ce?.iv ?? 0;
+    const peIV  = atmRow?.pe?.iv ?? 0;
+    const atmIV = ((ceIV + peIV) / 2).toFixed(2);
+
+    const { callStrike: scStrike, putStrike: spStrike } = getStrangleStrikes(strikes, atmStrike, 1);
+    const scRow = strikesArr.find(s => s.strike === scStrike) || {};
+    const spRow = strikesArr.find(s => s.strike === spStrike) || {};
+    const scePrice = scRow?.ce?.ltp ?? 0;
+    const spePrice = spRow?.pe?.ltp ?? 0;
+    const stranglePremium = scePrice + spePrice;
+
+    const totalCeOI = strikesArr.reduce((sum, s) => sum + (s?.ce?.oi ?? 0), 0);
+    const totalPeOI = strikesArr.reduce((sum, s) => sum + (s?.pe?.oi ?? 0), 0);
+    const pcr = totalCeOI > 0
+      ? Math.round((totalPeOI / totalCeOI) * 100) / 100
+      : (chainExpiry?.pcr ?? null);
+
+    const cacheTimestamp = chainData.timestamp || chainExpiry?.timestamp || new Date().toISOString();
+
+    return {
+      symbol: resolveSymbol(symbol), expiry: targetExpiry,
+      spotPrice: spotPrice2, atmStrike, timestamp: cacheTimestamp,
+      straddle: {
+        callStrike: atmStrike, putStrike: atmStrike,
+        callPremium: cePrice, putPremium: pePrice, combined: straddlePremium,
+        upperBreakeven: +(atmStrike + straddlePremium).toFixed(2),
+        lowerBreakeven: +(atmStrike - straddlePremium).toFixed(2),
+      },
+      strangle: {
+        callStrike: scStrike, putStrike: spStrike,
+        callPremium: scePrice, putPremium: spePrice, combined: stranglePremium,
+        upperBreakeven: +(scStrike + stranglePremium).toFixed(2),
+        lowerBreakeven: +(spStrike - stranglePremium).toFixed(2),
+      },
+      iv:  { atm: +atmIV, ce: +ceIV, pe: +peIV },
+      oi:  { ce: totalCeOI, pe: totalPeOI, pcr: pcr != null ? +pcr : null },
+      expiries: expiryList,
+    };
+  } catch (e) { return { error: e.message }; }
+}
+
+async function getPayoff(symbol, type = "straddle", side = "sell", expiry, steps = 1) {
+  try {
+    const cache = readCache();
+    if (!cache) return { error: "Cache not available" };
+    const chainData = getChainData(cache, symbol);
+    if (!chainData) return { error: `No data for ${symbol}` };
+
+    const spotPrice    = chainData.spotPrice || chainData.underlyingValue || 0;
+    const rawExpiries  = chainData.expiries  || Object.keys(chainData.chains || {});
+    const expiryList   = filterExpiredExpiries(rawExpiries);
+    const targetExpiry = (expiry && expiryList.includes(expiry))
+      ? expiry : (expiryList[0] || rawExpiries[0]);
+
+    const chainExpiry = chainData.chains?.[targetExpiry];
+    const strikesArr  = chainExpiry?.strikes || [];
+    if (!strikesArr.length) return { error: "No strikes found" };
+
+    const strikes    = strikesArr.map(s => s.strike).sort((a, b) => a - b);
+    const spotPrice2 = chainExpiry?.spotPrice || spotPrice;
+    const atmStrike  = chainExpiry?.atmStrike || findATMStrike(strikes, spotPrice2);
+
+    let callStrike, putStrike, callPremium, putPremium;
+    if (type === "straddle") {
+      callStrike = putStrike = atmStrike;
+      const atmRow = strikesArr.find(s => s.strike === atmStrike) || {};
+      callPremium = atmRow?.ce?.ltp ?? 0;
+      putPremium  = atmRow?.pe?.ltp ?? 0;
+    } else {
+      const { callStrike: cs, putStrike: ps } = getStrangleStrikes(strikes, atmStrike, +steps);
+      callStrike  = cs; putStrike = ps;
+      callPremium = strikesArr.find(s => s.strike === cs)?.ce?.ltp ?? 0;
+      putPremium  = strikesArr.find(s => s.strike === ps)?.pe?.ltp ?? 0;
+    }
+
+    const lotSize    = getLotSize(symbol);
+    const payoffData = buildPayoffCurve({ callStrike, putStrike, callPremium, putPremium, type, side, lotSize });
+
+    return {
+      symbol: resolveSymbol(symbol), expiry: targetExpiry, type, side,
+      atmStrike, spotPrice: spotPrice2, lotSize,
+      callStrike, putStrike, callPremium, putPremium,
+      ...payoffData,
+    };
+  } catch (e) { return { error: e.message }; }
+}
+
 module.exports = router;
+module.exports.getSnapshot = getSnapshot;
+module.exports.getPayoff   = getPayoff;

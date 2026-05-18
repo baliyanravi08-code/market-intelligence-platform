@@ -659,18 +659,16 @@ function attachSocketIO(server) {
     socket.on("request-straddle-snapshot", async ({ symbol, type, side } = {}) => {
       if (!symbol) return;
       try {
-        const fetchLocal = (url) => new Promise((resolve) => {
-          const http = require("http");
-          http.get(url, (res) => {
-            let d = "";
-            res.on("data", c => d += c);
-            res.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
-          }).on("error", () => resolve(null));
-        });
-        const snap   = await fetchLocal(`http://localhost:${process.env.PORT || 3000}/api/straddle/snapshot?symbol=${symbol}`);
-        const payoff = await fetchLocal(`http://localhost:${process.env.PORT || 3000}/api/straddle/payoff?symbol=${symbol}&type=${type || "straddle"}&side=${side || "sell"}`);
-        if (snap   && !snap.error)   socket.emit("straddle-snapshot", { symbol, data: snap });
-        if (payoff && !payoff.error) socket.emit("straddle-payoff",   { symbol, ...payoff });
+        // Use direct module calls instead of self-HTTP
+        const straddleRoutes = require("../routes/straddleRoutes");
+        if (straddleRoutes.getSnapshot) {
+          const snap = await straddleRoutes.getSnapshot(symbol);
+          if (snap && !snap.error) socket.emit("straddle-snapshot", { symbol, data: snap });
+        }
+        if (straddleRoutes.getPayoff) {
+          const payoff = await straddleRoutes.getPayoff(symbol, type || "straddle", side || "sell");
+          if (payoff && !payoff.error) socket.emit("straddle-payoff", { symbol, ...payoff });
+        }
       } catch (e) {
         console.warn("⚠️ request-straddle-snapshot error:", e.message);
       }
@@ -749,74 +747,29 @@ function attachSocketIO(server) {
     socket.on("join:straddle", () => {
       socket.join("straddle");
 
-      const isNowMarketHours = () => {
-        const ist  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-        const day  = ist.getDay();
-        const mins = ist.getHours() * 60 + ist.getMinutes();
-        return day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
-      };
-
-      const isTodayIST = (ts) => {
-        if (!ts) return false;
-        const tsDate  = new Date(typeof ts === "number" ? ts : new Date(ts).getTime())
-          .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
-        const nowDate = new Date()
-          .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
-        return tsDate === nowDate;
-      };
-
-      const inMarket = isNowMarketHours();
-
-      for (const [sym, payload] of _intelCache) {
-        const d         = payload.data || payload;
-        const structure = d?.structure || {};
-
-        // FIX-2: Prefer REST snapshot values for the initial hydration emit too
-        const snap = _straddleCache.get(sym);
-
-        const straddlePrice = snap?.straddlePrice
-  ?? structure.straddlePrice
-  ?? 0;
-
-        const stranglePrice = snap?.stranglePrice
-          ?? structure.stranglePrice
-          ?? d?.stranglePrice
-          ?? 0;
-
-        const atmIV     = snap?.atmIV ?? d?.volatility?.atmIV ?? d?.atmIV ?? 0;
-        const score     = d?.score ?? 50;
-        const bias      = d?.bias  ?? "NEUTRAL";
-        const spotPrice = d?.spot  ?? d?.spotPrice ?? 0;
-
-        const cacheTs = payload.cacheTimestamp || payload.timestamp
-          || payload.fetchedAt || d?.timestamp || null;
-
-        // Always send full options-intelligence for payoff chart seed
-        socket.emit("options-intelligence", payload);
-
-        if (!inMarket || !isTodayIST(cacheTs)) continue;
-
-        const totalCallOI = snap?.totalCallOI ?? d?.oi?.totalCallOI ?? 0;
-        const totalPutOI  = snap?.totalPutOI  ?? d?.oi?.totalPutOI  ?? 0;
-
-        // FIX-3: ?? not || so real PCR values like 1.23 are never lost
-        const tickPcr = snap?.pcr ?? d?.oi?.pcr ?? 0;
+      // Only hydrate from _straddleCache (REST snapshot derived, correct values)
+      // Skip _intelCache emit — it has stale 60s cycle data that overwrites correct prices
+      for (const [sym, snap] of _straddleCache) {
+        if (!snap?.straddlePrice) continue;
+        const intel = _intelCache.get(sym);
+        const d     = intel?.data || intel || {};
 
         socket.emit("options-intel-tick", {
-          symbol: sym, spotPrice, straddlePrice, stranglePrice,
-          atmIV, score, bias, ts: cacheTs,
-          totalCallOI, totalPutOI, pcr: tickPcr,
+          symbol:       sym,
+          spotPrice:    d?.spot ?? d?.spotPrice ?? 0,
+          straddlePrice: snap.straddlePrice,
+          stranglePrice: snap.stranglePrice ?? 0,
+          atmIV:        snap.atmIV ?? 0,
+          score:        d?.score ?? 50,
+          bias:         d?.bias  ?? "NEUTRAL",
+          ts:           snap.timestamp ?? Date.now(),
+          totalCallOI:  snap.totalCallOI ?? 0,
+          totalPutOI:   snap.totalPutOI  ?? 0,
+          pcr:          snap.pcr ?? null,
         });
 
-        try {
-          if (bp.encodeOptionsIntelTick) {
-            const buf = bp.encodeOptionsIntelTick(
-              sym, spotPrice, straddlePrice, atmIV, score, bias,
-              stranglePrice, cacheTs, totalCallOI, totalPutOI, tickPcr
-            );
-            socket.emit("binary", buf);
-          }
-        } catch (_) {}
+        // Also send options-intelligence for payoff chart only
+        if (intel) socket.emit("options-intelligence", intel);
       }
 
       console.log(`📊 ${socket.id} joined straddle room`);
