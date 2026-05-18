@@ -149,7 +149,7 @@ function getLotSize(symbol) {
 
 router.get("/snapshot", (req, res) => {
   try {
-    const { symbol = "NIFTY", expiry } = req.query;
+    const { symbol = "NIFTY", expiry, steps = 1 } = req.query;
     const cache = readCache();
     if (!cache) return res.status(503).json({ error: "Option chain cache not available" });
 
@@ -190,7 +190,7 @@ router.get("/snapshot", (req, res) => {
     const atmIV = ((ceIV + peIV) / 2).toFixed(2);
 
     // FIX-STRANGLE: read actual OTM strike rows, not ATM row
-    const { callStrike: scStrike, putStrike: spStrike } = getStrangleStrikes(strikes, atmStrike, 1);
+    const { callStrike: scStrike, putStrike: spStrike } = getStrangleStrikes(strikes, atmStrike, +steps);
     const scRow = strikesArr.find(s => s.strike === scStrike) || {};
     const spRow = strikesArr.find(s => s.strike === spStrike) || {};
     // OTM CE ltp from the OTM call strike row; OTM PE ltp from the OTM put strike row
@@ -423,7 +423,7 @@ router.get("/iv-rank", (req, res) => {
 });
 
 // ── Direct function exports for websocket.js (no self-HTTP) ──────────────────
-async function getSnapshot(symbol, expiry) {
+async function getSnapshot(symbol, expiry, steps = 1) {
   try {
     const cache = readCache();
     if (!cache) return { error: "Cache not available" };
@@ -453,7 +453,7 @@ async function getSnapshot(symbol, expiry) {
     const peIV  = atmRow?.pe?.iv ?? 0;
     const atmIV = ((ceIV + peIV) / 2).toFixed(2);
 
-    const { callStrike: scStrike, putStrike: spStrike } = getStrangleStrikes(strikes, atmStrike, 1);
+    const { callStrike: scStrike, putStrike: spStrike } = getStrangleStrikes(strikes, atmStrike, +steps);
     const scRow = strikesArr.find(s => s.strike === scStrike) || {};
     const spRow = strikesArr.find(s => s.strike === spStrike) || {};
     const scePrice = scRow?.ce?.ltp ?? 0;

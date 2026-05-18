@@ -447,7 +447,7 @@ export default function StraddlePage({ socket }) {
         if (cancelled) return;
 
         // Snapshot
-        const sr = await fetch(`/api/straddle/snapshot?symbol=${currentSymbol}`);
+        const sr = await fetch(`/api/straddle/snapshot?symbol=${currentSymbol}&steps=${strangleStep}`);
         if (!sr.ok) {
           console.warn(`Snapshot 404 for ${currentSymbol} — will seed from socket`);
           setLoading(false);
@@ -505,6 +505,11 @@ export default function StraddlePage({ socket }) {
 
       const straddlePrice = data.straddlePrice ?? data.straddle ?? null;
       if (straddlePrice == null || straddlePrice <= 0) return;
+      // Reject tick if straddle price is wildly different from snap (>50% off) — stale cache
+      if (snapRef.current?.straddle?.combined > 0) {
+        const ratio = straddlePrice / snapRef.current.straddle.combined;
+        if (ratio > 2.5 || ratio < 0.4) return;
+      }
 
       // Binary tick is now correctly seeded from disk — no guard needed.
 
@@ -664,6 +669,19 @@ export default function StraddlePage({ socket }) {
   }, [socket, symbol]);
 
   useEffect(() => { if (snap) fetchPayoff(snap); }, [stratType, side, strangleStep, fetchPayoff, snap]);
+
+  // Re-fetch snapshot when expiry changes
+  useEffect(() => {
+    if (!expiry || !socket) return;
+    fetch(`/api/straddle/snapshot?symbol=${symbol}&expiry=${expiry}`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data || data.error) return;
+        setSnap(data);
+        fetchPayoff(data);
+      })
+      .catch(() => {});
+  }, [expiry]);
   useEffect(() => { alertedRef.current = { upper: false, lower: false }; setAlertMsg(null); }, [stratType, side]);
 
   const activeStrat  = snap ? (stratType === "straddle" ? snap.straddle : snap.strangle) : null;
