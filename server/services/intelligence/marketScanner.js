@@ -1509,7 +1509,7 @@ module.exports = {
   getScannerData,
   getTechnicalsREST,
   getTechnicalsForTimeframe,
-  setInstrumentMap: setScannerInstrumentMap,
+  setInstrumentMap: setInstrumentMap,
   applyLiveTick,
   setToken,
   getTechBatch,
