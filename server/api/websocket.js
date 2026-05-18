@@ -554,16 +554,14 @@ function emitOptionsIntel(data) {
   const s = d?.structure || {};
   const existing = _straddleCache.get(data.symbol.toUpperCase()) || {};
   _straddleCache.set(data.symbol.toUpperCase(), {
-    // Use intel value ONLY if REST snapshot hasn't set a value yet
-    // Once REST sets it, never overwrite with intel
     straddlePrice: existing._fromREST ? existing.straddlePrice : (s.straddlePrice || existing.straddlePrice || 0),
     stranglePrice: existing._fromREST ? existing.stranglePrice : (s.stranglePrice || existing.stranglePrice || 0),
-    // Update these from intel cycle — they are not in binary tick
     pcr:         d?.oi?.pcr != null ? +(+d.oi.pcr).toFixed(2) : existing.pcr ?? null,
     atmIV:       d?.volatility?.atmIV ?? existing.atmIV ?? 0,
     totalCallOI: d?.oi?.totalCallOI   ?? existing.totalCallOI ?? 0,
     totalPutOI:  d?.oi?.totalPutOI    ?? existing.totalPutOI  ?? 0,
     timestamp:   existing.timestamp   ?? Date.now(),
+    _fromREST:   existing._fromREST   ?? false,  // ← preserve the flag
   });
 }
 
@@ -887,7 +885,29 @@ function attachSocketIO(server) {
       console.error(`Socket error [${socket.id}]:`, err?.message);
     });
   });
+// Auto-seed _straddleCache from REST snapshot for all major symbols
+  // This ensures correct straddle prices are available before any client connects
+  setTimeout(async () => {
+    try {
+      const straddleRoutes = require("../routes/straddleRoutes");
+      for (const sym of ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"]) {
+        try {
+          const snap = await straddleRoutes.getSnapshot(sym);
+          if (snap && !snap.error && snap.straddle?.combined > 0) {
+            setCachedStraddleSnap(sym, snap);
+            console.log(`✅ [auto-seed] ${sym}: straddle=₹${snap.straddle.combined} atm=${snap.atmStrike}`);
+          }
+        } catch (e) {
+          console.warn(`⚠️ [auto-seed] ${sym} failed:`, e.message);
+        }
+        await new Promise(r => setTimeout(r, 500));
+      }
+    } catch (e) {
+      console.warn("⚠️ straddleCache auto-seed failed:", e.message);
+    }
+  }, 5000); // wait 5s for server to fully start
 
+  
   console.log("🌐 Socket.io attached — Binary Protocol v1 + perMessageDeflate");
   return io;
 }
