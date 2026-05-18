@@ -602,56 +602,35 @@ export default function StraddlePage({ socket }) {
     const handleOptionsIntel = (data) => {
       if (!data || data.symbol !== symbolRef.current) return;
       const result = data?.data || data;
-      const s      = result?.structure;
-      if (!s) return;
+      if (!result) return;
 
-      const spotPrice     = result?.spotPrice ?? data?.spotPrice ?? null;
-      // Prefer snap (REST-derived correct value) over raw intel cache value
-      const straddlePrice = snapRef.current?.straddle?.combined ?? s.straddlePrice;
-      const t             = resolveTickTime(data.ts);
-
-      const socketStrangle = (s.stranglePrice && s.stranglePrice > 0)
-        ? s.stranglePrice
-        : (snapRef.current?.strangle?.combined > 0 ? snapRef.current.strangle.combined : null);
-
-      setSnap(prev => ({
-        ...prev,
-        spotPrice,
-        atmStrike: result.atmStrike ?? prev?.atmStrike,
-        straddle: {
-          ...(prev?.straddle || {}),
-          // DO NOT update combined — binary tick (handleIntelTick) has correct value
-          // intel cache has raw inflated value — only update strike/premium metadata
-          callStrike:     result.atmStrike ?? prev?.atmStrike,
-          putStrike:      result.atmStrike ?? prev?.atmStrike,
-          callPremium:    s.callLTP ?? (prev?.straddle?.callPremium || 0),
-          putPremium:     s.putLTP  ?? (prev?.straddle?.putPremium  || 0),
-          upperBreakeven: prev?.straddle?.upperBreakeven,
-          lowerBreakeven: prev?.straddle?.lowerBreakeven,
-        },
-        strangle: snapRef.current?.strangle
-          ? {
-              ...snapRef.current.strangle,
-              combined: (socketStrangle != null && socketStrangle > 0)
-                ? socketStrangle
-                : snapRef.current.strangle.combined,
-            }
-          : prev?.strangle ?? null,
-        iv: {
-          atm: result.volatility?.atmIV ?? prev?.iv?.atm,
-          ce:  result.volSurface?.iv25call ?? prev?.iv?.ce,
-          pe:  result.volSurface?.iv25put  ?? prev?.iv?.pe,
-        },
-        oi: {
-          ce:  result.oi?.totalCallOI ?? prev?.oi?.ce,
-          pe:  result.oi?.totalPutOI  ?? prev?.oi?.pe,
-          pcr: result.oi?.pcr         ?? prev?.oi?.pcr,
-        },
-        greeks:  result.atmGreeks ?? prev?.greeks,
-        expiry:  result.expiryDate ?? expiryRef.current ?? prev?.expiry,
-        expiries: prev?.expiries?.length ? prev.expiries : [],
-      }));
-
+      // Only update non-price fields from 60s intel cycle
+      // All price data (straddle, strangle, spot, atmStrike) comes from
+      // binary tick (handleIntelTick) which is live and correct
+      setSnap(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          // IV from intel cycle is useful (not in binary tick)
+          iv: {
+            atm: result.volatility?.atmIV ?? prev?.iv?.atm,
+            ce:  result.volSurface?.iv25call ?? prev?.iv?.ce,
+            pe:  result.volSurface?.iv25put  ?? prev?.iv?.pe,
+          },
+          // Greeks only come from intel cycle
+          greeks: result.atmGreeks ?? prev?.greeks,
+          // Expiries from REST snapshot only — never from intel
+          expiries: prev?.expiries?.length ? prev.expiries : [],
+          // OI/PCR already handled by binary tick — only update if binary has no data
+          oi: {
+            ce:  prev?.oi?.ce  > 0 ? prev.oi.ce  : (result.oi?.totalCallOI ?? 0),
+            pe:  prev?.oi?.pe  > 0 ? prev.oi.pe  : (result.oi?.totalPutOI  ?? 0),
+            pcr: prev?.oi?.pcr != null ? prev.oi.pcr : (result.oi?.pcr ?? null),
+          },
+          // Everything else (spotPrice, atmStrike, straddle, strangle) — NEVER touch
+          // Binary tick handles all of these correctly at ~1s frequency
+        };
+      });
     };
 
     socket.on("options-intel-tick",   handleIntelTick);
