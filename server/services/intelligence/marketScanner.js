@@ -1116,7 +1116,29 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
   const cacheKey = `${symbol}:${timeframe}`;
   const cached   = techCache.get(cacheKey);
   if (cached && Date.now() - cached.computedAt < cfg.ttl) return cached;
-  const candles = await fetchCandles(symbol, cfg.days, cfg.interval);
+
+  // Try Upstox candle endpoint first (handles ALL symbols via instrument key resolution)
+  let candles = [];
+  try {
+    const PORT = process.env.PORT || 10000;
+    const res  = await axios.get(
+      `http://localhost:${PORT}/api/candles/${encodeURIComponent(symbol)}?tf=${cfg.interval}&days=${cfg.days}`,
+      { timeout: 20000 }
+    );
+    if (res.data?.ok && Array.isArray(res.data.candles) && res.data.candles.length >= 5) {
+      candles = res.data.candles.map(c => ({
+        o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume || 0
+      }));
+    }
+  } catch (e) {
+    console.warn(`📊 [${symbol}][${timeframe}] Upstox candle fetch failed: ${e.message}`);
+  }
+
+  // Fallback to NSE if Upstox failed
+  if (candles.length < 20) {
+    candles = await fetchCandles(symbol, cfg.days, cfg.interval);
+  }
+
   if (!candles || candles.length < 20) return null;
   const result = computeTechnicals(symbol, candles);
   if (result) {
@@ -1169,8 +1191,8 @@ async function preWarmTechCache(symbols) {
           const last = result._candles[result._candles.length - 1];
           const prev = result._candles[result._candles.length - 2];
           if (last && last.close > 0) {
-            stock.ltp = last.close;
-            if (!stock._prevCloseFromExchange && prev && prev.close > 0) stock.prevClose = prev.close;
+  // DO NOT overwrite stock.ltp — candle close is prev day close, not live price
+  if (!stock._prevCloseFromExchange && prev && prev.close > 0) stock.prevClose = prev.close;
             const pc = stock.prevClose;
             if (pc && pc > 0) {
               const rawPct    = ((last.close - pc) / pc) * 100;
