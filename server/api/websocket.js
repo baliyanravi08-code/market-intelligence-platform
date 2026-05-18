@@ -104,6 +104,7 @@ function setCachedStraddleSnap(symbol, snap) {
     totalCallOI:   snap.oi?.ce             ?? existing.totalCallOI ?? 0,
     totalPutOI:    snap.oi?.pe             ?? existing.totalPutOI ?? 0,
     timestamp:     snap.timestamp          ?? Date.now(),
+    _fromREST:     true,
   });
 }
 
@@ -553,9 +554,10 @@ function emitOptionsIntel(data) {
   const s = d?.structure || {};
   const existing = _straddleCache.get(data.symbol.toUpperCase()) || {};
   _straddleCache.set(data.symbol.toUpperCase(), {
-    // NEVER update straddlePrice/stranglePrice from intel — REST snapshot has correct values
-    straddlePrice: existing.straddlePrice || 0,
-    stranglePrice: existing.stranglePrice || 0,
+    // Use intel value ONLY if REST snapshot hasn't set a value yet
+    // Once REST sets it, never overwrite with intel
+    straddlePrice: existing._fromREST ? existing.straddlePrice : (s.straddlePrice || existing.straddlePrice || 0),
+    stranglePrice: existing._fromREST ? existing.stranglePrice : (s.stranglePrice || existing.stranglePrice || 0),
     // Update these from intel cycle — they are not in binary tick
     pcr:         d?.oi?.pcr != null ? +(+d.oi.pcr).toFixed(2) : existing.pcr ?? null,
     atmIV:       d?.volatility?.atmIV ?? existing.atmIV ?? 0,
