@@ -526,11 +526,11 @@ export default function StraddlePage({ socket }) {
       // FIX-A: NEVER drop a tick — always get a valid time label
       const t = resolveTickTime(data.ts);
 
-      // Use decoded stranglePrice if non-zero and distinct from straddle.
-      // After FIX 1, data.stranglePrice is now correctly decoded from binary.
+    
+      // Use socket strangle if valid, else fall back to snap (set from REST snapshot)
       const socketStrangle = (data.stranglePrice && data.stranglePrice > 0 && data.stranglePrice !== straddlePrice)
         ? data.stranglePrice
-        : (snapRef.current?.strangle?.combined ?? null);
+        : (snapRef.current?.strangle?.combined > 0 ? snapRef.current.strangle.combined : null);
 
       setSnap(prev => {
         if (!prev) return prev;
