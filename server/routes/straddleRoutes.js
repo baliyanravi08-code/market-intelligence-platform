@@ -177,7 +177,7 @@ router.get("/snapshot", (req, res) => {
 
     const strikes    = strikesArr.map(s => s.strike).sort((a, b) => a - b);
     const spotPrice2 = chainExpiry.spotPrice || spotPrice;
-    const atmStrike  = chainExpiry.atmStrike || findATMStrike(strikes, spotPrice2);
+    const atmStrike  = findATMStrike(strikes, spotPrice2);
     const atmRow     = strikesArr.find(s => s.strike === atmStrike)
                     || strikesArr[Math.floor(strikesArr.length / 2)];
 
@@ -283,7 +283,7 @@ router.get("/payoff", (req, res) => {
 
     const strikes    = strikesArr.map(s => s.strike).sort((a, b) => a - b);
     const spotPrice2 = chainExpiry?.spotPrice || spotPrice;
-    const atmStrike  = chainExpiry?.atmStrike || findATMStrike(strikes, spotPrice2);
+    const atmStrike  = findATMStrike(strikes, spotPrice2);
 
     let callStrike, putStrike, callPremium, putPremium;
 
@@ -442,7 +442,7 @@ async function getSnapshot(symbol, expiry) {
 
     const strikes    = strikesArr.map(s => s.strike).sort((a, b) => a - b);
     const spotPrice2 = chainExpiry.spotPrice || spotPrice;
-    const atmStrike  = chainExpiry.atmStrike || findATMStrike(strikes, spotPrice2);
+    const atmStrike  = findATMStrike(strikes, spotPrice2);
     const atmRow     = strikesArr.find(s => s.strike === atmStrike)
                     || strikesArr[Math.floor(strikesArr.length / 2)];
 
@@ -509,7 +509,7 @@ async function getPayoff(symbol, type = "straddle", side = "sell", expiry, steps
 
     const strikes    = strikesArr.map(s => s.strike).sort((a, b) => a - b);
     const spotPrice2 = chainExpiry?.spotPrice || spotPrice;
-    const atmStrike  = chainExpiry?.atmStrike || findATMStrike(strikes, spotPrice2);
+    const atmStrike  = findATMStrike(strikes, spotPrice2);
 
     let callStrike, putStrike, callPremium, putPremium;
     if (type === "straddle") {
