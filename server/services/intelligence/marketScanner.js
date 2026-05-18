@@ -1219,7 +1219,34 @@ async function preWarmTechCache(symbols) {
   }
   console.log(`📊 Pre-warm done: ${warmed}/${symbols.length} | techCache size: ${techCache.size}`);
 }
-
+async function preWarmWithMemoryGuard(symbols) {
+  for (const sym of symbols) {
+    const mb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+    if (mb > 350) {
+      console.warn(`⚠️ Pre-warm paused — heap ${mb}MB > 350MB`);
+      break;
+    }
+    try {
+      const PORT = process.env.PORT || 10000;
+      const res  = await axios.get(
+        `http://localhost:${PORT}/api/candles/${encodeURIComponent(sym)}?tf=1day&days=365`,
+        { timeout: 20000 }
+      );
+      if (res.data?.ok && res.data.candles?.length >= 20) {
+        const candles = res.data.candles.map(c => ({
+          o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume || 0
+        }));
+        const result = computeTechnicals(sym, candles);
+        if (result) {
+          result.timeframe = "1day";
+          setTechCache(`${sym}:1day`, result);
+        }
+      }
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 500));
+  }
+  console.log(`📊 Background pre-warm done: techCache=${techCache.size}`);
+}
 function buildPayload(cache) {
   const premarket = cache.isPremarket || false;
   return {
@@ -1374,15 +1401,21 @@ async function runScanner() {
     const toWarm = [
       ...gainers.map(s => s.symbol),
       ...losers.map(s => s.symbol),
-      ...byMcap.largecap.slice(0, 50).map(s => s.symbol),
-      ...byMcap.midcap.slice(0, 30).map(s => s.symbol),
+      ...byMcap.largecap.slice(0, 10).map(s => s.symbol),
+    ].filter((sym, i, a) => a.indexOf(sym) === i).slice(0, 50);
+
+    const toWarmBackground = [
+      ...byMcap.largecap.slice(0, 80).map(s => s.symbol),
+      ...byMcap.midcap.slice(0, 50).map(s => s.symbol),
       ...byMcap.smallcap.slice(0, 20).map(s => s.symbol),
-    ].filter((sym, i, a) => a.indexOf(sym) === i).slice(0, 100);
+    ].filter((sym, i, a) => a.indexOf(sym) === i && !toWarm.includes(sym)).slice(0, 150);
 
     if (preWarmTimer) clearTimeout(preWarmTimer);
     preWarmTimer = setTimeout(() => {
       preWarmTechCache(toWarm).then(() => {
         tryBacktestCapture(toWarm.map(sym => stocks.find(s => s.symbol === sym)).filter(Boolean));
+        // Start background warm after tier 1 done — with memory guard
+        setTimeout(() => preWarmWithMemoryGuard(toWarmBackground), 3 * 60 * 1000);
       });
     }, PREWARM_DELAY);
 
