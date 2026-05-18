@@ -1166,10 +1166,7 @@ async function getTechnicals(symbol) {
 
 async function preWarmTechCache(symbols) {
   if (!symbols || !symbols.length) return;
-  const token = getUpstoxToken();
-  if (!token) { console.warn("📊 Pre-warm skipped — no Upstox token"); return; }
   console.log(`📊 Pre-warming ${symbols.length} symbols (1day only)…`);
-
   const BATCH_EMIT_SIZE = 10;
   let batch  = [];
   let warmed = 0;
@@ -1499,14 +1496,23 @@ function startMarketScanner(io) {
 function getScannerData()                { return scanCache; }
 async function getTechnicalsREST(symbol) { return getTechnicals(symbol); }
 
+function getTechBatch() {
+  const batch = [];
+  for (const [key, data] of techCache) {
+    batch.push({ key, data });
+  }
+  return batch;
+}
+
 module.exports = {
   startMarketScanner,
   getScannerData,
   getTechnicalsREST,
   getTechnicalsForTimeframe,
-  setInstrumentMap,
+  setInstrumentMap: setScannerInstrumentMap,
   applyLiveTick,
   setToken,
+  getTechBatch,
 
   forceCaptureNow: async function () {
     const backtestEngine = require("../backtestEngine");

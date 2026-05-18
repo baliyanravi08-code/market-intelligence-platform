@@ -678,6 +678,19 @@ function attachSocketIO(server) {
 
     socket.on("join:scanner", () => {
       socket.join("scanner");
+
+      // Send all cached tech data immediately to newly joined client
+      try {
+        const scanner = require("../services/intelligence/marketScanner");
+        if (scanner.getTechBatch) {
+          const techBatch = scanner.getTechBatch();
+          if (techBatch.length > 0) {
+            socket.emit("scanner-tech-batch", techBatch);
+            console.log(`📊 join:scanner — sent ${techBatch.length} tech entries`);
+          }
+        }
+      } catch (_) {}
+
       const snapshot = getScannerSnapshot();
       if (snapshot.length > 0) {
         try {
