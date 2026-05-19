@@ -93,18 +93,19 @@ const _straddleCache = new Map(); // sym → { straddlePrice, stranglePrice, pcr
  * straddle/strangle premium from optionChainCache.json) so binary ticks
  * emit the same value as the REST snapshot.
  */
+// In setCachedStraddleSnap — only seed, never overwrite:
 function setCachedStraddleSnap(symbol, snap) {
   if (!symbol || !snap) return;
   const existing = _straddleCache.get(symbol.toUpperCase()) || {};
+  // Only write prices if not already set by emitOptionsIntel
   _straddleCache.set(symbol.toUpperCase(), {
-    straddlePrice: snap.straddle?.combined ?? existing.straddlePrice ?? 0,
-    stranglePrice: snap.strangle?.combined ?? existing.stranglePrice ?? 0,
-    pcr:           snap.oi?.pcr != null ? +(+snap.oi.pcr).toFixed(2) : existing.pcr ?? null,
-    atmIV:         snap.iv?.atm            ?? existing.atmIV ?? 0,
-    totalCallOI:   snap.oi?.ce             ?? existing.totalCallOI ?? 0,
-    totalPutOI:    snap.oi?.pe             ?? existing.totalPutOI ?? 0,
-    timestamp:     snap.timestamp          ?? Date.now(),
-    _fromREST:     true,
+    straddlePrice: existing.straddlePrice > 0 ? existing.straddlePrice : (snap.straddle?.combined ?? 0),
+    stranglePrice: existing.stranglePrice > 0 ? existing.stranglePrice : (snap.strangle?.combined ?? 0),
+    pcr:         snap.oi?.pcr != null ? +(+snap.oi.pcr).toFixed(2) : existing.pcr ?? null,
+    atmIV:       snap.iv?.atm  ?? existing.atmIV ?? 0,
+    totalCallOI: snap.oi?.ce   ?? existing.totalCallOI ?? 0,
+    totalPutOI:  snap.oi?.pe   ?? existing.totalPutOI  ?? 0,
+    timestamp:   existing.timestamp ?? snap.timestamp ?? Date.now(),
   });
 }
 
@@ -387,12 +388,13 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   const pcr = pcrRaw != null ? +(+pcrRaw).toFixed(2) : null;
 
   // Guaranteed non-null timestamp so tsSec is never 0 in the binary frame.
-  const cacheTs = cached.cacheTimestamp
-    || cached.timestamp
-    || cached.fetchedAt
-    || d?.timestamp
-    || d?.cacheTimestamp
-    || Date.now();
+  const cacheTs = Date.now(); // ← live tick time, always now
+
+// Keep existing cacheTs separately for persist only:
+const dataTs = cached.cacheTimestamp
+  || cached.timestamp
+  || d?.cacheTimestamp
+  || Date.now();
 
   try {
     if (bp.encodeOptionsIntelTick) {
@@ -424,7 +426,8 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   _io.to("intel").emit("options-intel-tick", payload);
 
   // ── Persist straddle tick to disk (1 entry per minute per symbol) ──────────
-  _persistStraddleTick(sym, straddlePrice, stranglePrice, spotPrice, pcr, cacheTs);
+  // Use dataTs (NSE data capture time) not cacheTs (Date.now()) for disk history
+  _persistStraddleTick(sym, straddlePrice, stranglePrice, spotPrice, pcr, dataTs);
 }
 
 function emitCandleTick(symbol, tf, candle) {
@@ -554,16 +557,16 @@ function emitOptionsIntel(data) {
   const s = d?.structure || {};
   const existing = _straddleCache.get(data.symbol.toUpperCase()) || {};
   _straddleCache.set(data.symbol.toUpperCase(), {
-    straddlePrice: existing._fromREST ? existing.straddlePrice : (s.straddlePrice || existing.straddlePrice || 0),
-    stranglePrice: existing._fromREST ? existing.stranglePrice : (s.stranglePrice || existing.stranglePrice || 0),
+    straddlePrice: s.straddlePrice > 0 ? s.straddlePrice : (existing.straddlePrice || 0),
+    stranglePrice: s.stranglePrice > 0 ? s.stranglePrice : (existing.stranglePrice || 0),
     pcr:         d?.oi?.pcr != null ? +(+d.oi.pcr).toFixed(2) : existing.pcr ?? null,
     atmIV:       d?.volatility?.atmIV ?? existing.atmIV ?? 0,
     totalCallOI: d?.oi?.totalCallOI   ?? existing.totalCallOI ?? 0,
     totalPutOI:  d?.oi?.totalPutOI    ?? existing.totalPutOI  ?? 0,
-    timestamp:   existing.timestamp   ?? Date.now(),
-    _fromREST:   existing._fromREST   ?? false,  // ← preserve the flag
+    timestamp:   Date.now(),
+    _fromREST:   existing._fromREST   ?? false,
   });
-}
+}  // ← THIS WAS THE MISSING CLOSING BRACE
 
 function emitCompositeUpdate(data) {
   if (!_io || !data) return;
@@ -760,12 +763,11 @@ function attachSocketIO(server) {
           atmIV:        snap.atmIV ?? 0,
           score:        d?.score ?? 50,
           bias:         d?.bias  ?? "NEUTRAL",
-          ts:           snap.timestamp ?? Date.now(),
+          ts:           Date.now(), // ← live time, not stale cache timestamp
           totalCallOI:  snap.totalCallOI ?? 0,
           totalPutOI:   snap.totalPutOI  ?? 0,
           pcr:          snap.pcr ?? null,
         });
-
         // Also send options-intelligence for payoff chart only
         if (intel) socket.emit("options-intelligence", intel);
       }
@@ -887,25 +889,6 @@ function attachSocketIO(server) {
   });
 // Auto-seed _straddleCache from REST snapshot for all major symbols
   // This ensures correct straddle prices are available before any client connects
-  setTimeout(async () => {
-    try {
-      const straddleRoutes = require("../routes/straddleRoutes");
-      for (const sym of ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"]) {
-        try {
-          const snap = await straddleRoutes.getSnapshot(sym);
-          if (snap && !snap.error && snap.straddle?.combined > 0) {
-            setCachedStraddleSnap(sym, snap);
-            console.log(`✅ [auto-seed] ${sym}: straddle=₹${snap.straddle.combined} atm=${snap.atmStrike}`);
-          }
-        } catch (e) {
-          console.warn(`⚠️ [auto-seed] ${sym} failed:`, e.message);
-        }
-        await new Promise(r => setTimeout(r, 500));
-      }
-    } catch (e) {
-      console.warn("⚠️ straddleCache auto-seed failed:", e.message);
-    }
-  }, 5000); // wait 5s for server to fully start
 
   
   console.log("🌐 Socket.io attached — Binary Protocol v1 + perMessageDeflate");

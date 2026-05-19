@@ -497,6 +497,13 @@ function restartWithNewToken(accessToken, io) {
   startStreamer(accessToken, io);
 }
 
+function resetDailyCache() {
+  prevCloseCache.clear();
+  liveCandleState.clear();
+  candleEmitThrottle.clear();
+  console.log("📅 upstoxStream: daily caches cleared for new trading day");
+}
+
 module.exports = {
   startStreamer, stopStreamer, restartWithNewToken,
   subscribeOptions, setOITickHandler, setLTPTickHandler,
@@ -506,4 +513,5 @@ module.exports = {
   unregisterLiveCandleSubscription,
   subscribeSymbolForPriceTick,
   setInstrumentMapForStream,
+  resetDailyCache,
 };

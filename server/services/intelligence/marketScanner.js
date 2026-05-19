@@ -6,35 +6,39 @@
  *
  * FIXES IN THIS VERSION:
  *
- *  FIX-1: MARKET OPEN FORCED RE-SCAN AT 9:15:30 IST
- *    Pre-market scan at 9:08 uses NSE auction/indicative prices.
- *    A dedicated setTimeout fires at 9:15:30 sharp, clears techCache,
- *    and re-runs the full scanner so entry/sl/tp are computed from
- *    real traded prices (actual 9:15 open candle), not auction prices.
+ *  FIX-1: TIME CONSTANTS — single source of truth
+ *    T_MARKET_START   = 540  (9:00 AM)
+ *    T_PREOPEN_LOCKED = 548  (9:08 AM — auction prices mostly fixed)
+ *    T_MARKET_OPEN    = 555  (9:15 AM — real trading starts)
+ *    T_FIRST_CANDLE   = 560  (9:20 AM — first 5-min candle closed)
+ *    T_MARKET_CLOSE   = 930  (3:30 PM)
  *
- *  FIX-2: PRE-MARKET SIGNALS SUPPRESSED
- *    computeTechnicals() now returns signal="HOLD" and entry/sl/tp=null
- *    during 9:00–9:14 so frontend never shows wrong trade levels.
- *    After 9:15 real prices come in and signals are computed normally.
+ *  FIX-2: GAINERS/LOSERS FROM 9:08 AM
+ *    isStalePreopen now only blocks stocks before 9:08 AM.
+ *    From 9:08 AM, NSE pre-open auction prices are mostly locked
+ *    so gainers/losers populate immediately.
+ *    prevClose comes from Upstox stream ltpc.cp — no NSE dependency.
  *
- *  FIX-3: GAINERS/LOSERS HIDDEN DURING PRE-MARKET
- *    isStalePreopen is now true for ALL stocks during 9:00–9:14, not
- *    just volume=0 rows. This prevents pre-open auction prices from
- *    showing in the top gainers/losers list.
+ *  FIX-3: SIGNALS SUPPRESSED UNTIL 9:20 (NOT 9:15)
+ *    computeTechnicals() suppresses ONLY entry/sl/tp until 9:20.
+ *    RSI, MACD, MA Summary still show from 9:08 using daily candles.
+ *    At 9:20 first 5-min candle is closed — real entry/sl/tp computed.
  *
- *  FIX-4: PRE-MARKET SCHEDULER JUMP TO 9:15:30
- *    scheduleNextRun() now detects pre-market window (9:00–9:14) and
- *    schedules a direct jump to 9:15:30 instead of waiting for the
- *    next full SCAN_INTERVAL, so first real-market scan is never late.
+ *  FIX-4: 9:08 PRE-OPEN SCAN SCHEDULED
+ *    _schedulePreopenScan() fires at exactly 9:08 AM to populate
+ *    gainers/losers from auction prices. No wasted fetch before that.
  *
- *  FIX-5: REMOVED SELF-HTTP CANDLE FETCH
+ *  FIX-5: 9:20 SIGNAL SCAN — TARGETED, NOT FULL RE-FETCH
+ *    runSignalScanOnly() fetches 5-min candles for top 80 stocks only.
+ *    Does NOT re-fetch NSE/BSE (wasteful). Uses existing stockBySymbol.
+ *    Upstox stream already has prevClose from ltpc.cp ticks.
+ *
+ *  FIX-6: REMOVED SELF-HTTP CANDLE FETCH
  *    fetchCandles() no longer calls http://localhost:PORT/api/candles/
- *    (self-HTTP fails on Render during startup). Falls directly to NSE
- *    historical + NSE intraday fallbacks which work without Upstox token.
+ *    Falls directly to NSE historical + NSE intraday fallbacks.
  *
- *  FIX-6: PRE-WARM CAPPED AT 100 SYMBOLS
- *    toWarm list capped at 100 symbols max (was 500+) to prevent Render
- *    512MB memory from being exceeded during pre-warm phase.
+ *  FIX-7: PRE-WARM CAPPED AT 100 SYMBOLS
+ *    toWarm list capped at 100 symbols max to prevent memory excess.
  *
  *  PRESERVED: All signal filters, technical calculations, binary tick
  *  emission, instrument map, backtest capture, day-start reset, smart
@@ -44,6 +48,13 @@
 const axios = require("axios");
 const path  = require("path");
 const fs    = require("fs");
+
+// ── Time constants — single source of truth ───────────────────────────────────
+const T_MARKET_START   = 540; // 9:00 AM IST
+const T_PREOPEN_LOCKED = 548; // 9:08 AM IST — auction prices mostly fixed
+const T_MARKET_OPEN    = 555; // 9:15 AM IST — real trading starts
+const T_FIRST_CANDLE   = 560; // 9:20 AM IST — first 5-min candle closed
+const T_MARKET_CLOSE   = 930; // 3:30 PM IST
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const MCAP_DB_PATH      = path.join(__dirname, "../../data/marketCapDB.json");
@@ -354,17 +365,18 @@ function getISTDateStr() {
 
 function isMarketOpenWindow() {
   const { totalMins } = getISTTime();
-  return totalMins >= 560 && totalMins <= 575; // 9:20–9:35
+  return totalMins >= T_MARKET_OPEN && totalMins <= T_FIRST_CANDLE;
 }
 
 function isPreOpenWindow() {
   const { totalMins } = getISTTime();
-  return totalMins >= 548 && totalMins <= 560; // 9:08–9:20
+  return totalMins >= T_PREOPEN_LOCKED && totalMins < T_MARKET_OPEN;
 }
 
 function isPreMarket() {
   const { totalMins } = getISTTime();
-  return totalMins >= 540 && totalMins < 555; // 9:00–9:14
+  // Only true before 9:15 — used for banner display only
+  return totalMins >= T_MARKET_START && totalMins < T_MARKET_OPEN;
 }
 
 // Market hours: 9:00 AM to 3:30 PM IST, Mon–Fri
@@ -373,14 +385,16 @@ function isMarketHours() {
   const day = nowIST.getDay();
   if (day === 0 || day === 6) return false;
   const { totalMins } = getISTTime();
-  return totalMins >= 540 && totalMins <= 930; // 9:00–15:30
+  return totalMins >= T_MARKET_START && totalMins <= T_MARKET_CLOSE;
 }
 
 function shouldScanNow() {
   return isMarketHours();
 }
 
-// ── FIX-3: normaliseNSE with pre-market stale guard ───────────────────────────
+// ── FIX-2: normaliseNSE — stale guard fixed ───────────────────────────────────
+// Stale only before 9:08 AM. After 9:08 auction prices are locked.
+// prevClose comes from Upstox stream ltpc.cp — not from NSE response.
 function normaliseNSE(s) {
   if (!s.symbol || !s.lastPrice) return null;
   const ltp = parseFloat(s.lastPrice || 0);
@@ -402,12 +416,14 @@ function normaliseNSE(s) {
 
   const volume = parseInt(s.totalTradedVolume || 0, 10);
 
-  // FIX-3: Mark ALL stocks as stale during pre-market (9:00–9:14).
-  // NSE pre-open auction prices are indicative, not real traded prices.
-  // Also mark volume=0 + changePct=0 rows as stale (no trades at all).
   const { totalMins: nowMins } = getISTTime();
-  const isPreOpenTime  = nowMins >= 540 && nowMins < 555; // 9:00–9:14
-  const isStalePreopen = isPreOpenTime || (volume === 0 && changePct === 0);
+
+  // FIX-2: Only stale before 9:08 AM or if truly no data at all.
+  // From 9:08 onward, NSE auction prices are mostly locked — show gainers/losers.
+  // prevClose for live price ticks comes from Upstox stream ltpc.cp field.
+  const isStalePreopen =
+    (nowMins >= T_MARKET_START && nowMins < T_PREOPEN_LOCKED) // 9:00–9:07 too early
+    || (volume === 0 && changePct === 0 && nowMins < T_PREOPEN_LOCKED); // truly no data
 
   return {
     symbol:    s.symbol,
@@ -429,7 +445,7 @@ function normaliseNSE(s) {
   };
 }
 
-// ── FIX-3: normaliseBSE with pre-market stale guard ───────────────────────────
+// ── FIX-2: normaliseBSE — same stale guard fix ────────────────────────────────
 function normaliseBSE(s) {
   const symbol =
     s.NSE_Symbol || s.NseSymbol || s.nseSymbol ||
@@ -458,10 +474,12 @@ function normaliseBSE(s) {
 
   const volume = parseInt(s.TotalVolume || s.Volume || s.TotalTradedVolume || 0, 10);
 
-  // FIX-3: Same pre-market stale guard for BSE
   const { totalMins: nowMins } = getISTTime();
-  const isPreOpenTime  = nowMins >= 540 && nowMins < 555;
-  const isStalePreopen = isPreOpenTime || (volume === 0 && changePct === 0);
+
+  // FIX-2: Same fix as NSE — stale only before 9:08
+  const isStalePreopen =
+    (nowMins >= T_MARKET_START && nowMins < T_PREOPEN_LOCKED)
+    || (volume === 0 && changePct === 0 && nowMins < T_PREOPEN_LOCKED);
 
   return {
     symbol:    symbol.toUpperCase(), name, ltp, volume,
@@ -525,7 +543,7 @@ function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
     const rawChangePct = (rawChange / pc) * 100;
     stock.change       = Math.round(rawChange * 100) / 100;
     stock.changePct    = sanitiseChangePct(rawChangePct, price, pc);
-    stock._stalePreopen = false; // now has live data
+    stock._stalePreopen = false; // live data received — no longer stale
   } else if (changePct != null && Math.abs(changePct) <= CHANGE_PCT_SANITY_CAP) {
     stock.changePct = Math.round(changePct * 100) / 100;
     if (change != null) stock.change = change;
@@ -534,32 +552,183 @@ function applyLiveTick({ symbol, price, changePct, change, prevClose }) {
   emitBinaryScannerTick(stock);
 }
 
-// ── FIX-1: Force re-scan at 9:15:30 IST ──────────────────────────────────────
-// Pre-market scan at 9:08 uses NSE auction/indicative prices.
-// This fires 30s after market open with real traded prices and recomputes
-// entry/sl/tp from actual 9:15 open candle, not pre-open auction price.
+// ── FIX-5: Re-build rankings without re-fetching NSE/BSE ─────────────────────
+// Called at 9:20 after signals computed — just re-sorts existing stockBySymbol.
+function _rebuildRankings() {
+  if (stockBySymbol.size === 0) return;
+
+  const stocks       = [...stockBySymbol.values()];
+  const tradedStocks = stocks.filter(s => !s._stalePreopen);
+  const sorted       = [...tradedStocks].sort((a, b) => b.changePct - a.changePct);
+
+  scanCache.gainers    = sorted.filter(s => s.changePct > 0).slice(0, 20);
+  scanCache.losers     = [...sorted].reverse().filter(s => s.changePct < 0).slice(0, 20);
+  scanCache.updatedAt  = Date.now();
+  scanCache.isPremarket = false; // market is fully open now
+
+  // Rebuild sector
+  const sectorMap = {};
+  for (const s of stocks) {
+    if (!s.sector) continue;
+    if (!sectorMap[s.sector]) sectorMap[s.sector] = [];
+    sectorMap[s.sector].push(s);
+  }
+  scanCache.bySector = Object.entries(sectorMap).map(([sector, ss]) => ({
+    sector,
+    avgChange: Math.round((ss.reduce((sum, s) => sum + s.changePct, 0) / ss.length) * 100) / 100,
+    advancing: ss.filter(s => s.changePct > 0).length,
+    declining: ss.filter(s => s.changePct < 0).length,
+    total:     ss.length,
+    topGainer: [...ss].sort((a, b) => b.changePct - a.changePct)[0],
+  })).sort((a, b) => b.avgChange - a.avgChange);
+
+  const ws = getWS();
+  if (ws?.updateScannerTick) {
+    for (const s of stocks) emitBinaryScannerTick(s);
+  } else if (ioRef) {
+    ioRef.emit("scanner-update", buildPayload(scanCache));
+  }
+
+  console.log(`📊 Rankings rebuilt at 9:20 — ${scanCache.gainers.length} gainers, ${scanCache.losers.length} losers`);
+}
+
+// ── FIX-5: 9:20 targeted signal scan — no full NSE/BSE re-fetch ───────────────
+// Only fetches 5-min candles for top priority stocks and computes signals.
+// Upstox stream already has prevClose from ltpc.cp — no dependency on NSE here.
+async function runSignalScanOnly() {
+  console.log("📊 9:20 SIGNAL SCAN — computing technicals from first 5-min candle");
+
+  if (stockBySymbol.size === 0) {
+    console.warn("📊 stockBySymbol empty — falling back to full scan");
+    await runScanner();
+    return;
+  }
+
+  // Priority: gainers + losers + large caps (most watched by users)
+  const prioritySymbols = [
+    ...(scanCache.gainers          || []).map(s => s.symbol),
+    ...(scanCache.losers           || []).map(s => s.symbol),
+    ...(scanCache.byMcap?.largecap || []).slice(0, 40).map(s => s.symbol),
+    ...(scanCache.byMcap?.midcap   || []).slice(0, 20).map(s => s.symbol),
+  ].filter((sym, i, arr) => arr.indexOf(sym) === i).slice(0, 80);
+
+  console.log(`📊 Computing signals for ${prioritySymbols.length} priority stocks`);
+
+  const BATCH_SIZE = 5;
+  const techBatch  = [];
+
+  for (let i = 0; i < prioritySymbols.length; i += BATCH_SIZE) {
+    const batch = prioritySymbols.slice(i, i + BATCH_SIZE);
+
+    const batchResults = await Promise.allSettled(
+      batch.map(async (sym) => {
+        try {
+          // 5-min candles for intraday signal
+          const candles5 = await fetchCandles(sym, 10, "5min");
+          if (candles5 && candles5.length >= 20) {
+            const tech5 = computeTechnicals(sym, candles5);
+            if (tech5) {
+              tech5.timeframe = "5min";
+              setTechCache(`${sym}:5min`, tech5);
+              techBatch.push({ key: `${sym}:5min`, data: tech5 });
+            }
+          }
+
+          // 1-day candles for daily signal (RSI/MACD/MA already cached usually)
+          const cacheKey1d = `${sym}:1day`;
+          if (!techCache.get(cacheKey1d)) {
+            const candles1d = await fetchCandles(sym, 365, "1day");
+            if (candles1d && candles1d.length >= 20) {
+              const tech1d = computeTechnicals(sym, candles1d);
+              if (tech1d) {
+                tech1d.timeframe = "1day";
+                setTechCache(cacheKey1d, tech1d);
+                techBatch.push({ key: cacheKey1d, data: tech1d });
+              }
+            }
+          }
+
+          return sym;
+        } catch (e) {
+          console.warn(`📊 Signal scan failed [${sym}]:`, e.message);
+          return null;
+        }
+      })
+    );
+
+    const succeeded = batchResults.filter(r => r.status === "fulfilled" && r.value).length;
+    console.log(`📊 Signal batch ${Math.floor(i/BATCH_SIZE)+1}: ${succeeded}/${batch.length} ok`);
+
+    // Small delay between batches — don't hammer NSE
+    await new Promise(r => setTimeout(r, 200));
+  }
+
+  // Emit all computed tech data to frontend in one batch
+  if (techBatch.length > 0) {
+    const ws = getWS();
+    if (ws?.emitTechBatch) ws.emitTechBatch(techBatch);
+    else if (ioRef) ioRef.to("scanner").emit("scanner-tech-batch", techBatch);
+    console.log(`📊 Emitted ${techBatch.length} tech entries to frontend`);
+  }
+
+  // Re-sort rankings using live prices (no re-fetch needed)
+  _rebuildRankings();
+
+  // Trigger backtest capture now that we have real signals
+  tryBacktestCapture([...stockBySymbol.values()]);
+
+  console.log(`📊 ✅ 9:20 signal scan complete — entry/sl/tp now from real 5-min candle`);
+}
+
+// ── FIX-4: Schedule pre-open scan at exactly 9:08 AM ─────────────────────────
+function _schedulePreopenScan() {
+  const nowIST = getISTNow();
+  const { totalMins } = getISTTime();
+
+  // Already past 9:08 — no need
+  if (totalMins >= T_PREOPEN_LOCKED) return;
+
+  // Before 9:00 — normal scheduler handles market open
+  if (totalMins < T_MARKET_START) return;
+
+  // We are 9:00–9:07 — schedule scan at exactly 9:08
+  const target = new Date(nowIST);
+  target.setHours(9, 8, 0, 0);
+  const msUntil = Math.max(0, target.getTime() - nowIST.getTime());
+
+  console.log(`📊 Pre-open scan scheduled at 9:08 AM in ${Math.round(msUntil/1000)}s`);
+
+  setTimeout(async () => {
+    console.log("📊 ⚡ 9:08 AM — fetching auction prices for gainers/losers");
+    await runScanner();
+    // Note: scheduleNextRun() already set from startMarketScanner
+    // _scheduleMarketOpenRun() handles 9:20 signal scan
+  }, msUntil);
+}
+
+// ── FIX-3: Force signal scan at 9:20 (first 5-min candle closed) ─────────────
 function _scheduleMarketOpenRun() {
   const nowIST = getISTNow();
   const { totalMins } = getISTTime();
 
-  // Only schedule if we're before 9:15 right now
-  if (totalMins >= 555) {
-    console.log("📊 Market open run: already past 9:15, skipping schedule");
+  // Already past 9:20
+  if (totalMins >= T_FIRST_CANDLE) {
+    console.log("📊 Already past 9:20 — skipping signal scan schedule");
     return;
   }
 
   const target = new Date(nowIST);
-  target.setHours(9, 15, 30, 0); // 9:15:30 AM IST
+  target.setHours(9, 20, 0, 0); // 9:20 AM IST — first 5-min candle closed
   const msUntil = target.getTime() - nowIST.getTime();
   if (msUntil <= 0) return;
 
-  console.log(`📊 🔔 Market open run scheduled in ${Math.round(msUntil/1000)}s (9:15:30 IST)`);
+  console.log(`📊 🔔 Signal scan scheduled at 9:20 AM in ${Math.round(msUntil/1000)}s`);
+
   setTimeout(async () => {
-    console.log("📊 🔔 MARKET OPEN — clearing techCache + running fresh scan");
-    // Clear techCache so entry/sl/tp are recomputed with real 9:15 open price
-    techCache.clear();
-    await runScanner();
-    console.log("📊 ✅ Market open scan complete — entry/sl/tp now use real open prices");
+    console.log("📊 🔔 9:20 AM — first 5-min candle ready, running signal scan");
+    techCache.clear(); // force recompute with real open prices
+    await runSignalScanOnly(); // targeted — no full NSE/BSE re-fetch
+    console.log("📊 ✅ 9:20 signal scan complete");
   }, msUntil);
 }
 
@@ -578,19 +747,31 @@ function maybeResetForNewDay() {
     stockBySymbol.clear();
     techCache.clear();
     lastBacktestCapture = "";
-    console.log("📊 Scanner: cache cleared for new trading day");
+
+    // Also clear Upstox stream prevClose cache so fresh ltpc.cp is used
+    try {
+      const { resetDailyCache } = require("../upstoxStream");
+      if (typeof resetDailyCache === "function") {
+        resetDailyCache();
+        console.log("📊 Scanner: Upstox prevCloseCache cleared for new day");
+      }
+    } catch (e) {
+      console.warn("📊 Could not reset upstoxStream cache:", e.message);
+    }
+
+    console.log("📊 Scanner: all caches cleared for new trading day");
   }
   _lastScanDate = today;
 }
 
-// ── FIX-4: Smart scheduler with pre-market → 9:15:30 jump ────────────────────
+// ── FIX-4: Smart scheduler ────────────────────────────────────────────────────
 function scheduleNextRun() {
   if (_scanTimer) { clearTimeout(_scanTimer); _scanTimer = null; }
 
   const nowIST = getISTNow();
   const { totalMins } = getISTTime();
 
-  // If market hours: run every 5 min
+  // Market hours: run every 5 min
   if (shouldScanNow()) {
     _scanTimer = setTimeout(async () => {
       await runScanner();
@@ -599,17 +780,29 @@ function scheduleNextRun() {
     return;
   }
 
-  // FIX-4: If in pre-market window (9:00–9:14), jump directly to 9:15:30
-  // instead of waiting for a full SCAN_INTERVAL, so first real-market
-  // scan happens right at market open, not up to 5 min late.
-  if (totalMins >= 540 && totalMins < 555) {
+  // Pre-market window 9:00–9:07: schedule jump to 9:08 pre-open scan
+  if (totalMins >= T_MARKET_START && totalMins < T_PREOPEN_LOCKED) {
     const target = new Date(nowIST);
-    target.setHours(9, 15, 30, 0);
+    target.setHours(9, 8, 0, 0);
     const msUntil = Math.max(0, target.getTime() - nowIST.getTime());
-    console.log(`📊 Pre-market: fresh scan at 9:15:30 IST in ${Math.round(msUntil/1000)}s`);
+    console.log(`📊 Pre-market 9:00–9:07: gainers scan at 9:08 in ${Math.round(msUntil/1000)}s`);
     _scanTimer = setTimeout(async () => {
-      techCache.clear(); // force recompute with real open prices
       await runScanner();
+      scheduleNextRun();
+    }, msUntil);
+    return;
+  }
+
+  // 9:08–9:19: pre-open prices showing, waiting for 9:20 signal scan
+  // scheduleNextRun after 9:20 scan is handled by _scheduleMarketOpenRun
+  if (totalMins >= T_PREOPEN_LOCKED && totalMins < T_FIRST_CANDLE) {
+    const target = new Date(nowIST);
+    target.setHours(9, 20, 0, 0);
+    const msUntil = Math.max(0, target.getTime() - nowIST.getTime());
+    console.log(`📊 Waiting for 9:20 signal scan in ${Math.round(msUntil/1000)}s`);
+    _scanTimer = setTimeout(async () => {
+      techCache.clear();
+      await runSignalScanOnly();
       scheduleNextRun();
     }, msUntil);
     return;
@@ -619,7 +812,7 @@ function scheduleNextRun() {
   const nextOpen = new Date(nowIST);
   nextOpen.setHours(9, 0, 0, 0);
 
-  if (totalMins > 930) {
+  if (totalMins > T_MARKET_CLOSE) {
     nextOpen.setDate(nextOpen.getDate() + 1);
   }
 
@@ -882,7 +1075,9 @@ function calcMASummary(closes, ltp) {
   return { buy, sell, neutral, total: buy + sell + neutral, summary, emas: mas };
 }
 
-// ── FIX-2: computeTechnicals — suppress signals during pre-market ─────────────
+// ── FIX-3: computeTechnicals — split suppression ──────────────────────────────
+// RSI, MACD, MA shown from 9:08 (use daily candles already cached).
+// Entry/SL/TP suppressed until 9:20 (need real 5-min candle open price).
 function computeTechnicals(symbol, candles) {
   if (!candles || candles.length < 20) return null;
   const closes = candles.map(c => c.c);
@@ -962,17 +1157,18 @@ function computeTechnicals(symbol, candles) {
   const volRatio  = avgVol > 0 ? Math.round((latestVol / avgVol) * 100) / 100 : 1;
   const sig       = score >= 60 ? (score >= 75 ? "STRONG BUY" : "BUY") : score <= 40 ? (score <= 25 ? "STRONG SELL" : "SELL") : "HOLD";
 
-  // FIX-2: During pre-market (9:00–9:14), suppress signals and nullify entry/sl/tp.
-  // Prices are auction/indicative only — wrong entry/sl/tp mislead traders.
-  // At 9:15:30 the forced re-scan fires with techCache cleared, recomputing everything.
   const { totalMins: nowMins } = getISTTime();
-  const isPreMarketNow = nowMins >= 540 && nowMins < 555; // 9:00–9:14
 
-  const finalSignal = isPreMarketNow ? "HOLD"       : sig;
-  const finalEntry  = isPreMarketNow ? null         : entry;
-  const finalSL     = isPreMarketNow ? null         : sl;
-  const finalTP     = isPreMarketNow ? null         : tp2;
-  const finalType   = isPreMarketNow ? "PRE_MARKET" : entryType;
+  // FIX-3: Only suppress entry/sl/tp until 9:20 (first 5-min candle).
+  // RSI, MACD, MA are computed from daily candles — always valid.
+  // Signal badge suppressed too (needs real open to be meaningful).
+  const suppressTradeLevels = nowMins >= T_MARKET_START && nowMins < T_FIRST_CANDLE;
+
+  const finalSignal = suppressTradeLevels ? "HOLD"      : sig;
+  const finalEntry  = suppressTradeLevels ? null        : entry;
+  const finalSL     = suppressTradeLevels ? null        : sl;
+  const finalTP     = suppressTradeLevels ? null        : tp2;
+  const finalType   = suppressTradeLevels ? "WAIT 9:20" : entryType;
 
   return {
     symbol, ltp,
@@ -981,6 +1177,7 @@ function computeTechnicals(symbol, candles) {
     target: finalTP, stopLoss: finalSL, price: finalEntry,
     techScore: score,
     entryType: finalType, gapPct,
+    // RSI, MACD, MA always returned — shown from 9:08 onwards
     emas: maSumm.emas || { ema5: calcEMA(closes, 5), ema9: calcEMA(closes, 9), ema21: calcEMA(closes, 21), ema50: calcEMA(closes, 50), ema200: calcEMA(closes, 200) },
     rsi, stochastic: stoch ? { k: stoch.k, d: stoch.d } : null, williamsR: willR,
     macd, bollingerBands: bb, atr: atr ? Math.round(atr * 100) / 100 : null,
@@ -1045,9 +1242,7 @@ function resampleCandles(candles1min, targetMinutes) {
   return buckets;
 }
 
-// ── FIX-5: fetchCandles — no self-HTTP, direct NSE fallbacks only ─────────────
-// Self-HTTP (localhost:PORT) fails on Render during startup before server is ready.
-// We go directly to NSE historical API (no auth needed) and NSE intraday fallback.
+// ── fetchCandles — no self-HTTP, direct NSE fallbacks ────────────────────────
 async function fetchCandles(symbol, days, interval) {
   const INTERVAL_TO_TF = {
     "5min":    "5min",  "15min":   "15min", "1hour":   "1hour",
@@ -1058,7 +1253,7 @@ async function fetchCandles(symbol, days, interval) {
 
   const tf = INTERVAL_TO_TF[interval] || "1day";
 
-  // ── NSE historical fallback (works without Upstox token) ─────────────────
+  // ── NSE historical (works without Upstox token) ───────────────────────────
   if (["1day","1week","1month"].includes(tf)) {
     await refreshNSECookie();
     try {
@@ -1117,27 +1312,8 @@ async function getTechnicalsForTimeframe(symbol, timeframe = "1day") {
   const cached   = techCache.get(cacheKey);
   if (cached && Date.now() - cached.computedAt < cfg.ttl) return cached;
 
-  // Try Upstox candle endpoint first (handles ALL symbols via instrument key resolution)
-  let candles = [];
-  try {
-    const PORT = process.env.PORT || 10000;
-    const res  = await axios.get(
-      `http://localhost:${PORT}/api/candles/${encodeURIComponent(symbol)}?tf=${cfg.interval}&days=${cfg.days}`,
-      { timeout: 20000 }
-    );
-    if (res.data?.ok && Array.isArray(res.data.candles) && res.data.candles.length >= 5) {
-      candles = res.data.candles.map(c => ({
-        o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume || 0
-      }));
-    }
-  } catch (e) {
-    console.warn(`📊 [${symbol}][${timeframe}] Upstox candle fetch failed: ${e.message}`);
-  }
-
-  // Fallback to NSE if Upstox failed
-  if (candles.length < 20) {
-    candles = await fetchCandles(symbol, cfg.days, cfg.interval);
-  }
+  // Fallback to NSE directly
+  const candles = await fetchCandles(symbol, cfg.days, cfg.interval);
 
   if (!candles || candles.length < 20) return null;
   const result = computeTechnicals(symbol, candles);
@@ -1188,8 +1364,8 @@ async function preWarmTechCache(symbols) {
           const last = result._candles[result._candles.length - 1];
           const prev = result._candles[result._candles.length - 2];
           if (last && last.close > 0) {
-  // DO NOT overwrite stock.ltp — candle close is prev day close, not live price
-  if (!stock._prevCloseFromExchange && prev && prev.close > 0) stock.prevClose = prev.close;
+            // DO NOT overwrite stock.ltp — candle close is prev day close, not live price
+            if (!stock._prevCloseFromExchange && prev && prev.close > 0) stock.prevClose = prev.close;
             const pc = stock.prevClose;
             if (pc && pc > 0) {
               const rawPct    = ((last.close - pc) / pc) * 100;
@@ -1216,6 +1392,7 @@ async function preWarmTechCache(symbols) {
   }
   console.log(`📊 Pre-warm done: ${warmed}/${symbols.length} | techCache size: ${techCache.size}`);
 }
+
 async function preWarmWithMemoryGuard(symbols) {
   for (const sym of symbols) {
     const mb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
@@ -1224,15 +1401,8 @@ async function preWarmWithMemoryGuard(symbols) {
       break;
     }
     try {
-      const PORT = process.env.PORT || 10000;
-      const res  = await axios.get(
-        `http://localhost:${PORT}/api/candles/${encodeURIComponent(sym)}?tf=1day&days=365`,
-        { timeout: 20000 }
-      );
-      if (res.data?.ok && res.data.candles?.length >= 20) {
-        const candles = res.data.candles.map(c => ({
-          o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume || 0
-        }));
+      const candles = await fetchCandles(sym, 365, "1day");
+      if (candles && candles.length >= 20) {
         const result = computeTechnicals(sym, candles);
         if (result) {
           result.timeframe = "1day";
@@ -1244,6 +1414,7 @@ async function preWarmWithMemoryGuard(symbols) {
   }
   console.log(`📊 Background pre-warm done: techCache=${techCache.size}`);
 }
+
 function buildPayload(cache) {
   const premarket = cache.isPremarket || false;
   return {
@@ -1274,7 +1445,7 @@ function tryBacktestCapture(stocks) {
     const { subscribeStocksForBacktest } = require("../upstoxStream");
     const now  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
     const mins = now.getHours() * 60 + now.getMinutes();
-    if (mins < 555 || mins > 920) return;
+    if (mins < T_FIRST_CANDLE || mins > 920) return; // only after 9:20
     const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
     if (lastBacktestCapture === todayKey) return;
     const signals  = [];
@@ -1332,13 +1503,13 @@ async function runScanner() {
     stockBySymbol.clear();
     for (const s of stocks) stockBySymbol.set(s.symbol, s);
 
-    // FIX-3: All pre-market stocks are stale — exclude from gainers/losers
+    // FIX-2: Only exclude truly stale stocks from gainers/losers
+    // From 9:08 onward _stalePreopen is false so tradedStocks = all stocks
     const tradedStocks = stocks.filter(s => !s._stalePreopen);
     const staleCount   = stocks.length - tradedStocks.length;
-    if (staleCount > 0) console.log(`📊 ${premarket ? "Pre-market" : "Pre-open"}: ${staleCount} stocks excluded from gainers/losers`);
+    if (staleCount > 0) console.log(`📊 ${staleCount} stocks excluded (pre-open not yet locked)`);
 
-    const rankingStocks = tradedStocks; // always use only non-stale for ranking
-    const sorted  = [...rankingStocks].sort((a, b) => b.changePct - a.changePct);
+    const sorted  = [...tradedStocks].sort((a, b) => b.changePct - a.changePct);
     const gainers = sorted.filter(s => s.changePct > 0).slice(0, 20);
     const losers  = [...sorted].reverse().filter(s => s.changePct < 0).slice(0, 20);
 
@@ -1347,6 +1518,7 @@ async function runScanner() {
     for (const b of Object.keys(byMcap)) byMcap[b].sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct));
 
     console.log(`📊 Buckets — Large:${byMcap.largecap.length} Mid:${byMcap.midcap.length} Small:${byMcap.smallcap.length} Micro:${byMcap.microcap.length}`);
+    console.log(`📊 Gainers: ${gainers.length} | Losers: ${losers.length} | stale excluded: ${staleCount}`);
 
     let bySector;
     {
@@ -1394,7 +1566,7 @@ async function runScanner() {
       console.log(`📊 Scanner: subscribed ${topSymbols.length} stocks for live ticks`);
     } catch (e) { console.error("📊 Scanner: stock subscription FAILED —", e.message); }
 
-    // FIX-6: Cap pre-warm at 100 symbols to stay under Render 512MB limit
+    // FIX-7: Cap pre-warm at 50 symbols immediately, 150 background
     const toWarm = [
       ...gainers.map(s => s.symbol),
       ...losers.map(s => s.symbol),
@@ -1410,8 +1582,10 @@ async function runScanner() {
     if (preWarmTimer) clearTimeout(preWarmTimer);
     preWarmTimer = setTimeout(() => {
       preWarmTechCache(toWarm).then(() => {
-        tryBacktestCapture(toWarm.map(sym => stocks.find(s => s.symbol === sym)).filter(Boolean));
-        // Start background warm after tier 1 done — with memory guard
+        // Only capture backtest after 9:20 when real signals exist
+        if (getISTTime().totalMins >= T_FIRST_CANDLE) {
+          tryBacktestCapture(toWarm.map(sym => stocks.find(s => s.symbol === sym)).filter(Boolean));
+        }
         setTimeout(() => preWarmWithMemoryGuard(toWarmBackground), 3 * 60 * 1000);
       });
     }, PREWARM_DELAY);
@@ -1475,22 +1649,33 @@ function startMarketScanner(io) {
 
   _lastScanDate = "";
 
+  const { totalMins } = getISTTime();
+
   if (shouldScanNow()) {
     console.log("📊 Market Scanner starting — market is open, running immediately");
     runScanner().then(() => {
       scheduleNextRun();
-      // FIX-1: Schedule forced re-scan at 9:15:30 with real open prices
-      _scheduleMarketOpenRun();
+      // If between 9:08–9:19, schedule 9:20 signal scan
+      if (totalMins >= T_PREOPEN_LOCKED && totalMins < T_FIRST_CANDLE) {
+        _scheduleMarketOpenRun();
+      }
     });
   } else {
     maybeResetForNewDay();
-    console.log("📊 Market Scanner starting — market closed, scheduling next open run");
+    console.log("📊 Market Scanner starting — market closed, scheduling");
     scheduleNextRun();
-    // FIX-1: If we're in pre-market right now, also schedule the 9:15:30 run
+
+    // If between 9:00–9:07, schedule pre-open scan at 9:08
+    _schedulePreopenScan();
+
+    // Schedule signal scan at 9:20
     _scheduleMarketOpenRun();
   }
 
-  console.log("📊 Market Scanner started (smart scheduler + market-open forced re-scan active)");
+  console.log("📊 Market Scanner started");
+  console.log(`📊   → Gainers/Losers: 9:08 AM (auction locked)`);
+  console.log(`📊   → RSI/MACD/MA:    9:08 AM (from daily candles)`);
+  console.log(`📊   → Entry/SL/TP:    9:20 AM (first 5-min candle)`);
 }
 
 function getScannerData()                { return scanCache; }

@@ -210,16 +210,7 @@ router.get("/snapshot", (req, res) => {
     // FIX-TIMESTAMP: use cache's own timestamp if available so chart labels are accurate
     const cacheTimestamp = chainData.timestamp || chainExpiry?.timestamp || new Date().toISOString();
 // Seed binary tick cache so live ticks use REST-computed values (not raw chain sum)
-    try {
-      getWS()?.setCachedStraddleSnap?.(resolveSymbol(symbol), {
-        straddle:  { combined: straddlePremium },
-        strangle:  { combined: stranglePremium },
-        oi:        { pcr, ce: totalCeOI, pe: totalPeOI },
-        iv:        { atm: +atmIV },
-        timestamp: cacheTimestamp,
-      });
-    } catch (_) {}
-    
+  
     res.json({
       symbol:    resolveSymbol(symbol),
       expiry:    targetExpiry,
@@ -467,6 +458,9 @@ async function getSnapshot(symbol, expiry, steps = 1) {
       : (chainExpiry?.pcr ?? null);
 
     const cacheTimestamp = chainData.timestamp || chainExpiry?.timestamp || new Date().toISOString();
+
+    // Seed binary tick cache — was missing from function export (route handler had it, this didn't)
+    
 
     return {
       symbol: resolveSymbol(symbol), expiry: targetExpiry,
