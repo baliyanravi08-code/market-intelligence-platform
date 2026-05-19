@@ -72,9 +72,11 @@ const INTEL_SYMBOL_MAP  = {
   "NIFTY 50":   "NIFTY",
   "BANK NIFTY": "BANKNIFTY",
   "SENSEX":     "SENSEX",
-  // FINNIFTY and MIDCPNIFTY tick via NIFTY 50 feed — mapped separately below
-  // These are triggered from nseOIListener, not upstox index stream
 };
+
+// Symbols that have no dedicated index feed — emit their intel tick
+// on every NIFTY tick instead (same exchange, close enough timing)
+const NIFTY_PROXY_SYMBOLS = ["FINNIFTY", "MIDCPNIFTY"];
 const optionInstruments   = new Set();
 const stockInstruments    = new Set();
 const stockInstrumentKeys = new Set();
@@ -321,12 +323,17 @@ function parseAndEmit(raw) {
 
             if (typeof ltpTickHandler === "function") ltpTickHandler(GANN_SYMBOL_MAP[name] || name, price);
 
-            // Options Intel live tick → also goes to straddle room via emitOptionsIntelTick
+            // Options Intel live tick → straddle room
             const intelSym = INTEL_SYMBOL_MAP[name];
-            if (intelSym) {
-              const ws = getWS();
-              if (ws?.emitOptionsIntelTick) {
-                ws.emitOptionsIntelTick(intelSym, price);
+            const ws = getWS();
+            if (intelSym && ws?.emitOptionsIntelTick) {
+              ws.emitOptionsIntelTick(intelSym, price);
+            }
+            // FINNIFTY + MIDCPNIFTY have no Upstox index feed.
+            // Piggyback on NIFTY 50 tick to push their straddle updates.
+            if (name === "NIFTY 50" && ws?.emitOptionsIntelTick) {
+              for (const proxySym of NIFTY_PROXY_SYMBOLS) {
+                ws.emitOptionsIntelTick(proxySym, price);
               }
             }
           }

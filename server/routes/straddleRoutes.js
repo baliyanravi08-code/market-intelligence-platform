@@ -312,14 +312,64 @@ router.get("/payoff", (req, res) => {
 router.get("/history", (req, res) => {
   try {
     const { symbol = "NIFTY" } = req.query;
+    const key = resolveSymbol(symbol);
+
+    // 1. Try live disk history first (written every minute during market hours)
     const liveBookPath = path.join(__dirname, "../data/liveOrderBook.json");
     if (fs.existsSync(liveBookPath)) {
       const raw     = JSON.parse(fs.readFileSync(liveBookPath, "utf8"));
-      const key     = resolveSymbol(symbol);
       const history = raw[key]?.straddleHistory || raw[symbol]?.straddleHistory || [];
-      return res.json({ symbol: key, history });
+      if (history.length > 0) {
+        return res.json({ symbol: key, history });
+      }
     }
-    res.json({ symbol: resolveSymbol(symbol), history: [] });
+
+    // 2. Fallback — build a single seed point from optionChainCache.json
+    // This gives the chart at least one correct starting point on fresh restart
+    const cache = readCache();
+    if (cache) {
+      const chainData = getChainData(cache, symbol);
+      if (chainData) {
+        const spotPrice  = chainData.spotPrice || 0;
+        const rawExp     = chainData.expiries || Object.keys(chainData.chains || {});
+        const expiries   = filterExpiredExpiries(rawExp);
+        const nearExpiry = expiries[0] || rawExp[0];
+        const chainExp   = chainData.chains?.[nearExpiry];
+        const strikesArr = chainExp?.strikes || [];
+        if (strikesArr.length) {
+          const strikes   = strikesArr.map(s => s.strike).sort((a, b) => a - b);
+          const atmStrike = chainExp.atmStrike || findATMStrike(strikes, spotPrice);
+          const atmRow    = strikesArr.find(s => s.strike === atmStrike);
+          if (atmRow) {
+            const straddle = (atmRow?.ce?.ltp ?? 0) + (atmRow?.pe?.ltp ?? 0);
+            const atmIdx   = strikes.indexOf(atmStrike);
+            const scRow    = strikesArr.find(s => s.strike === strikes[atmIdx + 1]) || {};
+            const spRow    = strikesArr.find(s => s.strike === strikes[atmIdx - 1]) || {};
+            const strangle = (scRow?.ce?.ltp ?? 0) + (spRow?.pe?.ltp ?? 0);
+            if (straddle > 0) {
+              // Use market open as time for seed point
+              const now = new Date();
+              const istTime = now.toLocaleTimeString("en-IN", {
+                hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata",
+              });
+              return res.json({
+                symbol: key,
+                history: [{
+                  ts:       now.getTime(),
+                  time:     istTime,
+                  straddle: Math.round(straddle * 100) / 100,
+                  strangle: Math.round(strangle * 100) / 100,
+                  spot:     spotPrice,
+                  pcr:      null,
+                }],
+              });
+            }
+          }
+        }
+      }
+    }
+
+    res.json({ symbol: key, history: [] });
   } catch (err) {
     console.error("[straddleRoutes] /history error:", err);
     res.status(500).json({ error: "Internal server error" });

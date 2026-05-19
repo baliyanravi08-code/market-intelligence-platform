@@ -120,6 +120,15 @@ function updateLiveStraddlePrice(symbol, straddlePrice) {
     straddlePrice,
     timestamp: Date.now(),
   });
+  // Persist every live ATM tick to disk history (1 entry per minute)
+  _persistStraddleTick(
+    sym,
+    straddlePrice,
+    existing.stranglePrice || 0,
+    existing.spotPrice     || 0,
+    existing.pcr           ?? null,
+    Date.now()
+  );
 }
 
 function getCachedStraddleSnap(symbol) {
@@ -766,6 +775,11 @@ function attachSocketIO(server) {
         const intel = _intelCache.get(sym);
         const d     = intel?.data || intel || {};
 
+        // Only send if this is a LIVE price (set by updateLiveStraddlePrice)
+        // not a stale disk seed. Live prices have timestamp within last 5 minutes.
+        const isLive = snap.timestamp && (Date.now() - snap.timestamp) < 5 * 60 * 1000;
+        if (!isLive) continue;
+
         socket.emit("options-intel-tick", {
           symbol:       sym,
           spotPrice:    d?.spot ?? d?.spotPrice ?? 0,
@@ -774,12 +788,11 @@ function attachSocketIO(server) {
           atmIV:        snap.atmIV ?? 0,
           score:        d?.score ?? 50,
           bias:         d?.bias  ?? "NEUTRAL",
-          ts:           Date.now(), // ← live time, not stale cache timestamp
+          ts:           Date.now(),
           totalCallOI:  snap.totalCallOI ?? 0,
           totalPutOI:   snap.totalPutOI  ?? 0,
           pcr:          snap.pcr ?? null,
         });
-        // Also send options-intelligence for payoff chart only
         if (intel) socket.emit("options-intelligence", intel);
       }
 

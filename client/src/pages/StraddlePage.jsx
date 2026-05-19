@@ -467,22 +467,34 @@ export default function StraddlePage({ socket }) {
         // until tomorrow when real market-hours timestamps come in.
         cacheTimeRef.current = snapshotLabel || clampToMarket(currentIST());
 
-        // Only seed chart from snapshot if history is empty (no disk entries yet).
-        // If history already has entries, don't add a duplicate REST snapshot point.
         const seedStraddle = data.straddle?.combined ?? null;
         const seedStrangle = data.strangle?.combined ?? null;
-        if (seedStraddle != null && historyTicks.length === 0) {
-          historyTicks.push({
-            time:     cacheTimeRef.current,
-            straddle: seedStraddle,
-            strangle: seedStrangle,
-          });
-          lastKnownMinRef.current = cacheTimeRef.current;
-        } else if (historyTicks.length > 0) {
-          lastKnownMinRef.current = historyTicks[historyTicks.length - 1].time;
+
+        // Always add current snapshot as the most recent point using NOW as time
+        // This ensures chart always has at least one correct current point
+        const nowLabel = clampToMarket(currentIST());
+        const snapPoint = seedStraddle != null ? {
+          time:     nowLabel,
+          straddle: seedStraddle,
+          strangle: seedStrangle,
+        } : null;
+
+        // Merge history first, then overlay snapshot at current time
+        const allTicks = [...historyTicks];
+        if (snapPoint) {
+          // Remove any existing entry at same minute to avoid duplicate
+          const filtered = allTicks.filter(t => t.time !== nowLabel);
+          filtered.push(snapPoint);
+          allTicks.length = 0;
+          allTicks.push(...filtered);
         }
 
-        setPremHistory(() => mergeIntoSlots(buildFullMarketSlots(), historyTicks));
+        if (allTicks.length > 0) {
+          lastKnownMinRef.current = allTicks[allTicks.length - 1].time;
+        }
+        cacheTimeRef.current = nowLabel;
+
+        setPremHistory(() => mergeIntoSlots(buildFullMarketSlots(), allTicks));
 
         if (data.expiries?.length && expiryRef.current && !data.expiries.includes(expiryRef.current)) {
           setExpiry(data.expiries[0] || "");
