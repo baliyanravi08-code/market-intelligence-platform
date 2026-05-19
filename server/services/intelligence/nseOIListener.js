@@ -447,21 +447,27 @@ function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
 
   const { nearATM: unusualNearATM, tailRisk: unusualTailRisk } = detectUnusualOI(strikes, spotPrice, name);
 
-  // Export ATM instrument keys so upstoxStream can subscribe live option ticks
+  // Only subscribe ATM for nearest expiry — monthly expiries have different
+  // instrument keys for same strike and would overwrite the live weekly feed.
   const atmRowRaw = sorted.find(s => s.strike_price === atmStrike);
-  const atmInstrumentKeys = {
-    ce: atmRowRaw?.call_options?.instrument_key || null,
-    pe: atmRowRaw?.put_options?.instrument_key  || null,
-    atmStrike,
-    expiry,
-  };
-  // Push to upstoxStream for live subscription
-  try {
-    const stream = require("../upstoxStream");
-    if (stream.updateAtmSubscription) {
-      stream.updateAtmSubscription(name, atmInstrumentKeys);
-    }
-  } catch (_) {}
+  const ceKey = atmRowRaw?.call_options?.instrument_key || null;
+  const peKey = atmRowRaw?.put_options?.instrument_key  || null;
+  const isWeeklyExpiry = (() => {
+    const now = new Date();
+    const [y, m, d] = expiry.split("-").map(Number);
+    const expDate = new Date(y, m - 1, d);
+    const diffDays = Math.round((expDate - now) / 86400000);
+    return diffDays <= 8; // nearest expiry is always ≤8 days away
+  })();
+  if (isWeeklyExpiry && ceKey && peKey) {
+    try {
+      const stream = require("../upstoxStream");
+      if (stream.updateAtmSubscription) {
+        stream.updateAtmSubscription(name, { ce: ceKey, pe: peKey, atmStrike, expiry });
+      }
+    } catch (_) {}
+
+  }
 
   return {
     underlying: name, expiry, spotPrice, pcr, maxPainStrike, support, resistance,

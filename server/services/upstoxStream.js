@@ -110,7 +110,7 @@ function updateAtmSubscription(symbol, { ce, pe, atmStrike, expiry }) {
     console.log(`📡 ATM strike changed ${sym}: ${old.atmStrike}→${atmStrike}`);
   }
 
-  const keepLTP = old && old.atmStrike === atmStrike;
+  const keepLTP = old && old.atmStrike === atmStrike && old.ce === ce && old.pe === pe;
   atmOptionState.set(sym, {
     ce, pe, atmStrike, expiry,
     ceLTP: keepLTP ? (old.ceLTP || 0) : 0,
