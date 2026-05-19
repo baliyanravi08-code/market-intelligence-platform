@@ -587,6 +587,31 @@ function emitOptionsIntel(data) {
     totalPutOI:  d?.oi?.totalPutOI    ?? existing.totalPutOI  ?? 0,
     timestamp:   existing.timestamp   ?? Date.now(),
   });
+ // Seed straddlePrice from ATM CE+PE LTP if live tick hasn't arrived yet.
+  // s.straddlePrice is raw chain sum (wrong). Use ATM row LTP directly.
+  if (!existing.straddlePrice) {
+    try {
+      const straddleRoutes = require("../routes/straddleRoutes");
+      const sym2 = data.symbol.toUpperCase();
+      straddleRoutes.getSnapshot(sym2).then(snap => {
+        if (snap?.straddle?.combined > 0) {
+          const cur3 = _straddleCache.get(sym2) || {};
+          if (!cur3.straddlePrice) {
+            _straddleCache.set(sym2, {
+              ...cur3,
+              straddlePrice: snap.straddle.combined,
+              stranglePrice: snap.strangle?.combined || cur3.stranglePrice || 0,
+              atmIV:   snap.iv?.atm   || cur3.atmIV   || 0,
+              pcr:     snap.oi?.pcr   ?? cur3.pcr ?? null,
+              totalCallOI: snap.oi?.ce ?? cur3.totalCallOI ?? 0,
+              totalPutOI:  snap.oi?.pe ?? cur3.totalPutOI  ?? 0,
+              timestamp: Date.now(),
+            });
+          }
+        }
+      }).catch(() => {});
+    } catch (_) {}
+  }
 }
 function emitCompositeUpdate(data) {
   if (!_io || !data) return;
@@ -775,10 +800,8 @@ function attachSocketIO(server) {
         const intel = _intelCache.get(sym);
         const d     = intel?.data || intel || {};
 
-        // Only send if this is a LIVE price (set by updateLiveStraddlePrice)
-        // not a stale disk seed. Live prices have timestamp within last 5 minutes.
-        const isLive = snap.timestamp && (Date.now() - snap.timestamp) < 5 * 60 * 1000;
-        if (!isLive) continue;
+        // Send if price exists — either live tick OR REST seed from today's session.
+        // Without this, chart is blank until first live tick arrives after restart.
 
         socket.emit("options-intel-tick", {
           symbol:       sym,
@@ -947,5 +970,7 @@ module.exports = {
   emitCompositeUpdate,
   broadcastUpstoxStatus,
   emitOptionsIntel,
+  emitOptionsIntel,
   updateLiveStraddlePrice,
+  _straddleCache,
 };
