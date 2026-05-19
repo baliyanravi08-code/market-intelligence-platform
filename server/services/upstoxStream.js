@@ -80,6 +80,9 @@ const stockInstruments    = new Set();
 const stockInstrumentKeys = new Set();
 const instrKeyToSymbol    = new Map();
 const prevCloseCache      = new Map();
+// ── ATM option live price tracker ─────────────────────────────────────────────
+const atmOptionState   = new Map(); // sym → { ce, pe, atmStrike, expiry, ceLTP, peLTP }
+const atmInstrKeyToSym = new Map(); // instrKey → symbol (NIFTY/BANKNIFTY etc.)
 
 // ── Candle aggregation ────────────────────────────────────────────────────────
 const liveCandleState     = new Map();
@@ -94,6 +97,39 @@ function setInstrumentMapForStream(map) {
   console.log(`📡 upstoxStream: instrument map set — ${Object.keys(_instrMap).length} symbols`);
 }
 
+function updateAtmSubscription(symbol, { ce, pe, atmStrike, expiry }) {
+  if (!ce || !pe) return;
+  const sym = symbol.toUpperCase();
+  const old = atmOptionState.get(sym);
+
+  if (old && (old.ce !== ce || old.pe !== pe)) {
+    if (old.ce) atmInstrKeyToSym.delete(old.ce);
+    if (old.pe) atmInstrKeyToSym.delete(old.pe);
+    console.log(`📡 ATM strike changed ${sym}: ${old.atmStrike}→${atmStrike}`);
+  }
+
+  const keepLTP = old && old.atmStrike === atmStrike;
+  atmOptionState.set(sym, {
+    ce, pe, atmStrike, expiry,
+    ceLTP: keepLTP ? (old.ceLTP || 0) : 0,
+    peLTP: keepLTP ? (old.peLTP || 0) : 0,
+  });
+  atmInstrKeyToSym.set(ce, sym);
+  atmInstrKeyToSym.set(pe, sym);
+
+  const newKeys = [ce, pe].filter(k => !optionInstruments.has(k));
+  if (newKeys.length > 0) {
+    newKeys.forEach(k => optionInstruments.add(k));
+    if (streamer) {
+      try {
+        streamer.subscribe(newKeys, "full_d30");
+        console.log(`📡 ATM subscribed ${sym}: strike=${atmStrike} CE=${ce} PE=${pe}`);
+      } catch (e) {
+        console.warn(`⚠️ ATM subscribe error ${sym}:`, e.message);
+      }
+    }
+  }
+}
 function symbolToInstrKey(symbol) {
   const sym = symbol.toUpperCase().trim();
   return _instrMap[sym] || `NSE_EQ|${sym}`;
@@ -301,6 +337,29 @@ function parseAndEmit(raw) {
       // ── Options / Futures tick ────────────────────────────────────────────
       if (key.startsWith("NSE_FO|") || key.startsWith("BSE_FO|")) {
         if (oiTickHandler) oiTickHandler(key, ff || {});
+
+        // ── Live ATM option tick → straddle price ───────────────────────────
+        const atmSym = atmInstrKeyToSym.get(key);
+        if (atmSym) {
+          const ltp = parseFloat(
+            ff?.optionFF?.ltpc?.ltp ||
+            ff?.marketFF?.ltpc?.ltp ||
+            feed?.ltpc?.ltp || 0
+          );
+          if (ltp > 0) {
+            const state = atmOptionState.get(atmSym);
+            if (state) {
+              if (key === state.ce) state.ceLTP = ltp;
+              if (key === state.pe) state.peLTP = ltp;
+              if (state.ceLTP > 0 && state.peLTP > 0) {
+                const ws = getWS();
+                if (ws?.updateLiveStraddlePrice) {
+                  ws.updateLiveStraddlePrice(atmSym, state.ceLTP + state.peLTP);
+                }
+              }
+            }
+          }
+        }
         continue;
       }
 
@@ -514,4 +573,5 @@ module.exports = {
   subscribeSymbolForPriceTick,
   setInstrumentMapForStream,
   resetDailyCache,
+  updateAtmSubscription,
 };

@@ -93,19 +93,32 @@ const _straddleCache = new Map(); // sym → { straddlePrice, stranglePrice, pcr
  * straddle/strangle premium from optionChainCache.json) so binary ticks
  * emit the same value as the REST snapshot.
  */
-// In setCachedStraddleSnap — only seed, never overwrite:
 function setCachedStraddleSnap(symbol, snap) {
+  // Cold-start disk seed only. Exits if live price already set.
   if (!symbol || !snap) return;
-  const existing = _straddleCache.get(symbol.toUpperCase()) || {};
-  // Only write prices if not already set by emitOptionsIntel
-  _straddleCache.set(symbol.toUpperCase(), {
-    straddlePrice: existing.straddlePrice > 0 ? existing.straddlePrice : (snap.straddle?.combined ?? 0),
-    stranglePrice: existing.stranglePrice > 0 ? existing.stranglePrice : (snap.strangle?.combined ?? 0),
-    pcr:         snap.oi?.pcr != null ? +(+snap.oi.pcr).toFixed(2) : existing.pcr ?? null,
-    atmIV:       snap.iv?.atm  ?? existing.atmIV ?? 0,
-    totalCallOI: snap.oi?.ce   ?? existing.totalCallOI ?? 0,
-    totalPutOI:  snap.oi?.pe   ?? existing.totalPutOI  ?? 0,
-    timestamp:   existing.timestamp ?? snap.timestamp ?? Date.now(),
+  const sym = symbol.toUpperCase();
+  const existing = _straddleCache.get(sym) || {};
+  if (existing.straddlePrice > 0) return;
+  _straddleCache.set(sym, {
+    straddlePrice: snap.straddle?.combined ?? 0,
+    stranglePrice: snap.strangle?.combined ?? 0,
+    pcr:         snap.oi?.pcr != null ? +(+snap.oi.pcr).toFixed(2) : null,
+    atmIV:       snap.iv?.atm  ?? 0,
+    totalCallOI: snap.oi?.ce   ?? 0,
+    totalPutOI:  snap.oi?.pe   ?? 0,
+    timestamp:   snap.timestamp ?? Date.now(),
+  });
+}
+
+// SOLE writer of straddlePrice — called by upstoxStream on every ATM CE+PE tick
+function updateLiveStraddlePrice(symbol, straddlePrice) {
+  if (!symbol || !straddlePrice) return;
+  const sym = symbol.toUpperCase();
+  const existing = _straddleCache.get(sym) || {};
+  _straddleCache.set(sym, {
+    ...existing,
+    straddlePrice,
+    timestamp: Date.now(),
   });
 }
 
@@ -551,23 +564,21 @@ function emitOptionsIntel(data) {
   }
   setCachedIntel(data.symbol, data);
 
- // Only update non-price fields from intel cycle — never overwrite
-  // straddlePrice/stranglePrice which come correctly from REST snapshot
+ // 60s poll owns strangle, OI, PCR, IV only.
+  // straddlePrice NEVER written here — updateLiveStraddlePrice owns it exclusively.
   const d = data.data || data;
   const s = d?.structure || {};
   const existing = _straddleCache.get(data.symbol.toUpperCase()) || {};
   _straddleCache.set(data.symbol.toUpperCase(), {
-    straddlePrice: s.straddlePrice > 0 ? s.straddlePrice : (existing.straddlePrice || 0),
+    straddlePrice: existing.straddlePrice || 0,
     stranglePrice: s.stranglePrice > 0 ? s.stranglePrice : (existing.stranglePrice || 0),
     pcr:         d?.oi?.pcr != null ? +(+d.oi.pcr).toFixed(2) : existing.pcr ?? null,
     atmIV:       d?.volatility?.atmIV ?? existing.atmIV ?? 0,
     totalCallOI: d?.oi?.totalCallOI   ?? existing.totalCallOI ?? 0,
     totalPutOI:  d?.oi?.totalPutOI    ?? existing.totalPutOI  ?? 0,
-    timestamp:   Date.now(),
-    _fromREST:   existing._fromREST   ?? false,
+    timestamp:   existing.timestamp   ?? Date.now(),
   });
-}  // ← THIS WAS THE MISSING CLOSING BRACE
-
+}
 function emitCompositeUpdate(data) {
   if (!_io || !data) return;
   const buf = bp.encodeJSON("composite-update", data);
@@ -923,4 +934,5 @@ module.exports = {
   emitCompositeUpdate,
   broadcastUpstoxStatus,
   emitOptionsIntel,
+  updateLiveStraddlePrice,
 };

@@ -447,6 +447,22 @@ function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
 
   const { nearATM: unusualNearATM, tailRisk: unusualTailRisk } = detectUnusualOI(strikes, spotPrice, name);
 
+  // Export ATM instrument keys so upstoxStream can subscribe live option ticks
+  const atmRowRaw = sorted.find(s => s.strike_price === atmStrike);
+  const atmInstrumentKeys = {
+    ce: atmRowRaw?.call_options?.instrument_key || null,
+    pe: atmRowRaw?.put_options?.instrument_key  || null,
+    atmStrike,
+    expiry,
+  };
+  // Push to upstoxStream for live subscription
+  try {
+    const stream = require("../upstoxStream");
+    if (stream.updateAtmSubscription) {
+      stream.updateAtmSubscription(name, atmInstrumentKeys);
+    }
+  } catch (_) {}
+
   return {
     underlying: name, expiry, spotPrice, pcr, maxPainStrike, support, resistance,
     totalCEOI, totalPEOI,
