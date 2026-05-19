@@ -452,14 +452,11 @@ function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
   const atmRowRaw = sorted.find(s => s.strike_price === atmStrike);
   const ceKey = atmRowRaw?.call_options?.instrument_key || null;
   const peKey = atmRowRaw?.put_options?.instrument_key  || null;
-  const isWeeklyExpiry = (() => {
-    const now = new Date();
-    const [y, m, d] = expiry.split("-").map(Number);
-    const expDate = new Date(y, m - 1, d);
-    const diffDays = Math.round((expDate - now) / 86400000);
-    return diffDays <= 8; // nearest expiry is always ≤8 days away
-  })();
-  if (isWeeklyExpiry && ceKey && peKey) {
+  // Only push ATM subscription for the single nearest expiry.
+  // Both May 19 and May 26 pass a "≤8 days" check — we need strictly the first.
+  const nearestExpiry = (cache[name]?.expiries || [])[0];
+  const isNearestExpiry = nearestExpiry === expiry;
+  if (isNearestExpiry && ceKey && peKey) {
     try {
       const stream = require("../upstoxStream");
       if (stream.updateAtmSubscription) {

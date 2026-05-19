@@ -369,6 +369,10 @@ function emitOptionsIntelTick(symbol, spotPrice) {
 
   const sym = symbol.toUpperCase();
 
+  // Don't emit if straddlePrice not yet seeded — prevents 0 flash on chart
+  const snap = _straddleCache.get(sym);
+  if (!snap?.straddlePrice) return;
+
   const now  = Date.now();
   const last = _intelTickThrottle.get(sym) || 0;
   if (now - last < 500) return;
@@ -380,9 +384,6 @@ function emitOptionsIntelTick(symbol, spotPrice) {
   const d         = cached.data || cached;
   const structure = d?.structure || {};
 
-  // FIX-2: Prefer REST-snapshot-derived values (correct, normalised) over
-  // raw intel cache values (structure.straddlePrice = chain sum, inflated).
-  const snap = _straddleCache.get(sym);
 
   const straddlePrice = snap?.straddlePrice
   ?? structure.straddlePrice
@@ -589,10 +590,14 @@ function emitOptionsIntel(data) {
   });
  // Seed straddlePrice from ATM CE+PE LTP if live tick hasn't arrived yet.
   // s.straddlePrice is raw chain sum (wrong). Use ATM row LTP directly.
+  // Seed straddlePrice directly from the intel payload's chain data.
+  // getSnapshot reads from disk cache which may not exist yet (debounced 5min write).
+  // Instead, read ATM LTP directly from the ingestChainData processed result.
   if (!existing.straddlePrice) {
+    const sym2 = data.symbol.toUpperCase();
+    // Try direct module call first (no disk dependency)
     try {
       const straddleRoutes = require("../routes/straddleRoutes");
-      const sym2 = data.symbol.toUpperCase();
       straddleRoutes.getSnapshot(sym2).then(snap => {
         if (snap?.straddle?.combined > 0) {
           const cur3 = _straddleCache.get(sym2) || {};
@@ -610,6 +615,36 @@ function emitOptionsIntel(data) {
           }
         }
       }).catch(() => {});
+    } catch (_) {}
+
+    // Also seed from nseOIListener cache directly — no disk, always available after first poll
+    try {
+      const oi = require("../services/intelligence/nseOIListener");
+      const allCached = oi.getAllCached?.();
+      const chainData = allCached?.[sym2];
+      if (chainData) {
+        const expiries = chainData.expiries || [];
+        const nearExp  = expiries[0];
+        const chain    = chainData.chains?.[nearExp];
+        const strikesArr = chain?.strikes || [];
+        if (strikesArr.length) {
+          const atmStrike = chain.atmStrike;
+          const atmRow = strikesArr.find(s => s.strike === atmStrike);
+          if (atmRow) {
+            const straddle = (atmRow.ce?.ltp || 0) + (atmRow.pe?.ltp || 0);
+            if (straddle > 0) {
+              const cur3 = _straddleCache.get(sym2) || {};
+              if (!cur3.straddlePrice) {
+                _straddleCache.set(sym2, {
+                  ...cur3,
+                  straddlePrice: straddle,
+                  timestamp: Date.now(),
+                });
+              }
+            }
+          }
+        }
+      }
     } catch (_) {}
   }
 }
@@ -969,7 +1004,6 @@ module.exports = {
   emitDeliverySpikes,
   emitCompositeUpdate,
   broadcastUpstoxStatus,
-  emitOptionsIntel,
   emitOptionsIntel,
   updateLiveStraddlePrice,
   _straddleCache,
