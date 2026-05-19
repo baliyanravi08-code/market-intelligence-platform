@@ -207,10 +207,22 @@ router.get("/snapshot", (req, res) => {
       ? Math.round((peOI / ceOI) * 100) / 100
       : (chainExpiry?.pcr ?? null);
 
-    // FIX-TIMESTAMP: use cache's own timestamp if available so chart labels are accurate
     const cacheTimestamp = chainData.timestamp || chainExpiry?.timestamp || new Date().toISOString();
-// Seed binary tick cache so live ticks use REST-computed values (not raw chain sum)
-  
+
+    // Seed _straddleCache with correct REST-computed strangle
+    try {
+      const ws = require("../api/websocket");
+      if (ws.setCachedStraddleSnap) {
+        ws.setCachedStraddleSnap(resolveSymbol(symbol), {
+          straddle:  { combined: straddlePremium },
+          strangle:  { combined: stranglePremium },
+          oi:        { pcr, ce: totalCeOI, pe: totalPeOI },
+          iv:        { atm: +atmIV },
+          timestamp: Date.now(),
+        });
+      }
+    } catch(_) {}
+
     res.json({
       symbol:    resolveSymbol(symbol),
       expiry:    targetExpiry,
@@ -509,8 +521,19 @@ async function getSnapshot(symbol, expiry, steps = 1) {
 
     const cacheTimestamp = chainData.timestamp || chainExpiry?.timestamp || new Date().toISOString();
 
-    // Seed binary tick cache — was missing from function export (route handler had it, this didn't)
-    
+    // Seed _straddleCache with correct REST-computed values (strangle especially)
+    try {
+      const ws = require("../api/websocket");
+      if (ws.setCachedStraddleSnap) {
+        ws.setCachedStraddleSnap(resolveSymbol(symbol), {
+          straddle:  { combined: straddlePremium },
+          strangle:  { combined: stranglePremium },
+          oi:        { pcr, ce: totalCeOI, pe: totalPeOI },
+          iv:        { atm: +atmIV },
+          timestamp: Date.now(),
+        });
+      }
+    } catch(_) {}
 
     return {
       symbol: resolveSymbol(symbol), expiry: targetExpiry,

@@ -54,7 +54,7 @@ const MAX_FAILS          = 5;
 const POLL_INTERVAL_MS   = 60_000;
 const EXPIRY_REFRESH_MS  = 4 * 60 * 60 * 1000;
 const CACHE_MAX_AGE_MS   = 4 * 60 * 60 * 1000;
-const EXPIRIES_TO_KEEP   = 2;   // only keep nearest N expiries in memory
+const EXPIRIES_TO_KEEP   = 4;   // keep 4 expiries so dropdown shows weekly + monthly
 
 const cache = {};
 
@@ -72,7 +72,7 @@ const UNDERLYINGS = [
   { name: "NIFTY",      upstoxKey: "NSE_INDEX|Nifty 50",      lotSize: 75  },
   { name: "BANKNIFTY",  upstoxKey: "NSE_INDEX|Nifty Bank",     lotSize: 35  },
   { name: "FINNIFTY",   upstoxKey: "NSE_INDEX|Nifty Fin Service", lotSize: 65 },
-  { name: "MIDCPNIFTY", upstoxKey: "NSE_INDEX|Nifty MidSelect", lotSize: 120 },
+  { name: "MIDCPNIFTY", upstoxKey: "NSE_INDEX|Nifty Mid Select", lotSize: 120 },
   { name: "SENSEX",     upstoxKey: "BSE_INDEX|SENSEX",         lotSize: 20  },
 ];
 

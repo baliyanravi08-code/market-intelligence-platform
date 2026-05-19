@@ -613,7 +613,30 @@ function emitOptionsIntel(data) {
   const existing = _straddleCache.get(data.symbol.toUpperCase()) || {};
   _straddleCache.set(data.symbol.toUpperCase(), {
     straddlePrice: existing.straddlePrice || 0,
-    stranglePrice: s.stranglePrice > 0 ? s.stranglePrice : (existing.stranglePrice || 0),
+    stranglePrice: (() => {
+      // Prefer REST-computed strangle (correct OTM strike LTP)
+      // over intel engine strangle (may use wrong chain sum)
+      if (existing.stranglePrice > 0) return existing.stranglePrice;
+      if (s.stranglePrice > 0) return s.stranglePrice;
+      // Fallback: compute from nseOIListener chain directly
+      try {
+        const oi = require("../services/intelligence/nseOIListener");
+        const sym2 = data.symbol.toUpperCase();
+        const chainData = oi.getAllCached?.()?.[sym2];
+        const nearExp = (chainData?.expiries || [])[0];
+        const chain = chainData?.chains?.[nearExp];
+        const strikesArr = chain?.strikes || [];
+        const sortedS = strikesArr.map(r => r.strike).sort((a,b) => a-b);
+        const atmIdx = sortedS.indexOf(chain?.atmStrike);
+        if (atmIdx >= 0) {
+          const scRow = strikesArr.find(r => r.strike === sortedS[atmIdx+1]) || {};
+          const spRow = strikesArr.find(r => r.strike === sortedS[atmIdx-1]) || {};
+          const sg = (scRow.ce?.ltp || 0) + (spRow.pe?.ltp || 0);
+          if (sg > 0) return sg;
+        }
+      } catch(_) {}
+      return 0;
+    })(),
     pcr:         d?.oi?.pcr != null ? +(+d.oi.pcr).toFixed(2) : existing.pcr ?? null,
     atmIV:       d?.volatility?.atmIV ?? existing.atmIV ?? 0,
     totalCallOI: d?.oi?.totalCallOI   ?? existing.totalCallOI ?? 0,
@@ -872,7 +895,7 @@ function attachSocketIO(server) {
 
         socket.emit("options-intel-tick", {
           symbol:       sym,
-          spotPrice:    d?.spot ?? d?.spotPrice ?? 0,
+          spotPrice:    d?.ltp ?? d?.spot ?? d?.spotPrice ?? d?.data?.spotPrice ?? 0,
           straddlePrice: snap.straddlePrice,
           stranglePrice: snap.stranglePrice ?? 0,
           atmIV:        snap.atmIV ?? 0,
