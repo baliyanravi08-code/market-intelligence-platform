@@ -395,6 +395,7 @@ export default function StraddlePage({ socket }) {
   // ── Reset on symbol change ─────────────────────────────────────────────────
   useEffect(() => {
     setSnap(null);
+    snapRef.current = null; // ← clear immediately so ratio guard doesn't block new symbol's ticks
     setPremHistory(buildFullMarketSlots());
     setPayoff(null);
     setLoading(true);
@@ -405,7 +406,6 @@ export default function StraddlePage({ socket }) {
     alertedRef.current      = { upper: false, lower: false };
     setAlertMsg(null);
   }, [symbol]);
-
   // ── Main effect: initial REST seed + socket listeners ─────────────────────
   useEffect(() => {
     if (!socket) return;
@@ -561,6 +561,7 @@ export default function StraddlePage({ socket }) {
           strangle: prev.strangle && socketStrangle != null && socketStrangle > 0
             ? { ...prev.strangle, combined: socketStrangle }
             : prev.strangle,
+          expiries: prev.expiries?.length ? prev.expiries : (data.expiries || []),
           iv: prev.iv
             ? {
                 ...prev.iv,
@@ -661,17 +662,40 @@ export default function StraddlePage({ socket }) {
 
   useEffect(() => { if (snap) fetchPayoff(snap); }, [stratType, side, strangleStep, fetchPayoff, snap]);
 
-  // Re-fetch snapshot when expiry changes
+  // Re-fetch snapshot + history when expiry changes
   useEffect(() => {
     if (!expiry || !socket) return;
-    fetch(`/api/straddle/snapshot?symbol=${symbol}&expiry=${expiry}`)
-      .then(r => r.json())
-      .then(data => {
-        if (!data || data.error) return;
-        setSnap(data);
-        fetchPayoff(data);
-      })
-      .catch(() => {});
+    // Reset chart for new expiry
+    setPremHistory(buildFullMarketSlots());
+    lastKnownMinRef.current = null;
+
+    Promise.all([
+      fetch(`/api/straddle/snapshot?symbol=${symbol}&expiry=${expiry}`).then(r => r.json()),
+      fetch(`/api/straddle/history?symbol=${symbol}`).then(r => r.json()).catch(() => ({ history: [] })),
+    ]).then(([snapData, histData]) => {
+      if (!snapData || snapData.error) return;
+      setSnap(prev => ({ ...snapData, expiries: prev?.expiries?.length ? prev.expiries : (snapData.expiries || []) }));
+      fetchPayoff(snapData);
+
+      const historyTicks = (histData.history || []).map(h => {
+        const label = h.ts ? toMarketLabel(h.ts) : (h.time || null);
+        if (!label) return null;
+        return { time: label, straddle: h.straddle ?? null, strangle: h.strangle ?? null };
+      }).filter(Boolean);
+
+      const nowLabel  = clampToMarket(currentIST());
+      const snapPoint = snapData.straddle?.combined > 0 ? {
+        time: nowLabel,
+        straddle: snapData.straddle.combined,
+        strangle: snapData.strangle?.combined ?? null,
+      } : null;
+
+      const allTicks = [...historyTicks.filter(t => t.time !== nowLabel)];
+      if (snapPoint) allTicks.push(snapPoint);
+      if (allTicks.length) lastKnownMinRef.current = allTicks[allTicks.length - 1].time;
+
+      setPremHistory(mergeIntoSlots(buildFullMarketSlots(), allTicks));
+    }).catch(() => {});
   }, [expiry]);
   useEffect(() => { alertedRef.current = { upper: false, lower: false }; setAlertMsg(null); }, [stratType, side]);
 

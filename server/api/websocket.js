@@ -369,9 +369,41 @@ function emitOptionsIntelTick(symbol, spotPrice) {
 
   const sym = symbol.toUpperCase();
 
-  // Don't emit if straddlePrice not yet seeded — prevents 0 flash on chart
   const snap = _straddleCache.get(sym);
-  if (!snap?.straddlePrice) return;
+  // If no price seeded yet, try to seed now from nseOIListener in-memory cache
+  if (!snap?.straddlePrice) {
+    try {
+      const oi = require("../services/intelligence/nseOIListener");
+      const chainData = oi.getAllCached?.()?.[sym];
+      if (chainData) {
+        const nearExp    = (chainData.expiries || [])[0];
+        const chain      = chainData.chains?.[nearExp];
+        const strikesArr = chain?.strikes || [];
+        const atmRow     = strikesArr.find(s => s.strike === chain?.atmStrike);
+        if (atmRow) {
+          const straddle = (atmRow.ce?.ltp || 0) + (atmRow.pe?.ltp || 0);
+          if (straddle > 0) {
+            const atmIdx = strikesArr.map(s => s.strike).sort((a,b)=>a-b).indexOf(chain.atmStrike);
+            const sorted = strikesArr.map(s => s.strike).sort((a,b)=>a-b);
+            const scRow  = strikesArr.find(s => s.strike === sorted[atmIdx+1]) || {};
+            const spRow  = strikesArr.find(s => s.strike === sorted[atmIdx-1]) || {};
+            const strangle = (scRow.ce?.ltp || 0) + (spRow.pe?.ltp || 0);
+            _straddleCache.set(sym, {
+              straddlePrice: straddle,
+              stranglePrice: strangle,
+              atmIV:   ((atmRow.ce?.iv||0) + (atmRow.pe?.iv||0)) / 2,
+              pcr:     chain.pcr ?? null,
+              totalCallOI: chain.totalCEOI ?? 0,
+              totalPutOI:  chain.totalPEOI ?? 0,
+              timestamp: Date.now(),
+            });
+          }
+        }
+      }
+    } catch (_) {}
+    // If still no price after seed attempt, skip this tick
+    if (!_straddleCache.get(sym)?.straddlePrice) return;
+  }
 
   const now  = Date.now();
   const last = _intelTickThrottle.get(sym) || 0;

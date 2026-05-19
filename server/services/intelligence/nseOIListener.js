@@ -687,7 +687,13 @@ async function pollChains() {
 
   if (anySuccess) {
     failCount = 0;
-    persistCache();   // FIX-MEM-4: debounced — won't actually write more than once per 5 min
+    // On first successful poll, write immediately so websocket.js disk seed works on next restart
+    const hasExistingFile = (() => { try { return require("fs").existsSync(CACHE_FILE); } catch(_) { return false; } })();
+    if (!hasExistingFile) {
+      flushPersistNow(); // first boot — write immediately
+    } else {
+      persistCache();   // subsequent polls — debounced 5 min
+    }
   } else {
     failCount++;
     if (failCount >= MAX_FAILS) {
