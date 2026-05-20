@@ -475,7 +475,7 @@ function emitOptionsIntelTick(symbol, spotPrice) {
 
   const now  = Date.now();
   const last = _intelTickThrottle.get(sym) || 0;
-  if (now - last < 500) return;
+  if (now - last < 2000) return;
   _intelTickThrottle.set(sym, now);
 
   const cached = _intelCache.get(sym);
@@ -565,7 +565,7 @@ function emitCandleTick(symbol, tf, candle) {
     console.warn("⚠️ binary candle:tick encode error:", e.message);
   }
 
-  _io.to(room).emit("candle:tick", { symbol: sym, tf, candle });
+
 }
 
 function emitCandleClosed(symbol, tf, candle) {
@@ -580,7 +580,7 @@ function emitCandleClosed(symbol, tf, candle) {
     console.warn("⚠️ binary candle:closed encode error:", e.message);
   }
 
-  _io.to(room).emit("candle:closed", { symbol: sym, tf, candle });
+  
 }
 
 const _priceTickThrottle = new Map();
@@ -595,7 +595,7 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
 
   const now  = Date.now();
   const last = _priceTickThrottle.get(sym) || 0;
-  if (now - last < 500) return;
+  if (now - last < 2000) return;
   _priceTickThrottle.set(sym, now);
 
   const payload = {
@@ -629,7 +629,7 @@ function emitBacktestTick(socketId, payload) {
   if (!_io) return;
   const buf = bp.encodeJSON("backtest-live-tick", payload);
   _io.to(`backtest:${socketId}`).emit("binary", buf);
-  _io.to(`backtest:${socketId}`).emit("backtest-live-tick", payload);
+  
 }
 
 function broadcastBacktestTick(payload) {
@@ -638,7 +638,7 @@ function broadcastBacktestTick(payload) {
   for (const [roomName] of _io.sockets.adapter.rooms) {
     if (roomName.startsWith("backtest:")) {
       _io.to(roomName).emit("binary", buf);
-      _io.to(roomName).emit("backtest-live-tick", payload);
+    
     }
   }
 }

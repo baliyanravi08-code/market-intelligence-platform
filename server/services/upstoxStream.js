@@ -82,6 +82,7 @@ const stockInstruments    = new Set();
 const stockInstrumentKeys = new Set();
 const instrKeyToSymbol    = new Map();
 const prevCloseCache      = new Map();
+const _proxyThrottle      = new Map();
 // ── ATM option live price tracker ─────────────────────────────────────────────
 const atmOptionState   = new Map(); // sym → { ce, pe, atmStrike, expiry, ceLTP, peLTP }
 const atmInstrKeyToSym = new Map(); // instrKey → symbol (NIFTY/BANKNIFTY etc.)
@@ -332,10 +333,14 @@ function parseAndEmit(raw) {
             // FINNIFTY + MIDCPNIFTY have no Upstox index feed.
             // Piggyback on NIFTY 50 tick to push their straddle updates.
             if (name === "NIFTY 50" && ws?.emitOptionsIntelTick) {
-              for (const proxySym of NIFTY_PROXY_SYMBOLS) {
-                ws.emitOptionsIntelTick(proxySym, price);
-              }
-            }
+  const _pNow = Date.now();
+  for (const proxySym of NIFTY_PROXY_SYMBOLS) {
+    if (_pNow - (_proxyThrottle.get(proxySym) || 0) > 5000) {
+      _proxyThrottle.set(proxySym, _pNow);
+      ws.emitOptionsIntelTick(proxySym, price);
+    }
+  }
+}
           }
         }
         continue;
