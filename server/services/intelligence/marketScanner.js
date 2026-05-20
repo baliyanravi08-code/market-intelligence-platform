@@ -401,9 +401,17 @@ function normaliseNSE(s) {
   if (ltp <= 0) return null;
 
   let prevClose = parseFloat(s.previousClose || s.lastClosedPrice || 0);
-  if (prevClose <= 0 || prevClose === ltp) {
-    const changeAbs = parseFloat(s.change || 0);
-    if (changeAbs !== 0) prevClose = ltp - changeAbs;
+  // During pre-open, NSE sometimes sends auction price as previousClose.
+  // Use s.change to back-calculate the real previous close instead.
+  const changeAbs0 = parseFloat(s.change || 0);
+  if (changeAbs0 !== 0 && prevClose > 0) {
+    const backCalc = ltp - changeAbs0;
+    // If back-calculated prevClose differs from reported prevClose by >0.5%, trust back-calc
+    if (backCalc > 0 && Math.abs(backCalc - prevClose) / prevClose > 0.005) {
+      prevClose = backCalc;
+    }
+  } else if (prevClose <= 0 || prevClose === ltp) {
+    if (changeAbs0 !== 0) prevClose = ltp - changeAbs0;
   }
   const prevCloseFromExchange = prevClose > 0 && prevClose !== ltp;
 
@@ -421,9 +429,12 @@ function normaliseNSE(s) {
   // FIX-2: Only stale before 9:08 AM or if truly no data at all.
   // From 9:08 onward, NSE auction prices are mostly locked — show gainers/losers.
   // prevClose for live price ticks comes from Upstox stream ltpc.cp field.
-  const isStalePreopen =
-    (nowMins >= T_MARKET_START && nowMins < T_PREOPEN_LOCKED) // 9:00–9:07 too early
-    || (volume === 0 && changePct === 0 && nowMins < T_PREOPEN_LOCKED); // truly no data
+  // Before 9:08: always stale (no auction prices yet)
+  // At 9:08+: stale only if changePct is exactly 0 AND volume is 0 (no pre-open trade)
+  // Never stale after 9:15 (market open)
+  const isStalePreopen = nowMins >= T_MARKET_OPEN ? false
+    : nowMins < T_PREOPEN_LOCKED ? true
+    : (Math.abs(changePct) < 0.01 && volume === 0); // 9:08-9:14: stale only if truly no data// truly no data
 
   return {
     symbol:    s.symbol,
@@ -1500,8 +1511,7 @@ async function runScanner() {
       return { ...s, mcapBucket: bucket, mcapLabel: MCAP_BUCKETS[bucket]?.label || "Micro Cap" };
     });
 
-    stockBySymbol.clear();
-    for (const s of stocks) stockBySymbol.set(s.symbol, s);
+    // DO NOT overwrite stock.ltp — candle close is prev day close, not live price
 
     // FIX-2: Only exclude truly stale stocks from gainers/losers
     // From 9:08 onward _stalePreopen is false so tradedStocks = all stocks
