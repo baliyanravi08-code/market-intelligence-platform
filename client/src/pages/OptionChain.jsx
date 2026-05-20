@@ -790,7 +790,6 @@ export default function OptionChain({ onBack }) {
   const tableRef   = useRef(null);
   const socketRef      = useRef(null);
   const lastUpdateRef  = useRef(null);
-  const pollRef        = useRef(null);
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -857,6 +856,23 @@ export default function OptionChain({ onBack }) {
       if (u !== underlying) return;
       applyChainData(data, "socket");
     });
+
+    socket.on("option-chain-diff", ({ underlying: u, strikes: diffStrikes, spotPrice, pcr, totalCEOI, totalPEOI, maxPainStrike, support, resistance, atmStrike, alerts }) => {
+      if (u !== underlying) return;
+      setChainData(prev => {
+        if (!prev) return prev;
+        const diffMap = {};
+        diffStrikes.forEach(s => { diffMap[s.strike] = s; });
+        return {
+          ...prev,
+          spotPrice, pcr, totalCEOI, totalPEOI,
+          maxPainStrike, support, resistance, atmStrike, alerts,
+          strikes: prev.strikes.map(s => diffMap[s.strike] || s),
+        };
+      });
+      setLastUpdate(Date.now());
+      setConnStatus("live");
+    });
     return () => { socket.disconnect(); setConnStatus("disconnected"); };
   }, [underlying]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -867,28 +883,17 @@ export default function OptionChain({ onBack }) {
 
   useEffect(() => {
     if (!selectedExpiry) return;
-    const poll = () => {
-      fetch(`/api/option-chain?underlying=${underlying}&expiry=${selectedExpiry}`)
-        .then(r => r.json())
-        .then(data => {
-          if (!data?.strikes) return;
-          const age = lastUpdateRef.current ? Date.now() - lastUpdateRef.current : Infinity;
-          if (age > 2000) {
-            applyChainData(data, "rest");
-          } else {
-            const now = Date.now();
-            setLastUpdate(now);
-            lastUpdateRef.current = now;
-          }
-        })
-        .catch(() => {});
-    };
-    setLoading(true);
-    poll();
-    pollRef.current = setInterval(poll, 3000);
-    return () => clearInterval(pollRef.current);
+    // Only fetch via REST if socket hasn't delivered data within 5 seconds
+    const timeout = setTimeout(() => {
+      if (!lastUpdateRef.current) {
+        fetch(`/api/option-chain?underlying=${underlying}&expiry=${selectedExpiry}`)
+          .then(r => r.json())
+          .then(data => { if (data?.strikes) applyChainData(data, "rest"); })
+          .catch(() => {});
+      }
+    }, 5000);
+    return () => clearTimeout(timeout);
   }, [underlying, selectedExpiry, applyChainData]);
-
   useEffect(() => {
     setLoading(true);
     setChainData(null);
@@ -1050,7 +1055,7 @@ export default function OptionChain({ onBack }) {
       {!loading && !chainData && (
         <div className="oc-empty">
           <p>⏳ Waiting for first poll...</p>
-          <p className="empty-sub">NSE · socket primary · 3s REST fallback</p>
+          <p className="empty-sub">NSE · socket primary · REST fallback after 5s</p>
         </div>
       )}
 
@@ -1099,7 +1104,7 @@ export default function OptionChain({ onBack }) {
       )}
 
       <div className="oc-footer" ref={footerRef}>
-        <span>Socket · 3s REST · BS-augmented Greeks · Hull 10th ed.</span>
+        <span>Socket · diff updates · BS-augmented Greeks · Hull 10th ed.</span>
         {chainData && <span>{visibleStrikes.length}/{strikes.length} strikes · {underlying} · {selectedExpiry}{dte!=null?` · ${dte}d DTE`:""}</span>}
       </div>
     </div>

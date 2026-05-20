@@ -351,7 +351,32 @@ function detectUnusualOI(strikes, spotPrice, symbol) {
   tailRisk.sort((a, b) => b.neighborRatio - a.neighborRatio);
   return { nearATM: nearATM.slice(0, 6), tailRisk: tailRisk.slice(0, 4) };
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// Compute diff between previous and new strikes — only changed rows
+// ─────────────────────────────────────────────────────────────────────────────
 
+function computeChainDiff(prevStrikes, newStrikes) {
+  const prevMap = {};
+  (prevStrikes || []).forEach(s => { prevMap[s.strike] = s; });
+  const diff = [];
+  for (const row of newStrikes) {
+    const prev = prevMap[row.strike];
+    if (!prev) { diff.push(row); continue; }
+    if (
+      prev.ce.ltp    !== row.ce.ltp    ||
+      prev.ce.oi     !== row.ce.oi     ||
+      prev.ce.volume !== row.ce.volume ||
+      prev.ce.signal !== row.ce.signal ||
+      prev.pe.ltp    !== row.pe.ltp    ||
+      prev.pe.oi     !== row.pe.oi     ||
+      prev.pe.volume !== row.pe.volume ||
+      prev.pe.signal !== row.pe.signal
+    ) {
+      diff.push(row);
+    }
+  }
+  return diff;
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // processChain
 // ─────────────────────────────────────────────────────────────────────────────
@@ -643,12 +668,44 @@ async function pollChains() {
         if (!processed) continue;
 
         if (!cache[u.name]) cache[u.name] = { expiries: [], chains: {}, spotPrice: 0, updatedAt: 0 };
+
+        // ← Read prevChain BEFORE overwriting cache
+        const prevChain = cache[u.name]?.chains?.[expiry] || null;
+
         cache[u.name].chains[expiry] = processed;
         cache[u.name].spotPrice      = spotPrice;
         cache[u.name].updatedAt      = Date.now();
 
         if (ioRef) {
-          ioRef.to(`chain:${u.name}`).emit("option-chain-update", { underlying: u.name, expiry, data: processed });
+          const room = ioRef.sockets?.adapter?.rooms?.get(`chain:${u.name}`);
+          if (room && room.size > 0) {
+            if (prevChain?.strikes?.length) {
+              // Send diff only — typically 5-15 rows instead of 200
+              const diff = computeChainDiff(prevChain.strikes, processed.strikes);
+              if (diff.length > 0) {
+                ioRef.to(`chain:${u.name}`).emit("option-chain-diff", {
+                  underlying:  u.name,
+                  expiry,
+                  strikes:     diff,
+                  spotPrice:   processed.spotPrice,
+                  pcr:         processed.pcr,
+                  totalCEOI:   processed.totalCEOI,
+                  totalPEOI:   processed.totalPEOI,
+                  maxPainStrike: processed.maxPainStrike,
+                  support:     processed.support,
+                  resistance:  processed.resistance,
+                  atmStrike:   processed.atmStrike,
+                  alerts:      processed.alerts,
+                });
+                console.log(`📡 OI diff: ${u.name} ${expiry} — ${diff.length} changed strikes`);
+              }
+            } else {
+              // First time — send full chain
+              ioRef.to(`chain:${u.name}`).emit("option-chain-update", {
+                underlying: u.name, expiry, data: processed,
+              });
+            }
+          }
         }
 
         try {
