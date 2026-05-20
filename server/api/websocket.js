@@ -362,7 +362,75 @@ function _resetStraddleHistoryIfNewDay() {
 }
 
 setInterval(_resetStraddleHistoryIfNewDay, 60_000);
-setInterval(_flushStraddleHistory, 5 * 60_000); // flush every 5 min as backup
+setInterval(_flushStraddleHistory, 5 * 60_000);
+
+// ── Seed _straddleCache from nseOIListener as soon as chains are available
+// Retries every 30s until all 5 symbols are seeded
+const _seedInterval = setInterval(() => {
+  try {
+    const oi = require("../services/intelligence/nseOIListener");
+    const allCached = oi.getAllCached?.();
+    if (!allCached) return;
+    let allSeeded = true;
+    for (const [sym, chainData] of Object.entries(allCached)) {
+      const existing = _straddleCache.get(sym);
+      if (existing?.straddlePrice > 0) continue; // already seeded
+      allSeeded = false;
+      const nearExp    = (chainData.expiries || [])[0];
+      const chain      = chainData.chains?.[nearExp];
+      const strikesArr = chain?.strikes || [];
+      if (!strikesArr.length) continue;
+      const atmRow = strikesArr.find(s => s.strike === chain.atmStrike);
+      if (!atmRow) continue;
+      const straddle = (atmRow.ce?.ltp || 0) + (atmRow.pe?.ltp || 0);
+      if (!straddle) continue;
+      const sorted   = strikesArr.map(s => s.strike).sort((a, b) => a - b);
+      const atmIdx   = sorted.indexOf(chain.atmStrike);
+      const scRow    = strikesArr.find(s => s.strike === sorted[atmIdx + 1]) || {};
+      const spRow    = strikesArr.find(s => s.strike === sorted[atmIdx - 1]) || {};
+      const strangle = (scRow.ce?.ltp || 0) + (spRow.pe?.ltp || 0);
+      const totalCeOI = strikesArr.reduce((s, r) => s + (r?.ce?.oi ?? 0), 0);
+      const totalPeOI = strikesArr.reduce((s, r) => s + (r?.pe?.oi ?? 0), 0);
+      const pcr = totalCeOI > 0 ? +((totalPeOI / totalCeOI).toFixed(2)) : null;
+      const atmIV = +((((atmRow.ce?.iv || 0) + (atmRow.pe?.iv || 0)) / 2).toFixed(2));
+      _straddleCache.set(sym, {
+        straddlePrice: straddle,
+        stranglePrice: strangle,
+        spotPrice:     chain.spotPrice || 0,
+        pcr,
+        atmIV,
+        totalCallOI:   totalCeOI,
+        totalPutOI:    totalPeOI,
+        timestamp:     Date.now(),
+      });
+      console.log(`✅ [straddleCache seed] ${sym}: straddle=${straddle} strangle=${strangle} pcr=${pcr}`);
+    }
+    if (allSeeded) clearInterval(_seedInterval);
+  } catch (_) {}
+}, 30_000);
+
+// ── Per-minute history writer — runs from 9:15 regardless of client connections
+setInterval(() => {
+  const now = new Date();
+  const istTime = now.toLocaleTimeString("en-IN", {
+    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata",
+  });
+  const [h, m] = istTime.split(":").map(Number);
+  const mins = h * 60 + m;
+  if (mins < 555 || mins > 930) return;
+
+  for (const [sym, snap] of _straddleCache) {
+    if (!snap?.straddlePrice) continue;
+    _persistStraddleTick(
+      sym,
+      snap.straddlePrice,
+      snap.stranglePrice || 0,
+      snap.spotPrice     || 0,
+      snap.pcr           ?? null,
+      Date.now()
+    );
+  }
+}, 60_000);
 
 function emitOptionsIntelTick(symbol, spotPrice) {
   if (!_io || !symbol || !spotPrice) return;

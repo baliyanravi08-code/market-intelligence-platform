@@ -201,8 +201,8 @@ router.get("/snapshot", (req, res) => {
     // PCR from total OI across ALL strikes — not just ATM row
     const totalCeOI = strikesArr.reduce((sum, s) => sum + (s?.ce?.oi ?? 0), 0);
     const totalPeOI = strikesArr.reduce((sum, s) => sum + (s?.pe?.oi ?? 0), 0);
-    const ceOI = totalCeOI || (atmRow?.ce?.oi ?? 0);
-    const peOI = totalPeOI || (atmRow?.pe?.oi ?? 0);
+    const ceOI = totalCeOI;
+    const peOI = totalPeOI;
     const pcr  = ceOI > 0
       ? Math.round((peOI / ceOI) * 100) / 100
       : (chainExpiry?.pcr ?? null);

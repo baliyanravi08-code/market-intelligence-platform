@@ -286,6 +286,12 @@ function AlertBanner({ message, onDismiss }) {
   );
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const pillStyle = (color) => ({
+  background: `${color}18`, border: `1px solid ${color}40`, color,
+  borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, fontFamily: "monospace",
+});
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function StraddlePage({ socket }) {
   const [symbol,       setSymbol]       = useState("NIFTY");
@@ -297,6 +303,7 @@ export default function StraddlePage({ socket }) {
   const [snap,        setSnap]        = useState(null);
   const [payoff,      setPayoff]      = useState(null);
   const [premHistory, setPremHistory] = useState(() => buildFullMarketSlots());
+  const premHistoryRef = useRef({});  // persists across unmount/remount per symbol  
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState(null);
   const [lastRefresh, setLastRefresh] = useState("—");
@@ -395,10 +402,16 @@ export default function StraddlePage({ socket }) {
   // ── Reset on symbol change ─────────────────────────────────────────────────
   useEffect(() => {
     setSnap(null);
-    snapRef.current = null; // ← clear immediately so ratio guard doesn't block new symbol's ticks
-    setPremHistory(buildFullMarketSlots());
+    snapRef.current = null;
+    // Restore chart from ref if we've visited this symbol before this session
+    const saved = premHistoryRef.current[symbol];
+    setPremHistory(saved && saved.some(p => p.straddle != null)
+      ? saved
+      : buildFullMarketSlots());
     setPayoff(null);
-    setLoading(true);
+    // Don't show loading spinner if we have cached history — avoids flash on navigation back
+    const hasSaved = premHistoryRef.current[symbol]?.some(p => p.straddle != null);
+    setLoading(!hasSaved);
     setError(null);
     setLastRefresh("—");
     cacheTimeRef.current    = null;
@@ -494,7 +507,9 @@ export default function StraddlePage({ socket }) {
         }
         cacheTimeRef.current = nowLabel;
 
-        setPremHistory(() => mergeIntoSlots(buildFullMarketSlots(), allTicks));
+        const merged = mergeIntoSlots(buildFullMarketSlots(), allTicks);
+        premHistoryRef.current[currentSymbol] = merged;
+        setPremHistory(merged);
 
         if (data.expiries?.length && expiryRef.current && !data.expiries.includes(expiryRef.current)) {
           setExpiry(data.expiries[0] || "");
@@ -517,15 +532,17 @@ export default function StraddlePage({ socket }) {
 
       const straddlePrice = data.straddlePrice ?? data.straddle ?? null;
       if (straddlePrice == null || straddlePrice <= 0) return;
-      // Reject tick if straddle price is wildly different from snap (>50% off) — stale cache
+      // EXPIRY GUARD: socket ticks carry nearest-expiry data only.
+      // Block if user selected a non-nearest expiry.
+      if (expiryRef.current && snapRef.current?.expiry &&
+          expiryRef.current !== snapRef.current.expiry) return;
+      // Reject if price is wildly different from snap (>50% off) — stale cache
       if (snapRef.current?.straddle?.combined > 0) {
         const ratio = straddlePrice / snapRef.current.straddle.combined;
         if (ratio > 2.5 || ratio < 0.4) return;
       }
 
       // Binary tick is now correctly seeded from disk — no guard needed.
-
-      // Seed snap from socket if REST snapshot failed (404)
 
       // Seed snap from socket if REST snapshot failed (404)
       if (!snapRef.current && straddlePrice > 0) {
@@ -543,7 +560,6 @@ export default function StraddlePage({ socket }) {
       // FIX-A: NEVER drop a tick — always get a valid time label
       const t = resolveTickTime(data.ts);
 
-    
       // Use socket strangle if valid, else fall back to snap (set from REST snapshot)
       // Accept strangle if > 0, regardless of whether it equals straddle
       const socketStrangle = (data.stranglePrice && data.stranglePrice > 0)
@@ -578,26 +594,25 @@ export default function StraddlePage({ socket }) {
           },
         };
       });
-      // Upsert into skeleton
+      // Upsert into skeleton + keep ref in sync for navigation restore
       setPremHistory(prev => {
         const entry = {
           time:     t,
           straddle: straddlePrice,
-          // Never use straddlePrice as strangle fallback in chart —
-          // they are different values. Use null so the line shows a gap
-          // rather than a wrong value, until full intel cycle fills it.
           strangle: (socketStrangle != null && socketStrangle > 0)
             ? socketStrangle
             : (prev.find(p => p.time === t)?.strangle ?? null),
         };
         const idx = prev.findIndex(p => p.time === t);
+        let next;
         if (idx !== -1) {
-          const next = [...prev];
+          next = [...prev];
           next[idx] = { ...next[idx], ...entry };
-          return next;
+        } else {
+          next = [...prev, entry];
         }
-        // New minute — append. This is what grows the chart rightward.
-        return [...prev, entry];
+        premHistoryRef.current[symbolRef.current] = next;
+        return next;
       });
 
       setLastRefresh(t);
@@ -674,7 +689,9 @@ export default function StraddlePage({ socket }) {
       fetch(`/api/straddle/history?symbol=${symbol}`).then(r => r.json()).catch(() => ({ history: [] })),
     ]).then(([snapData, histData]) => {
       if (!snapData || snapData.error) return;
-      setSnap(prev => ({ ...snapData, expiries: prev?.expiries?.length ? prev.expiries : (snapData.expiries || []) }));
+      const merged = { ...snapData, expiries: snapRef.current?.expiries?.length ? snapRef.current.expiries : (snapData.expiries || []) };
+      snapRef.current = merged;  // ← update ref immediately so expiry guard sees new expiry
+      setSnap(merged);
       fetchPayoff(snapData);
 
       const historyTicks = (histData.history || []).map(h => {
@@ -1016,7 +1033,3 @@ export default function StraddlePage({ socket }) {
     </div>
   );
 }
-const pillStyle = (color) => ({
-  background: `${color}18`, border: `1px solid ${color}40`, color,
-  borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, fontFamily: "monospace",
-});

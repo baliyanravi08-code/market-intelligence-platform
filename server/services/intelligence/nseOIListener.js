@@ -72,7 +72,7 @@ const UNDERLYINGS = [
   { name: "NIFTY",      upstoxKey: "NSE_INDEX|Nifty 50",      lotSize: 75  },
   { name: "BANKNIFTY",  upstoxKey: "NSE_INDEX|Nifty Bank",     lotSize: 35  },
   { name: "FINNIFTY",   upstoxKey: "NSE_INDEX|Nifty Fin Service", lotSize: 65 },
-  { name: "MIDCPNIFTY", upstoxKey: "NSE_INDEX|Nifty Mid Select", lotSize: 120 },
+  { name: "MIDCPNIFTY", upstoxKey: "NSE_INDEX|Nifty MidCap Select", lotSize: 120 },
   { name: "SENSEX",     upstoxKey: "BSE_INDEX|SENSEX",         lotSize: 20  },
 ];
 
@@ -157,6 +157,10 @@ async function fetchExpiries(upstoxKey, token) {
     { params: { instrument_key: upstoxKey }, headers: authHeaders(token), timeout: 15_000 }
   );
   const contracts = res.data?.data || [];
+  if (!contracts.length) {
+    console.warn(`⚠️ OI: fetchExpiries got 0 contracts for key="${upstoxKey}" — wrong instrument key?`);
+    console.warn(`⚠️ OI: MIDCPNIFTY raw response:`, JSON.stringify(res.data).slice(0, 300));
+  }
   const dates = [...new Set(contracts.map(c => c.expiry))].sort();
   return dates;
 }
