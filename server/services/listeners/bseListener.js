@@ -353,7 +353,12 @@ async function processItem(item) {
       .then(doc => {
         if (doc) {
           persistGuidance(doc);
-          if (ioRef) { const b = bp.encodeJSON("guidance_update", doc); ioRef.emit("binary", b); ioRef.emit("guidance_update", doc); }
+          if (ioRef) {
+  const room = ioRef.sockets?.adapter?.rooms?.get("alerts");
+  if (room && room.size > 0) {
+    const b = bp.encodeJSON("guidance_update", doc); ioRef.to("alerts").emit("binary", b); ioRef.to("alerts").emit("guidance_update", doc);
+  }
+}
         }
       })
       .catch(() => {});
@@ -372,7 +377,7 @@ async function processItem(item) {
   persistRadar(radar);
 
   if (ioRef) { const b = bp.encodeJSON("bse_events", [signalWithTs]); ioRef.emit("binary", b); ioRef.emit("bse_events", [signalWithTs]); }
-  if (ioRef) { const b = bp.encodeJSON("radar_update", radar); ioRef.emit("binary", b); ioRef.emit("radar_update", radar); }
+if (ioRef) { ioRef.emit("radar_update", radar); }
 
   if (signalWithTs.type === "ORDER_ALERT") {
     const enrichedSignal = { ...signalWithTs, _orderInfo: signal._orderInfo };
@@ -403,7 +408,7 @@ async function processItem(item) {
     if (orderData) {
       persistOrderBook(orderData);
       if (ioRef) { const b = bp.encodeJSON("order_book_update", orderData); ioRef.emit("binary", b); ioRef.emit("order_book_update", orderData); }
-
+// ← keep as-is, orderbook is needed on main feed
       if (orderData.isMegaOrder || orderData.isMcapAlert || orderData.isFrequencyAlert) {
         const megaPayload = {
           company:        orderData.company,
@@ -423,7 +428,12 @@ async function processItem(item) {
           receivedAt:     signalWithTs.savedAt || Date.now()
         };
         persistMegaOrder(megaPayload);
-        if (ioRef) { const b = bp.encodeJSON("mega_order_alert", megaPayload); ioRef.emit("binary", b); ioRef.emit("mega_order_alert", megaPayload); }
+        if (ioRef) {
+  const b1 = bp.encodeJSON("sector_alerts", [sectorResult]); ioRef.emit("binary", b1); ioRef.emit("sector_alerts", [sectorResult]);
+  if (sectorResult.isBoom) {
+    const b2 = bp.encodeJSON("sector_boom", sectorResult); ioRef.emit("binary", b2); ioRef.emit("sector_boom", sectorResult);
+  }
+}
       }
     }
 

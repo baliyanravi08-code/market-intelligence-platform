@@ -183,10 +183,8 @@ export default function SectorPage({ socket }) {
   };
 
   useEffect(() => {
-    fetchSectors();
-    const iv = setInterval(fetchSectors, 30_000);
-    return () => clearInterval(iv);
-  }, []);
+  fetchSectors(); // one-time seed only
+}, []);
 
   useEffect(() => {
     if (!socket) return;

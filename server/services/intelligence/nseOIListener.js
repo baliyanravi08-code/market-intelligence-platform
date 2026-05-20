@@ -708,20 +708,25 @@ async function pollChains() {
           }
         }
 
-        try {
-          const normalisedRows = buildNormalisedRows(u.name, expiry, raw);
-          const closes         = getSpotHistory(u.name);
+        // Only ingest nearest expiry for intel — far expiries add no signal value
+        // and cause 4× the socket emissions per poll cycle
+        const nearestExpiry = (cache[u.name]?.expiries || [])[0];
+        if (expiry === nearestExpiry) {
+          try {
+            const normalisedRows = buildNormalisedRows(u.name, expiry, raw);
+            const closes         = getSpotHistory(u.name);
 
-          ingestChainData(
-            u.name,
-            spotPrice,
-            normalisedRows,
-            expiry,
-            u.lotSize || 1,
-            closes,
-          );
-        } catch (err) {
-          console.warn(`⚠️ OI Intel ingest error for ${u.name}:`, err.message);
+            ingestChainData(
+              u.name,
+              spotPrice,
+              normalisedRows,
+              expiry,
+              u.lotSize || 1,
+              closes,
+            );
+          } catch (err) {
+            console.warn(`⚠️ OI Intel ingest error for ${u.name}:`, err.message);
+          }
         }
 
         const tailCount = processed.unusualOITailRisk?.length || 0;

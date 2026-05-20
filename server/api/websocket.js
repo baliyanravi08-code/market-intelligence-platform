@@ -616,6 +616,9 @@ function emitPriceTick(symbol, price, change, changePct, prevClose) {
 
 function emitTechBatch(batch) {
   if (!_io || !batch?.length) return;
+  // Only emit if scanner room has clients
+  const room = _io.sockets?.adapter?.rooms?.get("scanner");
+  if (!room || room.size === 0) return;
   try {
     const buf = bp.encodeJSON("scanner-tech-batch", batch);
     _io.to("scanner").emit("binary", buf);

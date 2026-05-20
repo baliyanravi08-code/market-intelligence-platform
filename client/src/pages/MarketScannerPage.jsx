@@ -1452,8 +1452,14 @@ function ScannerBody() {
       if (hasNew) setTechVersion(v => v + 1);
       if (Object.keys(priceUpdates).length > 0) setLivePriceMap(prev => ({ ...prev, ...priceUpdates }));
     });
-    socket.on("ltp", ({ s, p }) => { if (s && p > 0) setLivePriceMap(prev => ({ ...prev, [s]: p })); });
-    socket.on("backtest-live-tick", ({ symbol: sym, price }) => { if (sym && price > 0) setLivePriceMap(prev => ({ ...prev, [sym]: price })); });
+    socket.on("ltp", ({ s, p }) => {
+  if (s && p > 0) setLivePriceMap(prev => {
+    if (Math.abs((prev[s] || 0) - p) < 0.01) return prev; // no change
+    return { ...prev, [s]: p };
+  });
+});
+    // REPLACE: DELETE this entire listener + its cleanup line
+// backtest-live-tick is for BacktestLab only — not for live price display
 
     return () => {
       socket.emit("leave:scanner"); socket.emit("leave:alerts");

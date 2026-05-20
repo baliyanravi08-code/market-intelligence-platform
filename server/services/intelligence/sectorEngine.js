@@ -171,7 +171,7 @@ function ingestFilingSignal(signal) {
         boomType: q.orders >= threshold * 2 ? "SECTOR_BOOM" : "SECTOR_MOMENTUM",
         lastUpdate: timeIST(),
       };
-      if (ioRef) ioRef.emit("sector-update", boom);
+      if (ioRef) ioRef.to("alerts").emit("sector-update", boom);
       console.log(`🔥 SectorEngine boom: ${sector} orders=${q.orders} value=₹${q.totalValue}Cr`);
     }
   }

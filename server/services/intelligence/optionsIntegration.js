@@ -101,15 +101,21 @@ function getIVHistory(symbol) {
 // ── FIX THROTTLE-1: canRun() bypasses throttle for full chains ───────────────
 // chainLength > 80 → full chain → always runs (never throttled)
 // chainLength ≤ 80 → partial chain → throttled at 55s
-const lastRun = {};
+const lastRun    = {};
+const lastEmit   = {};  // ← separate throttle for socket emission
 
 function canRun(key, chainLength) {
-  // FIX THROTTLE-1: full chains always bypass throttle
   if (chainLength > 80) return true;
-
   const now = Date.now();
   if (lastRun[key] && now - lastRun[key] < 55_000) return false;
   lastRun[key] = now;
+  return true;
+}
+
+function canEmit(key) {
+  const now = Date.now();
+  if (lastEmit[key] && now - lastEmit[key] < 120_000) return false; // max once per 2 min
+  lastEmit[key] = now;
   return true;
 }
 
@@ -336,7 +342,7 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
     );
   }
 
-  if (_io) {
+  if (_io && canEmit(`${symbol}_emit`)) {
     // Compute strangle from chain (1-step OTM) so websocket tick has correct value.
     // Engine doesn't compute strangle — we build it here directly from the chain.
     const sortedStrikes = chain.map(r => r.strike).sort((a, b) => a - b);
@@ -350,15 +356,25 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
     const payload = {
       symbol,
       data: {
-        ...result,
+        // Slim payload — only fields needed for live dashboard updates
+        // Heavy fields (gex, dealerExposures, volSurface) omitted from live tick
+        score:     result.score,
+        bias:      result.bias,
+        confidence: result.confidence,
+        spotPrice: result.spotPrice,
+        atmStrike: result.atmStrike,
+        volatility: result.volatility,
+        oi:        result.oi,
+        atmGreeks: result.atmGreeks,
+        strategy:  result.strategy?.slice(0, 2), // top 2 signals only
         structure: {
           ...(result.structure || {}),
           straddlePrice: result.structure?.straddlePrice || 0,
           stranglePrice: stranglePrice > 0 ? stranglePrice : 0,
         },
       },
-      ltp:          spotPrice,
-      ts:           Date.now(),
+      ltp:           spotPrice,
+      ts:            Date.now(),
       straddlePrice: result.structure?.straddlePrice || 0,
       stranglePrice: stranglePrice > 0 ? stranglePrice : 0,
     };

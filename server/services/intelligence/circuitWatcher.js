@@ -404,7 +404,7 @@ async function runPoll() {
     prevTierMap.set(s.symbol, s.tier);
   }
   if (tierChanges.length) {
-    if (ioRef) ioRef.emit("circuit-tier-change", tierChanges);
+    if (ioRef) ioRef.to("alerts").emit("circuit-tier-change", tierChanges);
     emitter.emit("circuit-tier-change", tierChanges);
     console.log(`📈 Tier escalations: ${tierChanges.map(t => `${t.symbol} ${t.from}→${t.to}`).join(", ")}`);
   }
@@ -423,7 +423,7 @@ async function runPoll() {
     .map(s => Object.fromEntries(WATCHLIST_FIELDS.map(f => [f, s[f]])));
 
   lastWatchlist = watchlist;
-  if (ioRef) ioRef.emit("circuit-watchlist", watchlist);
+  if (ioRef) ioRef.to("alerts").emit("circuit-watchlist", watchlist);
   emitter.emit("circuit-watchlist", watchlist);
 
   // ── Radar — pre-circuit zone 3–5%, toward circuit, has volume ────────────
@@ -439,7 +439,7 @@ async function runPoll() {
 
   lastRadar = radar;
   if (radar.length) {
-    if (ioRef) ioRef.emit("circuit-radar", radar);
+    if (ioRef) ioRef.to("alerts").emit("circuit-radar", radar);
     emitter.emit("circuit-radar", radar);
     console.log(`⚡ Radar: ${radar.length} stocks in pre-circuit zone`);
   }
@@ -482,7 +482,7 @@ async function runPoll() {
   if (alerts.length) {
     console.log(`⚡ ${alerts.length} circuit alert(s): ${alerts.map(a => a.symbol).join(", ")}`);
     lastAlerts = alerts;
-    if (ioRef) ioRef.emit("circuit-alerts", alerts);
+    if (ioRef) ioRef.to("alerts").emit("circuit-alerts", alerts);
     emitter.emit("circuit-alerts", alerts);
   }
 }

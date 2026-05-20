@@ -259,7 +259,7 @@ export default function BacktestLab({ onClose, socket }) {
     losses:   signals.filter(s => s.status.includes("LOSS")).length,
     pending:  signals.filter(s => s.status === "PENDING").length,
     avgPnl:   signals.filter(s => s.pnlPct != null).reduce((sum,s,_,a) => sum + s.pnlPct/a.length, 0),
-    bestTrade: signals.reduce((best, s) => s.pnlPct > (best?.pnlPct||−Infinity) ? s : best, null),
+    bestTrade: signals.reduce((best, s) => s.pnlPct > (best?.pnlPct ?? -Infinity) ? s : best, null),
   };
   const overallAcc = stats.resolved ? Math.round((stats.wins / stats.resolved) * 100) : 0;
 

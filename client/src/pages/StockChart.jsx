@@ -190,9 +190,9 @@ export default function StockChart({ symbol, socket }) {
     socket.on("candle:tick",         onCandleTick);
     socket.on("candle:closed",       onCandleClosed);
     socket.on("price:tick",          onPriceTick);
-    socket.on("scanner-tech-batch",  onTechBatch);
-    socket.on("ltp",                 onLTP);
-    socket.on("scanner-update",      onScannerUpdate);
+    socket.off("scanner-tech-batch", onTechBatch);
+    socket.off("ltp",                onLTP);
+    socket.off("scanner-update",     onScannerUpdate);
 
     return () => {
       socket.off("candle:tick",        onCandleTick);

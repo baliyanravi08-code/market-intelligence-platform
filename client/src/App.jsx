@@ -1349,15 +1349,6 @@ return saved && VALID_PAGES.has(saved) ? saved : "dashboard";
     return () => clearInterval(iv);
   }, []);
 
-  useEffect(() => {
-  // One-time seed only — socket handles bse_events/nse_events/sector-update live
-  fetch("/api/events").then(r => r.json()).then(data => {
-    setBseEvents(data.bse || []);
-    setNseEvents(data.nse || []);
-    setOrderBook(data.orderBook || []);
-    setSector(data.sectors || []);
-  }).catch(err => console.log("Events seed fetch error:", err));
-}, []); // ← no interval, runs once only
 
   useEffect(() => {
     fetch("/api/mcap").then(r => r.json()).then(data => { if (Array.isArray(data) && data.length > 0) window._mcapDb = data; }).catch(() => {});

@@ -187,7 +187,11 @@ async function runPoll() {
     if (spikes.length > 0) {
       // Emit to all connected frontend clients
       if (ioRef) {
-        try { const b = bp.encodeJSON("delivery-spikes", spikes); ioRef.emit("binary", b); } catch(_){} ioRef.emit("delivery-spikes", spikes);
+        const room = ioRef.sockets?.adapter?.rooms?.get("alerts");
+        if (room && room.size > 0) {
+          try { const b = bp.encodeJSON("delivery-spikes", spikes); ioRef.to("alerts").emit("binary", b); } catch(_){}
+          ioRef.to("alerts").emit("delivery-spikes", spikes);
+        }
       }
 
       // Also emit on internal bus for other engines (compositeScoreEngine, etc.)

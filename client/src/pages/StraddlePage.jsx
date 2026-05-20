@@ -440,22 +440,26 @@ export default function StraddlePage({ socket }) {
       try {
         // History
         let historyTicks = [];
-        try {
-          const hr = await fetch(`/api/straddle/history?symbol=${currentSymbol}`);
-          const hd = await hr.json();
-          if (Array.isArray(hd.history) && hd.history.length > 0) {
-            historyTicks = hd.history.map(h => {
-              const raw   = h.ts || h.time;
-              const label = raw ? toMarketLabel(raw) : null;
-              if (!label) return null;
-              return {
-                time:     label,
-                straddle: h.straddle ?? h.straddlePrice ?? null,
-                strangle: h.strangle ?? h.stranglePrice ?? null,
-              };
-            }).filter(Boolean);
-          }
-        } catch (e) { console.warn("History fetch failed:", e.message); }
+        const existingSaved = premHistoryRef.current[currentSymbol];
+        const hasCachedHistory = existingSaved?.some(p => p.straddle != null);
+        if (!hasCachedHistory) {
+          try {
+            const hr = await fetch(`/api/straddle/history?symbol=${currentSymbol}`);
+            const hd = await hr.json();
+            if (Array.isArray(hd.history) && hd.history.length > 0) {
+              historyTicks = hd.history.map(h => {
+                const raw   = h.ts || h.time;
+                const label = raw ? toMarketLabel(raw) : null;
+                if (!label) return null;
+                return {
+                  time:     label,
+                  straddle: h.straddle ?? h.straddlePrice ?? null,
+                  strangle: h.strangle ?? h.stranglePrice ?? null,
+                };
+              }).filter(Boolean);
+            }
+          } catch (e) { console.warn("History fetch failed:", e.message); }
+        }
 
         if (cancelled) return;
 

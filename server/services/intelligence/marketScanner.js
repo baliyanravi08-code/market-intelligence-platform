@@ -1618,10 +1618,8 @@ function startHeapMonitor() {
 
 function registerScannerHandlers(io) {
   io.on("connection", socket => {
-    if (scanCache?.updatedAt) {
-      socket.emit("scanner-update", buildPayload(scanCache));
-    }
-
+    // Don't send full payload on bare connection — only send when client
+    // explicitly joins scanner room via join:scanner
     socket.on("get-technicals", async ({ symbol } = {}) => {
       if (!symbol) return;
       try {

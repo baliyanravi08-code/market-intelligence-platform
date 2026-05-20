@@ -272,9 +272,9 @@ async function scan() {
         persistRadar(radar);
 
         if (ioRef) {
-          ioRef.emit("nse_events",   [signal]);
-          ioRef.emit("radar_update", radar);
-        }
+  ioRef.emit("nse_events", [signal]);
+  ioRef.emit("radar_update", radar);
+}
       } catch (e) {
         console.log("⚠️ NSE item error:", e.message);
       }
