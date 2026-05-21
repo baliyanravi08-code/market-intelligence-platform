@@ -1,0 +1,12 @@
+name: Daily Redeploy at 8:50 AM IST
+
+on:
+  schedule:
+    - cron: '20 3 * * 1-5'
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render Deploy
+        run: curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}

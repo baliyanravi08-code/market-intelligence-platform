@@ -1656,6 +1656,7 @@ function startMarketScanner(io) {
   startHeapMonitor();
 
   _lastScanDate = "";
+  maybeResetForNewDay(); // ← ADD THIS ONE LINE
 
   const { totalMins } = getISTTime();
 
