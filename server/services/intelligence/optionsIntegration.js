@@ -312,10 +312,23 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
     }
   }
 
-  // Inject near-ATM and tail-risk OI rows
-  const nearPct       = symbol.toUpperCase().includes("BANK") ? 10 : 8;
-  const nearATMRows   = buildNearATMRows(chain, spotPrice, nearPct);
-  const nearSet       = new Set(nearATMRows.map(r => `${r.strike}-${r.type}`));
+  const nearPct     = symbol.toUpperCase().includes("BANK") ? 10 : 8;
+  const nearATMRows = buildNearATMRows(chain, spotPrice, nearPct);
+
+  // Guard: if near ATM builder returned nothing (e.g. all OI=0 on first cycle),
+  // force-populate from chain so OI panel never shows far OTM tail strikes
+  if (nearATMRows.length === 0 && chain.length > 0) {
+    const sortedByProx = chain
+      .filter(r => r.strike >= spotPrice * (1 - nearPct / 100) && r.strike <= spotPrice * (1 + nearPct / 100))
+      .sort((a, b) => Math.abs(a.strike - spotPrice) - Math.abs(b.strike - spotPrice))
+      .slice(0, 14);
+    for (const r of sortedByProx) {
+      nearATMRows.push({ strike: r.strike, type: "call", oi: r.callOI||0, vol: r.callVol||0, ltp: r.callLTP||0, iv: r.callIV||null, note: "Near ATM call" });
+      nearATMRows.push({ strike: r.strike, type: "put",  oi: r.putOI||0,  vol: r.putVol||0,  ltp: r.putLTP||0,  iv: r.putIV||null, note: "Near ATM put"  });
+    }
+  }
+
+  const nearSet = new Set(nearATMRows.map(r => `${r.strike}-${r.type}`));
   const engineUnusual = result.oi?.unusualOI || [];
   const tailRiskRows  = engineUnusual.filter(r => !nearSet.has(`${r.strike}-${r.type}`));
 

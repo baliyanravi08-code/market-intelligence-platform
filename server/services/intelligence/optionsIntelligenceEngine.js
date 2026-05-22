@@ -215,12 +215,18 @@ function ivRankAndPercentile(currentIV, historicalIVs, hv20 = null, hv60 = null)
   // FIX-IVRANK-C: cap at 95 when synthetic so we never show false 100
   if (usedSynthetic) ivRank = Math.min(ivRank, 95);
 
-  const below        = ivs.filter(v => v < iv).length;
-  const ivPercentile = (below / ivs.length) * 100;
+  const below        = ivs.filter(v => v <= iv * 0.9999).length;
+  const ivPercentile = ivs.length > 0
+    ? Math.round((below / ivs.length) * 100)
+    : 50;
+
+  const finalPercentile = usedSynthetic
+    ? Math.min(ivPercentile, 95)
+    : ivPercentile;
 
   return {
     ivRank:       Math.round(Math.min(100, Math.max(0, ivRank))),
-    ivPercentile: Math.round(Math.min(100, Math.max(0, ivPercentile))),
+    ivPercentile: Math.round(Math.min(100, Math.max(0, finalPercentile))),
     synthetic:    usedSynthetic,
   };
 }
