@@ -227,8 +227,8 @@ async function loadInstrumentMaster(retryCount = 0) {
       const type = (inst.instrument_type || inst.instrumentType || "").toUpperCase();
       const seg  = inst.segment || "";
       if (!sym || !key || type !== "EQ") continue;
-      if (seg === "NSE_EQ" || seg === "BSE_EQ") {
-        if (!map[sym] || seg === "NSE_EQ") map[sym] = key;
+      if (type === "EQ" && (key?.startsWith("NSE_EQ|") || key?.startsWith("BSE_EQ|"))) {
+        if (!map[sym] || key.startsWith("NSE_EQ|")) map[sym] = key;
       }
     }
     console.log(`✅ complete.json.gz parsed: ${Object.keys(map).length} EQ symbols`);
