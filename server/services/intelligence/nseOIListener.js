@@ -489,10 +489,19 @@ function processChain(name, expiry, rawStrikes, spotPrice, lotSize) {
     try {
       const stream = require("../upstoxStream");
       if (stream.updateAtmSubscription) {
-        stream.updateAtmSubscription(name, { ce: ceKey, pe: peKey, atmStrike, expiry });
+        // Find ATM index in sorted array for strangle strikes (ATM+1 CE, ATM-1 PE)
+        const atmIdx     = sorted.findIndex(s => s.strike_price === atmStrike);
+        const scRaw      = atmIdx >= 0 ? sorted[atmIdx + 1] : null;
+        const spRaw      = atmIdx >= 0 ? sorted[atmIdx - 1] : null;
+        const strangleCe = scRaw?.call_options?.instrument_key || null;
+        const stranglePe = spRaw?.put_options?.instrument_key  || null;
+
+        stream.updateAtmSubscription(name, {
+          ce: ceKey, pe: peKey, atmStrike, expiry,
+          strangleCe, stranglePe,
+        });
       }
     } catch (_) {}
-
   }
 
   return {

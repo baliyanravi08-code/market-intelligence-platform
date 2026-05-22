@@ -741,7 +741,7 @@ function MarketStructurePanel({ structure, gannData, gannBadgeMap, activeSymbol,
 // Net savings: ~10 REST requests/5s eliminated → ~600KB/min saved
 // ═══════════════════════════════════════════════════════════════════════════
 
-function StraddlePanel({ d, spot, activeSymbol, liveStraddlePrice, socket }) {
+function StraddlePanel({ d, spot, activeSymbol, liveStraddlePrice, liveStranglePrice, socket }) {
   const [snapData,   setSnapData]   = useState(null);
   const [payoffData, setPayoffData] = useState(null);
   const [history,    setHistory]    = useState([]);
@@ -842,11 +842,12 @@ function StraddlePanel({ d, spot, activeSymbol, liveStraddlePrice, socket }) {
 
   // ── Derived display values ────────────────────────────────────────────────
   const socketStraddlePrice = liveStraddlePrice ?? d?.structure?.straddlePrice ?? null;
+  const socketStranglePrice = liveStranglePrice ?? d?.structure?.stranglePrice ?? null;
   const atmIVRaw            = d?.volatility?.atmIV ?? d?.volatility?.iv ?? null;
   const atmIV               = typeof atmIVRaw === "number" ? atmIVRaw : parseFloat(atmIVRaw) || null;
   const pcr                 = d?.oi?.pcr ?? null;
   const activeStrat    = snapData ? (stratType === "straddle" ? snapData.straddle : snapData.strangle) : null;
-  const displayPremium = activeStrat?.combined ?? socketStraddlePrice;
+  const displayPremium = activeStrat?.combined ?? (stratType === "strangle" ? socketStranglePrice : socketStraddlePrice);
   const displayUBE     = activeStrat?.upperBreakeven ?? null;
   const displayLBE     = activeStrat?.lowerBreakeven ?? null;
   const displayIV      = snapData?.iv?.atm ?? atmIV;
@@ -1015,14 +1016,28 @@ export default function OptionsIntelligencePage({ socket }) {
   }, []);
 
   useEffect(() => {
-  if (!socket) return;
-  socket.emit("join:intel");
-  socket.on("connect", () => socket.emit("join:intel"));
-  return () => {
-    socket.emit("leave:intel");
-    socket.off("connect");
-  };
-}, [socket]);
+    if (!socket) return;
+    const rejoin = () => {
+      socket.emit("join:intel");
+    };
+    rejoin();
+    socket.on("connect", rejoin);
+    socket.on("reconnect", rejoin);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        rejoin();
+      } else {
+        socket.emit("leave:intel");
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      socket.emit("leave:intel");
+      socket.off("connect", rejoin);
+      socket.off("reconnect", rejoin);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [socket]);
 
   // ── Weekend / after-hours REST cache (one-time, not polling) ─────────────
   useEffect(() => {
@@ -1288,7 +1303,7 @@ export default function OptionsIntelligencePage({ socket }) {
               <GannPanel gann={gannData} />
               <MarketStructurePanel structure={structure} gannData={gannData} gannBadgeMap={gannBadgeMap} activeSymbol={activeSymbol} spot={spot} callWall={gex.callWall} putWall={gex.putWall} gammaFlip={gex.gammaFlip} maxPain={oi.maxPain} pcr={oi.pcr} skew25={skew25} />
               {/* FIX-BW: pass socket prop so StraddlePanel can use socket events */}
-              <StraddlePanel d={d} spot={spot} activeSymbol={activeSymbol} liveStraddlePrice={liveStraddle} socket={socket} />
+              <StraddlePanel d={d} spot={spot} activeSymbol={activeSymbol} liveStraddlePrice={liveStraddle} liveStranglePrice={liveTicks[activeSymbol]?.stranglePrice ?? null} socket={socket} />
             </div>
 
           </div>
