@@ -759,15 +759,18 @@ function emitOptionsIntel(data) {
           if (atmRow) {
             const straddle = (atmRow.ce?.ltp || 0) + (atmRow.pe?.ltp || 0);
             if (straddle > 0) {
-              const cur3 = _straddleCache.get(sym2) || {};
-              if (!cur3.straddlePrice) {
-                _straddleCache.set(sym2, {
-                  ...cur3,
-                  straddlePrice: straddle,
-                  timestamp: Date.now(),
-                });
-              }
-            }
+  const cur3 = _straddleCache.get(sym2) || {};
+  if (!cur3.straddlePrice) {
+    const seeded = {
+      ...cur3,
+      straddlePrice: straddle,
+      timestamp: Date.now(),
+    };
+    _straddleCache.set(sym2, seeded);
+    // Immediately persist first tick so history starts at first NSE poll (~9:16)
+    _persistStraddleTick(sym2, straddle, cur3.stranglePrice || 0, cur3.spotPrice || 0, cur3.pcr ?? null, Date.now());
+  }
+}
           }
         }
       }
