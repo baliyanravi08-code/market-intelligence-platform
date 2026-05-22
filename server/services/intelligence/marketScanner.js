@@ -1264,7 +1264,33 @@ async function fetchCandles(symbol, days, interval) {
 
   const tf = INTERVAL_TO_TF[interval] || "1day";
 
-  // ── NSE historical (works without Upstox token) ───────────────────────────
+  // Try Upstox historical first (works from any IP, no geo-block)
+if (["1day","1week","1month"].includes(tf)) {
+  try {
+    const token = getUpstoxToken();
+    const instrKey = getInstrumentKey(symbol);
+    if (token && instrKey) {
+      const toDate   = new Date().toISOString().split("T")[0];
+      const fromDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+      const upstoxInterval = tf === "1week" ? "week" : tf === "1month" ? "month" : "day";
+      const res = await axios.get(
+        `https://api.upstox.com/v2/historical-candle/${encodeURIComponent(instrKey)}/${upstoxInterval}/${toDate}/${fromDate}`,
+        { headers: { Authorization: "Bearer " + token, Accept: "application/json" }, timeout: 12000 }
+      );
+      const candles = (res.data?.data?.candles || []).reverse().map(c => ({
+        o: parseFloat(c[1]), h: parseFloat(c[2]), l: parseFloat(c[3]),
+        c: parseFloat(c[4]), v: parseFloat(c[5] || 0),
+      })).filter(c => c.c > 0);
+      if (candles.length >= 5) {
+        console.log(`📊 [${symbol}][${tf}] Upstox historical: ${candles.length} candles`);
+        return candles;
+      }
+    }
+  } catch (e) {
+    console.warn(`📊 [${symbol}][${tf}] Upstox historical failed: ${e.message}`);
+  }
+}
+      // ── NSE historical fallback ───────────────────────────────────────────────
   if (["1day","1week","1month"].includes(tf)) {
     await refreshNSECookie();
     try {
@@ -1290,6 +1316,7 @@ async function fetchCandles(symbol, days, interval) {
       console.warn(`📊 [${symbol}][${tf}] NSE historical failed: ${e.message}`);
     }
   }
+  
 
   // ── NSE intraday fallback ─────────────────────────────────────────────────
   if (["5min","15min","1hour","4hour"].includes(tf)) {

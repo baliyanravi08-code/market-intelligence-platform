@@ -372,6 +372,7 @@ function runAnalysis(symbol, spotPrice, rawRows, expiryDate, lotSize) {
           straddlePrice: result.structure?.straddlePrice || 0,
           stranglePrice: stranglePrice > 0 ? stranglePrice : 0,
         },
+        gex:       result.gex || null,
       },
       ltp:           spotPrice,
       ts:            Date.now(),
