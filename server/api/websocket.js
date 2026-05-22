@@ -94,11 +94,10 @@ const _straddleCache = new Map(); // sym → { straddlePrice, stranglePrice, pcr
  * emit the same value as the REST snapshot.
  */
 function setCachedStraddleSnap(symbol, snap) {
-  // Cold-start disk seed only. Exits if live price already set.
   if (!symbol || !snap) return;
   const sym = symbol.toUpperCase();
   const existing = _straddleCache.get(sym) || {};
-  if (existing.straddlePrice > 0) return;
+  if (existing._isLive) return;
   _straddleCache.set(sym, {
     straddlePrice: snap.straddle?.combined ?? 0,
     stranglePrice: snap.strangle?.combined ?? 0,
@@ -107,6 +106,7 @@ function setCachedStraddleSnap(symbol, snap) {
     totalCallOI: snap.oi?.ce   ?? 0,
     totalPutOI:  snap.oi?.pe   ?? 0,
     timestamp:   snap.timestamp ?? Date.now(),
+    _isLive:     false,
   });
 }
 
@@ -118,6 +118,7 @@ function updateLiveStraddlePrice(symbol, straddlePrice) {
   _straddleCache.set(sym, {
     ...existing,
     straddlePrice,
+    _isLive: true,
     timestamp: Date.now(),
   });
   // Persist every live ATM tick to disk history (1 entry per minute)

@@ -1644,7 +1644,6 @@ function registerScannerHandlers(io) {
   });
 }
 
-// ── startMarketScanner ────────────────────────────────────────────────────────
 function startMarketScanner(io) {
   if (ioRef) {
     console.warn("📊 startMarketScanner called twice — ignoring duplicate call");
@@ -1655,8 +1654,29 @@ function startMarketScanner(io) {
   registerScannerHandlers(io);
   startHeapMonitor();
 
-  _lastScanDate = "";
-  maybeResetForNewDay(); // ← ADD THIS ONE LINE
+  console.log("📊 startMarketScanner: clearing all caches for fresh start");
+  stockBySymbol.clear();
+  techCache.clear();
+  lastBacktestCapture = "";
+  scanCache = {
+    gainers: [], losers: [], allStocks: [],
+    byMcap: { largecap: [], midcap: [], smallcap: [], microcap: [] },
+    bySector: [], updatedAt: 0,
+    advancing: 0, declining: 0, unchanged: 0, totalCount: 0,
+    isPremarket: true,
+  };
+
+  try {
+    const { resetDailyCache } = require("../upstoxStream");
+    if (typeof resetDailyCache === "function") {
+      resetDailyCache();
+      console.log("📊 startMarketScanner: Upstox prevCloseCache cleared");
+    }
+  } catch (e) {
+    console.warn("📊 Could not reset upstoxStream cache:", e.message);
+  }
+
+  _lastScanDate = getISTDateStr();
 
   const { totalMins } = getISTTime();
 
@@ -1664,20 +1684,14 @@ function startMarketScanner(io) {
     console.log("📊 Market Scanner starting — market is open, running immediately");
     runScanner().then(() => {
       scheduleNextRun();
-      // If between 9:08–9:19, schedule 9:20 signal scan
       if (totalMins >= T_PREOPEN_LOCKED && totalMins < T_FIRST_CANDLE) {
         _scheduleMarketOpenRun();
       }
     });
   } else {
-    maybeResetForNewDay();
     console.log("📊 Market Scanner starting — market closed, scheduling");
     scheduleNextRun();
-
-    // If between 9:00–9:07, schedule pre-open scan at 9:08
     _schedulePreopenScan();
-
-    // Schedule signal scan at 9:20
     _scheduleMarketOpenRun();
   }
 
@@ -1686,7 +1700,6 @@ function startMarketScanner(io) {
   console.log(`📊   → RSI/MACD/MA:    9:08 AM (from daily candles)`);
   console.log(`📊   → Entry/SL/TP:    9:20 AM (first 5-min candle)`);
 }
-
 function getScannerData()                { return scanCache; }
 async function getTechnicalsREST(symbol) { return getTechnicals(symbol); }
 
