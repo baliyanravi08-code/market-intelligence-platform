@@ -597,7 +597,7 @@ function TechSkeleton() {
 // ─────────────────────────────────────────────────────────────────────────────
 // STOCK ROW
 // ─────────────────────────────────────────────────────────────────────────────
-function StockRow({ stock, rank, onSelect, selected, tech, livePrice }) {
+function StockRow({ stock, rank, onSelect, selected, tech, livePrice, _v }) {
   let prevClose = stock.prevClose || 0;
   if (prevClose <= 0 && stock.changePct !== 0 && stock.ltp > 0) {
     prevClose = Math.round((stock.ltp / (1 + stock.changePct / 100)) * 100) / 100;

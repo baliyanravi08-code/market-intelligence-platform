@@ -1173,7 +1173,7 @@ function computeTechnicals(symbol, candles) {
   // FIX-3: Only suppress entry/sl/tp until 9:20 (first 5-min candle).
   // RSI, MACD, MA are computed from daily candles — always valid.
   // Signal badge suppressed too (needs real open to be meaningful).
-  const suppressTradeLevels = nowMins >= T_MARKET_START && nowMins < T_FIRST_CANDLE;
+  const suppressTradeLevels = nowMins >= T_MARKET_START && nowMins < T_FIRST_CANDLE && isMarketHours();
 
   const finalSignal = suppressTradeLevels ? "HOLD"      : sig;
   const finalEntry  = suppressTradeLevels ? null        : entry;
@@ -1514,6 +1514,10 @@ async function runScanner() {
     // DO NOT overwrite stock.ltp — candle close is prev day close, not live price
 
     // FIX-2: Only exclude truly stale stocks from gainers/losers
+    // Populate stockBySymbol so applyLiveTick and techCache can find stocks
+    for (const s of stocks) stockBySymbol.set(s.symbol, s);
+
+    // DO NOT overwrite stock.ltp — candle close is prev day close, not live price
     // From 9:08 onward _stalePreopen is false so tradedStocks = all stocks
     const tradedStocks = stocks.filter(s => !s._stalePreopen);
     const staleCount   = stocks.length - tradedStocks.length;

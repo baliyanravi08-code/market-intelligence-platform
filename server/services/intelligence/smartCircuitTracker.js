@@ -128,7 +128,7 @@ function updateDayHistory(symbol, side, distPct) {
 async function scanCircuits(symbols) {
   const token    = tokenGetter?.();
   const instrMap = instrumentGetter?.() || {};
-  const toScan   = symbols.filter(s => instrMap[s]).slice(0, CIRCUIT_SCAN_SYMBOLS);
+  const toScan = symbols.filter(s => instrMap[s] || instrMap[s?.toUpperCase()]).slice(0, CIRCUIT_SCAN_SYMBOLS);
 
   console.log(`🔍 SmartCircuit scan: token=${!!token}, instrMap=${Object.keys(instrMap).length}, toScan=${toScan.length}`);
 
@@ -140,7 +140,7 @@ async function scanCircuits(symbols) {
 
   for (let i = 0; i < toScan.length; i += BATCH) {
     const batch = toScan.slice(i, i + BATCH);
-    const keys  = batch.map(s => instrMap[s]).join(",");
+    const keys  = batch.map(s => instrMap[s] || instrMap[s?.toUpperCase()]).filter(Boolean).join(",");
     try {
       const r = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
         params:  { instrument_key: keys },
@@ -151,7 +151,7 @@ async function scanCircuits(symbols) {
       console.log(`📊 SmartCircuit batch ${i / BATCH + 1}: got ${Object.keys(data).length} quotes`);
 
       for (const sym of batch) {
-        const key   = instrMap[sym];
+        const key   = instrMap[sym] || instrMap[sym?.toUpperCase()];
         const quote = data[key] || data[key?.replace("|", ":")] || null;
         if (!quote) continue;
 

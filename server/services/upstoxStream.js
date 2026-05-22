@@ -264,7 +264,16 @@ function subscribeStocksForBacktest(symbols) {
   if (!newKeys.length) return;
   newKeys.forEach(k => stockInstruments.add(k));
   for (const sym of symbols) { evictMapIfNeeded(instrKeyToSymbol, MAX_MAP_ENTRIES); instrKeyToSymbol.set(`NSE_EQ|${sym.toUpperCase()}`, sym.toUpperCase()); }
-  if (streamer) { try { streamer.subscribe(newKeys, "full"); } catch (e) { console.warn("⚠️ stock subscribe error:", e.message); } }
+  if (streamer) {
+    try { streamer.subscribe(newKeys, "full"); }
+    catch (e) {
+      console.warn("⚠️ stock subscribe error:", e.message);
+      newKeys.forEach(k => pendingSubscriptions.add(k)); // queue for reconnect
+    }
+  } else {
+    newKeys.forEach(k => pendingSubscriptions.add(k)); // streamer not ready yet
+    console.log(`📡 stock keys queued (streamer not ready): ${newKeys.length}`);
+  }
 }
 
 function subscribeWithInstrumentKeys(instrKeys, symbolMap) {
