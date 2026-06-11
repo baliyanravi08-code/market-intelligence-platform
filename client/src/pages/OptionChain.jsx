@@ -766,7 +766,7 @@ function mergeChainData(prev, next) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function OptionChain({ onBack }) {
+export default function OptionChain({ onBack, socket: externalSocket }) {
   const saved = useMemo(() => loadSession(), []);
 
   const [underlying,     setUnderlying]  = useState(saved?.underlying || "NIFTY");
@@ -837,9 +837,11 @@ export default function OptionChain({ onBack }) {
   }, []);
 
   useEffect(() => {
-    const socket = io(window.location.origin, { transports: ["websocket"] });
+    const isOwnSocket = !externalSocket;
+    const socket = externalSocket || io(window.location.origin, { transports: ["websocket"] });
     socketRef.current = socket;
-    socket.on("connect", () => {
+    if (isOwnSocket) {
+      socket.on("connect", () => {
       setConnStatus("live");
       socket.emit("request-option-chain", { underlying, expiry: selectedExpiry });
     });
@@ -873,7 +875,8 @@ export default function OptionChain({ onBack }) {
       setLastUpdate(Date.now());
       setConnStatus("live");
     });
-    return () => { socket.disconnect(); setConnStatus("disconnected"); };
+    }
+    return () => { if (isOwnSocket) socket.disconnect(); setConnStatus("disconnected"); };
   }, [underlying]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

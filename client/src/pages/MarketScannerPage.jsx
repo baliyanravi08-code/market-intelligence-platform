@@ -1287,13 +1287,13 @@ function BacktestPanel({ onClose, techCacheRef }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
-export default function MarketScannerPage() {
+export default function MarketScannerPage({ socket }) {
   const [authed, setAuthed] = useState(() => sessionStorage.getItem(SESSION_KEY) === "1");
   if (!authed) return <AccessGate onAuth={() => setAuthed(true)} />;
-  return <ScannerBody />;
+  return <ScannerBody socket={socket} />;
 }
 
-function ScannerBody() {
+function ScannerBody({ socket: externalSocket }) {
   const [data,         setData]         = useState(null);
   const [selectedSym,  setSelectedSym]  = useState(null);
   const [tech,         setTech]         = useState(null);
@@ -1410,7 +1410,8 @@ function ScannerBody() {
 
   // Socket
   useEffect(() => {
-    const socket = getSocket();
+    const socket = externalSocket || getSocket();
+    if (!socket) return;
     socket.emit("join:scanner");
     socket.emit("join:alerts");
     socket.emit("backtest:start");
@@ -1475,7 +1476,7 @@ function ScannerBody() {
     selectedSymRef.current = symbol;
     setSelectedSym(symbol);
     setTech(null);
-    getSocket().emit("watch:chart", symbol);
+    (externalSocket || getSocket()).emit("watch:chart", symbol);
 
     if (techCacheRef.current[key]) {
       setTech(techCacheRef.current[key]);
@@ -1523,7 +1524,7 @@ function ScannerBody() {
     setTech(null);
     setTechLoading(false);
     setActiveTF("1day"); activeTFRef.current = "1day";
-    getSocket().emit("watch:chart", null);
+    (externalSocket || getSocket()).emit("watch:chart", null);
   }, []);
 
   const stocks   = getStocksForTab(data, tab);
@@ -1711,7 +1712,7 @@ function ScannerBody() {
           timeframe={activeTF}
           livePrice={livePriceMap[selectedSym] ?? null}
           onTimeframeChange={handleTimeframeChange}
-          socket={getSocket()}
+          socket={externalSocket || getSocket()}
           onClose={handleClose}
         />
       )}

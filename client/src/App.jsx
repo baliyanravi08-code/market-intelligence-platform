@@ -1468,7 +1468,7 @@ return saved && VALID_PAGES.has(saved) ? saved : "dashboard";
     return (
       <div className="terminal" style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
         {sharedHeader}{sharedTicker}
-        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}><OptionChain onBack={() => setCurrentPage("dashboard")} /></div>
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}><OptionChain onBack={() => setCurrentPage("dashboard")} socket={socket} /></div>
         <TickerModal item={selectedTicker} onClose={() => setSelectedTicker(null)} />
       </div>
     );
