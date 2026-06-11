@@ -259,19 +259,39 @@ function subscribeOptions(instrKeys) {
 
 function subscribeStocksForBacktest(symbols) {
   if (!symbols || !symbols.length) return;
-  const keys    = symbols.map(s => `NSE_EQ|${s.toUpperCase()}`);
-  const newKeys = keys.filter(k => !stockInstruments.has(k));
+
+  // Use ISIN-based instrument keys from _instrMap when available.
+  // Fallback to NSE_EQ|SYMBOL only when not in map.
+  // This is the fix — previously hardcoded NSE_EQ|SYMBOL keys were subscribed
+  // but Upstox sends ticks on ISIN keys (NSE_EQ|INE002A01018), so instrKeyToSymbol
+  // never matched incoming ticks and applyLiveTick never fired.
+  const keyToSym = {};
+  for (const sym of symbols) {
+    const s      = sym.toUpperCase();
+    const isinKey = _instrMap[s];
+    const key     = isinKey || `NSE_EQ|${s}`;
+    keyToSym[key] = s;
+  }
+
+  const newKeys = Object.keys(keyToSym).filter(k => !stockInstruments.has(k));
   if (!newKeys.length) return;
+
   newKeys.forEach(k => stockInstruments.add(k));
-  for (const sym of symbols) { evictMapIfNeeded(instrKeyToSymbol, MAX_MAP_ENTRIES); instrKeyToSymbol.set(`NSE_EQ|${sym.toUpperCase()}`, sym.toUpperCase()); }
+  for (const [key, sym] of Object.entries(keyToSym)) {
+    evictMapIfNeeded(instrKeyToSymbol, MAX_MAP_ENTRIES);
+    instrKeyToSymbol.set(key, sym);
+  }
+
+  console.log(`📡 subscribeStocksForBacktest: ${newKeys.length} symbols (ISIN keys: ${newKeys.filter(k => k.includes('INE')).length})`);
+
   if (streamer) {
     try { streamer.subscribe(newKeys, "full"); }
     catch (e) {
       console.warn("⚠️ stock subscribe error:", e.message);
-      newKeys.forEach(k => pendingSubscriptions.add(k)); // queue for reconnect
+      newKeys.forEach(k => pendingSubscriptions.add(k));
     }
   } else {
-    newKeys.forEach(k => pendingSubscriptions.add(k)); // streamer not ready yet
+    newKeys.forEach(k => pendingSubscriptions.add(k));
     console.log(`📡 stock keys queued (streamer not ready): ${newKeys.length}`);
   }
 }
