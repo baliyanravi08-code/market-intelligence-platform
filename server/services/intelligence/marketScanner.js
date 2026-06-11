@@ -610,9 +610,71 @@ async function runSignalScanOnly() {
   console.log("📊 9:20 SIGNAL SCAN — computing technicals from first 5-min candle");
 
   if (stockBySymbol.size === 0) {
-    console.warn("📊 stockBySymbol empty — falling back to full scan");
-    await runScanner();
-    return;
+    console.warn("📊 stockBySymbol empty at 9:20 — seeding from Upstox stream prevCloseCache");
+    // Seed stockBySymbol from prevCloseCache in upstoxStream so we don't
+    // depend on NSE (which 403s frequently). Without this, 9:20 signal scan
+    // silently does nothing if the 9:08 NSE scan failed.
+    try {
+      const stream = require("../upstoxStream");
+      const { getAccessToken } = stream;
+      const token = getAccessToken();
+      if (token && Object.keys(_instrumentMap).length > 0) {
+        // Pull top 90 liquid symbols via Upstox quotes batch
+        const TOP_SYMBOLS = [
+          "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","SBIN","AXISBANK","KOTAKBANK",
+          "LT","WIPRO","BAJFINANCE","BHARTIARTL","HINDUNILVR","NTPC","SUNPHARMA",
+          "TATAMOTORS","TATASTEEL","MARUTI","TITAN","ITC","ADANIENT","ADANIPORTS",
+          "HCLTECH","TECHM","ZOMATO","JSWSTEEL","HINDALCO","COALINDIA","DRREDDY","CIPLA",
+          "BAJAJ-AUTO","BAJAJFINSV","NESTLEIND","ASIANPAINT","HAL","BEL","RECLTD","PFC",
+          "POLYCAB","PERSISTENT","COFORGE","LTIM","TATAPOWER","ADANIGREEN","NHPC","IRCTC",
+          "IRFC","TRENT","VEDL","SUZLON","SAIL","NMDC","BANKBARODA","CANBK","PNB",
+          "FEDERALBNK","CHOLAFIN","MUTHOOTFIN","DLF","GODREJPROP","HAVELLS","DIXON",
+          "M&M","HEROMOTOCO","EICHERMOT","ASHOKLEY","APOLLOHOSP","JUBLFOOD","MARICO",
+          "DABUR","COLPAL","GODREJCP","ZYDUSLIFE","LUPIN","ALKEM","TORNTPHARM",
+          "OBEROIRLTY","PHOENIXLTD","PRESTIGE","MCX","CDSL","CAMS","ANGELONE",
+          "JSWENERGY","TATACONSUM","SBILIFE","HDFCLIFE","BRITANNIA","ONGC","BPCL","GRASIM",
+        ];
+        const axios = require("axios");
+        const keys = TOP_SYMBOLS.map(s => _instrumentMap[s]).filter(Boolean).slice(0, 90);
+        if (keys.length > 0) {
+          const res = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
+            params: { instrument_key: keys.join(",") },
+            headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+            timeout: 15000,
+          });
+          const quotes = res.data?.data || {};
+          const reverseMap = {};
+          for (const [sym, key] of Object.entries(_instrumentMap)) reverseMap[key] = sym;
+          for (const [key, q] of Object.entries(quotes)) {
+            const sym = reverseMap[key] || key.split("|").pop();
+            const ltp = parseFloat(q.last_price || 0);
+            const prevClose = parseFloat(q.ohlc?.close || 0);
+            if (!ltp || ltp <= 0) continue;
+            const changeAbs = prevClose > 0 ? ltp - prevClose : 0;
+            const changePct = prevClose > 0 ? (changeAbs / prevClose) * 100 : 0;
+            const volume = parseInt(q.volume || 0, 10);
+            const bucket = getMcapBucket(sym, ltp, volume);
+            stockBySymbol.set(sym, {
+              symbol: sym, name: sym, ltp, prevClose, changePct,
+              change: Math.round(changeAbs * 100) / 100,
+              volume, mcapBucket: bucket,
+              mcapLabel: MCAP_BUCKETS[bucket]?.label || "Micro Cap",
+              exchange: key.startsWith("BSE") ? "BSE" : "NSE",
+              _prevCloseFromExchange: prevClose > 0,
+              _stalePreopen: false,
+            });
+          }
+          console.log(`📊 9:20 seed: ${stockBySymbol.size} stocks from Upstox quotes`);
+        }
+      }
+    } catch (e) {
+      console.warn("📊 9:20 Upstox seed failed:", e.message);
+    }
+    // If still empty after seed attempt, abort gracefully
+    if (stockBySymbol.size === 0) {
+      console.warn("📊 9:20 seed also failed — skipping signal scan");
+      return;
+    }
   }
 
   // Priority: gainers + losers + large caps (most watched by users)

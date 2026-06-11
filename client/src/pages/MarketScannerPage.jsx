@@ -1307,6 +1307,8 @@ function ScannerBody({ socket: externalSocket }) {
   const [displayLimit, setDisplayLimit] = useState(500);
   const [autoCapMsg,   setAutoCapMsg]   = useState("");
   const [livePriceMap, setLivePriceMap] = useState({});
+  const livePriceBufferRef = useRef({});
+  const livePriceFlushTimer = useRef(null);
   const [techVersion,  setTechVersion]  = useState(0);
 
   // ── PATCH 1: isPremarket state ────────────────────────────────────────────
@@ -1454,11 +1456,28 @@ function ScannerBody({ socket: externalSocket }) {
       if (Object.keys(priceUpdates).length > 0) setLivePriceMap(prev => ({ ...prev, ...priceUpdates }));
     });
     socket.on("ltp", ({ s, p }) => {
-  if (s && p > 0) setLivePriceMap(prev => {
-    if (Math.abs((prev[s] || 0) - p) < 0.01) return prev; // no change
-    return { ...prev, [s]: p };
-  });
-});
+      if (!s || !(p > 0)) return;
+      livePriceBufferRef.current[s] = p;
+      if (!livePriceFlushTimer.current) {
+        livePriceFlushTimer.current = setTimeout(() => {
+          livePriceFlushTimer.current = null;
+          const buf = livePriceBufferRef.current;
+          if (!Object.keys(buf).length) return;
+          livePriceBufferRef.current = {};
+          setLivePriceMap(prev => {
+            let changed = false;
+            const next = { ...prev };
+            for (const [sym, price] of Object.entries(buf)) {
+              if (Math.abs((prev[sym] || 0) - price) >= 0.01) {
+                next[sym] = price;
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
+        }, 500);
+      }
+    });
     // REPLACE: DELETE this entire listener + its cleanup line
 // backtest-live-tick is for BacktestLab only — not for live price display
 
@@ -1466,7 +1485,7 @@ function ScannerBody({ socket: externalSocket }) {
       socket.emit("leave:scanner"); socket.emit("leave:alerts");
       socket.off("scanner:snapshot"); socket.off("scanner:diff");
       socket.off("scanner-update"); socket.off("scanner-tech-batch");
-      socket.off("ltp"); socket.off("backtest-live-tick");
+      socket.off("ltp");
     };
   }, [rebuildDataFromMap]);
 
