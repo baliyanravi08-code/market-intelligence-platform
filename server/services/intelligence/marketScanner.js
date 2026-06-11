@@ -1593,7 +1593,17 @@ async function runScanner() {
     const nseSymbols = new Set(nseStocks.map(s => s.symbol));
     const bseStocks  = bseRaw.map(normaliseBSE).filter(Boolean).filter(s => !nseSymbols.has(s.symbol));
     let stocks       = [...nseStocks, ...bseStocks];
-    if (!stocks.length) { console.warn("📊 No stocks — skipping"); return; }
+
+    if (!stocks.length) {
+      // NSE/BSE both failed — use whatever Upstox stream has already populated
+      if (stockBySymbol.size > 0) {
+        console.warn(`📊 NSE/BSE returned 0 — rebuilding from ${stockBySymbol.size} Upstox live ticks`);
+        stocks = [...stockBySymbol.values()];
+      } else {
+        console.warn("📊 No stocks from NSE/BSE and Upstox stream empty — skipping");
+        return;
+      }
+    }
 
     stocks = stocks.map(s => {
       const bucket = getMcapBucket(s.symbol, s.ltp, s.volume);

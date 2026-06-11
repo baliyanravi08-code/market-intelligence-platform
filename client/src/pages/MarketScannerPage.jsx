@@ -1312,7 +1312,14 @@ function ScannerBody({ socket: externalSocket }) {
   const [techVersion,  setTechVersion]  = useState(0);
 
   // ── PATCH 1: isPremarket state ────────────────────────────────────────────
-  const [isPremarket,  setIsPremarket]  = useState(false);
+  const [isPremarket, setIsPremarket] = useState(() => {
+    // Compute client-side on mount — don't wait for server
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const day  = now.getDay();
+    // Pre-market: weekday 9:00–9:15 only
+    return day !== 0 && day !== 6 && mins >= 540 && mins < 555;
+  });
 
   const techCacheRef   = useRef({});
   const selectedSymRef = useRef(null);
