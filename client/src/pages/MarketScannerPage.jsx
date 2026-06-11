@@ -1313,11 +1313,11 @@ function ScannerBody({ socket: externalSocket }) {
 
   // ── PATCH 1: isPremarket state ────────────────────────────────────────────
   const [isPremarket, setIsPremarket] = useState(() => {
-    // Compute client-side on mount — don't wait for server
-    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const now  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
     const mins = now.getHours() * 60 + now.getMinutes();
     const day  = now.getDay();
-    // Pre-market: weekday 9:00–9:15 only
+    // PRE-MARKET: 9:00–9:15 AM IST on weekdays only
+    // Market OPEN: 9:15 AM–3:30 PM → isPremarket = false
     return day !== 0 && day !== 6 && mins >= 540 && mins < 555;
   });
 
@@ -1380,7 +1380,11 @@ function ScannerBody({ socket: externalSocket }) {
         const res = await fetch("/api/scanner");
         const d   = await res.json();
         if (d.error && !d.weekend && !d.isPremarket) return;
-        setIsPremarket(d.isPremarket || false);
+        const nowIST2   = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+        const mins2     = nowIST2.getHours() * 60 + nowIST2.getMinutes();
+        const day2      = nowIST2.getDay();
+        const mktOpen2  = day2 !== 0 && day2 !== 6 && mins2 >= 555 && mins2 < 930;
+        if (!mktOpen2) setIsPremarket(d.isPremarket || false);
         // Use allStocks if available (faster than reconstructing from gainers/losers)
         const allSrc = d.allStocks?.length ? d.allStocks
           : [...(d.gainers||[]), ...(d.losers||[]), ...Object.values(d.byMcap||{}).flat()];
@@ -1440,7 +1444,14 @@ function ScannerBody({ socket: externalSocket }) {
     socket.on("scanner-update", d => {
       setData(d);
       setUpdatedAt(new Date(d.updatedAt));
-      setIsPremarket(d.isPremarket || false);   // ← PATCH: track premarket flag
+      // Never trust server's isPremarket=true if client clock says market is open.
+      // Server may send stale premarket flag if scanner ran before 9:15 and cached it.
+      const nowIST  = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+      const mins    = nowIST.getHours() * 60 + nowIST.getMinutes();
+      const day     = nowIST.getDay();
+      const marketOpen = day !== 0 && day !== 6 && mins >= 555 && mins < 930;
+      if (!marketOpen) setIsPremarket(d.isPremarket || false);
+      // If market is open (9:15–3:30 IST), ignore server flag — always show live data
       if (d.allStocks) { const map = new Map(); d.allStocks.forEach(s => map.set(s.symbol, s)); stockMapRef.current = map; }
     });
 
