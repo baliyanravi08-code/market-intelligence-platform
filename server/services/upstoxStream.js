@@ -419,7 +419,7 @@ function parseAndEmit(raw) {
               changePct = Math.round(((price - prevClose) / prevClose) * 10000) / 100;
             }
             let symbol = instrKeyToSymbol.get(key);
-            if (!symbol) symbol = key.replace(/^(NSE_EQ|BSE_EQ)\|/, "");
+            if (!symbol) symbol = key.replace(/^(?:NSE_EQ|BSE_EQ)\|/, "");
 
             const ws = getWS();
 

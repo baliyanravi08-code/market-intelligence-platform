@@ -646,15 +646,11 @@ async function runSignalScanOnly() {
           const reverseMap = {};
           for (const [sym, key] of Object.entries(_instrumentMap)) reverseMap[key] = sym;
           for (const [key, q] of Object.entries(quotes)) {
-            for (const [key, q] of Object.entries(quotes)) {
-  let sym = reverseMap[key];
-  if (!sym) {
-    const normalized = key.replace(":", "|");
-    sym = reverseMap[normalized] || key.split(/[|:]/).pop();
-  }
-  // sym is now correct ticker, e.g. "NATIONALUM"
-
-}
+            let sym = reverseMap[key];
+            if (!sym) {
+              const normalized = key.replace(":", "|");
+              sym = reverseMap[normalized] || key.split(/[|:]/).pop();
+            }
             const ltp = parseFloat(q.last_price || 0);
             const prevClose = parseFloat(q.ohlc?.close || 0);
             if (!ltp || ltp <= 0) continue;
@@ -1628,14 +1624,11 @@ async function runScanner() {
                 });
                 const quotes = res.data?.data || {};
                 for (const [key, q] of Object.entries(quotes)) {
-                  for (const [key, q] of Object.entries(quotes)) {
-  let sym = reverseMap[key];
-  if (!sym) {
-    const normalized = key.replace(":", "|");
-    sym = reverseMap[normalized] || key.split(/[|:]/).pop();
-  }
-  // sym is now correct ticker, e.g. "NATIONALUM"
-}
+                  let sym = reverseMap[key];
+                  if (!sym) {
+                    const normalized = key.replace(":", "|");
+                    sym = reverseMap[normalized] || key.split(/[|:]/).pop();
+                  }
                   const ltp = parseFloat(q.last_price || 0);
                   const prevClose = parseFloat(q.ohlc?.close || 0);
                   if (!ltp || ltp <= 0) continue;
