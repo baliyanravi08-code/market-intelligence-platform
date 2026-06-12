@@ -1600,7 +1600,8 @@ async function runScanner() {
         console.warn(`📊 NSE/BSE returned 0 — rebuilding from ${stockBySymbol.size} Upstox live ticks`);
         stocks = [...stockBySymbol.values()];
       } else {
-        console.warn("📊 No stocks from NSE/BSE and Upstox stream empty — skipping");
+        console.warn("📊 No stocks from NSE/BSE and Upstox stream empty — retrying in 60s");
+        setTimeout(async () => { await runScanner(); scheduleNextRun(); }, 60_000);
         return;
       }
     }

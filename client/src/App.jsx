@@ -1117,8 +1117,11 @@ return saved && VALID_PAGES.has(saved) ? saved : "dashboard";
       setSocket(sock);
       window._sock = sock;  // temporary debug line
       sock.on("connect", () => {
-        console.log("✅ Socket connected");
-        sock.emit("use-binary", { version: 1 });
+  console.log("Scanner socket connected");
+  sock.emit("use-binary", { version: 1 });
+  // Re-join scanner room on reconnect — server will resend snapshot if available
+  sock.emit("join:scanner");
+  sock.emit("backtest:start");
         if (window._appKeepalive) clearInterval(window._appKeepalive);
         window._appKeepalive = setInterval(() => {
           if (sock.connected) sock.emit("ping");

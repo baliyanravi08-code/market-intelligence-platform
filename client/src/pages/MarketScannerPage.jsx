@@ -1374,27 +1374,15 @@ function ScannerBody({ socket: externalSocket }) {
 
   // ── PATCH 1: REST fallback — updated to handle isPremarket + allStocks ────
   useEffect(() => {
-    const timer = setTimeout(async () => {
-      if (stockMapRef.current.size > 0) return;
-      try {
-        const res = await fetch("/api/scanner");
-        const d   = await res.json();
-        if (d.error && !d.weekend && !d.isPremarket) return;
-        const nowIST2   = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-        const mins2     = nowIST2.getHours() * 60 + nowIST2.getMinutes();
-        const day2      = nowIST2.getDay();
-        const mktOpen2  = day2 !== 0 && day2 !== 6 && mins2 >= 555 && mins2 < 930;
-        if (!mktOpen2) setIsPremarket(d.isPremarket || false);
-        // Use allStocks if available (faster than reconstructing from gainers/losers)
-        const allSrc = d.allStocks?.length ? d.allStocks
-          : [...(d.gainers||[]), ...(d.losers||[]), ...Object.values(d.byMcap||{}).flat()];
-        const map = new Map(); const seen = new Set();
-        allSrc.forEach(s => { if (s?.symbol && !seen.has(s.symbol)) { seen.add(s.symbol); map.set(s.symbol, s); } });
-        if (map.size > 0) { stockMapRef.current = map; rebuildDataFromMap(map); }
-      } catch {}
-    }, 4000);
-    return () => clearTimeout(timer);
-  }, [rebuildDataFromMap]);
+    // Retry join:scanner every 30s until binary snapshot arrives
+  const retryTimer = setInterval(() => {
+    if (stockMapRef.current.size > 0) { clearInterval(retryTimer); return; }
+    console.log("📡 Scanner retry — re-emitting join:scanner");
+    socket.emit("join:scanner");
+  }, 30_000);
+  return () => clearInterval(retryTimer);
+}, [rebuildDataFromMap]);
+  
 
   // Live-ranked gainers/losers
   const liveRankedGainers = useMemo(() => {
