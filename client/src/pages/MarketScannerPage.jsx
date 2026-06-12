@@ -384,9 +384,6 @@ const clr    = (v) => v > 0 ? "#4ade80" : v < 0 ? "#f87171" : "#9ca3af";
 const arrow  = (v) => v > 0 ? "▲" : v < 0 ? "▼" : "—";
 const clamp  = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
 
-const ACCESS_PIN  = "MARKET2024";
-const SESSION_KEY = "mscanner_auth";
-
 // ─────────────────────────────────────────────────────────────────────────────
 // ACCESS GATE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1287,9 +1284,8 @@ function BacktestPanel({ onClose, techCacheRef }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
+// TO THIS — no auth check at all:
 export default function MarketScannerPage({ socket }) {
-  const [authed, setAuthed] = useState(() => sessionStorage.getItem(SESSION_KEY) === "1");
-  if (!authed) return <AccessGate onAuth={() => setAuthed(true)} />;
   return <ScannerBody socket={socket} />;
 }
 
