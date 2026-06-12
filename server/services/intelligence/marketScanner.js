@@ -1600,9 +1600,63 @@ async function runScanner() {
         console.warn(`📊 NSE/BSE returned 0 — rebuilding from ${stockBySymbol.size} Upstox live ticks`);
         stocks = [...stockBySymbol.values()];
       } else {
-        console.warn("📊 No stocks from NSE/BSE and Upstox stream empty — retrying in 60s");
-        setTimeout(async () => { await runScanner(); scheduleNextRun(); }, 60_000);
-        return;
+        console.warn("📊 NSE/BSE failed — seeding from Upstox quotes API");
+        try {
+          const token = getUpstoxToken();
+          if (token && Object.keys(_instrumentMap).length > 0) {
+            const keys = Object.entries(_instrumentMap)
+              .filter(([, v]) => v.startsWith("NSE_EQ|"))
+              .slice(0, 500)
+              .map(([, v]) => v);
+            const reverseMap = {};
+            for (const [sym, key] of Object.entries(_instrumentMap)) reverseMap[key] = sym;
+            for (let i = 0; i < keys.length; i += 50) {
+              const batch = keys.slice(i, i + 50);
+              try {
+                const res = await axios.get("https://api.upstox.com/v2/market-quote/quotes", {
+                  params: { instrument_key: batch.join(",") },
+                  headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+                  timeout: 15000,
+                });
+                const quotes = res.data?.data || {};
+                for (const [key, q] of Object.entries(quotes)) {
+                  const sym = reverseMap[key] || key.split("|").pop();
+                  const ltp = parseFloat(q.last_price || 0);
+                  const prevClose = parseFloat(q.ohlc?.close || 0);
+                  if (!ltp || ltp <= 0) continue;
+                  const changeAbs = prevClose > 0 ? ltp - prevClose : 0;
+                  const changePct = prevClose > 0 ? (changeAbs / prevClose) * 100 : 0;
+                  const volume = parseInt(q.volume || 0, 10);
+                  const bucket = getMcapBucket(sym, ltp, volume);
+                  stocks.push({
+                    symbol: sym, name: sym, ltp, prevClose,
+                    change: Math.round(changeAbs * 100) / 100,
+                    changePct: sanitiseChangePct(changePct, ltp, prevClose),
+                    volume, mcapBucket: bucket,
+                    mcapLabel: MCAP_BUCKETS[bucket]?.label || "Micro Cap",
+                    exchange: "NSE",
+                    open: parseFloat(q.ohlc?.open || ltp),
+                    high: parseFloat(q.ohlc?.high || ltp),
+                    low:  parseFloat(q.ohlc?.low  || ltp),
+                    _prevCloseFromExchange: prevClose > 0,
+                    _stalePreopen: false, sector: "",
+                  });
+                }
+              } catch (e) {
+                console.warn(`📊 Upstox quotes batch failed:`, e.message);
+              }
+              await new Promise(r => setTimeout(r, 200));
+            }
+            console.log(`📊 Upstox quotes seed: ${stocks.length} stocks`);
+          }
+        } catch (e) {
+          console.warn("📊 Upstox seed failed:", e.message);
+        }
+        if (!stocks.length) {
+          console.warn("📊 All sources failed — retrying in 60s");
+          setTimeout(async () => { await runScanner(); scheduleNextRun(); }, 60_000);
+          return;
+        }
       }
     }
 

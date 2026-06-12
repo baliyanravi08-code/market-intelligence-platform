@@ -1372,16 +1372,17 @@ function ScannerBody({ socket: externalSocket }) {
     setUpdatedAt(new Date());
   }, []);
 
-  // ── PATCH 1: REST fallback — updated to handle isPremarket + allStocks ────
-  useEffect(() => {
-    // Retry join:scanner every 30s until binary snapshot arrives
-  const retryTimer = setInterval(() => {
-    if (stockMapRef.current.size > 0) { clearInterval(retryTimer); return; }
-    console.log("📡 Scanner retry — re-emitting join:scanner");
-    socket.emit("join:scanner");
-  }, 30_000);
-  return () => clearInterval(retryTimer);
-}, [rebuildDataFromMap]);
+ useEffect(() => {
+    const retryTimer = setInterval(() => {
+      if (stockMapRef.current.size > 0) { clearInterval(retryTimer); return; }
+      const sock = externalSocket || getSocket();
+      if (sock?.connected) {
+        console.log("📡 Scanner retry — re-emitting join:scanner");
+        sock.emit("join:scanner");
+      }
+    }, 30_000);
+    return () => clearInterval(retryTimer);
+  }, [externalSocket, rebuildDataFromMap]);
   
 
   // Live-ranked gainers/losers
@@ -1416,7 +1417,12 @@ function ScannerBody({ socket: externalSocket }) {
     socket.emit("join:scanner");
     socket.emit("join:alerts");
     socket.emit("backtest:start");
-
+    socket.on("connect", () => {
+      socket.emit("use-binary", { version: 1 });
+      socket.emit("join:scanner");
+      socket.emit("join:alerts");
+      socket.emit("backtest:start");
+    });
     socket.on("scanner:snapshot", (allStocks) => {
       if (!Array.isArray(allStocks)) return;
       const map = new Map(); allStocks.forEach(s => map.set(s.symbol, s));
